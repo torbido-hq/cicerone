@@ -50,7 +50,7 @@ def narrow_items_frame(
     items: pd.DataFrame | None,
     columns: Sequence[str] | None,
 ) -> pd.DataFrame | None:
-    if items is None or columns is None or items.empty:
+    if items is None or columns is None:
         return items
     keep = [name for name in columns if name in items.columns]
     if not keep:

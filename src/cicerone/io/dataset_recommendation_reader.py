@@ -70,10 +70,15 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         )
         self._replace_items_snapshot()
 
-    def _items_columns(self) -> list[str] | None:
+    def _items_columns(
+        self,
+        *,
+        category_column: str | None,
+        availability_filters: Sequence[str],
+    ) -> list[str] | None:
         wanted = item_snapshot_columns(
-            category_column=self._category_column,
-            availability_filters=self._availability_filters,
+            category_column=category_column,
+            availability_filters=availability_filters,
         )
         if wanted is None or self._backend != "local":
             return None
@@ -87,18 +92,30 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
     def _read_recommendations(self) -> pd.DataFrame:
         return read_parquet(self._options, "recommendations.parquet")
 
-    def _read_items_snapshot(self) -> pd.DataFrame | None:
+    def _read_items_snapshot(
+        self,
+        *,
+        category_column: str | None,
+        availability_filters: Sequence[str],
+    ) -> pd.DataFrame | None:
         try:
             if self._backend == "local":
                 path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
                 if not path.exists():
                     return None
-            frame = read_parquet(self._options, ITEMS_SNAPSHOT_FILENAME, columns=self._items_columns())
+            frame = read_parquet(
+                self._options,
+                ITEMS_SNAPSHOT_FILENAME,
+                columns=self._items_columns(
+                    category_column=category_column,
+                    availability_filters=availability_filters,
+                ),
+            )
             return narrow_items_frame(
                 frame,
                 item_snapshot_columns(
-                    category_column=self._category_column,
-                    availability_filters=self._availability_filters,
+                    category_column=category_column,
+                    availability_filters=availability_filters,
                 ),
             )
         except FileNotFoundError:
@@ -109,12 +126,22 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             raise
 
     def _replace_items_snapshot(self) -> None:
+        with self._lock:
+            category = self._category_column
+            availability = tuple(self._availability_filters)
+            version = self._items_version
         items = normalize_items_snapshot(
-            self._read_items_snapshot(),
-            category_column=self._category_column,
-            availability_filters=self._availability_filters,
+            self._read_items_snapshot(category_column=category, availability_filters=availability),
+            category_column=category,
+            availability_filters=availability,
         )
         with self._lock:
+            if (
+                self._items_version != version
+                or self._category_column != category
+                or tuple(self._availability_filters) != availability
+            ):
+                return
             self._items = items
             self._items_version += 1
 
