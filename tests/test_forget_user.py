@@ -142,6 +142,24 @@ def test_forget_user_reuses_a_held_writer_lock(tmp_path) -> None:
     assert _remaining_users(output) == {"u2"}
 
 
+def test_forget_user_rewrites_legacy_history_parquet(tmp_path) -> None:
+    output = _local(tmp_path)
+    legacy = tmp_path / "recommendation_history.parquet"
+    pd.DataFrame(
+        {
+            "user_id": ["u1", "u2"],
+            "item_id": ["i-u1", "i-u2"],
+            "rank": [1, 1],
+            "source": ["personalized", "personalized"],
+            "variant": [None, None],
+            "generated_at": ["2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"],
+        }
+    ).to_parquet(legacy, index=False)
+    assert forget_user(output, "u1").history == 1
+    kept = pd.read_parquet(legacy)
+    assert list(kept["user_id"]) == ["u2"]
+
+
 def test_forget_user_drops_a_history_part_that_only_held_that_user(tmp_path) -> None:
     output = _local(tmp_path)
     TrackStore(output).append_history(_recs("u1"), generated_at="2026-09-29T12:00:00+00:00")

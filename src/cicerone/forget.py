@@ -20,7 +20,7 @@ from cicerone.io.options import read_parquet, require_option, sql_identifier, st
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendations_sql_names
 from cicerone.locks.hold import LockBackend
 from cicerone.track.store import TrackStore
-from cicerone.track.store_common import HISTORY_DIR, TRACK_FILENAME
+from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
 
 FORGET_OUTPUT_ERROR = 'forget-user requires output kind = "db" or a local dataset path'
 
@@ -76,6 +76,9 @@ def _preflight_local(output: IOSettings) -> None:
         path = root / name
         if path.is_file():
             drop_user_lines(path.read_bytes(), user_id="")
+    legacy = root / HISTORY_FILENAME
+    if legacy.is_file():
+        pd.read_parquet(legacy)
     history = root / HISTORY_DIR
     if not history.is_dir():
         return

@@ -177,11 +177,15 @@ class TrackDatasetBackend:
         return removed
 
     def _delete_history_dataset(self, user_id: str) -> int:
-        root = Path(require_option(self._options, "path", "local")) / HISTORY_DIR
-        if not root.is_dir():
-            return 0
+        root = Path(require_option(self._options, "path", "local"))
+        paths = [root / HISTORY_FILENAME]
+        history = root / HISTORY_DIR
+        if history.is_dir():
+            paths.extend(sorted(history.glob("*.parquet")))
         pending: list[tuple[Path, pd.DataFrame, int]] = []
-        for path in sorted(root.glob("*.parquet")):
+        for path in paths:
+            if not path.is_file():
+                continue
             frame = pd.read_parquet(path)
             if frame.empty or USER_COLUMN not in frame.columns:
                 continue
