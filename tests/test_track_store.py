@@ -207,26 +207,30 @@ def test_track_read_ensures_indexes_on_existing_table(tmp_path) -> None:
                 "variant TEXT, experiment_id TEXT, generated_at TEXT)"
             )
         )
+    from cicerone.track.store_db import _track_index_name
+
     store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
     assert store.read_rows() == []
     with engine.connect() as conn:
         names = {row[1] for row in conn.execute(text('PRAGMA index_list("recommendation_track")'))}
-    assert "recommendation_track_occurred_at_idx" in names
-    assert "recommendation_track_experiment_occurred_at_idx" in names
+    assert _track_index_name("recommendation_track", "occurred_at_idx") in names
+    assert _track_index_name("recommendation_track", "experiment_occurred_at_idx") in names
 
 
-def test_track_index_names_stay_distinct_at_postgres_limit() -> None:
+def test_track_index_names_do_not_alias_across_tables() -> None:
     from cicerone.track.store_db import _track_index_name
 
+    assert _track_index_name("foo", "experiment_occurred_at_idx") != _track_index_name(
+        "foo_experiment", "occurred_at_idx"
+    )
     table = "t" * 62
     occurred = _track_index_name(table, "occurred_at_idx")
     experiment = _track_index_name(table, "experiment_occurred_at_idx")
     assert occurred != experiment
     assert len(occurred.encode()) <= 63
     assert len(experiment.encode()) <= 63
-    assert _track_index_name("recommendation_track", "occurred_at_idx") == (
-        "recommendation_track_occurred_at_idx"
-    )
+    assert occurred.startswith("trk_")
+    assert experiment.startswith("trk_")
 
 
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
