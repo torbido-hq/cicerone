@@ -7,10 +7,13 @@ import math
 from collections.abc import Sequence
 from contextlib import suppress
 from hashlib import sha256
+from typing import overload
 
 import pandas as pd
 
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendation_output_columns
+
+RecommendationMessage = tuple[str, bytes, str]
 
 
 def _json_cell(value: object) -> object:
@@ -30,27 +33,70 @@ def _json_cell(value: object) -> object:
     return value
 
 
+def _recommendation_message(user_id: str, group: pd.DataFrame | None) -> RecommendationMessage:
+    recommendations = (
+        []
+        if group is None
+        else [
+            {key: _json_cell(value) for key, value in row.items()} for row in group.to_dict(orient="records")
+        ]
+    )
+    content = {"user_id": user_id, "recommendations": recommendations}
+    message_id = sha256(
+        json.dumps(content, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+    body = json.dumps({**content, "message_id": message_id}, allow_nan=False).encode()
+    return user_id, body, message_id
+
+
+class _RecommendationMessages(Sequence[RecommendationMessage]):
+    def __init__(self, df: pd.DataFrame, user_ids: Sequence[str] | None) -> None:
+        self._grouped = None
+        if df is None or df.empty or USER_COLUMN not in df.columns:
+            self._order = (
+                [] if user_ids is None else list(dict.fromkeys(str(user_id) for user_id in user_ids))
+            )
+            return
+        columns = recommendation_output_columns(df)
+        indexed = df[columns].copy()
+        indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
+        self._grouped = indexed.groupby(USER_COLUMN, sort=False)
+        if user_ids is None:
+            self._order = [str(user_id) for user_id in self._grouped.groups]
+            return
+        self._order = list(dict.fromkeys(str(user_id) for user_id in user_ids))
+
+    def __len__(self) -> int:
+        return len(self._order)
+
+    @overload
+    def __getitem__(self, index: int) -> RecommendationMessage: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> list[RecommendationMessage]: ...
+
+    def __getitem__(self, index: int | slice) -> RecommendationMessage | list[RecommendationMessage]:
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
+        user_id = self._order[index]
+        group = None
+        if self._grouped is not None and user_id in self._grouped.groups:
+            group = self._grouped.get_group(user_id)
+        return _recommendation_message(user_id, group)
+
+    def __iter__(self):
+        for index in range(len(self)):
+            yield self[index]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, list):
+            return list(self) == other
+        return NotImplemented
+
+
 def user_recommendation_messages(
     df: pd.DataFrame,
     *,
     user_ids: Sequence[str] | None = None,
-) -> list[tuple[str, bytes, str]]:
-    by_user: dict[str, list[dict[str, object]]] = {}
-    if df is not None and not df.empty and USER_COLUMN in df.columns:
-        columns = recommendation_output_columns(df)
-        indexed = df[columns].copy()
-        indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
-        for user_id, group in indexed.groupby(USER_COLUMN, sort=False):
-            by_user[str(user_id)] = [
-                {key: _json_cell(val) for key, val in row.items()} for row in group.to_dict(orient="records")
-            ]
-    ordered = list(by_user) if user_ids is None else list(dict.fromkeys(str(user_id) for user_id in user_ids))
-    out: list[tuple[str, bytes, str]] = []
-    for user_id in ordered:
-        content = {"user_id": user_id, "recommendations": by_user.get(user_id, [])}
-        message_id = sha256(
-            json.dumps(content, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
-        ).hexdigest()
-        body = json.dumps({**content, "message_id": message_id}, allow_nan=False).encode()
-        out.append((user_id, body, message_id))
-    return out
+) -> _RecommendationMessages:
+    return _RecommendationMessages(df, user_ids)
