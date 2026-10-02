@@ -160,7 +160,10 @@ class RabbitMQEventSource(QueuedEventSource):
                 claimed.append((incoming, tag))
                 remaining -= 1
             if error is not None:
-                logger.error("RabbitMQ basic_get failed", exc_info=error)
+                logger.error(
+                    "RabbitMQ basic_get failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
                 io._mark_failed()
             if stop or not fetched:
                 break

@@ -1471,7 +1471,7 @@ def test_health_disconnected_when_probe_times_out(monkeypatch):
     source.close()
 
 
-def test_basic_get_failure_returns_partial(monkeypatch):
+def test_basic_get_failure_returns_partial(monkeypatch, caplog):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
     source = RabbitMQEventSource(_options())
@@ -1483,8 +1483,12 @@ def test_basic_get_failure_returns_partial(monkeypatch):
         raise AMQPError("get fail")
 
     broker.connection.channel_obj.basic_get = _boom  # type: ignore[method-assign]
-    again = list(source.poll(10))
+    with caplog.at_level("ERROR", logger="cicerone.events.rabbitmq"):
+        again = list(source.poll(10))
     assert [event.event_id for event in again] == ["e1"]
+    logged = [record.exc_info for record in caplog.records if record.exc_info]
+    assert logged and logged[0][0] is AMQPError
+    assert "get fail" in str(logged[0][1])
     assert source._io is not None and source._io.failed is True
     assert source.health().connected is False
     source.close()
