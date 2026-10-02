@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Item snapshot refresh reads the item id and the configured filter columns.
 - Exposure reads load the stored exposure columns.
+- Quality live metrics load recommendations for users in the lookback window.
 
 ### Fixed
 
