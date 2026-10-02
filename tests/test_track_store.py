@@ -215,6 +215,20 @@ def test_track_read_ensures_indexes_on_existing_table(tmp_path) -> None:
     assert "recommendation_track_experiment_occurred_at_idx" in names
 
 
+def test_track_index_names_stay_distinct_at_postgres_limit() -> None:
+    from cicerone.track.store_db import _track_index_name
+
+    table = "t" * 62
+    occurred = _track_index_name(table, "occurred_at_idx")
+    experiment = _track_index_name(table, "experiment_occurred_at_idx")
+    assert occurred != experiment
+    assert len(occurred.encode()) <= 63
+    assert len(experiment.encode()) <= 63
+    assert _track_index_name("recommendation_track", "occurred_at_idx") == (
+        "recommendation_track_occurred_at_idx"
+    )
+
+
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(IOSettings(kind="db", options={"database_url": url}))

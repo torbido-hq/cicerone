@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -25,6 +26,19 @@ from cicerone.track.store_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PG_IDENT_MAX = 63
+
+
+def _track_index_name(table: str, suffix: str) -> str:
+    name = f"{table}_{suffix}"
+    raw = name.encode()
+    if len(raw) <= _PG_IDENT_MAX:
+        return name
+    digest = hashlib.sha256(raw).hexdigest()[:8]
+    marker = f"_{digest}".encode()
+    trimmed = raw[: _PG_IDENT_MAX - len(marker)].decode(errors="ignore")
+    return f"{trimmed}_{digest}"
 
 
 class TrackDbBackend:
@@ -63,12 +77,11 @@ class TrackDbBackend:
         self._ensure_track_indexes(conn, table)
 
     def _ensure_track_indexes(self, conn: Any, table: str) -> None:
-        conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{table}_occurred_at_idx" ON "{table}" (occurred_at)'))
+        occurred = _track_index_name(table, "occurred_at_idx")
+        experiment = _track_index_name(table, "experiment_occurred_at_idx")
+        conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{occurred}" ON "{table}" (occurred_at)'))
         conn.execute(
-            text(
-                f'CREATE INDEX IF NOT EXISTS "{table}_experiment_occurred_at_idx" '
-                f'ON "{table}" (experiment_id, occurred_at)'
-            )
+            text(f'CREATE INDEX IF NOT EXISTS "{experiment}" ON "{table}" (experiment_id, occurred_at)')
         )
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
