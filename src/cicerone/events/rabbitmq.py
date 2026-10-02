@@ -137,24 +137,36 @@ class RabbitMQEventSource(QueuedEventSource):
             if not self._owns_io(io):
                 break
             try:
-                method, _properties, body = io.submit(partial(self._basic_get, io))
+                fetched, error = io.submit(partial(self._basic_get_many, io, remaining))
             except RABBITMQ_IO_ERRORS:
                 logger.exception("RabbitMQ basic_get failed")
                 io._mark_failed()
                 break
-            if method is None:
-                break
-            incoming = self._delivery_to_event(io, method, body)
-            if incoming is None:
-                if not self._owns_io(io):
+            stop = error is not None
+            for method, _properties, body in fetched:
+                if method is None:
+                    stop = True
                     break
-                continue
-            with self._lock:
-                tag = self._delivery_tags.get(incoming.event_id)
-            if tag is None:
-                continue
-            claimed.append((incoming, tag))
-            remaining -= 1
+                incoming = self._delivery_to_event(io, method, body)
+                if incoming is None:
+                    if not self._owns_io(io):
+                        stop = True
+                        break
+                    continue
+                with self._lock:
+                    tag = self._delivery_tags.get(incoming.event_id)
+                if tag is None:
+                    continue
+                claimed.append((incoming, tag))
+                remaining -= 1
+            if error is not None:
+                logger.error(
+                    "RabbitMQ basic_get failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                io._mark_failed()
+            if stop or not fetched:
+                break
 
         with self._lock:
             out = [
@@ -190,6 +202,7 @@ class RabbitMQEventSource(QueuedEventSource):
                 confirmed.append(eid)
         if not resolved:
             return tuple(confirmed)
+
         for eid, tag in resolved:
             if not self._owns_io(io):
                 return tuple(confirmed)
@@ -278,6 +291,21 @@ class RabbitMQEventSource(QueuedEventSource):
             last_event_at=last_event_at,
             detail=f"queue={self._queue}",
         )
+
+    def _basic_get_many(
+        self, io: _PikaIo, count: int
+    ) -> tuple[list[tuple[Any, Any, Any]], BaseException | None]:
+        fetched: list[tuple[Any, Any, Any]] = []
+        for _ in range(count):
+            if not self._owns_io(io):
+                break
+            try:
+                fetched.append(self._basic_get(io))
+            except RABBITMQ_IO_ERRORS as exc:
+                return fetched, exc
+            if fetched[-1][0] is None:
+                break
+        return fetched, None
 
     def _basic_get(self, io: _PikaIo) -> Any:
         return io.broker_channel().basic_get(self._queue, auto_ack=False)
