@@ -12,6 +12,7 @@ from support.prometheus_metrics import registry_metric_value
 from support.toml_config import write_toml
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings, make_settings
+from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
 from cicerone.events.normalize import normalize_event
@@ -797,7 +798,7 @@ def test_ha_worker_nacks_when_heartbeat_raises(tmp_path, feature_config: Feature
     class _BoomBeat(WebhookEventSource):
         def heartbeat(self, events):  # type: ignore[no-untyped-def]
             del events
-            raise RuntimeError("beat failed")
+            raise EventSourceError("beat failed")
 
     source = _BoomBeat({})
     source.ingest(event_payload(event_id="hbx", user_id="u1", item_id="ihbx"))
@@ -824,7 +825,7 @@ def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: F
             del events
             self.beats += 1
             if self.beats > 1:
-                raise RuntimeError("lost visibility")
+                raise EventSourceError("lost visibility")
 
     source = _LaterBoom()
     source.ingest(event_payload(event_id="hbl", user_id="u1", item_id="ihbl"))
@@ -864,6 +865,56 @@ def test_inflight_heartbeat_preserves_apply_error():
     with pytest.raises(ValueError, match="apply boom"), inflight_heartbeat(source, [], 0.02):
         time.sleep(0.06)
         raise ValueError("apply boom")
+
+
+def test_inflight_heartbeat_propagates_unexpected_error():
+    from cicerone.events.worker import inflight_heartbeat
+
+    class _Src:
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            raise RuntimeError("beat bug")
+
+    source = _Src()
+    with pytest.raises(RuntimeError, match="beat bug"), inflight_heartbeat(source, [], 0):
+        pass
+
+
+def test_later_unexpected_heartbeat_propagates():
+    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
+
+    class _Src:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            self.n += 1
+            if self.n > 1:
+                raise RuntimeError("beat bug")
+
+    source = _Src()
+    with pytest.raises(RuntimeError, match="beat bug") as captured, inflight_heartbeat(source, [], 0.02):
+        time.sleep(0.08)
+    assert not isinstance(captured.value, HeartbeatError)
+
+
+def test_later_source_heartbeat_error_is_heartbeat_error():
+    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
+
+    class _Src:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            self.n += 1
+            if self.n > 1:
+                raise EventSourceError("lost visibility")
+
+    source = _Src()
+    with pytest.raises(HeartbeatError, match="heartbeat failed"), inflight_heartbeat(source, [], 0.02):
+        time.sleep(0.08)
 
 
 def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):
