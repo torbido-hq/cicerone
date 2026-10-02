@@ -643,7 +643,7 @@ def test_kafka_publisher_close_wraps_client_error(monkeypatch):
         publisher.close()
 
 
-def test_kafka_publisher_close_propagates_os_error(monkeypatch):
+def test_kafka_publisher_close_wraps_os_error(monkeypatch):
     install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     publisher.connect()
@@ -652,7 +652,7 @@ def test_kafka_publisher_close_propagates_os_error(monkeypatch):
         raise OSError("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    with pytest.raises(OSError, match="flush fail"):
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
 
 
@@ -764,7 +764,7 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
         publisher.close()
 
 
-def test_kafka_publisher_publish_unexpected_error_propagates(monkeypatch):
+def test_kafka_publisher_flush_after_produce_is_publish_error(monkeypatch):
     install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
     publisher.connect()
@@ -773,7 +773,20 @@ def test_kafka_publisher_publish_unexpected_error_propagates(monkeypatch):
         raise RuntimeError("flush bug")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="flush bug"):
+    with pytest.raises(PublishError, match="flush bug"):
+        publisher.publish(_recs_frame())
+
+
+def test_kafka_publisher_produce_unexpected_error_propagates(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("produce bug")
+
+    publisher._producer.produce = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="produce bug"):
         publisher.publish(_recs_frame())
 
 

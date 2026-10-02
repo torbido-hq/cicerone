@@ -28,8 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the apply is not acknowledged.
 - Kafka publishing only recovers from Kafka client errors and a full
   producer queue while connecting, publishing, and closing. Unexpected
-  exceptions now propagate. A failed flush after a connect error is
-  logged and does not replace that error.
+  exceptions now propagate until a message has been produced. An error
+  after that, including on close, stays a publish failure so callers do
+  not retry records the broker may already have. A failed flush after a
+  connect error is logged and does not replace that error.
 
 ## [0.8.4] - 2026-09-25
 
