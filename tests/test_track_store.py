@@ -233,6 +233,25 @@ def test_track_index_names_do_not_alias_across_tables() -> None:
     assert experiment.startswith("trk_")
 
 
+def test_track_append_inserts_when_index_creation_fails(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    import cicerone.track.store_db as store_db
+
+    real_text = store_db.text
+
+    def _text(sql: str):
+        if "CREATE INDEX" in sql:
+            raise OperationalError(sql, {}, Exception("permission denied"))
+        return real_text(sql)
+
+    monkeypatch.setattr(store_db, "text", _text)
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    assert store.append_rows([_row()]) == 1
+    assert [row["event_id"] for row in store.read_rows()] == ["imp-1"]
+
+
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(IOSettings(kind="db", options={"database_url": url}))

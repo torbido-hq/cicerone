@@ -71,10 +71,18 @@ class TrackDbBackend:
     def _ensure_track_indexes(self, conn: Any, table: str) -> None:
         occurred = _track_index_name(table, "occurred_at_idx")
         experiment = _track_index_name(table, "experiment_occurred_at_idx")
-        conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{occurred}" ON "{table}" (occurred_at)'))
-        conn.execute(
-            text(f'CREATE INDEX IF NOT EXISTS "{experiment}" ON "{table}" (experiment_id, occurred_at)')
-        )
+        try:
+            with conn.begin_nested():
+                conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{occurred}" ON "{table}" (occurred_at)'))
+                conn.execute(
+                    text(
+                        f'CREATE INDEX IF NOT EXISTS "{experiment}" ON "{table}" (experiment_id, occurred_at)'
+                    )
+                )
+        except SQL_READ_ERRORS as exc:
+            if is_missing_table_error(exc):
+                raise
+            logger.warning("Skipped track indexes on %s: %s", table, exc)
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
