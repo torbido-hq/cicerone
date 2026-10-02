@@ -111,29 +111,38 @@ class RabbitMQPublisher:
                 self._publish_from(messages, sent)
                 return
         try:
-            self._publish_confirmed(messages, sent)
-        except _rabbitmq_publish_errors():
-            logger.exception("RabbitMQ publish failed; recovering publisher")
-            self._retry_unsent(messages, sent)
-
-    def _publish_confirmed(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
-        try:
             self._publish_from(messages, sent)
         except Exception as exc:
-            if isinstance(exc, _rabbitmq_publish_errors()) or not sent[0]:
+            if not isinstance(exc, _rabbitmq_publish_errors()) and not sent[0]:
                 raise
-            # The broker may already have these records. Callers must not retry them.
-            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            logger.exception("RabbitMQ publish failed; recovering publisher")
+            self._retry_unsent(messages, sent)
 
     def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
         try:
             self._recover()
         except ConfigError as exc:
-            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            self._fail_unless_sent(sent, exc)
+            return
+        except Exception:
+            if not sent[0]:
+                raise
+            # Accepted records must not be raised back to a caller that would republish them.
+            logger.exception("RabbitMQ publisher recover failed after confirm")
+            return
         try:
-            self._publish_confirmed(messages, sent)
-        except _rabbitmq_publish_errors() as exc:
-            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            self._publish_from(messages, sent)
+        except Exception as exc:
+            if isinstance(exc, _rabbitmq_publish_errors()) or sent[0]:
+                self._fail_unless_sent(sent, exc)
+                return
+            raise
+
+    def _fail_unless_sent(self, sent: list[int], exc: BaseException) -> None:
+        if sent[0]:
+            logger.exception("RabbitMQ publish stopped after confirm; accepted records are not retried")
+            return
+        raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
     def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
         channel = self._require()

@@ -34,10 +34,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   connect error is logged and does not replace that error.
 - RabbitMQ publishing only recovers from AMQP, socket, and timeout
   errors while connecting, publishing, and closing. Unexpected
-  exceptions now propagate until a message has been confirmed. An error
-  after that stays a publish failure so callers do not retry records
-  the broker may already have. A failed close after a connect error is
-  logged and does not replace that error.
+  exceptions now propagate until a message has been confirmed. After
+  that, only unsent messages are retried, and a further failure is
+  logged instead of raised, so callers do not publish the accepted
+  records again. A failed close after a connect error is logged and
+  does not replace that error.
 
 ## [0.8.4] - 2026-09-25
 

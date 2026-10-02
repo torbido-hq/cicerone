@@ -941,7 +941,7 @@ def test_rabbitmq_publisher_publish_unexpected_error_propagates(monkeypatch):
     assert publisher._channel is channel
 
 
-def test_rabbitmq_publisher_unexpected_error_after_confirm_is_publish_error(monkeypatch):
+def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -957,11 +957,77 @@ def test_rabbitmq_publisher_unexpected_error_after_confirm_is_publish_error(monk
         return original(*args, **kwargs)
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    with pytest.raises(PublishError, match="publish bug"):
-        publisher.publish(_recs_frame())
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+
+
+def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    calls = {"n": 0}
+    original = FakeChannel.basic_publish
+
+    def boom(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(self, *args, **kwargs)
+        raise RuntimeError("publish bug")
+
+    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
+    publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
-    assert publisher._channel is channel
+
+
+def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(*args, **kwargs)
+        broker.connect_error = AMQPError("down")
+        raise AMQPError("channel closed")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1"]
+    assert publisher._channel is None
+
+
+def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(*args, **kwargs)
+        raise RuntimeError("publish bug")
+
+    def boom_close() -> None:
+        raise RuntimeError("close bug")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    channel.close = boom_close  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1"]
+    assert broker.connection.closed is True
 
 
 def test_rabbitmq_publisher_retry_unexpected_error_propagates(monkeypatch):
