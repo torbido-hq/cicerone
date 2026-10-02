@@ -592,6 +592,60 @@ def test_quality_live_eval_concats_history_with_current_recs(tmp_path):
     assert context["track_eval"]["by_source"]["personalized"]["n_impressions"] == 1
 
 
+def test_quality_live_eval_loads_recommendations_for_tracked_users(tmp_path, monkeypatch):
+    from cicerone.dashboard_quality import quality_context
+    from cicerone.track.normalize import normalize_track
+
+    seen: dict[str, list[str]] = {}
+
+    def _load(_output, user_ids):
+        seen["ids"] = list(user_ids)
+        return pd.DataFrame(
+            [
+                {
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "score": 1.0,
+                    "source": "popular",
+                    "note": "unused",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("cicerone.dashboard_quality.load_recommendations_for_users", _load)
+    settings = _settings(tmp_path, track={"enabled": True})
+    TrackStore(settings.output).append_rows(
+        [
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:00:00Z",
+                    "generated_at": "2026-08-28T03:00:00+00:00",
+                    "event_id": "imp-window",
+                }
+            ).as_row(),
+            normalize_track(
+                {
+                    "kind": "impression",
+                    "user_id": "u1",
+                    "item_id": "i1",
+                    "rank": 1,
+                    "occurred_at": "2026-08-28T12:05:00Z",
+                    "generated_at": "2026-08-28T03:00:00+00:00",
+                    "event_id": "imp-window-2",
+                }
+            ).as_row(),
+        ]
+    )
+    context = quality_context(settings)
+    assert seen["ids"] == ["u1"]
+    assert context["track_eval"]["by_source"]["popular"]["n_impressions"] == 2
+
+
 def test_quality_live_eval_history_error_keeps_current_recs(tmp_path, monkeypatch):
     import pandas as pd
 

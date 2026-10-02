@@ -17,6 +17,8 @@ from cicerone.evaluation import (
     load_metric_events,
 )
 from cicerone.evaluation.context import prefer_history
+from cicerone.events.store import load_recommendations_for_users
+from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
 from cicerone.locks import LockLostError
 from cicerone.track.store import TrackStore
@@ -24,6 +26,7 @@ from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_si
 
 logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
+_TRACK_REC_COLUMNS = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN, "generated_at")
 
 
 def quality_context(settings: Settings) -> dict[str, Any]:
@@ -114,6 +117,17 @@ def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
     return int(overall.get("n_impressions") or 0) <= 0
 
 
+def _recommendations_for_track(settings: Settings, rows: list[dict[str, Any]]) -> pd.DataFrame | None:
+    user_ids = list(dict.fromkeys(str(row[USER_COLUMN]) for row in rows if row.get(USER_COLUMN)))
+    frame = load_recommendations_for_users(settings.output, user_ids)
+    if frame.empty:
+        return None
+    keep = [column for column in _TRACK_REC_COLUMNS if column in frame.columns]
+    if not keep:
+        return None
+    return frame.loc[:, keep]
+
+
 def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | None:
     try:
         since = lookback_since(
@@ -131,8 +145,6 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
     conversions = pd.DataFrame()
     recs = None
     try:
-        from cicerone.events.store import load_recommendations_frame
-
         wanted = generated_ats_from_track(rows)
 
         def _load_conversions() -> pd.DataFrame:
@@ -146,10 +158,7 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             )
 
         def _load_recs() -> pd.DataFrame | None:
-            frame = load_recommendations_frame(settings.output)
-            if frame is not None and frame.empty:
-                return None
-            return frame
+            return _recommendations_for_track(settings, rows)
 
         def _load_history() -> pd.DataFrame | None:
             if not wanted:
