@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - In-flight event heartbeats only treat source errors as a failed beat.
   Unexpected exceptions now propagate after the beat is recorded, so
   the apply is not acknowledged.
+- Kafka publishing only recovers from Kafka client errors and a full
+  producer queue while connecting, publishing, and closing. Unexpected
+  exceptions now propagate. A failed flush after a connect error is
+  logged and does not replace that error.
 
 ## [0.8.4] - 2026-09-25
 
