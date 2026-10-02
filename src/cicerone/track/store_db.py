@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -25,6 +26,11 @@ from cicerone.track.store_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _track_index_name(table: str, suffix: str) -> str:
+    digest = hashlib.sha256(table.encode()).hexdigest()[:24]
+    return f"trk_{digest}_{suffix}"
 
 
 class TrackDbBackend:
@@ -60,6 +66,23 @@ class TrackDbBackend:
                 ")"
             )
         )
+        self._ensure_track_indexes(conn, table)
+
+    def _ensure_track_indexes(self, conn: Any, table: str) -> None:
+        occurred = _track_index_name(table, "occurred_at_idx")
+        experiment = _track_index_name(table, "experiment_occurred_at_idx")
+        try:
+            with conn.begin_nested():
+                conn.execute(text(f'CREATE INDEX IF NOT EXISTS "{occurred}" ON "{table}" (occurred_at)'))
+                conn.execute(
+                    text(
+                        f'CREATE INDEX IF NOT EXISTS "{experiment}" ON "{table}" (experiment_id, occurred_at)'
+                    )
+                )
+        except SQL_READ_ERRORS as exc:
+            if is_missing_table_error(exc):
+                raise
+            logger.warning("Skipped track indexes on %s: %s", table, exc)
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -119,6 +142,13 @@ class TrackDbBackend:
         )
         engine = self._db_engine()
         clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
+        try:
+            with engine.begin() as conn:
+                self._ensure_track_indexes(conn, table)
+        except SQL_READ_ERRORS as exc:
+            if is_missing_table_error(exc):
+                return []
+            logger.warning("Skipped track indexes on %s: %s", table, exc)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except SQL_READ_ERRORS as exc:
