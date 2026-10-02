@@ -433,11 +433,14 @@ class ExperimentStore:
             option="exposures_table",
         )
         engine = self._db_engine()
+        quoted = ", ".join(
+            f'"{sql_identifier(column, option="exposures column")}"' for column in EXPOSURE_COLUMNS
+        )
         if experiment_id:
-            sql = text(f'SELECT * FROM "{table}" WHERE experiment_id = :experiment_id')
+            sql = text(f'SELECT {quoted} FROM "{table}" WHERE experiment_id = :experiment_id')
             params: dict[str, Any] = {"experiment_id": experiment_id}
         else:
-            sql = text(f'SELECT * FROM "{table}"')
+            sql = text(f'SELECT {quoted} FROM "{table}"')
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.5] - 2026-09-28
 
+### Changed
+
+- Exposure reads load the stored exposure columns.
+
 ### Fixed
 
 - Redis Streams polling, health, heartbeat, and close paths only recover
