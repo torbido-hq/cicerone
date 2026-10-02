@@ -20,12 +20,14 @@ from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
+from cicerone.io.jsonl_user import drop_user_lines
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
     sql_identifier,
     storage_backend,
 )
+from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 
 logger = logging.getLogger(__name__)
@@ -295,6 +297,24 @@ class ExperimentStore:
         ):
             _persist()
 
+    def delete_exposures_for_user(self, user_id: str) -> int:
+
+        def _persist() -> int:
+            if self._kind == "db":
+                return self._delete_exposures_db(user_id)
+            require_appendable_exposure_log(self._output)
+            return self._delete_exposures_dataset(user_id)
+
+        if writer_lock_held_here(self._writer_lock):
+            return _persist()
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            return _persist()
+
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":
             rows = self._read_exposures_db(experiment_id=experiment_id)
@@ -428,6 +448,51 @@ class ExperimentStore:
                 fence_lost=self._fence_lost,
                 fence_kind=self._fence_kind,
             )
+
+    def _delete_exposures_db(self, user_id: str) -> int:
+        table = sql_identifier(
+            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
+            option="exposures_table",
+        )
+        count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE "{USER_COLUMN}" = :user_id')
+        delete_sql = text(f'DELETE FROM "{table}" WHERE "{USER_COLUMN}" = :user_id')
+        removed = 0
+        try:
+            with self._db_engine().begin() as conn:
+                ensure_writer_owned(
+                    self._writer_lock,
+                    fence_check=self._fence_check,
+                    fence_lost=self._fence_lost,
+                    fence_kind=self._fence_kind,
+                )
+                removed = int(conn.execute(count_sql, {"user_id": user_id}).scalar() or 0)
+                if removed:
+                    conn.execute(delete_sql, {"user_id": user_id})
+                    ensure_writer_owned(
+                        self._writer_lock,
+                        fence_check=self._fence_check,
+                        fence_lost=self._fence_lost,
+                        fence_kind=self._fence_kind,
+                    )
+        except MISSING_TABLE_ERRORS as exc:
+            if is_missing_column_error(exc):
+                raise
+            return 0
+        return removed
+
+    def _delete_exposures_dataset(self, user_id: str) -> int:
+        path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+        with exclusive_file_lock(path):
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            payload, removed = drop_user_lines(self._read_bytes(EXPOSURES_FILENAME), user_id)
+            if removed:
+                self._write_bytes(EXPOSURES_FILENAME, payload, "application/x-ndjson")
+            return removed
 
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(
