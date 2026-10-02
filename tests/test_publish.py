@@ -5,10 +5,11 @@ import json
 import pandas as pd
 import pytest
 from support.events import event_payload
-from support.fake_kafka import install_fake_kafka
+from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
+from cicerone.events.errors import KafkaException
 from cicerone.events.normalize import normalize_event
 from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
@@ -543,7 +544,31 @@ def test_rabbitmq_publisher_exchange_empty_routing_key(monkeypatch):
 
 def test_kafka_publisher_connect_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    broker.list_topics_error = RuntimeError("down")
+    broker.list_topics_error = KafkaException("down")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
+    with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.flush_calls == [2.0]
+
+
+def test_kafka_publisher_connect_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = RuntimeError("bug")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(RuntimeError, match="bug"):
+        publisher.connect()
+    assert broker.flush_calls == [10.0]
+
+
+def test_kafka_publisher_connect_flush_failure_keeps_original_error(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = KafkaException("down")
+
+    def _boom(self, timeout=None):  # type: ignore[no-untyped-def]
+        self.broker.flush_calls.append(timeout)
+        raise RuntimeError("flush bug")
+
+    monkeypatch.setattr(FakeProducer, "flush", _boom)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
@@ -552,9 +577,18 @@ def test_kafka_publisher_connect_failure(monkeypatch):
 
 def test_kafka_publisher_producer_constructor_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    broker.producer_error = RuntimeError("bad client")
+    broker.producer_error = KafkaException("bad client")
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.flush_calls == []
+
+
+def test_kafka_publisher_producer_constructor_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.producer_error = RuntimeError("bad client")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(RuntimeError, match="bad client"):
         publisher.connect()
     assert broker.flush_calls == []
 
@@ -593,6 +627,19 @@ def test_kafka_publisher_close_flush_failure(monkeypatch):
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="flush fail"):
+        publisher.close()
+
+
+def test_kafka_publisher_close_wraps_client_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise KafkaException("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
 
 
@@ -708,13 +755,39 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
     publisher.connect()
 
     def _boom(_timeout=None):
-        raise RuntimeError("flush fail")
+        raise KafkaException("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="flush fail"):
         publisher.publish(_recs_frame())
-    with pytest.raises(RuntimeError, match="flush fail"):
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
+
+
+def test_kafka_publisher_flush_after_produce_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise RuntimeError("flush bug")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush bug"):
+        publisher.publish(_recs_frame())
+
+
+def test_kafka_publisher_produce_unexpected_error_propagates(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("produce bug")
+
+    publisher._producer.produce = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="produce bug"):
+        publisher.publish(_recs_frame())
 
 
 def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
