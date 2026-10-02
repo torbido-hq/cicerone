@@ -615,6 +615,55 @@ def test_sqlite_write_manifest_skips_newer_row(tmp_path):
     assert list(stored["status"]) == ["success"]
 
 
+def test_sqlite_write_manifest_adds_missing_incremental_columns(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    assert (
+        sink.write_manifest(
+            {
+                "generated_at": "2026-01-01T00:00:00+00:00",
+                "status": "success",
+                "n_events": 5,
+            }
+        )
+        is True
+    )
+    assert (
+        sink.write_manifest(
+            {
+                "triggered_by": "incremental",
+                "status": "success",
+                "error": None,
+                "generated_at": "2026-01-02T00:00:00+00:00",
+                "n_events": 1,
+                "incremental_events_applied": 1,
+                "last_incremental_at": "2026-01-02T00:00:00+00:00",
+                "partial_outputs": True,
+                "rrf_k": 60.0,
+            }
+        )
+        is True
+    )
+    engine = create_engine(url)
+    stored = pd.read_sql("SELECT * FROM recommendation_runs", engine)
+    assert len(stored) == 2
+    incremental = stored.iloc[1]
+    assert incremental["triggered_by"] == "incremental"
+    assert int(incremental["incremental_events_applied"]) == 1
+    assert incremental["last_incremental_at"] == "2026-01-02T00:00:00+00:00"
+    assert bool(incremental["partial_outputs"]) is True
+    assert float(incremental["rrf_k"]) == 60.0
+    assert pd.isna(stored.iloc[0]["incremental_events_applied"])
+
+
+def test_sqlite_write_manifest_rejects_unsafe_column_name(tmp_path):
+    url = _sqlite_url(tmp_path)
+    sink = DatabaseOutputSink({"database_url": url})
+    assert sink.write_manifest({"status": "success"}) is True
+    with pytest.raises(ValueError, match="SQL identifier"):
+        sink.write_manifest({"status": "success", "bad-name": 1})
+
+
 def test_sqlite_db_sink_fence_rejects_writes(tmp_path):
     url = _sqlite_url(tmp_path)
     owned = {"v": True}
