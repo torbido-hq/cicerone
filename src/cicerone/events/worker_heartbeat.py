@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from cicerone.events.base import EventSource, NormalizedEvent
+from cicerone.events.errors import EVENT_SOURCE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def _call_heartbeat(
 ) -> None:
     try:
         beat(events)
-    except Exception as exc:
+    except EVENT_SOURCE_ERRORS as exc:
         logger.exception("Event source heartbeat failed")
         if fail_closed:
             raise HeartbeatError("Event source heartbeat failed") from exc
@@ -48,13 +49,21 @@ def inflight_heartbeat(
         return
     stop = threading.Event()
     failed = threading.Event()
+    caught: list[BaseException] = []
 
     def _loop() -> None:
         while not stop.wait(interval_seconds):
             try:
                 beat(events)
-            except Exception:
+            except EVENT_SOURCE_ERRORS as exc:
                 logger.exception("Event source heartbeat failed")
+                caught.append(exc)
+                failed.set()
+                return
+            except Exception as exc:
+                # The caller is blocked in apply; record and stop this thread.
+                logger.exception("Event source heartbeat failed")
+                caught.append(exc)
                 failed.set()
                 return
 
@@ -68,4 +77,9 @@ def inflight_heartbeat(
         stop.set()
         thread.join(timeout=max(1.0, interval_seconds))
     if completed and (failed.is_set() or thread.is_alive()):
-        raise HeartbeatError("Event source heartbeat failed")
+        exc = caught[0] if caught else None
+        if exc is not None and not isinstance(exc, EVENT_SOURCE_ERRORS):
+            raise exc
+        if exc is None:
+            raise HeartbeatError("Event source heartbeat failed")
+        raise HeartbeatError("Event source heartbeat failed") from exc
