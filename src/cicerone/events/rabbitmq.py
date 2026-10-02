@@ -62,7 +62,6 @@ class RabbitMQEventSource(QueuedEventSource):
         self._channel: Any | None = None
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
-        self._outstanding_tags: set[int] = set()
         self._event_io: dict[int, tuple[_PikaIo, str]] = {}
 
     def connect(self) -> None:
@@ -95,7 +94,6 @@ class RabbitMQEventSource(QueuedEventSource):
             self._clear_lifecycle()
             self._delivery_tags.clear()
             self._held_tags.clear()
-            self._outstanding_tags.clear()
             self._event_io.clear()
             for event in carried:
                 self._pending.append(event)
@@ -115,7 +113,6 @@ class RabbitMQEventSource(QueuedEventSource):
             self._clear_lifecycle()
             self._delivery_tags.clear()
             self._held_tags.clear()
-            self._outstanding_tags.clear()
             self._event_io.clear()
         if io is None:
             return
@@ -205,44 +202,7 @@ class RabbitMQEventSource(QueuedEventSource):
         if not resolved:
             return tuple(confirmed)
 
-        batch_tag: int | None = None
-        requested_tags = {tag for _eid, tag in resolved}
-        with self._lock:
-            outstanding = set(self._outstanding_tags)
-        for candidate in sorted(requested_tags, reverse=True):
-            covered = {tag for tag in outstanding if tag <= candidate}
-            if len(covered) > 1 and covered <= requested_tags:
-                batch_tag = candidate
-                break
-
-        remaining = resolved
-        if batch_tag is not None:
-            if not self._owns_io(io):
-                return tuple(confirmed)
-            applied = io.submit(
-                partial(
-                    self._basic_ack,
-                    io,
-                    batch_tag,
-                    multiple=True,
-                    requested=frozenset(requested_tags),
-                )
-            )
-            if applied:
-                batched = [(eid, tag) for eid, tag in resolved if tag <= batch_tag]
-                remaining = [(eid, tag) for eid, tag in resolved if tag > batch_tag]
-                with self._lock:
-                    if self._io is io:
-                        self._outstanding_tags -= {tag for tag in self._outstanding_tags if tag <= batch_tag}
-                        for eid, tag in batched:
-                            if self._delivery_tags.get(eid) != tag:
-                                continue
-                            self._delivery_tags.pop(eid, None)
-                            self._held_tags.discard(tag)
-                            self._forget_event(eid)
-                            confirmed.append(eid)
-
-        for eid, tag in remaining:
+        for eid, tag in resolved:
             if not self._owns_io(io):
                 return tuple(confirmed)
             io.submit(partial(self._basic_ack, io, tag))
@@ -251,7 +211,6 @@ class RabbitMQEventSource(QueuedEventSource):
                     continue
                 self._delivery_tags.pop(eid, None)
                 self._held_tags.discard(tag)
-                self._outstanding_tags.discard(tag)
                 self._forget_event(eid)
                 confirmed.append(eid)
         return tuple(confirmed)
@@ -358,34 +317,10 @@ class RabbitMQEventSource(QueuedEventSource):
         return fetched, None
 
     def _basic_get(self, io: _PikaIo) -> Any:
-        got = io.broker_channel().basic_get(self._queue, auto_ack=False)
-        method = got[0] if got else None
-        if method is not None:
-            tag = int(method.delivery_tag)
-            with self._lock:
-                if self._io is io:
-                    self._outstanding_tags.add(tag)
-        return got
+        return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
-    def _basic_ack(
-        self,
-        io: _PikaIo,
-        tag: int,
-        *,
-        multiple: bool = False,
-        requested: frozenset[int] | None = None,
-    ) -> bool:
-        if multiple:
-            with self._lock:
-                if self._io is not io or requested is None:
-                    return False
-                covered = {held for held in self._outstanding_tags if held <= tag}
-                if len(covered) <= 1 or not covered <= requested:
-                    return False
-            io.broker_channel().basic_ack(delivery_tag=tag, multiple=True)
-            return True
+    def _basic_ack(self, io: _PikaIo, tag: int) -> None:
         io.broker_channel().basic_ack(delivery_tag=tag)
-        return True
 
     def _basic_nack(self, io: _PikaIo, tag: int) -> None:
         io.broker_channel().basic_nack(delivery_tag=tag, requeue=True)
@@ -475,7 +410,3 @@ class RabbitMQEventSource(QueuedEventSource):
             io.submit(partial(self._basic_ack, io, tag))
         except RABBITMQ_IO_ERRORS:
             logger.exception("Failed to ack discarded RabbitMQ message")
-            return
-        with self._lock:
-            if self._io is io:
-                self._outstanding_tags.discard(tag)
