@@ -27,18 +27,10 @@ from cicerone.track.store_common import (
 
 logger = logging.getLogger(__name__)
 
-_PG_IDENT_MAX = 63
-
 
 def _track_index_name(table: str, suffix: str) -> str:
-    name = f"{table}_{suffix}"
-    raw = name.encode()
-    if len(raw) <= _PG_IDENT_MAX:
-        return name
-    digest = hashlib.sha256(raw).hexdigest()[:8]
-    marker = f"_{digest}".encode()
-    trimmed = raw[: _PG_IDENT_MAX - len(marker)].decode(errors="ignore")
-    return f"{trimmed}_{digest}"
+    digest = hashlib.sha256(table.encode()).hexdigest()[:24]
+    return f"trk_{digest}_{suffix}"
 
 
 class TrackDbBackend:
