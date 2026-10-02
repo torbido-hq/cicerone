@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   logged instead of raised, so callers do not publish the accepted
   records again. A failed close after a connect error is logged and
   does not replace that error.
+- Serve event shutdown only treats publish errors as ignorable while
+  closing the publisher. Unexpected exceptions now propagate. A failed
+  worker stop or publisher close after a startup error is logged and
+  does not replace that error.
 
 ## [0.8.4] - 2026-09-25
 

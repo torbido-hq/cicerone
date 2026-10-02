@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
+from cicerone.job_eval import PUBLISH_ERRORS
 from cicerone.locks import (
     LockBackend,
     build_lock_backend,
@@ -56,8 +58,11 @@ class EventsRuntime:
                     return False
             return True
         finally:
-            _close_publisher(self.publisher)
-            self.publisher = None
+            try:
+                # A pending worker-stop error must still propagate.
+                _close_publisher(self.publisher, quiet=sys.exception() is not None)
+            finally:
+                self.publisher = None
 
 
 def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
@@ -146,12 +151,26 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
     return read_users
 
 
-def _close_publisher(publisher: RecommendationPublisher | None) -> None:
+def _stop_worker_quietly(worker: EventWorker | None) -> None:
+    if worker is None:
+        return
+    try:
+        worker.stop()
+    except Exception:
+        # The startup error must still propagate.
+        logger.exception("Event worker stop after startup failure")
+
+
+def _close_publisher(publisher: RecommendationPublisher | None, *, quiet: bool = False) -> None:
     if publisher is None:
         return
     try:
         publisher.close()
+    except PUBLISH_ERRORS:
+        logger.exception("Recommendation publisher close failed")
     except Exception:
+        if not quiet:
+            raise
         logger.exception("Recommendation publisher close failed")
 
 
@@ -206,6 +225,7 @@ def start_events_runtime(
     )
     publisher = build_publisher(settings, connect=False)
     worker: EventWorker | None = None
+    ready = False
     try:
         online = None
         if settings.events.online.enabled and settings.experiment.enabled:
@@ -290,14 +310,12 @@ def start_events_runtime(
                 settings.events.kind,
                 settings.output.kind,
             )
-        return EventsRuntime(
+        runtime = EventsRuntime(
             webhook_source=webhook_source, worker=worker, apply_lock=apply_lock, publisher=publisher
         )
-    except Exception:
-        if worker is not None:
-            try:
-                worker.stop()
-            except Exception:
-                logger.exception("Event worker stop after startup failure")
-        _close_publisher(publisher)
-        raise
+        ready = True
+        return runtime
+    finally:
+        if not ready:
+            _stop_worker_quietly(worker)
+            _close_publisher(publisher, quiet=True)
