@@ -1117,7 +1117,7 @@ def test_poll_ack_and_health(monkeypatch):
     assert channel.acked == [1, 2]
 
 
-def test_poll_gets_a_batch_on_one_submit_and_acks_once(monkeypatch):
+def test_poll_gets_a_batch_on_one_submit(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     for event_id in ("e1", "e2", "e3"):
         broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
@@ -1138,7 +1138,7 @@ def test_poll_gets_a_batch_on_one_submit_and_acks_once(monkeypatch):
     assert submits["n"] == 1
     source.ack([event.event_id for event in events])
     channel = broker.connection.channel_obj
-    assert channel.ack_calls == [(3, True)]
+    assert channel.ack_calls == [(1, False), (2, False), (3, False)]
     assert channel.acked == [1, 2, 3]
     source.close()
 
@@ -1155,29 +1155,6 @@ def test_ack_leaves_an_unrequested_lower_tag(monkeypatch):
     channel = broker.connection.channel_obj
     assert channel.ack_calls == [(2, False), (3, False)]
     assert 1 in channel._unacked
-    source.close()
-
-
-def test_ack_skips_batch_when_outstanding_set_grows(monkeypatch):
-    broker = install_fake_rabbitmq(monkeypatch)
-    for event_id in ("e1", "e2", "e3"):
-        broker.enqueue("cicerone.events", event_payload(event_id=event_id, item_id=event_id))
-    source = RabbitMQEventSource(_options())
-    source.connect()
-    events = list(source.poll(3))
-    io = source._io
-    assert io is not None
-    original_submit = io.submit
-
-    def _submit(fn, **kwargs):
-        source._outstanding_tags.add(0)
-        return original_submit(fn, **kwargs)
-
-    io.submit = _submit  # type: ignore[method-assign]
-    source.ack([event.event_id for event in events])
-    channel = broker.connection.channel_obj
-    assert [flag for _tag, flag in channel.ack_calls] == [False, False, False]
-    assert channel.acked == [1, 2, 3]
     source.close()
 
 
@@ -1235,7 +1212,7 @@ def test_nack_rejects_when_io_failed(monkeypatch):
     source.close()
 
 
-def test_failed_batch_ack_forgets_nothing(monkeypatch):
+def test_ack_keeps_later_tag_when_an_earlier_ack_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", event_payload(event_id="e1"))
     broker.enqueue("cicerone.events", event_payload(event_id="e2"))
@@ -1245,13 +1222,13 @@ def test_failed_batch_ack_forgets_nothing(monkeypatch):
     assert [event.event_id for event in events] == ["e1", "e2"]
     original = broker.connection.channel_obj.basic_ack
 
-    def _ack(*, delivery_tag: int, multiple: bool = False) -> None:
-        if multiple:
-            raise RuntimeError("ack 2")
+    def _ack(*, delivery_tag: int) -> None:
+        if delivery_tag == 1:
+            raise RuntimeError("ack 1")
         original(delivery_tag=delivery_tag)
 
     broker.connection.channel_obj.basic_ack = _ack  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="ack 2"):
+    with pytest.raises(RuntimeError, match="ack 1"):
         source.ack([event.event_id for event in events])
     source.nack(events)
     again = list(source.poll(10))
