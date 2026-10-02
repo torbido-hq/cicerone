@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from collections.abc import Callable
 
 from cicerone import __version__
@@ -12,7 +13,7 @@ from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
 logger = logging.getLogger(__name__)
 
-_FORWARDING_COMMANDS = frozenset({"users", "export-openapi"})
+_FORWARDING_COMMANDS = frozenset({"users", "export-openapi", "forget-user"})
 
 
 def _apply_config(path: str | None) -> None:
@@ -88,6 +89,14 @@ def _parser() -> argparse.ArgumentParser:
     _add_command(
         sub.add_parser("export-openapi", add_help=False, help="Write the serve OpenAPI document"),
         _cmd_export_openapi,
+    )
+    _add_command(
+        sub.add_parser(
+            "forget-user",
+            add_help=False,
+            help="Erase one user's recommendations, track, exposures, and history",
+        ),
+        _cmd_forget_user,
     )
     return parser
 
@@ -185,6 +194,36 @@ def _cmd_users(argv: list[str]) -> int:
         config_path = os.environ.get("CICERONE_CONFIG_PATH")
         argv = ["--users-path", dashboard_users_path(load_settings(), config_path=config_path), *argv]
     users_main(argv)
+    return 0
+
+
+def _cmd_forget_user(argv: list[str]) -> int:
+    from cicerone.config import load_settings
+    from cicerone.config.constants import ConfigError
+    from cicerone.forget import forget_user
+    from cicerone.locks import LockLostError, WriterLockBusyError, build_output_writer_lock, held_writer_lock
+
+    parser = argparse.ArgumentParser(
+        prog="cicerone forget-user",
+        description="Erase one user's recommendations, track rows, exposures, and history.",
+    )
+    parser.add_argument("user_id", help="User id to erase from the output store")
+    args = parser.parse_args(argv)
+    try:
+        settings = load_settings()
+        lock = build_output_writer_lock(settings)
+        if lock is None:
+            result = forget_user(settings.output, args.user_id)
+        else:
+            with held_writer_lock(lock):
+                result = forget_user(settings.output, args.user_id, writer_lock=lock)
+    except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(
+        f"forgot {args.user_id}: recommendations={result.recommendations} "
+        f"track={result.track} exposures={result.exposures} history={result.history}"
+    )
     return 0
 
 
