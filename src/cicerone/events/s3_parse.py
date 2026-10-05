@@ -161,15 +161,16 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
         event_name = str(record.get("eventName") or "")
         if event_name and not event_name.startswith("ObjectCreated"):
             continue
-        s3 = record.get("s3") or {}
+        s3 = record.get("s3")
         if not isinstance(s3, dict):
             raise MalformedS3Notification("S3 notification record is missing an object descriptor")
-        bucket_info = s3.get("bucket") or {}
-        object_info = s3.get("object") or {}
+        bucket_info = s3.get("bucket")
+        object_info = s3.get("object")
         if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
             raise MalformedS3Notification("S3 notification record is missing bucket or object")
         bucket = bucket_info.get("name")
         key = object_info.get("key")
-        if bucket and key:
-            out.append((str(bucket), unquote_plus(str(key))))
+        if not bucket or not key:
+            raise MalformedS3Notification("S3 notification record is missing bucket name or object key")
+        out.append((str(bucket), unquote_plus(str(key))))
     return out

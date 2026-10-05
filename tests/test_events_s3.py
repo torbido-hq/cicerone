@@ -530,6 +530,22 @@ def test_events_from_body_validation():
                 }
             )
         )
+    for body in (
+        {"Records": [{"eventName": "ObjectCreated:Put"}]},
+        {"Records": [{"eventName": "ObjectCreated:Put", "s3": None}]},
+        {"Records": [{"eventName": "ObjectCreated:Put", "s3": {"bucket": None, "object": {"key": "a"}}}]},
+        {
+            "Records": [
+                {"eventName": "ObjectCreated:Put", "s3": {"bucket": {"name": "b"}, "object": {}}},
+                {
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {"bucket": {"name": "b"}, "object": {"key": "ok"}},
+                },
+            ]
+        },
+    ):
+        with pytest.raises(MalformedS3Notification):
+            _s3_records_from_sqs_body(json.dumps(body))
 
 
 @mock_aws
