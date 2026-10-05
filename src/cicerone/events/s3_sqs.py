@@ -12,6 +12,7 @@ from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    MalformedS3Notification,
     _Batch,
     _s3_records_from_sqs_body,
 )
@@ -72,6 +73,9 @@ class S3SqsPoll:
                 receipt = message["ReceiptHandle"]
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
+                except MalformedS3Notification:
+                    logger.exception("Malformed nested S3 notification; leaving the SQS message for retry")
+                    continue
                 except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)

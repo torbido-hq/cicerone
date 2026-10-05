@@ -11,13 +11,13 @@ from support.events import event_payload
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
-    _LOAD_FAILURE_SKIP_AFTER,
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
     _events_from_body,
     _s3_records_from_sqs_body,
 )
+from cicerone.events.s3_parse import MalformedS3Notification
 
 
 def _creds(**extra):
@@ -113,20 +113,19 @@ def test_s3_list_retries_transient_load_failures(tmp_path, monkeypatch):
     def flaky(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
         if str(key).endswith("a.json"):
             calls["n"] += 1
-            if calls["n"] < _LOAD_FAILURE_SKIP_AFTER:
+            if calls["n"] < 2:
                 raise BotoCoreError()
         return real_load(self, s3, bucket, key, etag=etag)
 
     monkeypatch.setattr(S3EventSource, "_load_object_events", flaky)
-    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
-        assert list(source.poll(10)) == []
-        assert not marker.exists()
+    assert list(source.poll(10)) == []
+    assert not marker.exists()
     loaded = list(source.poll(1))
     assert [event.event_id for event in loaded] == ["e1"]
 
 
 @mock_aws
-def test_s3_list_skips_after_repeated_transient_failures(tmp_path, monkeypatch):
+def test_s3_list_does_not_skip_after_repeated_client_failures(tmp_path, monkeypatch):
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket="events-bucket")
     _put_event(client, "events/a.json", event_payload(event_id="e1", item_id="i1"))
@@ -142,12 +141,9 @@ def test_s3_list_skips_after_repeated_transient_failures(tmp_path, monkeypatch):
         return real_load(self, s3, bucket, key, etag=etag)
 
     monkeypatch.setattr(S3EventSource, "_load_object_events", always_fail_a)
-    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
+    for _ in range(5):
         assert list(source.poll(10)) == []
         assert not marker.exists()
-    loaded = list(source.poll(10))
-    assert [event.event_id for event in loaded] == ["e2"]
-    assert json.loads(marker.read_text())["key"] == "events/a.json"
 
 
 @mock_aws
@@ -507,32 +503,33 @@ def test_events_from_body_validation():
         _s3_records_from_sqs_body("[]")
     with pytest.raises(ValueError, match="Records"):
         _s3_records_from_sqs_body("{}")
-    assert _s3_records_from_sqs_body(
-        json.dumps(
-            {
-                "Records": [
-                    "skip",
-                    {
-                        "eventName": "ObjectRemoved:Delete",
-                        "s3": {"bucket": {"name": "b"}, "object": {"key": "x"}},
-                    },
-                    {"eventName": "ObjectCreated:Put", "s3": "bad"},
-                    {
-                        "eventName": "ObjectCreated:Put",
-                        "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
-                    },
-                    {
-                        "eventName": "ObjectCreated:Put",
-                        "s3": {"bucket": {"name": "b"}, "object": "not-an-object"},
-                    },
-                    {
-                        "eventName": "ObjectCreated:Put",
-                        "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
-                    },
-                ]
-            }
+    with pytest.raises(MalformedS3Notification):
+        _s3_records_from_sqs_body(
+            json.dumps(
+                {
+                    "Records": [
+                        "skip",
+                        {
+                            "eventName": "ObjectRemoved:Delete",
+                            "s3": {"bucket": {"name": "b"}, "object": {"key": "x"}},
+                        },
+                        {"eventName": "ObjectCreated:Put", "s3": "bad"},
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
+                        },
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": {"name": "b"}, "object": "not-an-object"},
+                        },
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
+                        },
+                    ]
+                }
+            )
         )
-    ) == [("b", "a/b.json")]
 
 
 @mock_aws
@@ -615,11 +612,12 @@ def test_s3_sqs_poison_and_missing_object_and_health():
 
 
 @mock_aws
-def test_s3_sqs_malformed_nested_notification_is_deleted():
+def test_s3_sqs_malformed_nested_notification_is_left():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
     queue_url = sqs.create_queue(QueueName="events-nested-poison")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-nested"))
     sqs.send_message(
         QueueUrl=queue_url,
         MessageBody=json.dumps(
@@ -628,24 +626,24 @@ def test_s3_sqs_malformed_nested_notification_is_deleted():
                     {
                         "eventName": "ObjectCreated:Put",
                         "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
-                    }
+                    },
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": {"name": "events-bucket"}, "object": {"key": "ok.json"}},
+                    },
                 ]
             }
         ),
     )
-    _put_event(s3, "ok.json", event_payload(event_id="ok-nested"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
-    events = list(source.poll(10))
-    assert [event.event_id for event in events] == ["ok-nested"]
-    source.ack([events[0].event_id])
+    assert list(source.poll(10)) == []
     attrs = sqs.get_queue_attributes(
         QueueUrl=queue_url,
         AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
     )["Attributes"]
     held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
-    assert held == 0
+    assert held == 1
 
 
 @mock_aws
