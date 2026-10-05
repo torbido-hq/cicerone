@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
-from cicerone.config.constants import TRACK_KIND_IMPRESSION
+from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -35,7 +35,7 @@ from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
 from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
-from cicerone.track.store_common import _utc_stamp
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, _utc_stamp, lookback_since
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +187,31 @@ def persist_track_outputs(
         raise
 
 
+def job_track_since(settings: Settings) -> str | None:
+    need_track = settings.track.enabled or (
+        settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON
+    )
+    if not need_track:
+        return None
+    window_hours = float(settings.track.attribution_window_hours)
+    floor = pd.Timestamp(lookback_since(window_hours=window_hours, floor_hours=DASHBOARD_TRACK_FLOOR_HOURS))
+    thompson = settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON
+    if not thompson:
+        return floor.isoformat()
+    try:
+        state = ExperimentStore(settings.output).read_state()
+    except OPTIONAL_IO_ERRORS:
+        return None
+    if not isinstance(state, dict):
+        return None
+    started = str(state.get("window_started_at") or "").strip()
+    stamp = pd.to_datetime(started, utc=True, errors="coerce") if started else pd.NaT
+    if pd.isna(stamp):
+        return None
+    earliest = min(floor, stamp - pd.Timedelta(hours=window_hours))
+    return earliest.isoformat()
+
+
 def score_previous_run(
     settings: Settings,
     events: pd.DataFrame,
@@ -213,7 +238,7 @@ def score_previous_run(
     def _load_track() -> list[dict[str, Any]]:
         if not settings.track.enabled:
             return []
-        return store.read_rows()
+        return store.read_rows(since=job_track_since(settings))
 
     previous_recs: pd.DataFrame | None
     track_rows: list[dict[str, Any]]

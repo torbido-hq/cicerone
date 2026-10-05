@@ -20,6 +20,7 @@ from cicerone.events.base import EventSourceError, EventSourceHealth, Normalized
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
+    RABBITMQ_IO_ERRORS,
     _close_handles,
     _PikaIo,
     _release_io,
@@ -72,11 +73,15 @@ class RabbitMQEventSource(QueuedEventSource):
 
         io = _PikaIo(self._timeout_seconds)
         io.start()
+        opened = False
         try:
             connection, channel = io.submit(partial(self._open, pika, io))
-        except Exception as exc:
-            io.abandon(None, io._connection)
+            opened = True
+        except RABBITMQ_IO_ERRORS as exc:
             raise EventSourceError(f"events.options.amqp_url is unreachable: {exc}") from exc
+        finally:
+            if not opened:
+                io.abandon(None, io._connection)
 
         with self._lock:
             previous_io = self._io
@@ -132,24 +137,36 @@ class RabbitMQEventSource(QueuedEventSource):
             if not self._owns_io(io):
                 break
             try:
-                method, _properties, body = io.submit(partial(self._basic_get, io))
-            except Exception:
+                fetched, error = io.submit(partial(self._basic_get_many, io, remaining))
+            except RABBITMQ_IO_ERRORS:
                 logger.exception("RabbitMQ basic_get failed")
                 io._mark_failed()
                 break
-            if method is None:
-                break
-            incoming = self._delivery_to_event(io, method, body)
-            if incoming is None:
-                if not self._owns_io(io):
+            stop = error is not None
+            for method, _properties, body in fetched:
+                if method is None:
+                    stop = True
                     break
-                continue
-            with self._lock:
-                tag = self._delivery_tags.get(incoming.event_id)
-            if tag is None:
-                continue
-            claimed.append((incoming, tag))
-            remaining -= 1
+                incoming = self._delivery_to_event(io, method, body)
+                if incoming is None:
+                    if not self._owns_io(io):
+                        stop = True
+                        break
+                    continue
+                with self._lock:
+                    tag = self._delivery_tags.get(incoming.event_id)
+                if tag is None:
+                    continue
+                claimed.append((incoming, tag))
+                remaining -= 1
+            if error is not None:
+                logger.error(
+                    "RabbitMQ basic_get failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                io._mark_failed()
+            if stop or not fetched:
+                break
 
         with self._lock:
             out = [
@@ -185,6 +202,7 @@ class RabbitMQEventSource(QueuedEventSource):
                 confirmed.append(eid)
         if not resolved:
             return tuple(confirmed)
+
         for eid, tag in resolved:
             if not self._owns_io(io):
                 return tuple(confirmed)
@@ -244,11 +262,7 @@ class RabbitMQEventSource(QueuedEventSource):
         io = self._io
         if io is None:
             return
-        try:
-            io.submit(partial(self._pump_connection, io))
-        except Exception:
-            logger.exception("RabbitMQ heartbeat process_data_events failed")
-            raise
+        io.submit(partial(self._pump_connection, io))
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -263,7 +277,7 @@ class RabbitMQEventSource(QueuedEventSource):
         try:
             declared = io.submit(partial(self._passive_declare, io))
             ready = int(declared.method.message_count)
-        except Exception:
+        except RABBITMQ_IO_ERRORS:
             logger.exception("RabbitMQ queue_declare (passive) failed")
             if io.failed or io.closing or not self._owns_io(io):
                 return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
@@ -277,6 +291,21 @@ class RabbitMQEventSource(QueuedEventSource):
             last_event_at=last_event_at,
             detail=f"queue={self._queue}",
         )
+
+    def _basic_get_many(
+        self, io: _PikaIo, count: int
+    ) -> tuple[list[tuple[Any, Any, Any]], BaseException | None]:
+        fetched: list[tuple[Any, Any, Any]] = []
+        for _ in range(count):
+            if not self._owns_io(io):
+                break
+            try:
+                fetched.append(self._basic_get(io))
+            except RABBITMQ_IO_ERRORS as exc:
+                return fetched, exc
+            if fetched[-1][0] is None:
+                break
+        return fetched, None
 
     def _basic_get(self, io: _PikaIo) -> Any:
         return io.broker_channel().basic_get(self._queue, auto_ack=False)
@@ -294,17 +323,19 @@ class RabbitMQEventSource(QueuedEventSource):
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )
         channel = None
+        opened = False
         try:
             io._bind_handles(connection=connection)
             channel = connection.channel()
             io._bind_handles(channel=channel)
             channel.basic_qos(prefetch_count=self._prefetch)
             channel.queue_declare(queue=self._queue, durable=True)
-        except Exception:
-            io._channel = None
-            io._connection = None
-            _close_handles(channel, connection)
-            raise
+            opened = True
+        finally:
+            if not opened:
+                io._channel = None
+                io._connection = None
+                _close_handles(channel, connection)
         return connection, channel
 
     def _pump_connection(self, io: _PikaIo) -> None:
@@ -365,5 +396,5 @@ class RabbitMQEventSource(QueuedEventSource):
     def _ack_discard(self, io: _PikaIo, tag: int) -> None:
         try:
             io.submit(partial(self._basic_ack, io, tag))
-        except Exception:
+        except RABBITMQ_IO_ERRORS:
             logger.exception("Failed to ack discarded RabbitMQ message")

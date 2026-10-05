@@ -5,10 +5,11 @@ import json
 import pandas as pd
 import pytest
 from support.events import event_payload
-from support.fake_kafka import install_fake_kafka
-from support.fake_rabbitmq import FakeChannel, install_fake_rabbitmq
+from support.fake_kafka import FakeProducer, install_fake_kafka
+from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
+from cicerone.events.errors import AMQPError, KafkaException
 from cicerone.events.normalize import normalize_event
 from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
@@ -41,6 +42,7 @@ def test_user_recommendation_messages_one_per_user():
     assert first["message_id"] == user_recommendation_messages(_recs_frame())[0][2]
     assert len(first["recommendations"]) == 2
     assert first["recommendations"][0]["item_id"] == "i1"
+    assert b"message_id" not in repr(vars(messages)).encode()
 
 
 def test_user_recommendation_messages_empty():
@@ -186,7 +188,7 @@ def test_user_recommendation_messages_rejects_nan():
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": float("nan"), "source": "popular"}]
     )
     with pytest.raises(ValueError, match="not JSON compliant"):
-        user_recommendation_messages(frame)
+        list(user_recommendation_messages(frame))
 
 
 def test_user_recommendation_messages_rejects_numpy_nan():
@@ -198,7 +200,7 @@ def test_user_recommendation_messages_rejects_numpy_nan():
     frame["score"] = frame["score"].astype(object)
     frame.at[0, "score"] = np.float64("nan")
     with pytest.raises(ValueError, match="not JSON compliant"):
-        user_recommendation_messages(frame)
+        list(user_recommendation_messages(frame))
 
 
 def test_user_recommendation_messages_encodes_optional_missing_as_null():
@@ -542,7 +544,31 @@ def test_rabbitmq_publisher_exchange_empty_routing_key(monkeypatch):
 
 def test_kafka_publisher_connect_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    broker.list_topics_error = RuntimeError("down")
+    broker.list_topics_error = KafkaException("down")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
+    with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+    assert broker.flush_calls == [2.0]
+
+
+def test_kafka_publisher_connect_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = RuntimeError("bug")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(RuntimeError, match="bug"):
+        publisher.connect()
+    assert broker.flush_calls == [10.0]
+
+
+def test_kafka_publisher_connect_flush_failure_keeps_original_error(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = KafkaException("down")
+
+    def _boom(self, timeout=None):  # type: ignore[no-untyped-def]
+        self.broker.flush_calls.append(timeout)
+        raise RuntimeError("flush bug")
+
+    monkeypatch.setattr(FakeProducer, "flush", _boom)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
@@ -551,28 +577,68 @@ def test_kafka_publisher_connect_failure(monkeypatch):
 
 def test_kafka_publisher_producer_constructor_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    broker.producer_error = RuntimeError("bad client")
+    broker.producer_error = KafkaException("bad client")
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
     assert broker.flush_calls == []
 
 
+def test_kafka_publisher_producer_constructor_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.producer_error = RuntimeError("bad client")
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    with pytest.raises(RuntimeError, match="bad client"):
+        publisher.connect()
+    assert broker.flush_calls == []
+
+
 def test_rabbitmq_publisher_connect_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    broker.connect_error = RuntimeError("down")
+    broker.connect_error = AMQPError("down")
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
     with pytest.raises(ConfigError, match="unreachable"):
+        publisher.connect()
+
+
+def test_rabbitmq_publisher_connect_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.connect_error = RuntimeError("bug")
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    with pytest.raises(RuntimeError, match="bug"):
         publisher.connect()
 
 
 def test_rabbitmq_publisher_closes_connection_when_declare_fails(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    broker.queue_declare_error = RuntimeError("no queue")
+    broker.queue_declare_error = AMQPError("no queue")
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
     with pytest.raises(ConfigError, match="unreachable"):
         publisher.connect()
     assert broker.connection.closed is True
+
+
+def test_rabbitmq_publisher_declare_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.queue_declare_error = RuntimeError("bug")
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    with pytest.raises(RuntimeError, match="bug"):
+        publisher.connect()
+    assert broker.connection.closed is True
+
+
+def test_rabbitmq_publisher_connect_close_failure_keeps_original_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.queue_declare_error = AMQPError("no queue")
+
+    def _boom(self) -> None:
+        del self
+        raise RuntimeError("close bug")
+
+    monkeypatch.setattr(FakeConnection, "close", _boom)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    with pytest.raises(ConfigError, match="no queue"):
+        publisher.connect()
 
 
 def test_build_publisher_unknown_kind():
@@ -592,6 +658,19 @@ def test_kafka_publisher_close_flush_failure(monkeypatch):
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="flush fail"):
+        publisher.close()
+
+
+def test_kafka_publisher_close_wraps_client_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise KafkaException("flush fail")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
 
 
@@ -707,13 +786,39 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
     publisher.connect()
 
     def _boom(_timeout=None):
-        raise RuntimeError("flush fail")
+        raise KafkaException("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="flush fail"):
         publisher.publish(_recs_frame())
-    with pytest.raises(RuntimeError, match="flush fail"):
+    with pytest.raises(PublishError, match="flush fail"):
         publisher.close()
+
+
+def test_kafka_publisher_flush_after_produce_is_publish_error(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(_timeout=None):
+        raise RuntimeError("flush bug")
+
+    publisher._producer.flush = _boom  # type: ignore[method-assign]
+    with pytest.raises(PublishError, match="flush bug"):
+        publisher.publish(_recs_frame())
+
+
+def test_kafka_publisher_produce_unexpected_error_propagates(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("produce bug")
+
+    publisher._producer.produce = _boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="produce bug"):
+        publisher.publish(_recs_frame())
 
 
 def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
@@ -729,7 +834,7 @@ def test_rabbitmq_publisher_recovers_after_channel_error(monkeypatch):
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise RuntimeError("channel closed")
+            raise AMQPError("channel closed")
         return original(*args, **kwargs)
 
     channel.basic_publish = boom  # type: ignore[method-assign]
@@ -751,7 +856,7 @@ def test_rabbitmq_publisher_retries_unsent_users_only(monkeypatch):
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise RuntimeError("channel closed")
+            raise AMQPError("channel closed")
         return original(*args, **kwargs)
 
     channel.basic_publish = boom  # type: ignore[method-assign]
@@ -768,7 +873,7 @@ def test_rabbitmq_publisher_second_failure_is_publish_error(monkeypatch):
 
     def boom(self, *args, **kwargs):
         del self, args, kwargs
-        raise RuntimeError("channel closed")
+        raise AMQPError("channel closed")
 
     monkeypatch.setattr(FakeChannel, "basic_publish", boom)
     with pytest.raises(PublishError, match="channel closed"):
@@ -784,8 +889,8 @@ def test_rabbitmq_publisher_reconnects_after_failed_recover(monkeypatch):
     assert channel is not None
 
     def boom(*args, **kwargs):
-        broker.connect_error = RuntimeError("down")
-        raise RuntimeError("channel closed")
+        broker.connect_error = AMQPError("down")
+        raise AMQPError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
     with pytest.raises(PublishError, match="unreachable or setup failed"):
@@ -807,7 +912,7 @@ def test_rabbitmq_publisher_recover_runtime_error_is_not_publish_error(monkeypat
 
     def boom_publish(*args, **kwargs):
         del args, kwargs
-        raise RuntimeError("channel closed")
+        raise AMQPError("channel closed")
 
     def boom_close() -> None:
         raise RuntimeError("close bug")
@@ -817,6 +922,144 @@ def test_rabbitmq_publisher_recover_runtime_error_is_not_publish_error(monkeypat
     with pytest.raises(RuntimeError, match="close bug"):
         publisher.publish(_recs_frame())
     publisher.close()
+
+
+def test_rabbitmq_publisher_publish_unexpected_error_propagates(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("publish bug")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="publish bug"):
+        publisher.publish(_recs_frame())
+    assert broker.published == []
+    assert publisher._channel is channel
+
+
+def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("publish bug")
+        return original(*args, **kwargs)
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1", "u2"]
+
+
+def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    calls = {"n": 0}
+    original = FakeChannel.basic_publish
+
+    def boom(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(self, *args, **kwargs)
+        raise RuntimeError("publish bug")
+
+    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1"]
+
+
+def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(*args, **kwargs)
+        broker.connect_error = AMQPError("down")
+        raise AMQPError("channel closed")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1"]
+    assert publisher._channel is None
+
+
+def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_raised(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    channel = publisher._channel
+    assert channel is not None
+    calls = {"n": 0}
+    original = channel.basic_publish
+
+    def boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return original(*args, **kwargs)
+        raise RuntimeError("publish bug")
+
+    def boom_close() -> None:
+        raise RuntimeError("close bug")
+
+    channel.basic_publish = boom  # type: ignore[method-assign]
+    channel.close = boom_close  # type: ignore[method-assign]
+    publisher.publish(_recs_frame())
+    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
+    assert users == ["u1"]
+    assert broker.connection.closed is True
+
+
+def test_rabbitmq_publisher_retry_unexpected_error_propagates(monkeypatch):
+    install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
+    publisher.connect()
+    calls = {"n": 0}
+
+    def boom(self, *args, **kwargs):
+        del self, args, kwargs
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise AMQPError("channel closed")
+        raise RuntimeError("publish bug")
+
+    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
+    with pytest.raises(RuntimeError, match="publish bug"):
+        publisher.publish(_recs_frame())
+
+
+def test_rabbitmq_publisher_close_propagates_unexpected_error(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+
+    def _boom() -> None:
+        raise ValueError("close bug")
+
+    broker.connection.channel_obj.close = _boom  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="close bug"):
+        publisher.close()
+    assert broker.connection.closed is True
 
 
 def test_sidecar_generation_current_matches_latest_manifest(tmp_path):

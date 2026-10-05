@@ -4,6 +4,46 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.5] - 2026-09-28
+
+### Fixed
+
+- Redis Streams polling, health, heartbeat, and close paths only recover
+  from Redis client errors. Unexpected exceptions now propagate.
+- Kafka consumption only recovers from Kafka client errors while polling,
+  discarding invalid messages, and closing the consumer. Unexpected
+  exceptions now propagate.
+- RabbitMQ consumption only recovers from AMQP, socket, and timeout
+  errors while connecting, polling, probing queue depth, and closing.
+  Unexpected exceptions now propagate, including a heartbeat pump
+  error. An unexpected idle-pump error marks the worker failed and
+  closes both connection handles before that thread stops. A failed
+  handle close is logged and does not skip the other handle.
+- DB event consumption only recovers from SQL errors while estimating
+  lag, and only treats corrupt watermark files as ignorable. Unexpected
+  exceptions now propagate. A failed connect releases the engine it
+  just opened.
+- In-flight event heartbeats only treat source errors as a failed beat.
+  Unexpected exceptions now propagate after the beat is recorded, so
+  the apply is not acknowledged.
+- Kafka publishing only recovers from Kafka client errors and a full
+  producer queue while connecting, publishing, and closing. Unexpected
+  exceptions now propagate until a message has been produced. An error
+  after that, including on close, stays a publish failure so callers do
+  not retry records the broker may already have. A failed flush after a
+  connect error is logged and does not replace that error.
+- RabbitMQ publishing only recovers from AMQP, socket, and timeout
+  errors while connecting, publishing, and closing. Unexpected
+  exceptions now propagate until a message has been confirmed. After
+  that, only unsent messages are retried, and a further failure is
+  logged instead of raised, so callers do not publish the accepted
+  records again. A failed close after a connect error is logged and
+  does not replace that error.
+- Serve event shutdown only treats publish errors as ignorable while
+  closing the publisher. Unexpected exceptions now propagate. A failed
+  worker stop or publisher close after a startup error is logged and
+  does not replace that error.
+
 ## [0.8.4] - 2026-09-25
 
 ### Fixed

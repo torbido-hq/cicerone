@@ -193,6 +193,21 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
+def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
+    from sqlalchemy import create_engine, text
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
+    assert store.read_rows() == []
+    assert store.append_rows([_row()]) == 1
+    assert store.read_rows()[0]["event_id"] == "imp-1"
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        names = [row[1] for row in conn.execute(text('PRAGMA index_list("recommendation_track")'))]
+    assert names == ["sqlite_autoindex_recommendation_track_1"]
+
+
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
