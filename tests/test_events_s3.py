@@ -17,7 +17,7 @@ from cicerone.events.s3 import (
     _events_from_body,
     _s3_records_from_sqs_body,
 )
-from cicerone.events.s3_parse import MalformedS3Notification
+from cicerone.events.s3_parse import _SQS_MALFORMED_RECEIVE_LIMIT, MalformedS3Notification
 
 
 def _creds(**extra):
@@ -682,6 +682,70 @@ def test_s3_sqs_malformed_nested_sns_and_record_are_left():
     source.connect()
     assert list(source.poll(10)) == []
     assert _sqs_held(sqs, queue_url) == 2
+
+
+def _sqs_counts(sqs, queue_url: str) -> tuple[int, int]:
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    return int(attrs["ApproximateNumberOfMessages"]), int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+
+@mock_aws
+def test_s3_sqs_malformed_notification_is_visible_until_receive_limit():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-limit")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_counts(sqs, queue_url) == (1, 0)
+    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+        assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
+def test_s3_sqs_malformed_without_receive_count_is_deleted(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-uncounted")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    real = source._sqs.receive_message
+
+    def strip(**kwargs):
+        response = real(**kwargs)
+        for message in response.get("Messages") or []:
+            message.pop("Attributes", None)
+        return response
+
+    monkeypatch.setattr(source._sqs, "receive_message", strip)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
+def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-release")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 1
 
 
 @mock_aws

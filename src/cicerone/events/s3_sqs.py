@@ -11,6 +11,7 @@ from typing import Any
 from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+    _SQS_MALFORMED_RECEIVE_LIMIT,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     MalformedS3Notification,
     _Batch,
@@ -28,6 +29,41 @@ def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
         logger.exception("Failed to delete SQS poison message; leaving it for retry")
         return False
     return True
+
+
+def _approximate_receive_count(message: dict[str, Any]) -> int:
+    attributes = message.get("Attributes")
+    raw = attributes.get("ApproximateReceiveCount") if isinstance(attributes, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, int | str):
+        return _SQS_MALFORMED_RECEIVE_LIMIT
+    try:
+        count = int(raw)
+    except ValueError:
+        return _SQS_MALFORMED_RECEIVE_LIMIT
+    if count < 1:
+        return _SQS_MALFORMED_RECEIVE_LIMIT
+    return count
+
+
+def _release_or_drop_malformed(sqs: Any, queue_url: str, message: dict[str, Any]) -> bool:
+    receipt = message["ReceiptHandle"]
+    count = _approximate_receive_count(message)
+    if count >= _SQS_MALFORMED_RECEIVE_LIMIT:
+        logger.exception(
+            "Malformed nested S3 notification reached %s receives; deleting poison message",
+            count,
+        )
+        return _delete_poison_message(sqs, queue_url, receipt)
+    logger.exception(
+        "Malformed nested S3 notification; releasing SQS message for retry (receive %s of %s)",
+        count,
+        _SQS_MALFORMED_RECEIVE_LIMIT,
+    )
+    try:
+        sqs.change_message_visibility(QueueUrl=queue_url, ReceiptHandle=receipt, VisibilityTimeout=0)
+    except S3_READ_ERRORS:
+        logger.exception("Failed to release malformed S3 notification for retry")
+    return False
 
 
 class S3SqsPoll:
@@ -72,6 +108,7 @@ class S3SqsPoll:
                 MaxNumberOfMessages=min(self._max_messages, 10),
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
                 VisibilityTimeout=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+                MessageSystemAttributeNames=["ApproximateReceiveCount"],
             )
             messages = response.get("Messages") or []
             if not messages:
@@ -84,7 +121,8 @@ class S3SqsPoll:
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
                 except MalformedS3Notification:
-                    logger.exception("Malformed nested S3 notification; leaving the SQS message for retry")
+                    if _release_or_drop_malformed(sqs, queue_url, message):
+                        made_progress = True
                     continue
                 except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
