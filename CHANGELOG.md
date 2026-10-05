@@ -170,11 +170,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - S3 parquet reads only fall back from the pyarrow filesystem to
   GetObject for OS and Arrow errors. Unexpected exceptions now
   propagate.
-- S3 event consumption only retries or skips objects on S3 client
-  errors, and only treats corrupt markers and invalid SQS bodies as
-  ignorable. Unexpected exceptions now propagate.
-- Malformed nested S3 notification fields are ignored like other invalid
-  SQS bodies, instead of aborting the poll.
+- S3 list loads only retry or skip an object on S3 client errors. A
+  corrupt marker file is still ignored. Unexpected list and marker
+  errors propagate.
+- A malformed nested S3 notification field is skipped, so a valid
+  record in the same message is still applied. SQS retry, visibility,
+  and delete-after-ack are unchanged.
 
 ## [0.8.4] - 2026-09-25
 
