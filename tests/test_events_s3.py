@@ -796,7 +796,7 @@ def test_s3_list_unexpected_marker_error_propagates(tmp_path, monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_health_unexpected_lag_error_propagates(monkeypatch):
+def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -808,8 +808,9 @@ def test_s3_sqs_health_unexpected_lag_error_propagates(monkeypatch):
         raise RuntimeError("attrs")
 
     monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
-    with pytest.raises(RuntimeError, match="attrs"):
-        source.health()
+    health = source.health()
+    assert health.connected is True
+    assert health.lag == 0
 
 
 @mock_aws
@@ -831,7 +832,7 @@ def test_s3_sqs_health_recovers_from_client_error(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_unexpected_load_error_propagates(monkeypatch):
+def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -845,8 +846,7 @@ def test_s3_sqs_unexpected_load_error_propagates(monkeypatch):
         raise RuntimeError("load bug")
 
     monkeypatch.setattr(S3EventSource, "_load_object_events", boom)
-    with pytest.raises(RuntimeError, match="load bug"):
-        source.poll(10)
+    assert list(source.poll(10)) == []
     attrs = sqs.get_queue_attributes(
         QueueUrl=queue_url,
         AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
@@ -856,7 +856,7 @@ def test_s3_sqs_unexpected_load_error_propagates(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_ack_delete_unexpected_error_propagates(monkeypatch):
+def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -871,12 +871,11 @@ def test_s3_sqs_ack_delete_unexpected_error_propagates(monkeypatch):
         raise RuntimeError("delete bug")
 
     monkeypatch.setattr(source._sqs, "delete_message", boom)
-    with pytest.raises(RuntimeError, match="delete bug"):
-        source.ack([events[0].event_id])
+    source.ack([events[0].event_id])
 
 
 @mock_aws
-def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
+def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -891,8 +890,7 @@ def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
         raise RuntimeError("visibility bug")
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
-    with pytest.raises(RuntimeError, match="visibility bug"):
-        source.nack(events)
+    source.nack(events)
 
 
 @mock_aws
