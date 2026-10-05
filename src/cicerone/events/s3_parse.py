@@ -18,8 +18,6 @@ _MODES = frozenset({"sqs", "list"})
 _DEFAULT_LIST_PAGE_SIZE = 100
 _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
-# Transient S3 read errors retry; after this many failures the object is skipped.
-_LOAD_FAILURE_SKIP_AFTER = 3
 # Cover lock-busy nack retries so the message is not stolen mid-lease wait.
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 # In-flight apply (online fit_partial) can outlast the receive visibility window.
@@ -142,6 +140,10 @@ def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[
     return events
 
 
+class MalformedS3Notification(ValueError):
+    pass
+
+
 def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
     data = json.loads(body)
     if isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data):
@@ -161,11 +163,11 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
             continue
         s3 = record.get("s3") or {}
         if not isinstance(s3, dict):
-            continue
+            raise MalformedS3Notification("S3 notification record is missing an object descriptor")
         bucket_info = s3.get("bucket") or {}
         object_info = s3.get("object") or {}
         if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
-            continue
+            raise MalformedS3Notification("S3 notification record is missing bucket or object")
         bucket = bucket_info.get("name")
         key = object_info.get("key")
         if bucket and key:
