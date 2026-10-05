@@ -63,8 +63,18 @@ def optional_float(
     return value
 
 
+def _type_name(value: object) -> str:
+    # Read the type slot directly so a metaclass cannot turn this into a new error.
+    name = type.__dict__["__name__"].__get__(type(value), type)
+    if isinstance(name, str):
+        return name
+    return "unrepresentable"
+
+
 def _option_detail(raw: Any) -> str:
     try:
-        return f", got {raw!r}"
-    except Exception:
-        return ""
+        rendered = repr(raw)
+    except Exception as exc:
+        # The configuration error must still be raised.
+        rendered = f"<{_type_name(raw)} {_type_name(exc)}>"
+    return f", got {rendered}"
