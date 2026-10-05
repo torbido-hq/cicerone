@@ -187,19 +187,28 @@ class TrackDatasetBackend:
             if not path.is_file():
                 continue
             frame = pd.read_parquet(path)
-            if frame.empty or USER_COLUMN not in frame.columns:
+            if frame.empty:
                 continue
+            if USER_COLUMN not in frame.columns:
+                raise ValueError(f"{path.name} is missing {USER_COLUMN}")
             mask = frame[USER_COLUMN].astype(str) == user_id
             removed = int(mask.sum())
             if removed:
                 pending.append((path, frame.loc[~mask].reset_index(drop=True), removed))
+        staged: list[tuple[Path, Path]] = []
+        for path, kept, _removed in pending:
+            if kept.empty:
+                continue
+            tmp = path.with_name(f".{path.name}.tmp")
+            kept.to_parquet(tmp, index=False)
+            staged.append((tmp, path))
+        for tmp, path in staged:
+            tmp.replace(path)
         total = 0
         for path, kept, removed in pending:
             total += removed
             if kept.empty:
                 path.unlink()
-            else:
-                kept.to_parquet(path, index=False)
         return total
 
 

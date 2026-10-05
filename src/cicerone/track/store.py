@@ -142,8 +142,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
         return len(self.append_accepted_rows(rows))
 
-    def delete_user_rows(self, user_id: str) -> int:
+    def delete_user_rows(self, user_id: str, *, conn: Any = None) -> int:
         if self._kind == "db":
+            if conn is not None:
+                return self._delete_user_rows_db(user_id, conn=conn)
             with self._writer_lease():
                 return self._delete_user_rows_db(user_id)
         require_appendable_track_log(self._output)
@@ -153,8 +155,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._track_size = None
         return removed
 
-    def delete_history_for_user(self, user_id: str) -> int:
+    def delete_history_for_user(self, user_id: str, *, conn: Any = None) -> int:
         if self._kind == "db":
+            if conn is not None:
+                return self._delete_history_db(user_id, conn=conn)
             with self._writer_lease():
                 return self._delete_history_db(user_id)
         require_appendable_track_log(self._output)

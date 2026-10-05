@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine, text
 
 from cicerone.cli import main
 from cicerone.config import ConfigError, IOSettings
@@ -165,6 +166,35 @@ def test_forget_user_drops_a_history_part_that_only_held_that_user(tmp_path) -> 
     TrackStore(output).append_history(_recs("u1"), generated_at="2026-09-29T12:00:00+00:00")
     assert forget_user(output, "u1").history == 1
     assert list((tmp_path / "recommendation_history").glob("*.parquet")) == []
+    assert list((tmp_path / "recommendation_history").glob(".*.tmp")) == []
+
+
+def test_history_without_user_id_leaves_recommendations(tmp_path) -> None:
+    output = _local(tmp_path)
+    DatasetOutputSink(output.options).write_recommendations(_recs("u1"))
+    history = tmp_path / "recommendation_history"
+    history.mkdir()
+    pd.DataFrame({"item_id": ["i-u1"]}).to_parquet(history / "snap.parquet", index=False)
+    with pytest.raises(ValueError, match="user_id"):
+        forget_user(output, "u1")
+    assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["u1"]
+
+
+def test_sqlite_schema_error_rolls_back_earlier_deletes(tmp_path) -> None:
+    output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    _seed(output)
+    engine = create_engine(output.options["database_url"])
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE recommendation_history"))
+        conn.execute(text("CREATE TABLE recommendation_history (item_id TEXT)"))
+        conn.execute(text("INSERT INTO recommendation_history (item_id) VALUES ('i-u1')"))
+    with pytest.raises(ValueError, match="user_id"):
+        forget_user(output, "u1")
+    recommendations = pd.read_sql('SELECT user_id FROM "recommendations"', engine)
+    track = pd.read_sql('SELECT user_id FROM "recommendation_track"', engine)
+    engine.dispose()
+    assert set(recommendations["user_id"]) == {"u1", "u2"}
+    assert set(track["user_id"]) == {"u1", "u2"}
 
 
 def test_forget_user_missing_sqlite_tables_are_zero(tmp_path) -> None:

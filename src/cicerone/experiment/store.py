@@ -27,8 +27,8 @@ from cicerone.io.options import (
     sql_identifier,
     storage_backend,
 )
-from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
+from cicerone.track.store_db import delete_rows_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +297,9 @@ class ExperimentStore:
         ):
             _persist()
 
-    def delete_exposures_for_user(self, user_id: str) -> int:
+    def delete_exposures_for_user(self, user_id: str, *, conn: Any = None) -> int:
+        if conn is not None:
+            return self._delete_exposures_db(user_id, conn=conn)
 
         def _persist() -> int:
             if self._kind == "db":
@@ -449,36 +451,24 @@ class ExperimentStore:
                 fence_kind=self._fence_kind,
             )
 
-    def _delete_exposures_db(self, user_id: str) -> int:
+    def _delete_exposures_db(self, user_id: str, *, conn: Any = None) -> int:
         table = sql_identifier(
             self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
             option="exposures_table",
         )
-        count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE "{USER_COLUMN}" = :user_id')
-        delete_sql = text(f'DELETE FROM "{table}" WHERE "{USER_COLUMN}" = :user_id')
-        removed = 0
-        try:
-            with self._db_engine().begin() as conn:
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
-                removed = int(conn.execute(count_sql, {"user_id": user_id}).scalar() or 0)
-                if removed:
-                    conn.execute(delete_sql, {"user_id": user_id})
-                    ensure_writer_owned(
-                        self._writer_lock,
-                        fence_check=self._fence_check,
-                        fence_lost=self._fence_lost,
-                        fence_kind=self._fence_kind,
-                    )
-        except MISSING_TABLE_ERRORS as exc:
-            if is_missing_column_error(exc):
-                raise
-            return 0
-        return removed
+
+        def fence() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+
+        if conn is not None:
+            return delete_rows_for_user(conn, table, user_id, fence=fence)
+        with self._db_engine().begin() as begun:
+            return delete_rows_for_user(begun, table, user_id, fence=fence)
 
     def _delete_exposures_dataset(self, user_id: str) -> int:
         path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"

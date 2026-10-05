@@ -342,8 +342,10 @@ neither.
 
 `cicerone forget-user USER_ID` drops that user's rows from the output store:
 recommendations, track events, exposures, and recommendation-history
-snapshots. It does not delete the catalog user or their training events
-(`DELETE /users/{id}` does that). The output must be `kind = "db"` or a
-local dataset path. Object-store output is refused because a JSONL rewrite
-there is not atomic. When a distributed writer lock is configured, the
-command holds it for the erase.
+snapshots, including a legacy `recommendation_history.parquet`. It does not
+delete the catalog user or their training events (`DELETE /users/{id}` does
+that). The output must be `kind = "db"` or a local dataset path. Object-store
+output is refused because a JSONL rewrite there is not atomic. Database
+deletes commit in one transaction. A history or recommendations file that has
+rows but no `user_id` is refused before anything is removed. When a
+distributed writer lock is configured, the command holds it for the erase.
