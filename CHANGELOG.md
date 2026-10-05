@@ -52,6 +52,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Basic Auth only treats an invalid password hash or an
   over-long password as a failed login. Unexpected exceptions now
   propagate.
+- Saving dashboard users closes the new file when adopting it fails.
+  Unexpected exceptions still propagate. A failed close is logged and
+  does not replace that error.
 
 ## [0.8.4] - 2026-09-25
 
