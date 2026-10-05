@@ -193,63 +193,19 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
-def test_track_read_ensures_indexes_on_existing_table(tmp_path) -> None:
+def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     from sqlalchemy import create_engine, text
 
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                'CREATE TABLE "recommendation_track" ('
-                "event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, user_id TEXT NOT NULL, "
-                "item_id TEXT NOT NULL, rank INTEGER, occurred_at TEXT NOT NULL, "
-                "variant TEXT, experiment_id TEXT, generated_at TEXT)"
-            )
-        )
-    from cicerone.track.store_db import _track_index_name
-
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    output = IOSettings(kind="db", options={"database_url": url})
+    store = TrackStore(output)
     assert store.read_rows() == []
-    with engine.connect() as conn:
-        names = {row[1] for row in conn.execute(text('PRAGMA index_list("recommendation_track")'))}
-    assert _track_index_name("recommendation_track", "occurred_at_idx") in names
-    assert _track_index_name("recommendation_track", "experiment_occurred_at_idx") in names
-
-
-def test_track_index_names_do_not_alias_across_tables() -> None:
-    from cicerone.track.store_db import _track_index_name
-
-    assert _track_index_name("foo", "experiment_occurred_at_idx") != _track_index_name(
-        "foo_experiment", "occurred_at_idx"
-    )
-    table = "t" * 62
-    occurred = _track_index_name(table, "occurred_at_idx")
-    experiment = _track_index_name(table, "experiment_occurred_at_idx")
-    assert occurred != experiment
-    assert len(occurred.encode()) <= 63
-    assert len(experiment.encode()) <= 63
-    assert occurred.startswith("trk_")
-    assert experiment.startswith("trk_")
-
-
-def test_track_append_inserts_when_index_creation_fails(tmp_path, monkeypatch) -> None:
-    from sqlalchemy.exc import OperationalError
-
-    import cicerone.track.store_db as store_db
-
-    real_text = store_db.text
-
-    def _text(sql: str):
-        if "CREATE INDEX" in sql:
-            raise OperationalError(sql, {}, Exception("permission denied"))
-        return real_text(sql)
-
-    monkeypatch.setattr(store_db, "text", _text)
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
     assert store.append_rows([_row()]) == 1
-    assert [row["event_id"] for row in store.read_rows()] == ["imp-1"]
+    assert store.read_rows()[0]["event_id"] == "imp-1"
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        names = [row[1] for row in conn.execute(text('PRAGMA index_list("recommendation_track")'))]
+    assert names == ["sqlite_autoindex_recommendation_track_1"]
 
 
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
