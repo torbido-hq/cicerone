@@ -987,6 +987,33 @@ def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> 
     assert ExperimentStore(output).read_exposures(experiment_id="exp") == []
 
 
+def test_read_exposures_missing_other_column_returns_rows(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE recommendation_exposures ("
+                "user_id TEXT, experiment_id TEXT, variant TEXT, generated_at TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO recommendation_exposures "
+                "(user_id, experiment_id, variant, generated_at) "
+                "VALUES ('u1', 'exp', 'control', 't')"
+            )
+        )
+    store = ExperimentStore(output)
+    filtered = store.read_exposures(experiment_id="exp")
+    assert [row["user_id"] for row in filtered] == ["u1"]
+    assert "exposed_at" not in filtered[0]
+    unfiltered = store.read_exposures()
+    assert [row["user_id"] for row in unfiltered] == ["u1"]
+    assert "exposed_at" not in unfiltered[0]
+
+
 def test_jsonish_numpy_scalar_and_na() -> None:
     import numpy as np
     import pandas as pd

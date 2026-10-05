@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import ConfigError
@@ -427,25 +427,39 @@ class ExperimentStore:
                 fence_kind=self._fence_kind,
             )
 
+    def _stored_exposure_columns(self, engine: Engine, table: str) -> list[str]:
+        try:
+            existing = {col["name"] for col in inspect(engine).get_columns(table)}
+        except SQL_READ_ERRORS as exc:
+            if is_missing_table_error(exc):
+                return []
+            logger.exception("Failed to inspect exposures table %r", table)
+            raise
+        return [column for column in EXPOSURE_COLUMNS if column in existing]
+
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(
             self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
             option="exposures_table",
         )
         engine = self._db_engine()
+        selected = self._stored_exposure_columns(engine, table)
+        if not selected:
+            return []
+        if experiment_id and "experiment_id" not in selected:
+            logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
+            return []
+        quoted = ", ".join(f'"{sql_identifier(column, option="exposures column")}"' for column in selected)
         if experiment_id:
-            sql = text(f'SELECT * FROM "{table}" WHERE experiment_id = :experiment_id')
+            sql = text(f'SELECT {quoted} FROM "{table}" WHERE experiment_id = :experiment_id')
             params: dict[str, Any] = {"experiment_id": experiment_id}
         else:
-            sql = text(f'SELECT * FROM "{table}"')
+            sql = text(f'SELECT {quoted} FROM "{table}"')
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
-                return []
-            if experiment_id and is_missing_column_error(exc):
-                logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
                 return []
             logger.exception("Failed to read exposures table %r", table)
             raise
