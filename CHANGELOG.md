@@ -65,6 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A client or transport error while deleting a poison S3 notification
   is logged and leaves the SQS message for retry. Unexpected delete
   errors still propagate.
+- A non-object S3 notification record, and a malformed nested SNS
+  Message, leave the SQS message for retry. A malformed top-level SQS
+  body is still deleted.
 
 ## [0.8.4] - 2026-09-25
 

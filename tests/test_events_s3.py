@@ -501,8 +501,16 @@ def test_events_from_body_validation():
     assert [event.event_id for event in kept] == ["ok"]
     with pytest.raises(ValueError, match="JSON object"):
         _s3_records_from_sqs_body("[]")
+    with pytest.raises(json.JSONDecodeError):
+        _s3_records_from_sqs_body("not-json")
     with pytest.raises(ValueError, match="Records"):
         _s3_records_from_sqs_body("{}")
+    with pytest.raises(MalformedS3Notification, match="not an object"):
+        _s3_records_from_sqs_body(json.dumps({"Records": ["skip"]}))
+    sns = {"Type": "Notification", "TopicArn": "arn:aws:sns:us-east-1:123:topic"}
+    for message in ("{", "[]", "{}", 1, None):
+        with pytest.raises(MalformedS3Notification):
+            _s3_records_from_sqs_body(json.dumps({**sns, "Message": message}))
     with pytest.raises(MalformedS3Notification):
         _s3_records_from_sqs_body(
             json.dumps(
@@ -651,6 +659,29 @@ def test_s3_sqs_poison_delete_client_error_leaves_message(monkeypatch):
     monkeypatch.setattr(source._sqs, "delete_message", boom)
     assert list(source.poll(10)) == []
     assert _sqs_held(sqs, queue_url) == 1
+
+
+@mock_aws
+def test_s3_sqs_malformed_nested_sns_and_record_are_left():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-nested-sns")["QueueUrl"]
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Type": "Notification",
+                "TopicArn": "arn:aws:sns:us-east-1:123:topic",
+                "Message": "{",
+            }
+        ),
+    )
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 2
 
 
 @mock_aws
