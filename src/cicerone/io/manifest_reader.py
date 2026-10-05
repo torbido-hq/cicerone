@@ -3,8 +3,8 @@
 DatasetManifestReader — latest manifest.json only.
 DbManifestReader — history from the manifest table.
 
-NOTE: upgrading an existing db output may need ALTER TABLE for new
-manifest columns (status/error/…); pandas to_sql(append) will not add them.
+NOTE: ``DatabaseOutputSink.write_manifest`` adds missing columns before
+append. Readers do not ALTER.
 """
 
 from __future__ import annotations
