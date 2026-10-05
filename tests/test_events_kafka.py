@@ -80,6 +80,20 @@ def test_optional_float_validation():
 
     with pytest.raises(ConfigError, match=r"must be a number, got <_OverflowNoRepr RuntimeError>$"):
         optional_float({"n": _OverflowNoRepr()}, "n", 10.0, prefix="x")
+
+    class _NoName(type):
+        def __getattribute__(cls, name: str) -> object:
+            raise RuntimeError("no name")
+
+    class _Hostile(metaclass=_NoName):
+        def __float__(self) -> float:
+            raise OverflowError("too big")
+
+        def __repr__(self) -> str:
+            raise RuntimeError("repr failed")
+
+    with pytest.raises(ConfigError, match=r"must be a number, got <_Hostile RuntimeError>$"):
+        optional_float({"n": _Hostile()}, "n", 10.0, prefix="x")
     with pytest.raises(ConfigError, match="<= 5"):
         optional_float({"n": 5.1}, "n", 10.0, prefix="x", maximum=5.0)
     assert optional_float({"n": 5.0}, "n", 10.0, prefix="x", maximum=5.0) == 5.0
