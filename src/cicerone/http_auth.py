@@ -39,7 +39,8 @@ def require_basic_auth(users: dict[str, str]):
         candidate_hash = password_hash.encode("utf-8") if password_hash is not None else _DUMMY_HASH
         try:
             password_ok = bcrypt.checkpw(credentials.password.encode("utf-8"), candidate_hash)
-        except Exception:
+        except ValueError:
+            # A bad hash or an over-long password is a failed login.
             password_ok = False
         if password_hash is None or not password_ok:
             raise HTTPException(
