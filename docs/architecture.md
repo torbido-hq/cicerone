@@ -271,8 +271,10 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    run happens at a time regardless of what triggered it.
 
 `cicerone forget-user USER_ID` deletes that user's recommendation, track,
-exposure, and history rows from a db or local dataset output. It holds the
-output writer lock when one is configured. It does not touch the catalog.
+exposure, and history rows from a db or local dataset output. Database
+deletes commit together. Local files are replaced only after the full erase
+is staged. It holds the output writer lock when one is configured. It does
+not touch the catalog.
 
 ## Serve mode and the retrain trigger
 

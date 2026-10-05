@@ -726,8 +726,9 @@ cicerone forget-user --config ./config/cicerone.toml USER_ID
 ```
 
 `forget-user` removes that user's recommendations, track events, exposures,
-and recommendation history from a db or local dataset output. It leaves the
-catalog user in place.
+and recommendation history from a db or local dataset output. Local files
+are replaced only after every rewrite is staged. It leaves the catalog user
+in place.
 
 `--config` may also come before the command. Runs in the foreground; stop with
 Ctrl-C / SIGTERM (`docker compose stop`). Prefer the image for production.

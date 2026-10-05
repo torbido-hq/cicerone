@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
@@ -176,6 +178,37 @@ def test_forget_user_drops_a_history_part_that_only_held_that_user(tmp_path) -> 
     assert forget_user(output, "u1").history == 1
     assert list((tmp_path / "recommendation_history").glob("*.parquet")) == []
     assert list((tmp_path / "recommendation_history").glob(".*.tmp")) == []
+
+
+def test_local_stage_failure_leaves_every_file(tmp_path, monkeypatch) -> None:
+    output = _local(tmp_path)
+    _seed(output)
+    track = TrackStore(output)
+    track.append_history(_recs("u1", "u2"), generated_at="2026-09-29T13:00:00+00:00")
+    before = _local_bytes(tmp_path)
+    original = Path.write_bytes
+    seen: list[str] = []
+
+    def boom(self: Path, payload: bytes) -> int:
+        if self.name.startswith(".") and self.parent.name == "recommendation_history":
+            seen.append(self.name)
+            if len(seen) > 1:
+                raise OSError("disk full")
+        return original(self, payload)
+
+    monkeypatch.setattr(Path, "write_bytes", boom)
+    with pytest.raises(OSError, match="disk full"):
+        forget_user(output, "u1")
+    assert _local_bytes(tmp_path) == before
+    assert list(tmp_path.rglob(".*.tmp")) == []
+
+
+def _local_bytes(root) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and not path.name.endswith(".lock") and not path.name.startswith(".")
+    }
 
 
 def test_history_without_user_id_leaves_recommendations(tmp_path) -> None:
