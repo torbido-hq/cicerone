@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,14 +12,19 @@ from sqlalchemy.engine import Engine
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore
+from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore, require_appendable_exposure_log
 from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
 from cicerone.io.jsonl_user import drop_user_lines
-from cicerone.io.options import read_parquet, require_option, storage_backend
+from cicerone.io.options import exclusive_file_lock, require_option, storage_backend
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendations_sql_names
-from cicerone.locks.hold import LockBackend
-from cicerone.track.store import TrackStore
+from cicerone.locks.hold import (
+    LockBackend,
+    ensure_writer_owned,
+    held_writer_lock,
+    writer_lock_held_here,
+)
+from cicerone.track.store import TrackStore, require_appendable_track_log
 from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
 from cicerone.track.store_db import delete_rows_for_user
 
@@ -58,17 +64,7 @@ def forget_user(
     if output.kind == "db":
         return _forget_db(output, user_id, writer_lock=writer_lock)
     _preflight_local(output)
-    recommendations = _delete_recommendations(output, user_id, writer_lock=writer_lock)
-    track_store = TrackStore(output, writer_lock=writer_lock)
-    track = track_store.delete_user_rows(user_id)
-    exposures = ExperimentStore(output, writer_lock=writer_lock).delete_exposures_for_user(user_id)
-    history = track_store.delete_history_for_user(user_id)
-    return ForgetResult(
-        recommendations=recommendations,
-        track=track,
-        exposures=exposures,
-        history=history,
-    )
+    return _forget_local(output, user_id, writer_lock=writer_lock)
 
 
 def _preflight_local(output: IOSettings) -> None:
@@ -146,26 +142,129 @@ def _output_engine(url: str) -> Engine:
     return engine
 
 
-def _delete_recommendations(
+def _forget_local(
     output: IOSettings,
     user_id: str,
     *,
     writer_lock: LockBackend | None,
-) -> int:
+) -> ForgetResult:
+    require_appendable_track_log(output)
+    require_appendable_exposure_log(output)
+    root = Path(require_option(output.options, "path", "local"))
     sink = DatasetOutputSink(output.options, writer_lock=writer_lock)
-    with sink.recommendations_write():
-        removed = _count_recommendation_rows(output, user_id)
-        if not removed:
-            return 0
-        sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[user_id])
+
+    def _run() -> ForgetResult:
+        with (
+            sink.recommendations_write(),
+            exclusive_file_lock(root / ".track.jsonl.lock"),
+            exclusive_file_lock(root / ".exposures.jsonl.lock"),
+        ):
+            ensure_writer_owned(writer_lock)
+            rewrites, unlinks, counts = _plan_local_erase(root, user_id)
+            ensure_writer_owned(writer_lock)
+            _commit_local_rewrites(rewrites, unlinks)
+            return counts
+
+    if writer_lock_held_here(writer_lock):
+        return _run()
+    with held_writer_lock(writer_lock):
+        return _run()
+
+
+def _plan_local_erase(root: Path, user_id: str) -> tuple[list[tuple[Path, bytes]], list[Path], ForgetResult]:
+    rewrites: list[tuple[Path, bytes]] = []
+    unlinks: list[Path] = []
+    recommendations = _plan_recommendations(root, user_id, rewrites)
+    track = _plan_jsonl(root / TRACK_FILENAME, user_id, rewrites)
+    exposures = _plan_jsonl(root / EXPOSURES_FILENAME, user_id, rewrites)
+    history = _plan_history(root, user_id, rewrites, unlinks)
+    return rewrites, unlinks, ForgetResult(recommendations, track, exposures, history)
+
+
+def _plan_recommendations(root: Path, user_id: str, rewrites: list[tuple[Path, bytes]]) -> int:
+    path = root / "recommendations.parquet"
+    if not path.is_file():
+        return 0
+    frame = pd.read_parquet(path)
+    _require_user_column(path, frame)
+    if frame.empty:
+        return 0
+    mask = frame[USER_COLUMN].astype(str) == user_id
+    removed = int(mask.sum())
+    if removed:
+        kept = frame.loc[~mask].reset_index(drop=True)
+        rewrites.append((path, _parquet_bytes(kept)))
     return removed
 
 
-def _count_recommendation_rows(output: IOSettings, user_id: str) -> int:
+def _plan_jsonl(path: Path, user_id: str, rewrites: list[tuple[Path, bytes]]) -> int:
+    if not path.is_file():
+        return 0
+    payload, removed = drop_user_lines(path.read_bytes(), user_id)
+    if removed:
+        rewrites.append((path, payload))
+    return removed
+
+
+def _plan_history(
+    root: Path,
+    user_id: str,
+    rewrites: list[tuple[Path, bytes]],
+    unlinks: list[Path],
+) -> int:
+    paths = [root / HISTORY_FILENAME]
+    history = root / HISTORY_DIR
+    if history.is_dir():
+        paths.extend(sorted(history.glob("*.parquet")))
+    total = 0
+    for path in paths:
+        if not path.is_file():
+            continue
+        frame = pd.read_parquet(path)
+        _require_user_column(path, frame)
+        if frame.empty:
+            continue
+        mask = frame[USER_COLUMN].astype(str) == user_id
+        removed = int(mask.sum())
+        if not removed:
+            continue
+        total += removed
+        kept = frame.loc[~mask].reset_index(drop=True)
+        if kept.empty:
+            unlinks.append(path)
+        else:
+            rewrites.append((path, _parquet_bytes(kept)))
+    return total
+
+
+def _parquet_bytes(frame: pd.DataFrame) -> bytes:
+    buffer = io.BytesIO()
+    frame.to_parquet(buffer, index=False)
+    return buffer.getvalue()
+
+
+def _commit_local_rewrites(rewrites: list[tuple[Path, bytes]], unlinks: list[Path]) -> None:
+    staged: list[tuple[Path, Path]] = []
     try:
-        frame = read_parquet(output.options, "recommendations.parquet")
-    except FileNotFoundError:
-        return 0
-    if frame.empty or USER_COLUMN not in frame.columns:
-        return 0
-    return int((frame[USER_COLUMN].astype(str) == user_id).sum())
+        for dest, payload in rewrites:
+            tmp = dest.with_name(f".{dest.name}.tmp")
+            tmp.write_bytes(payload)
+            staged.append((tmp, dest))
+    except OSError:
+        _unlink_temps(staged)
+        raise
+    replaced = 0
+    try:
+        for tmp, dest in staged:
+            tmp.replace(dest)
+            replaced += 1
+        for path in unlinks:
+            path.unlink()
+    except OSError:
+        _unlink_temps(staged[replaced:])
+        raise
+
+
+def _unlink_temps(staged: list[tuple[Path, Path]]) -> None:
+    for tmp, _dest in staged:
+        tmp.unlink(missing_ok=True)

@@ -45,8 +45,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `cicerone forget-user USER_ID` removes that user's recommendation rows,
   track events, exposures, and recommendation-history snapshots (including a
   legacy history file) from a db or local dataset output. Database deletes
-  commit together. A track or exposure line that is not a user row is refused.
-  Object-store output is refused. Catalog users and events stay.
+  commit together. Local recommendation, track, exposure, and history files
+  are replaced only after every rewrite is staged, so a failure while
+  preparing the erase leaves those files unchanged. A track or exposure
+  line that is not a user row is refused. Object-store output is refused.
+  Catalog users and events stay.
 
 ### Changed
 
