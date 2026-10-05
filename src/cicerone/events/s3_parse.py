@@ -22,6 +22,8 @@ _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 # In-flight apply (online fit_partial) can outlast the receive visibility window.
 _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
+# A malformed nested notification is released for another attempt, then deleted.
+_SQS_MALFORMED_RECEIVE_LIMIT = 3
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
