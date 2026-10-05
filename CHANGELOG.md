@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.5] - 2026-09-28
 
+### Changed
+
+- Item snapshot refresh reads the item id and the configured filter columns.
+
 ### Fixed
 
 - Redis Streams polling, health, heartbeat, and close paths only recover
