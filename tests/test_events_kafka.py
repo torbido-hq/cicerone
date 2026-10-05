@@ -78,7 +78,7 @@ def test_optional_float_validation():
         def __repr__(self) -> str:
             raise RuntimeError("repr failed")
 
-    with pytest.raises(ConfigError, match="must be a number$"):
+    with pytest.raises(ConfigError, match=r"must be a number, got <_OverflowNoRepr RuntimeError>$"):
         optional_float({"n": _OverflowNoRepr()}, "n", 10.0, prefix="x")
     with pytest.raises(ConfigError, match="<= 5"):
         optional_float({"n": 5.1}, "n", 10.0, prefix="x", maximum=5.0)

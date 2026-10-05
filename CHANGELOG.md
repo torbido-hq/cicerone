@@ -43,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   closing the publisher. Unexpected exceptions now propagate. A failed
   worker stop or publisher close after a startup error is logged and
   does not replace that error.
+- Invalid broker numbers stay configuration errors when formatting the
+  value fails. The message names the value type and the formatting error.
 
 ## [0.8.4] - 2026-09-25
 
