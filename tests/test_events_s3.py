@@ -4,19 +4,20 @@ import json
 
 import boto3
 import pytest
+from botocore.exceptions import BotoCoreError
 from moto import mock_aws
 from support.events import event_payload
 
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
-    _LOAD_FAILURE_SKIP_AFTER,
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
     _events_from_body,
     _s3_records_from_sqs_body,
 )
+from cicerone.events.s3_parse import _SQS_MALFORMED_RECEIVE_LIMIT, MalformedS3Notification
 
 
 def _creds(**extra):
@@ -112,20 +113,19 @@ def test_s3_list_retries_transient_load_failures(tmp_path, monkeypatch):
     def flaky(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
         if str(key).endswith("a.json"):
             calls["n"] += 1
-            if calls["n"] < _LOAD_FAILURE_SKIP_AFTER:
-                raise RuntimeError("transient s3 read")
+            if calls["n"] < 2:
+                raise BotoCoreError()
         return real_load(self, s3, bucket, key, etag=etag)
 
     monkeypatch.setattr(S3EventSource, "_load_object_events", flaky)
-    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
-        assert list(source.poll(10)) == []
-        assert not marker.exists()
+    assert list(source.poll(10)) == []
+    assert not marker.exists()
     loaded = list(source.poll(1))
     assert [event.event_id for event in loaded] == ["e1"]
 
 
 @mock_aws
-def test_s3_list_skips_after_repeated_transient_failures(tmp_path, monkeypatch):
+def test_s3_list_does_not_skip_after_repeated_client_failures(tmp_path, monkeypatch):
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket="events-bucket")
     _put_event(client, "events/a.json", event_payload(event_id="e1", item_id="i1"))
@@ -137,16 +137,13 @@ def test_s3_list_skips_after_repeated_transient_failures(tmp_path, monkeypatch):
 
     def always_fail_a(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
         if str(key).endswith("a.json"):
-            raise RuntimeError("persistent s3 read")
+            raise BotoCoreError()
         return real_load(self, s3, bucket, key, etag=etag)
 
     monkeypatch.setattr(S3EventSource, "_load_object_events", always_fail_a)
-    for _ in range(_LOAD_FAILURE_SKIP_AFTER - 1):
+    for _ in range(5):
         assert list(source.poll(10)) == []
         assert not marker.exists()
-    loaded = list(source.poll(10))
-    assert [event.event_id for event in loaded] == ["e2"]
-    assert json.loads(marker.read_text())["key"] == "events/a.json"
 
 
 @mock_aws
@@ -504,26 +501,59 @@ def test_events_from_body_validation():
     assert [event.event_id for event in kept] == ["ok"]
     with pytest.raises(ValueError, match="JSON object"):
         _s3_records_from_sqs_body("[]")
+    with pytest.raises(json.JSONDecodeError):
+        _s3_records_from_sqs_body("not-json")
     with pytest.raises(ValueError, match="Records"):
         _s3_records_from_sqs_body("{}")
-    assert _s3_records_from_sqs_body(
-        json.dumps(
-            {
-                "Records": [
-                    "skip",
-                    {
-                        "eventName": "ObjectRemoved:Delete",
-                        "s3": {"bucket": {"name": "b"}, "object": {"key": "x"}},
-                    },
-                    {"eventName": "ObjectCreated:Put", "s3": "bad"},
-                    {
-                        "eventName": "ObjectCreated:Put",
-                        "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
-                    },
-                ]
-            }
+    with pytest.raises(MalformedS3Notification, match="not an object"):
+        _s3_records_from_sqs_body(json.dumps({"Records": ["skip"]}))
+    sns = {"Type": "Notification", "TopicArn": "arn:aws:sns:us-east-1:123:topic"}
+    for message in ("{", "[]", "{}", 1, None):
+        with pytest.raises(MalformedS3Notification):
+            _s3_records_from_sqs_body(json.dumps({**sns, "Message": message}))
+    with pytest.raises(MalformedS3Notification):
+        _s3_records_from_sqs_body(
+            json.dumps(
+                {
+                    "Records": [
+                        "skip",
+                        {
+                            "eventName": "ObjectRemoved:Delete",
+                            "s3": {"bucket": {"name": "b"}, "object": {"key": "x"}},
+                        },
+                        {"eventName": "ObjectCreated:Put", "s3": "bad"},
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
+                        },
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": {"name": "b"}, "object": "not-an-object"},
+                        },
+                        {
+                            "eventName": "ObjectCreated:Put",
+                            "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
+                        },
+                    ]
+                }
+            )
         )
-    ) == [("b", "a/b.json")]
+    for body in (
+        {"Records": [{"eventName": "ObjectCreated:Put"}]},
+        {"Records": [{"eventName": "ObjectCreated:Put", "s3": None}]},
+        {"Records": [{"eventName": "ObjectCreated:Put", "s3": {"bucket": None, "object": {"key": "a"}}}]},
+        {
+            "Records": [
+                {"eventName": "ObjectCreated:Put", "s3": {"bucket": {"name": "b"}, "object": {}}},
+                {
+                    "eventName": "ObjectCreated:Put",
+                    "s3": {"bucket": {"name": "b"}, "object": {"key": "ok"}},
+                },
+            ]
+        },
+    ):
+        with pytest.raises(MalformedS3Notification):
+            _s3_records_from_sqs_body(json.dumps(body))
 
 
 @mock_aws
@@ -603,6 +633,154 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     assert [event.event_id for event in events] == ["ok-sqs"]
     assert source.health().lag is not None and source.health().lag >= 1
     source.ack(["unknown-id", events[0].event_id])
+
+
+def _sqs_held(sqs, queue_url: str) -> int:
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    return int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+
+@mock_aws
+def test_s3_sqs_poison_delete_client_error_leaves_message(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-poison-delete")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody="not-json")
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "delete_message", boom)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 1
+
+
+@mock_aws
+def test_s3_sqs_malformed_nested_sns_and_record_are_left():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-nested-sns")["QueueUrl"]
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Type": "Notification",
+                "TopicArn": "arn:aws:sns:us-east-1:123:topic",
+                "Message": "{",
+            }
+        ),
+    )
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 2
+
+
+def _sqs_counts(sqs, queue_url: str) -> tuple[int, int]:
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    return int(attrs["ApproximateNumberOfMessages"]), int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+
+@mock_aws
+def test_s3_sqs_malformed_notification_is_visible_until_receive_limit():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-limit")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_counts(sqs, queue_url) == (1, 0)
+    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+        assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
+def test_s3_sqs_malformed_without_receive_count_is_deleted(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-uncounted")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    real = source._sqs.receive_message
+
+    def strip(**kwargs):
+        response = real(**kwargs)
+        for message in response.get("Messages") or []:
+            message.pop("Attributes", None)
+        return response
+
+    monkeypatch.setattr(source._sqs, "receive_message", strip)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
+def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-release")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 1
+
+
+@mock_aws
+def test_s3_sqs_malformed_nested_notification_is_left():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-nested-poison")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-nested"))
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": "events-bucket", "object": {"key": "nested-bad"}},
+                    },
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": {"name": "events-bucket"}, "object": {"key": "ok.json"}},
+                    },
+                ]
+            }
+        ),
+    )
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+    assert held == 1
 
 
 @mock_aws
@@ -716,3 +894,197 @@ def test_count_list_lag_truncated(monkeypatch):
     assert source.health().lag == 1
     source.ack([events[0].event_id])
     assert source.health().lag == 0
+
+
+@mock_aws
+def test_s3_list_unexpected_load_error_propagates(tmp_path, monkeypatch):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="e1"))
+    marker = tmp_path / "marker.json"
+    source = S3EventSource(_creds(mode="list", prefix="events/", marker_path=str(marker)))
+    source.connect()
+
+    def boom(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(S3EventSource, "_load_object_events", boom)
+    with pytest.raises(RuntimeError, match="bug"):
+        source.poll(10)
+    assert not marker.exists()
+
+
+def test_s3_list_unexpected_marker_error_propagates(tmp_path, monkeypatch):
+    marker = tmp_path / "marker.json"
+    marker.write_text(json.dumps({"key": "events/a.json"}))
+    source = S3EventSource(_creds(mode="list", marker_path=str(marker)))
+    real = type(marker).read_text
+
+    def boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self == marker:
+            raise RuntimeError("marker bug")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(marker), "read_text", boom)
+    with pytest.raises(RuntimeError, match="marker bug"):
+        source.connect()
+
+
+@mock_aws
+def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-unexpected")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise RuntimeError("attrs")
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+    health = source.health()
+    assert health.connected is True
+    assert health.lag == 0
+
+
+@mock_aws
+def test_s3_sqs_health_recovers_from_client_error(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-client")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+    health = source.health()
+    assert health.connected is True
+    assert health.lag == 0
+
+
+@mock_aws
+def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-load-unexpected")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
+        raise RuntimeError("load bug")
+
+    monkeypatch.setattr(S3EventSource, "_load_object_events", boom)
+    assert list(source.poll(10)) == []
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+    assert held == 1
+
+
+@mock_aws
+def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-delete-unexpected")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+
+    def boom(**kwargs):
+        raise RuntimeError("delete bug")
+
+    monkeypatch.setattr(source._sqs, "delete_message", boom)
+    source.ack([events[0].event_id])
+
+
+@mock_aws
+def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-vis-unexpected")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+
+    def boom(**kwargs):
+        raise RuntimeError("visibility bug")
+
+    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
+    source.nack(events)
+
+
+@mock_aws
+def test_s3_sqs_load_client_error_leaves_message(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-load-client")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
+        raise BotoCoreError()
+
+    monkeypatch.setattr(S3EventSource, "_load_object_events", boom)
+    assert list(source.poll(10)) == []
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+    assert held == 1
+
+
+@mock_aws
+def test_s3_sqs_ack_delete_client_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-delete-client")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "delete_message", boom)
+    source.ack([events[0].event_id])
+
+
+@mock_aws
+def test_s3_sqs_visibility_client_error_is_logged(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-vis-client")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
+    source.nack(events)

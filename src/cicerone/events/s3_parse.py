@@ -18,12 +18,12 @@ _MODES = frozenset({"sqs", "list"})
 _DEFAULT_LIST_PAGE_SIZE = 100
 _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
 _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
-# Transient S3 read errors retry; after this many failures the object is skipped.
-_LOAD_FAILURE_SKIP_AFTER = 3
 # Cover lock-busy nack retries so the message is not stolen mid-lease wait.
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 # In-flight apply (online fit_partial) can outlast the receive visibility window.
 _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
+# A malformed nested notification is released for another attempt, then deleted.
+_SQS_MALFORMED_RECEIVE_LIMIT = 3
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -142,28 +142,51 @@ def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[
     return events
 
 
-def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
+class MalformedS3Notification(ValueError):
+    pass
+
+
+def _notification_document(body: str) -> tuple[Any, bool]:
     data = json.loads(body)
-    if isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data):
-        message = data["Message"]
-        data = json.loads(message) if isinstance(message, str) else message
+    if not (isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data)):
+        return data, False
+    message = data["Message"]
+    if not isinstance(message, str):
+        return message, True
+    try:
+        return json.loads(message), True
+    except json.JSONDecodeError as exc:
+        raise MalformedS3Notification("SNS notification Message is not JSON") from exc
+
+
+def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
+    data, nested = _notification_document(body)
     if not isinstance(data, dict):
+        if nested:
+            raise MalformedS3Notification("SNS notification Message must be a JSON object")
         raise ValueError("SQS message body must be a JSON object")
     records = data.get("Records")
     if not isinstance(records, list):
+        if nested:
+            raise MalformedS3Notification("SNS notification Message is missing S3 Records")
         raise ValueError("SQS message missing S3 Records")
     out: list[tuple[str, str]] = []
     for record in records:
         if not isinstance(record, dict):
-            continue
+            raise MalformedS3Notification("S3 notification record is not an object")
         event_name = str(record.get("eventName") or "")
         if event_name and not event_name.startswith("ObjectCreated"):
             continue
-        s3 = record.get("s3") or {}
+        s3 = record.get("s3")
         if not isinstance(s3, dict):
-            continue
-        bucket = (s3.get("bucket") or {}).get("name")
-        key = (s3.get("object") or {}).get("key")
-        if bucket and key:
-            out.append((str(bucket), unquote_plus(str(key))))
+            raise MalformedS3Notification("S3 notification record is missing an object descriptor")
+        bucket_info = s3.get("bucket")
+        object_info = s3.get("object")
+        if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
+            raise MalformedS3Notification("S3 notification record is missing bucket or object")
+        bucket = bucket_info.get("name")
+        key = object_info.get("key")
+        if not bucket or not key:
+            raise MalformedS3Notification("S3 notification record is missing bucket name or object key")
+        out.append((str(bucket), unquote_plus(str(key))))
     return out
