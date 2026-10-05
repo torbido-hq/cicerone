@@ -8,7 +8,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN
 
 
 def drop_user_lines(raw: bytes | None, user_id: str) -> tuple[bytes, int]:
-    """Kept JSONL and the match count. A non-JSON line raises before any rewrite."""
+    """Kept JSONL and the match count. A line that is not a user row raises first."""
     if not raw:
         return b"", 0
     kept: list[str] = []
@@ -21,7 +21,13 @@ def drop_user_lines(raw: bytes | None, user_id: str) -> tuple[bytes, int]:
             parsed = json.loads(stripped)
         except json.JSONDecodeError as exc:
             raise ValueError(f"output JSONL line {line_number} is not JSON") from exc
-        if isinstance(parsed, dict) and str(parsed.get(USER_COLUMN) or "") == user_id:
+        if (
+            not isinstance(parsed, dict)
+            or USER_COLUMN not in parsed
+            or not str(parsed[USER_COLUMN] or "").strip()
+        ):
+            raise ValueError(f"output JSONL line {line_number} is missing {USER_COLUMN}")
+        if str(parsed[USER_COLUMN]) == user_id:
             removed += 1
             continue
         kept.append(stripped)
