@@ -627,6 +627,32 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     source.ack(["unknown-id", events[0].event_id])
 
 
+def _sqs_held(sqs, queue_url: str) -> int:
+    attrs = sqs.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+    )["Attributes"]
+    return int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+
+@mock_aws
+def test_s3_sqs_poison_delete_client_error_leaves_message(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-poison-delete")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody="not-json")
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "delete_message", boom)
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 1
+
+
 @mock_aws
 def test_s3_sqs_malformed_nested_notification_is_left():
     s3 = boto3.client("s3", region_name="us-east-1")
