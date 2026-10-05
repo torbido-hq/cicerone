@@ -58,9 +58,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - S3 list loads retry an object on S3 client errors and leave the marker
   where it is. A corrupt marker file is still ignored. Unexpected list
   and marker errors propagate.
-- A malformed nested S3 notification leaves the SQS message for retry.
-  Other records in that message are not applied, and the message is not
-  deleted.
+- A malformed nested S3 notification, including a missing or null
+  bucket or object and a missing name or key, leaves the SQS message
+  for retry. Other records in that message are not applied, and the
+  message is not deleted.
 
 ## [0.8.4] - 2026-09-25
 
