@@ -24,6 +24,7 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 import pandas as pd
+from pyarrow.lib import ArrowException
 
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
 from cicerone.locks import WriterLockBusyError
@@ -43,6 +44,7 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
+_PYARROW_S3_FALLBACK_ERRORS = (OSError, ArrowException)
 STORAGE_BACKENDS = frozenset({"s3", "local"})
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
@@ -263,7 +265,7 @@ def read_parquet(
         return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
     try:
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
-    except Exception:
+    except _PYARROW_S3_FALLBACK_ERRORS:
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
     obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)

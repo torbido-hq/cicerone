@@ -6,6 +6,7 @@ import errno
 
 import pytest
 from botocore.exceptions import ClientError
+from pyarrow.lib import ArrowInvalid
 
 from cicerone.config import ConfigError
 from cicerone.io.options import (
@@ -396,12 +397,17 @@ def test_read_parquet_s3_uses_pyarrow_filesystem(mocker, enable_native_arrow_s3)
     )
 
 
-def test_read_parquet_s3_falls_back_to_get_object(mocker):
+@pytest.mark.parametrize(
+    "error",
+    [OSError("no sdk"), ArrowInvalid("bad schema")],
+    ids=["oserror", "arrow"],
+)
+def test_read_parquet_s3_falls_back_to_get_object(mocker, error):
     import pandas as pd
 
     from cicerone.io.options import read_parquet
 
-    mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=OSError("no sdk"))
+    mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=error)
     body = _FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
@@ -418,6 +424,45 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker):
     )
     assert list(frame.columns) == ["x"]
     assert body.closed is True
+
+
+def test_read_parquet_s3_does_not_fall_back_on_unexpected_error(mocker):
+    from cicerone.io.options import read_parquet
+
+    mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=RuntimeError("arrow bug"))
+    built = mocker.patch("cicerone.io.options.build_s3_client")
+    with pytest.raises(RuntimeError, match="arrow bug"):
+        read_parquet(
+            {
+                "storage_backend": "s3",
+                "access_key_id": "id",
+                "secret_access_key": "secret",
+                "bucket": "bucket",
+            },
+            "data.parquet",
+        )
+    built.assert_not_called()
+
+
+def test_read_parquet_s3_does_not_fall_back_on_value_error(mocker):
+    from cicerone.io.options import read_parquet
+
+    mocker.patch(
+        "cicerone.io.options._read_s3_parquet_pyarrow",
+        side_effect=ValueError("secret_key is not set"),
+    )
+    built = mocker.patch("cicerone.io.options.build_s3_client")
+    with pytest.raises(ValueError, match="secret_key"):
+        read_parquet(
+            {
+                "storage_backend": "s3",
+                "access_key_id": "id",
+                "secret_access_key": "secret",
+                "bucket": "bucket",
+            },
+            "data.parquet",
+        )
+    built.assert_not_called()
 
 
 def test_s3_filesystem_parses_endpoint_override(mocker):
