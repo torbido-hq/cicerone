@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 from pyarrow.lib import ArrowInvalid, ArrowIOError
 
 from cicerone.blending import COLD_START_USER_ID
@@ -29,6 +31,8 @@ from cicerone.io.recommendation_reader_common import (
     _index_recommendations_by_user,
     _ItemFilterMixin,
     _resolve_fallback_user_id,
+    item_snapshot_columns,
+    narrow_items_frame,
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
@@ -54,22 +58,92 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._init_item_filter_state()
         self.refresh()
 
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        super().configure_item_filters(
+            category_column=category_column,
+            availability_filters=availability_filters,
+        )
+        self._replace_items_snapshot()
+
+    def _items_columns(
+        self,
+        *,
+        category_column: str | None,
+        availability_filters: Sequence[str],
+    ) -> list[str] | None:
+        wanted = item_snapshot_columns(
+            category_column=category_column,
+            availability_filters=availability_filters,
+        )
+        if wanted is None or self._backend != "local":
+            return None
+        path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
+        if not path.exists():
+            return None
+        present = set(pq.read_schema(path).names)
+        chosen = [name for name in wanted if name in present]
+        return chosen or None
+
     def _read_recommendations(self) -> pd.DataFrame:
         return read_parquet(self._options, "recommendations.parquet")
 
-    def _read_items_snapshot(self) -> pd.DataFrame | None:
+    def _read_items_snapshot(
+        self,
+        *,
+        category_column: str | None,
+        availability_filters: Sequence[str],
+    ) -> pd.DataFrame | None:
         try:
             if self._backend == "local":
                 path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
                 if not path.exists():
                     return None
-            return read_parquet(self._options, ITEMS_SNAPSHOT_FILENAME)
+            frame = read_parquet(
+                self._options,
+                ITEMS_SNAPSHOT_FILENAME,
+                columns=self._items_columns(
+                    category_column=category_column,
+                    availability_filters=availability_filters,
+                ),
+            )
+            return narrow_items_frame(
+                frame,
+                item_snapshot_columns(
+                    category_column=category_column,
+                    availability_filters=availability_filters,
+                ),
+            )
         except FileNotFoundError:
             return None
         except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return None
             raise
+
+    def _replace_items_snapshot(self) -> None:
+        with self._lock:
+            category = self._category_column
+            availability = tuple(self._availability_filters)
+            version = self._items_version
+        items = normalize_items_snapshot(
+            self._read_items_snapshot(category_column=category, availability_filters=availability),
+            category_column=category,
+            availability_filters=availability,
+        )
+        with self._lock:
+            if (
+                self._items_version != version
+                or self._category_column != category
+                or tuple(self._availability_filters) != availability
+            ):
+                return
+            self._items = items
+            self._items_version += 1
 
     def refresh(self) -> None:
         started = time.perf_counter()
@@ -99,14 +173,7 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             recommendations_ok = True
         except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
-        items = normalize_items_snapshot(
-            self._read_items_snapshot(),
-            category_column=self._category_column,
-            availability_filters=self._availability_filters,
-        )
-        with self._lock:
-            self._items = items
-            self._items_version += 1
+        self._replace_items_snapshot()
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:

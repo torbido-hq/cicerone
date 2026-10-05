@@ -299,12 +299,13 @@ serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
-  configured output `kind` — `DatasetRecommendationReader` caches the whole
-  parquet file (and optional `items_snapshot.parquet`) in memory and refreshes
-  it on a successful incremental flush and on a background timer
-  (`serve.app`'s `_start_refresh_loop`);
-  `DbRecommendationReader` queries the recommendations table directly per
-  request and caches the `recommendation_items` snapshot for filters. Both
+  configured output `kind` — `DatasetRecommendationReader` caches the
+  recommendations parquet, and the item id plus configured filter columns from
+  `items_snapshot.parquet`, in memory and refreshes it on a successful
+  incremental flush and on a background timer (`serve.app`'s
+  `_start_refresh_loop`); `DbRecommendationReader` queries the recommendations
+  table directly per request and caches those same item columns from
+  `recommendation_items`. Both
   readers record cache hit/miss and refresh success/failure/duration metrics
   (`cicerone.serve.metrics`). Layers (in-memory webhook queue vs output vs
   track store): [configuration.md](configuration.md#where-state-lives).
