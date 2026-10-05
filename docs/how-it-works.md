@@ -347,5 +347,7 @@ delete the catalog user or their training events (`DELETE /users/{id}` does
 that). The output must be `kind = "db"` or a local dataset path. Object-store
 output is refused because a JSONL rewrite there is not atomic. Database
 deletes commit in one transaction. A history or recommendations file that has
-rows but no `user_id` is refused before anything is removed. When a
-distributed writer lock is configured, the command holds it for the erase.
+rows but no `user_id`, and a track or exposure line that is not a user row,
+are refused before anything is removed. The recommendation count is taken
+under the same write lock as the replace. When a distributed writer lock is
+configured, the command holds it for the erase.

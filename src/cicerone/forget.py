@@ -12,8 +12,8 @@ from sqlalchemy.engine import Engine
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore
+from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
-from cicerone.io.factory import build_output_sink
 from cicerone.io.jsonl_user import drop_user_lines
 from cicerone.io.options import read_parquet, require_option, storage_backend
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendations_sql_names
@@ -152,13 +152,12 @@ def _delete_recommendations(
     *,
     writer_lock: LockBackend | None,
 ) -> int:
-    removed = _count_recommendation_rows(output, user_id)
-    if not removed:
-        return 0
-    build_output_sink(output, writer_lock=writer_lock).replace_recommendations_for_users(
-        pd.DataFrame(),
-        user_ids=[user_id],
-    )
+    sink = DatasetOutputSink(output.options, writer_lock=writer_lock)
+    with sink.recommendations_write():
+        removed = _count_recommendation_rows(output, user_id)
+        if not removed:
+            return 0
+        sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=[user_id])
     return removed
 
 

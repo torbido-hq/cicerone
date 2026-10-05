@@ -103,6 +103,15 @@ def test_forget_user_requires_a_user_id(tmp_path) -> None:
         forget_user(_local(tmp_path), "  ")
 
 
+def test_jsonl_without_a_user_row_leaves_recommendations(tmp_path) -> None:
+    output = _local(tmp_path)
+    DatasetOutputSink(output.options).write_recommendations(_recs("u1"))
+    (tmp_path / "track.jsonl").write_text('{"item_id": "i-u1"}\n[1]\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="user_id"):
+        forget_user(output, "u1")
+    assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["u1"]
+
+
 def test_corrupt_track_log_leaves_recommendations(tmp_path) -> None:
     output = _local(tmp_path)
     DatasetOutputSink(output.options).write_recommendations(_recs("u1"))
