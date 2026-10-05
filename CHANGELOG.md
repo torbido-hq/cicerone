@@ -62,6 +62,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   bucket or object and a missing name or key, leaves the SQS message
   for retry. Other records in that message are not applied, and the
   message is not deleted.
+- A client or transport error while deleting a poison S3 notification
+  is logged and leaves the SQS message for retry. Unexpected delete
+  errors still propagate.
 
 ## [0.8.4] - 2026-09-25
 

@@ -16,8 +16,18 @@ from cicerone.events.s3_parse import (
     _Batch,
     _s3_records_from_sqs_body,
 )
+from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
+
+
+def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
+    try:
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+    except S3_READ_ERRORS:
+        logger.exception("Failed to delete SQS poison message; leaving it for retry")
+        return False
+    return True
 
 
 class S3SqsPoll:
@@ -78,12 +88,12 @@ class S3SqsPoll:
                     continue
                 except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-                    made_progress = True
+                    if _delete_poison_message(sqs, queue_url, receipt):
+                        made_progress = True
                     continue
                 if not pairs:
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-                    made_progress = True
+                    if _delete_poison_message(sqs, queue_url, receipt):
+                        made_progress = True
                     continue
                 matched = self._matching_sqs_records(pairs)
                 if not matched:
@@ -117,8 +127,8 @@ class S3SqsPoll:
                         failed = True
                         break
                 if poison:
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-                    made_progress = True
+                    if _delete_poison_message(sqs, queue_url, receipt):
+                        made_progress = True
                     continue
                 if failed:
                     continue
