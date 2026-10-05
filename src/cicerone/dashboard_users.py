@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
+
+logger = logging.getLogger(__name__)
 
 _OWNER_ONLY = 0o600
 
@@ -33,16 +36,27 @@ def save_users(path: str | Path, users: dict[str, str]) -> None:
     with tempfile.TemporaryDirectory(dir=file_path.parent) as temp_dir:
         temp_path = Path(temp_dir) / file_path.name
         fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _OWNER_ONLY)
-        try:
-            handle = os.fdopen(fd, "w", encoding="utf-8")
-        except Exception:
-            os.close(fd)
-            raise
+        handle = _adopt_users_fd(fd)
         with handle:
             handle.write(text)
         _restrict_owner_only(temp_path)
         temp_path.replace(file_path)
     _restrict_owner_only(file_path)
+
+
+def _adopt_users_fd(fd: int) -> IO[str]:
+    adopted = False
+    try:
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        adopted = True
+        return handle
+    finally:
+        if not adopted:
+            try:
+                os.close(fd)
+            except OSError:
+                # The open error must still propagate.
+                logger.exception("Failed to close dashboard users file")
 
 
 def _restrict_owner_only(path: Path) -> None:

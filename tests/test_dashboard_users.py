@@ -104,6 +104,71 @@ def test_save_users_closes_fd_if_fdopen_fails(tmp_path, monkeypatch):
     assert not path.exists()
 
 
+def test_save_users_closes_fd_when_fdopen_fails_unexpectedly(tmp_path, monkeypatch):
+    path = tmp_path / "dashboard_users.toml"
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracked_open(name: str | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        fd = real_open(name, flags, *args, **kwargs)  # type: ignore[arg-type]
+        opened.append(fd)
+        return fd
+
+    def failing_fdopen(_fd: int, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("fdopen bug")
+
+    def tracked_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    monkeypatch.setattr(os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(os, "close", tracked_close)
+
+    with pytest.raises(RuntimeError, match="fdopen bug"):
+        save_users(path, {"alice": "hash-a"})
+    assert opened
+    assert closed == opened
+    assert not path.exists()
+
+
+def test_save_users_keeps_open_error_when_close_fails(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "dashboard_users.toml"
+    opened: list[int] = []
+    closed: list[int] = []
+    real_open = os.open
+    real_close = os.close
+
+    def tracked_open(name: str | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        fd = real_open(name, flags, *args, **kwargs)  # type: ignore[arg-type]
+        opened.append(fd)
+        return fd
+
+    def failing_fdopen(_fd: int, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("fdopen bug")
+
+    def failing_close(fd: int) -> None:
+        if not opened or fd != opened[0]:
+            real_close(fd)
+            return
+        closed.append(fd)
+        raise OSError("close failed")
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    monkeypatch.setattr(os, "fdopen", failing_fdopen)
+    monkeypatch.setattr(os, "close", failing_close)
+
+    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="fdopen bug"):
+        save_users(path, {"alice": "hash-a"})
+    assert opened
+    assert closed == [opened[0]]
+    assert "Failed to close dashboard users file" in caplog.text
+    assert not path.exists()
+    real_close(opened[0])
+
+
 def test_restrict_owner_only_dispatches_to_windows_acl(tmp_path, monkeypatch):
     path = tmp_path / "users.toml"
     path.write_text("x")
