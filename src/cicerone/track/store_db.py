@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import Engine, bindparam, create_engine, text
 
-from cicerone.io.db_errors import is_missing_table_error
+from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
 from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
     DEFAULT_HISTORY_TABLE,
@@ -107,6 +108,24 @@ class TrackDbBackend:
             conn.execute(insert_sql, fresh)
             self._ensure_fence()
             return fresh
+
+    def _delete_user_rows_db(self, user_id: str, *, conn: Any = None) -> int:
+        table = sql_identifier(
+            self._options.get("track_table", DEFAULT_TRACK_TABLE),
+            option="track_table",
+        )
+        if conn is not None:
+            return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
+        return _delete_on_engine(self._db_engine(), table, user_id, fence=self._ensure_fence)
+
+    def _delete_history_db(self, user_id: str, *, conn: Any = None) -> int:
+        table = sql_identifier(
+            self._options.get("history_table", DEFAULT_HISTORY_TABLE),
+            option="history_table",
+        )
+        if conn is not None:
+            return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
+        return _delete_on_engine(self._db_engine(), table, user_id, fence=self._ensure_fence)
 
     def _read_rows_db(
         self,
@@ -223,3 +242,36 @@ def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[
         bindparam("ids", expanding=True)
     )
     return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}
+
+
+def delete_rows_for_user(
+    conn: Any,
+    table: str,
+    user_id: str,
+    *,
+    fence: Callable[[], None],
+    user_column: str = USER_COLUMN,
+) -> int:
+    """Delete one user's rows on an open transaction. A missing table counts as zero."""
+    table = sql_identifier(table, option="table")
+    user_column = sql_identifier(user_column, option="user_column")
+    # The column stays unquoted: SQLite treats an unknown quoted name as a string.
+    count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE {user_column} = :user_id')
+    delete_sql = text(f'DELETE FROM "{table}" WHERE {user_column} = :user_id')
+    try:
+        with conn.begin_nested():
+            fence()
+            removed = int(conn.execute(count_sql, {"user_id": user_id}).scalar() or 0)
+            if removed:
+                conn.execute(delete_sql, {"user_id": user_id})
+                fence()
+            return removed
+    except MISSING_TABLE_ERRORS as exc:
+        if is_missing_column_error(exc):
+            raise ValueError(f"{table} is missing {user_column}") from exc
+        return 0
+
+
+def _delete_on_engine(engine: Engine, table: str, user_id: str, *, fence: Callable[[], None]) -> int:
+    with engine.begin() as conn:
+        return delete_rows_for_user(conn, table, user_id, fence=fence)

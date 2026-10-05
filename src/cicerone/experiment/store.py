@@ -20,6 +20,7 @@ from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import MISSING_TABLE_ERRORS
+from cicerone.io.jsonl_user import drop_user_lines
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
@@ -27,6 +28,7 @@ from cicerone.io.options import (
     storage_backend,
 )
 from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
+from cicerone.track.store_db import delete_rows_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +297,26 @@ class ExperimentStore:
         ):
             _persist()
 
+    def delete_exposures_for_user(self, user_id: str, *, conn: Any = None) -> int:
+        if conn is not None:
+            return self._delete_exposures_db(user_id, conn=conn)
+
+        def _persist() -> int:
+            if self._kind == "db":
+                return self._delete_exposures_db(user_id)
+            require_appendable_exposure_log(self._output)
+            return self._delete_exposures_dataset(user_id)
+
+        if writer_lock_held_here(self._writer_lock):
+            return _persist()
+        with held_writer_lock(
+            self._writer_lock,
+            fence_check=self._fence_check,
+            fence_lost=self._fence_lost,
+            fence_kind=self._fence_kind,
+        ):
+            return _persist()
+
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":
             rows = self._read_exposures_db(experiment_id=experiment_id)
@@ -428,6 +450,39 @@ class ExperimentStore:
                 fence_lost=self._fence_lost,
                 fence_kind=self._fence_kind,
             )
+
+    def _delete_exposures_db(self, user_id: str, *, conn: Any = None) -> int:
+        table = sql_identifier(
+            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
+            option="exposures_table",
+        )
+
+        def fence() -> None:
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+
+        if conn is not None:
+            return delete_rows_for_user(conn, table, user_id, fence=fence)
+        with self._db_engine().begin() as begun:
+            return delete_rows_for_user(begun, table, user_id, fence=fence)
+
+    def _delete_exposures_dataset(self, user_id: str) -> int:
+        path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+        with exclusive_file_lock(path):
+            ensure_writer_owned(
+                self._writer_lock,
+                fence_check=self._fence_check,
+                fence_lost=self._fence_lost,
+                fence_kind=self._fence_kind,
+            )
+            payload, removed = drop_user_lines(self._read_bytes(EXPOSURES_FILENAME), user_id)
+            if removed:
+                self._write_bytes(EXPOSURES_FILENAME, payload, "application/x-ndjson")
+            return removed
 
     def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = sql_identifier(

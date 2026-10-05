@@ -337,3 +337,19 @@ priority or RRF; blending may also mix in `latest`). Incremental events then
 keep it fresh. Without a sentinel the reader substitutes one
 `popular_fallback` / `latest` user's top-K, and 404s if the table has
 neither.
+
+## Erase one user
+
+`cicerone forget-user USER_ID` drops that user's rows from the output store:
+recommendations, track events, exposures, and recommendation-history
+snapshots, including a legacy `recommendation_history.parquet`. It does not
+delete the catalog user or their training events (`DELETE /users/{id}` does
+that). The output must be `kind = "db"` or a local dataset path. Object-store
+output is refused because a JSONL rewrite there is not atomic. Database
+deletes commit in one transaction. Local files are replaced only after every
+rewrite is staged, so a failure while preparing the erase leaves them
+unchanged. A history or recommendations file that has rows but no `user_id`,
+and a track or exposure line that is not a user row, are refused before
+anything is removed. The recommendation count is taken under the same write
+lock as the replace. When a distributed writer lock is configured, the
+command holds it for the erase.

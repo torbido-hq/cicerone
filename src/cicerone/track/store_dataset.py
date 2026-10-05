@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
+from cicerone.io.jsonl_user import drop_user_lines
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -23,6 +24,7 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import (
     HISTORY_DIR,
     HISTORY_FILENAME,
@@ -167,6 +169,47 @@ class TrackDatasetBackend:
 
     def _append_bytes(self, filename: str, payload: bytes) -> None:
         append_storage_bytes(self._options, filename, payload)
+
+    def _delete_user_rows_dataset(self, user_id: str) -> int:
+        payload, removed = drop_user_lines(self._read_bytes(TRACK_FILENAME), user_id)
+        if removed:
+            self._write_bytes(TRACK_FILENAME, payload, "application/x-ndjson")
+        return removed
+
+    def _delete_history_dataset(self, user_id: str) -> int:
+        root = Path(require_option(self._options, "path", "local"))
+        paths = [root / HISTORY_FILENAME]
+        history = root / HISTORY_DIR
+        if history.is_dir():
+            paths.extend(sorted(history.glob("*.parquet")))
+        pending: list[tuple[Path, pd.DataFrame, int]] = []
+        for path in paths:
+            if not path.is_file():
+                continue
+            frame = pd.read_parquet(path)
+            if frame.empty:
+                continue
+            if USER_COLUMN not in frame.columns:
+                raise ValueError(f"{path.name} is missing {USER_COLUMN}")
+            mask = frame[USER_COLUMN].astype(str) == user_id
+            removed = int(mask.sum())
+            if removed:
+                pending.append((path, frame.loc[~mask].reset_index(drop=True), removed))
+        staged: list[tuple[Path, Path]] = []
+        for path, kept, _removed in pending:
+            if kept.empty:
+                continue
+            tmp = path.with_name(f".{path.name}.tmp")
+            kept.to_parquet(tmp, index=False)
+            staged.append((tmp, path))
+        for tmp, path in staged:
+            tmp.replace(path)
+        total = 0
+        for path, kept, removed in pending:
+            total += removed
+            if kept.empty:
+                path.unlink()
+        return total
 
 
 def _history_part_name(generated_at: str) -> str:

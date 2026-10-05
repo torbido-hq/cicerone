@@ -48,7 +48,8 @@ search weights, see [search-weights.md](search-weights.md).
 | `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
 | `track/` | Impression/click ingest (`POST /track`), JSONL/db store, rec history snapshots |
 | `evaluation/` | CTR/CVR attribution and production replay (`metrics.py`, `served.py`, `tracking.py`) |
-| `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
+| `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `forget-user` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
+| `forget.py` | `forget_user`: drop one user's recommendations, track rows, exposures, and history |
 | `packaging.py` | Wheel checks for the Docker `package` stage (`python -m cicerone.packaging`) |
 | `job.py` | Orchestrates one end-to-end run (source → dataset → model → sink) |
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
@@ -268,6 +269,12 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    thread and additionally serves `trigger.create_app()` (see below) in the
    main thread — both funnel through one `trigger.RunGuard` so at most one
    run happens at a time regardless of what triggered it.
+
+`cicerone forget-user USER_ID` deletes that user's recommendation, track,
+exposure, and history rows from a db or local dataset output. Database
+deletes commit together. Local files are replaced only after the full erase
+is staged. It holds the output writer lock when one is configured. It does
+not touch the catalog.
 
 ## Serve mode and the retrain trigger
 
