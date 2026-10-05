@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import bindparam, create_engine, inspect, text
+from sqlalchemy import bindparam, inspect, text
 from sqlalchemy.sql.elements import TextClause
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
@@ -21,6 +21,7 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
     MISSING_TABLE_ERRORS,
 )
+from cicerone.io.engines import engine_for
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_reader_common import (
     RANK_COLUMN,
@@ -53,7 +54,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
             option="item_scores_table",
         )
-        self._engine = create_engine(require_option(options, "database_url", "db"), pool_pre_ping=True)
+        self._engine = engine_for(require_option(options, "database_url", "db"), options=options)
         self._variant_supported: bool | None = None
         self._present_variants: tuple[str, ...] | None = None
         self._init_item_filter_state()
