@@ -12,6 +12,7 @@ from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import EligibilityRule, FeatureConfig
+from cicerone.publish import PublishError
 from cicerone.serve.bootstrap_events import (
     _assign_incremental_variant,
     _input_users_provider,
@@ -573,7 +574,55 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
             feature_config=feature_config,
             reader=_Reader(),  # type: ignore[arg-type]
         )
-        runtime.stop()
+        with pytest.raises(RuntimeError, match="close failed"):
+            runtime.stop()
+        assert runtime.publisher is None
+    finally:
+        bootstrap.build_publisher = original  # type: ignore[assignment]
+    assert closed["n"] == 1
+
+
+def test_stop_swallows_publisher_publish_error(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
+        def close(self) -> None:
+            closed["n"] += 1
+            raise PublishError("close failed")
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_publisher
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        assert runtime.stop() is True
+        assert runtime.publisher is None
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
     assert closed["n"] == 1
@@ -681,6 +730,166 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
         bootstrap.build_publisher = original_pub  # type: ignore[assignment]
         EventWorker.start = original_start  # type: ignore[method-assign]
     assert closed["n"] == 1
+
+
+def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
+        def close(self) -> None:
+            closed["n"] += 1
+            raise RuntimeError("close failed")
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.events.worker import EventWorker
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original_pub = bootstrap.build_publisher
+    original_start = EventWorker.start
+
+    def _boom(self) -> None:
+        raise RuntimeError("start fail")
+
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    EventWorker.start = _boom  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="start fail"):
+            start_events_runtime(
+                make_settings(
+                    output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                    events=EventsSettings(
+                        enabled=True,
+                        kind="webhook",
+                        incremental=EventsIncrementalSettings(
+                            batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                        ),
+                    ),
+                ),
+                feature_config=feature_config,
+                reader=_Reader(),  # type: ignore[arg-type]
+            )
+    finally:
+        bootstrap.build_publisher = original_pub  # type: ignore[assignment]
+        EventWorker.start = original_start  # type: ignore[method-assign]
+    assert closed["n"] == 1
+
+
+def test_startup_error_survives_worker_stop_failure(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    stopped = {"n": 0}
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.events.worker import EventWorker
+
+    original_start = EventWorker.start
+    original_stop = EventWorker.stop
+
+    def _boom_start(self) -> None:
+        raise RuntimeError("start fail")
+
+    def _boom_stop(self, *, join_timeout_seconds: float = 5.0) -> bool:
+        del join_timeout_seconds
+        stopped["n"] += 1
+        raise RuntimeError("stop fail")
+
+    EventWorker.start = _boom_start  # type: ignore[method-assign]
+    EventWorker.stop = _boom_stop  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="start fail"):
+            start_events_runtime(
+                make_settings(
+                    output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                    events=EventsSettings(
+                        enabled=True,
+                        kind="webhook",
+                        incremental=EventsIncrementalSettings(
+                            batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                        ),
+                    ),
+                ),
+                feature_config=feature_config,
+                reader=_Reader(),  # type: ignore[arg-type]
+            )
+    finally:
+        EventWorker.start = original_start  # type: ignore[method-assign]
+        EventWorker.stop = original_stop  # type: ignore[method-assign]
+    assert stopped["n"] == 1
+
+
+def test_publisher_close_does_not_replace_worker_stop_error(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    closed = {"n": 0}
+
+    class _Pub:
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            return None
+
+        def close(self) -> None:
+            closed["n"] += 1
+            raise RuntimeError("close failed")
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_publisher
+    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="webhook",
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        assert runtime.worker is not None
+        real_stop = runtime.worker.stop
+
+        def _boom_stop(**_kwargs: object) -> bool:
+            raise RuntimeError("stop fail")
+
+        runtime.worker.stop = _boom_stop  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError, match="stop fail"):
+                runtime.stop()
+            assert closed["n"] == 1
+            assert runtime.publisher is None
+        finally:
+            runtime.worker.stop = real_stop  # type: ignore[method-assign]
+            runtime.worker.stop()
+    finally:
+        bootstrap.build_publisher = original  # type: ignore[assignment]
 
 
 def test_start_events_runtime_without_feature_config(tmp_path):
