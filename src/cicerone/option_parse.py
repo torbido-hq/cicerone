@@ -65,6 +65,8 @@ def optional_float(
 
 def _option_detail(raw: Any) -> str:
     try:
-        return f", got {raw!r}"
-    except Exception:
-        return ""
+        rendered = repr(raw)
+    except Exception as exc:
+        # The configuration error must still be raised.
+        rendered = f"<{type(raw).__name__} {type(exc).__name__}>"
+    return f", got {rendered}"
