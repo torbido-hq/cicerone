@@ -144,20 +144,34 @@ class MalformedS3Notification(ValueError):
     pass
 
 
-def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
+def _notification_document(body: str) -> tuple[Any, bool]:
     data = json.loads(body)
-    if isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data):
-        message = data["Message"]
-        data = json.loads(message) if isinstance(message, str) else message
+    if not (isinstance(data, dict) and "Message" in data and ("TopicArn" in data or "Type" in data)):
+        return data, False
+    message = data["Message"]
+    if not isinstance(message, str):
+        return message, True
+    try:
+        return json.loads(message), True
+    except json.JSONDecodeError as exc:
+        raise MalformedS3Notification("SNS notification Message is not JSON") from exc
+
+
+def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
+    data, nested = _notification_document(body)
     if not isinstance(data, dict):
+        if nested:
+            raise MalformedS3Notification("SNS notification Message must be a JSON object")
         raise ValueError("SQS message body must be a JSON object")
     records = data.get("Records")
     if not isinstance(records, list):
+        if nested:
+            raise MalformedS3Notification("SNS notification Message is missing S3 Records")
         raise ValueError("SQS message missing S3 Records")
     out: list[tuple[str, str]] = []
     for record in records:
         if not isinstance(record, dict):
-            continue
+            raise MalformedS3Notification("S3 notification record is not an object")
         event_name = str(record.get("eventName") or "")
         if event_name and not event_name.startswith("ObjectCreated"):
             continue
