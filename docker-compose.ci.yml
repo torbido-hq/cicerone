@@ -2,8 +2,13 @@ version: "3.9"
 
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
-# database-backend tests and tests/test_system_db*.py. Local parquet
-# system specs (tests/test_system_dataset*.py) do not need Postgres.
+# database-backend tests. The Robot Framework system/E2E suites
+# (tests/robot/system_db*.robot, tests/robot/system_dataset*.robot) run in
+# the separate `robot` service — the local parquet suites don't need
+# Postgres, the db ones share this same throwaway instance. `robot` runs
+# under `coverage run` into the `coverage-data` bind mount shared with
+# `test`; the `coverage-report` service combines both and re-checks the
+# 95% gate so Robot-only code paths are not silently uncovered.
 # Sequential extra tests run in `test-sequential` (rectools[torch]); the
 # `test` and runtime images stay torch-free. Never used in production — see
 # docker-compose.yml (which also ships a durable local `postgres` service
@@ -41,6 +46,10 @@ services:
       POSTGRES_TEST_HOST: db-test
       # Required by support.system_db.reset_schema before it will drop known tables.
       ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
+      # Shared with `robot`/`coverage-report` so Robot-exercised lines count too.
+      COVERAGE_FILE: /app/coverage-data/.coverage.pytest
+    volumes:
+      - ./coverage-data:/app/coverage-data
     depends_on:
       db-test:
         condition: service_healthy
@@ -53,3 +62,43 @@ services:
       target: test-sequential
     # No Postgres: RecTools sequential fits only. Isolated so torch is not
     # imported during the main suite (RecTools loads NN models when present).
+
+  robot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: test
+    env_file:
+      - ./docker/postgres/defaults.env
+    environment:
+      POSTGRES_TEST_HOST: db-test
+      ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
+      COVERAGE_FILE: /app/coverage-data/.coverage.robot
+    volumes:
+      - ./coverage-data:/app/coverage-data
+      - ./robot-results:/app/robot-results
+    depends_on:
+      db-test:
+        condition: service_healthy
+    entrypoint: []
+    # Serve/dashboard/job code runs in-process (TestClient, not subprocesses),
+    # so `coverage run` captures it exactly like pytest-cov does.
+    command: ["coverage", "run", "-m", "robot", "--outputdir", "robot-results", "tests/robot"]
+
+  # Merges the pytest and Robot coverage data so lines only exercised by the
+  # Robot journeys (e.g. serve/dashboard HTTP paths) count toward the 95%
+  # gate instead of silently falling into the uncovered allowance.
+  coverage-report:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: test
+    volumes:
+      - ./coverage-data:/app/coverage-data
+    entrypoint: []
+    command:
+      [
+        "sh",
+        "-c",
+        "coverage combine coverage-data/.coverage.pytest coverage-data/.coverage.robot && coverage report",
+      ]

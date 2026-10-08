@@ -110,7 +110,9 @@ COPY docs/openapi/ ./docs/openapi/
 COPY examples/serve/ ./examples/serve/
 # Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
 COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
-ENV PYTHONPATH=/app/src
+# /app/tests on the path too: tests/robot/libraries/CiceroneSystemLibrary.py
+# imports tests/support/* the same way pytest's `pythonpath` ini option does.
+ENV PYTHONPATH=/app/src:/app/tests
 RUN pip install --no-cache-dir -r requirements-bandits.txt
 RUN chown -R cicerone:cicerone /app
 USER cicerone

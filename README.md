@@ -762,11 +762,11 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
 ```
 
 Runs the whole pytest suite (with an ephemeral Postgres for the `db`
-backend tests and the Postgres system-style end-to-end checks in
-`tests/test_system_db.py` / `tests/test_system_db_quality.py`; the
-local-parquet journeys are `tests/test_system_dataset.py` /
-`tests/test_system_dataset_quality.py`) inside
-Docker — nothing to install on the host.
+backend tests) inside Docker — nothing to install on the host. The
+Robot Framework system/E2E suites run in the separate `robot` compose
+service: Postgres journeys are `tests/robot/system_db.robot` /
+`tests/robot/system_db_quality.robot`; the local-parquet journeys are
+`tests/robot/system_dataset.robot` / `tests/robot/system_dataset_quality.robot`.
 Locally you can also point pytest at the compose `postgres` service's
 pytest database via `POSTGRES_TEST_HOST=localhost` (see
 [CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host

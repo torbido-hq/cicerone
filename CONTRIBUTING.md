@@ -14,15 +14,15 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
   up --build --abort-on-container-exit --exit-code-from test test
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
   --profile sequential run --rm --build test-sequential
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  run --rm --build robot
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  run --rm --build coverage-report
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env down -v
 ```
 
 This runs the full pytest suite, including the Postgres-backed `db` I/O
-tests, the local-parquet dataset system spec
-(`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`),
-and the Postgres system-style end-to-end checks in
-`tests/test_system_db.py` and `tests/test_system_db_quality.py`, and
-enforces the 95% coverage gate
+tests, and enforces the 95% coverage gate
 (`pyproject.toml`,
 `[tool.coverage.report].fail_under`). `test-sequential` then runs the
 SASRec/BERT4Rec/HSTU extra tests (`rectools[torch]`) in a separate image —
@@ -33,6 +33,24 @@ shared helpers under `tests/support/`). A plain `docker run --rm cicerone-test`
 (after `docker build --target test -t cicerone-test -f docker/Dockerfile .`)
 skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 — always validate with the compose file above before opening a PR.
+
+The `robot` service runs the Robot Framework system/E2E suites
+(`tests/robot/*.robot`): the local-parquet journeys
+(`system_dataset.robot`, `system_dataset_quality.robot`) need no database;
+the Postgres journeys (`system_db.robot`, `system_db_quality.robot`) share
+the same throwaway `db-test` instance as the pytest `db` tests. It runs
+under `coverage run` (serve/dashboard/job code runs in-process via
+`TestClient`, so coverage captures it like pytest-cov does) writing into
+the `coverage-data` bind mount shared with `test`; `coverage-report` then
+combines both and re-checks the 95% gate, so Robot-only code paths can't
+silently fall outside the coverage report. Results land under
+`robot-results/` (bind-mounted to the host so `log.html`/`report.html`
+survive the container). Run just that suite directly:
+
+```sh
+docker build --target test -t cicerone-test -f docker/Dockerfile .
+docker run --rm cicerone-test robot tests/robot/system_dataset.robot
+```
 
 To iterate on DB-backed tests against compose Postgres, use the dedicated
 **pytest database** so schema resets never wipe tutorial/app data. Prefer
@@ -68,8 +86,11 @@ interpolation matches that file too.
 Shared catalog / TOML / HTTP mounts for both I/O backends live in
 `tests/support/system_spec.py`. Schema-reset guardrails for the Postgres
 system test live in `tests/support/system_db.py` (reusable across
-DB-backed tests; keep `tests/test_system_db*.py` and
-`tests/test_system_dataset*.py` focused on the end-to-end scenarios).
+DB-backed tests; `tests/test_system_db_helpers.py` is the plain pytest
+unit test for those guardrails). The Robot Framework keyword library
+(`tests/robot/libraries/CiceroneSystemLibrary.py`) wraps both support
+modules — keep `tests/robot/*.robot` focused on the end-to-end scenarios,
+not low-level setup.
 
 Host vs container hostname for the same Postgres:
 
