@@ -53,7 +53,10 @@ class CiceroneSystemLibrary:
     ROBOT_LIBRARY_SCOPE = "TEST SUITE"
 
     def __init__(self) -> None:
-        self.database_url = resolve_test_database_url()
+        # Resolved lazily (see _resolve_database_url) so dataset-only suites
+        # never pay for Postgres URL validation they don't use.
+        self.database_url: str | None = None
+        self._database_url_resolved = False
         self.engine: Engine | None = None
         self.config_path: Path | None = None
         self.input_path: Path | None = None
@@ -64,12 +67,21 @@ class CiceroneSystemLibrary:
         self.settings: Any = None
 
     # -- environment ---------------------------------------------------
+    def _resolve_database_url(self) -> str | None:
+        if not self._database_url_resolved:
+            self.database_url = resolve_test_database_url()
+            self._database_url_resolved = True
+        return self.database_url
+
     def postgres_test_database_available(self) -> bool:
-        return bool(self.database_url)
+        return bool(self._resolve_database_url())
 
     def reset_postgres_schema(self) -> None:
         if self.engine is None:
-            self.engine = create_engine(self.database_url, pool_pre_ping=True)
+            database_url = self._resolve_database_url()
+            if not database_url:
+                return
+            self.engine = create_engine(database_url, pool_pre_ping=True)
         reset_schema(self.engine)
 
     # -- setup -----------------------------------------------------------
@@ -222,6 +234,7 @@ class CiceroneSystemLibrary:
         )
         assert response.status_code == 200
         served_ids = {row["item_id"] for row in response.json()["items"]}
+        assert served_ids
         assert served_ids <= set(allowed_ids)
 
     def serve_should_support_exclude_unavailable(self, user_id: str, *excluded_ids: str) -> None:
@@ -230,6 +243,7 @@ class CiceroneSystemLibrary:
         )
         assert response.status_code == 200
         served_ids = {row["item_id"] for row in response.json()["items"]}
+        assert served_ids
         assert served_ids.isdisjoint(excluded_ids)
 
     # -- dashboard assertions --------------------------------------------

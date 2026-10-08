@@ -16,6 +16,8 @@ docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env 
   --profile sequential run --rm --build test-sequential
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
   run --rm --build robot
+docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env \
+  run --rm --build coverage-report
 docker compose -f docker-compose.ci.yml --env-file docker/postgres/defaults.env down -v
 ```
 
@@ -36,10 +38,14 @@ The `robot` service runs the Robot Framework system/E2E suites
 (`tests/robot/*.robot`): the local-parquet journeys
 (`system_dataset.robot`, `system_dataset_quality.robot`) need no database;
 the Postgres journeys (`system_db.robot`, `system_db_quality.robot`) share
-the same throwaway `db-test` instance as the pytest `db` tests. Results
-land under `robot-results/` inside the container (`--outputdir`); mount or
-`docker cp` that path if you need `log.html`/`report.html` locally. Run
-just that suite directly:
+the same throwaway `db-test` instance as the pytest `db` tests. It runs
+under `coverage run` (serve/dashboard/job code runs in-process via
+`TestClient`, so coverage captures it like pytest-cov does) writing into
+the `coverage-data` bind mount shared with `test`; `coverage-report` then
+combines both and re-checks the 95% gate, so Robot-only code paths can't
+silently fall outside the coverage report. Results land under
+`robot-results/` (bind-mounted to the host so `log.html`/`report.html`
+survive the container). Run just that suite directly:
 
 ```sh
 docker build --target test -t cicerone-test -f docker/Dockerfile .

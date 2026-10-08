@@ -61,6 +61,8 @@ jobs:
       # matches exactly how the service is built and deployed.
       - name: Run test suite (>=95% coverage required)
         run: |
+          mkdir -p coverage-data
+          chmod 777 coverage-data
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml up \
             --build --abort-on-container-exit --exit-code-from test test
@@ -69,8 +71,23 @@ jobs:
 
       - name: Run Robot Framework system suite
         run: |
+          mkdir -p robot-results
+          chmod 777 robot-results
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml run --rm --build robot
+
+      - name: Upload Robot Framework report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-results
+          path: robot-results/
+          if-no-files-found: ignore
+
+      - name: Merge pytest + Robot coverage and enforce the gate
+        run: |
+          docker compose --env-file docker/postgres/defaults.env \
+            -f docker-compose.ci.yml run --rm --build coverage-report
 
       - name: Tear down
         if: always()
