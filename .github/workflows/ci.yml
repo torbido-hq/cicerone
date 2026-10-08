@@ -67,6 +67,11 @@ jobs:
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml --profile sequential run --rm --build test-sequential
 
+      - name: Run Robot Framework system suite
+        run: |
+          docker compose --env-file docker/postgres/defaults.env \
+            -f docker-compose.ci.yml run --rm --build robot
+
       - name: Tear down
         if: always()
         run: |

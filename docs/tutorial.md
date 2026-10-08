@@ -920,7 +920,8 @@ docker compose up --build
   RabbitMQ, HA, online LightFM): [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build
   --abort-on-container-exit --exit-code-from test test`) if you're contributing
-  code — see [CONTRIBUTING.md](../CONTRIBUTING.md). That suite includes a
-  system-style end-to-end checks for Postgres (`tests/test_system_db.py`,
-  `tests/test_system_db_quality.py`) and local parquet
-  (`tests/test_system_dataset.py`, `tests/test_system_dataset_quality.py`).
+  code — see [CONTRIBUTING.md](../CONTRIBUTING.md). A separate `robot`
+  compose service runs the Robot Framework system-style end-to-end suites
+  for Postgres (`tests/robot/system_db.robot`,
+  `tests/robot/system_db_quality.robot`) and local parquet
+  (`tests/robot/system_dataset.robot`, `tests/robot/system_dataset_quality.robot`).

@@ -93,13 +93,13 @@ Local Docker Compose (`docker-compose.yml`) also offers an optional
 so `kind = "db"` input/output can be exercised without an external database.
 Credentials and database names live in `docker/postgres/defaults.env` (see
 CONTRIBUTING.md). CI uses a separate throwaway instance via
-`docker-compose.ci.yml`. The system-style check in `tests/test_system_db.py`
-exercises job → recommendations/manifest/artifact → serve and dashboard
-HTTP against that real Postgres (resetting only
+`docker-compose.ci.yml`. The Robot Framework system suite in
+`tests/robot/system_db.robot` exercises job → recommendations/manifest/artifact
+→ serve and dashboard HTTP against that real Postgres (resetting only
 `cicerone.io.db_store.DEFAULT_DB_TABLES`).
-`tests/test_system_db_quality.py` continues the same catalog through
+`tests/robot/system_db_quality.robot` continues the same catalog through
 `POST /track`, a second job, and the Quality page.
-`tests/test_system_dataset.py` / `test_system_dataset_quality.py` run the
+`tests/robot/system_dataset.robot` / `system_dataset_quality.robot` run the
 same journeys against local parquet (`kind = "dataset"`).
 
 Public imports stay stable after the package splits:
@@ -130,8 +130,9 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_serve_events_routes.py` / `test_serve_bootstrap_events.py` | Serve webhook mount + worker bootstrap |
 | `tests/test_experiment_*.py` | Sticky assignment, per-variant recipes, sequential stats, store, serve lookup |
 | `tests/test_track_*.py` / `test_evaluation.py` / `test_dashboard_quality.py` | Track ingest, CTR/CVR, replay, Quality page |
-| `tests/test_system_db.py` / `test_system_db_quality.py` | Postgres system spec: job → serve/dashboard HTTP; track → second job → Quality |
-| `tests/test_system_dataset.py` / `test_system_dataset_quality.py` | Local parquet system spec: same journeys as the Postgres spec |
+| `tests/test_system_db_helpers.py` | Unit tests for the Postgres system-suite support helpers (schema-reset guardrails, fixtures) |
+| `tests/robot/system_db.robot` / `system_db_quality.robot` | Postgres system spec (Robot Framework): job → serve/dashboard HTTP; track → second job → Quality |
+| `tests/robot/system_dataset.robot` / `system_dataset_quality.robot` | Local parquet system spec (Robot Framework): same journeys as the Postgres spec |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
