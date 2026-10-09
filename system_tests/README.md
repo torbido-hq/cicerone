@@ -8,15 +8,19 @@ for the same endpoints via FastAPI's `TestClient`). Local-only for now, not
 wired into CI.
 
 ```sh
+mkdir -p system_tests/results
 docker compose -f docker-compose.robot.yml up --build -d \
   postgres recommender serve dashboard
-docker compose -f docker-compose.robot.yml run --rm --build robot
+docker compose -f docker-compose.robot.yml run --rm --build \
+  --user "$(id -u):$(id -g)" robot
 docker compose -f docker-compose.robot.yml down -v
 ```
 
 (`seed`/`robot` are one-shot containers that exit 0 on success — kept out
 of the `up`/`--abort-on-container-exit` combo, which would otherwise treat
-any container exiting, including a successful one-shot, as a stack failure.)
+any container exiting, including a successful one-shot, as a stack failure.
+`mkdir -p` + `--user "$(id -u):$(id -g)"` keep `system_tests/results/`
+owned by the host user, not root.)
 
 Results (`log.html`, `report.html`, `output.xml`) land in
 `system_tests/results/`.

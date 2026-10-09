@@ -25,5 +25,7 @@ Triggered Run Eventually Appears On The Dashboard As Webhook
 *** Keywords ***
 Dashboard Shows A Webhook Triggered Run
     ${response}=    GET On Session    dashboard    /partials/status    expected_status=200
-    Should Contain    ${response.text}    data-run-status="success"
-    Should Contain    ${response.text}    webhook
+    ${latest_run}=    Get Regexp Matches    ${response.text}    (?s)data-latest-run.*?</dl>
+    Should Not Be Empty    ${latest_run}
+    Should Contain    ${latest_run}[0]    data-run-status="success"
+    Should Contain    ${latest_run}[0]    >webhook<

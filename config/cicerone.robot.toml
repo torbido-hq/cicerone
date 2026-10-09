@@ -6,7 +6,7 @@
 [job]
 mode = "batch"
 top_k = 5
-cron_schedule = "0 3 * * *" # never fires during a test run; only the trigger matters
+cron_schedule = "0 3 29 2 *" # leap day only; cannot collide with the webhook trigger test
 feature_config_path = "/app/config/features.toml"
 models = ["collaborative", "popular"]
 

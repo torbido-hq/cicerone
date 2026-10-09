@@ -6,6 +6,7 @@ Documentation    Shared variables/keywords for the Robot Framework system
 ...              against docker compose port-forwards.
 Library          RequestsLibrary
 Library          Collections
+Library          String
 
 *** Variables ***
 ${SERVE_BASE_URL}         %{SERVE_BASE_URL=http://serve:8000}
