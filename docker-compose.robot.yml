@@ -1,7 +1,8 @@
 version: "3.9"
 
-# Local-only Robot Framework system tests — NOT used by CI (see
-# system_tests/README.md). Brings up a throwaway Postgres plus the real
+# Robot Framework system tests (see system_tests/README.md), run locally with
+# the commands below and in CI as the `system-tests` job in
+# .github/workflows/ci.yml. Brings up a throwaway Postgres plus the real
 # recommender/serve/dashboard images, seeds a tiny catalog, then runs the
 # Robot suite against the actually-running containers over HTTP:
 #
