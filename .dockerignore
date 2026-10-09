@@ -1,0 +1,4 @@
+# Robot-only configs carry fixed test tokens/credentials — never ship them
+# in the runtime image (docker-compose.robot.yml bind-mounts config/ instead).
+config/cicerone.robot*.toml
+config/dashboard_users.robot.toml
