@@ -73,10 +73,31 @@ jobs:
           docker compose --env-file docker/postgres/defaults.env \
             -f docker-compose.ci.yml down -v
 
+  system-tests:
+    needs: scope
+    if: needs.scope.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Black-box Robot Framework suite against the real recommender/serve/
+      # dashboard containers over HTTP (see system_tests/README.md).
+      - name: Run Robot Framework system tests
+        run: |
+          mkdir -p system_tests/results
+          docker compose -f docker-compose.robot.yml up --build -d \
+            postgres recommender serve dashboard
+          docker compose -f docker-compose.robot.yml run --rm --build \
+            --user "$(id -u):$(id -g)" robot
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.robot.yml down -v
+
   # Always reports: website-only PRs skip lint/test (no Docker VMs) without
   # leaving a required check pending. Require this job name, not lint/test.
   ci:
-    needs: [scope, lint, test]
+    needs: [scope, lint, test, system-tests]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
@@ -90,7 +111,7 @@ jobs:
             echo "Website-only change; Python lint/test skipped."
             exit 0
           fi
-          if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; then
-            echo "lint=${{ needs.lint.result }} test=${{ needs.test.result }}"
+          if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.system-tests.result }}" != "success" ]; then
+            echo "lint=${{ needs.lint.result }} test=${{ needs.test.result }} system-tests=${{ needs.system-tests.result }}"
             exit 1
           fi
