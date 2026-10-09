@@ -5,15 +5,20 @@ version: "3.9"
 # recommender/serve/dashboard images, seeds a tiny catalog, then runs the
 # Robot suite against the actually-running containers over HTTP:
 #
+#   mkdir -p system_tests/results
 #   docker compose -f docker-compose.robot.yml up --build -d \
 #     postgres recommender serve dashboard
-#   docker compose -f docker-compose.robot.yml run --rm --build robot
+#   docker compose -f docker-compose.robot.yml run --rm --build \
+#     --user "$(id -u):$(id -g)" robot
 #   docker compose -f docker-compose.robot.yml down -v
 #
 # (run/up split deliberately — seed/robot are one-shot containers that exit
 # 0 on success; --abort-on-container-exit would treat that as a failure of
 # the whole stack if seed/recommender/serve/dashboard were started together
 # with it.)
+#
+# --user + pre-creating the results dir keep its contents owned by the
+# invoking host user instead of root (the robot image has no app user).
 #
 # Results (log.html/report.html/output.xml) land in system_tests/results/.
 
@@ -36,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      target: test
+      target: runtime
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,8 +107,7 @@ services:
   robot:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-      target: robot
+      dockerfile: docker/Dockerfile.robot
     environment:
       SERVE_BASE_URL: http://serve:8000
       SERVE_AUTH_TOKEN: robot-serve-token

@@ -19,7 +19,7 @@ history_limit = 20
 lookup_k = 5
 
 [job]
-cron_schedule = "0 3 * * *"
+cron_schedule = "0 3 29 2 *" # leap day only; cannot collide with the webhook trigger test
 
 [input]
 kind = "db"

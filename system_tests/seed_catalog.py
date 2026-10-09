@@ -1,6 +1,6 @@
 """Seeds a tiny events/users/items catalog into Postgres for the Robot
 Framework system tests (docker-compose.robot.yml). Standalone script (no
-import of cicerone/tests.support) — runs in the Dockerfile "test" stage,
+import of cicerone/tests.support) — runs in the Dockerfile "runtime" stage,
 which already has pandas/sqlalchemy/psycopg installed.
 
 User ids below are asserted against directly in system_tests/*.robot —
@@ -13,6 +13,8 @@ import os
 
 import pandas as pd
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.types import String
 
 DATABASE_URL = os.environ.get(
     "ROBOT_DATABASE_URL",
@@ -51,7 +53,13 @@ def main() -> None:
     engine = create_engine(DATABASE_URL)
     try:
         EVENTS.to_sql("events", engine, if_exists="replace", index=False)
-        USERS.to_sql("users", engine, if_exists="replace", index=False)
+        USERS.to_sql(
+            "users",
+            engine,
+            if_exists="replace",
+            index=False,
+            dtype={"favorite_styles": ARRAY(String)},
+        )
         ITEMS.to_sql("items", engine, if_exists="replace", index=False)
     finally:
         engine.dispose()
