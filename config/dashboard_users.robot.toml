@@ -1,0 +1,6 @@
+# Robot-test-only Basic Auth user, baked in (not generated via `cicerone
+# users`, to keep the stack non-interactive). username "robot", password
+# "robot-password" — hash generated with bcrypt==5.0.0 (matches
+# requirements.txt). Never used outside docker-compose.robot.yml.
+[users]
+robot = "$2b$12$uBxpm1ZVZFw/V/Ra88OIYeuknUZJepoSWxUG6RpiW.ZxmGkMktFdG"

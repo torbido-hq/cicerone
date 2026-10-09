@@ -1,0 +1,5 @@
+# Robot Framework black-box/system tests only (docker/Dockerfile "robot"
+# stage, docker-compose.robot.yml). Never installed in the runtime/test
+# images used for production or the pytest suite.
+robotframework==7.5
+robotframework-requests==0.9.7

@@ -124,3 +124,15 @@ USER root
 RUN pip install --no-cache-dir -r requirements-sequential.txt
 USER cicerone
 CMD ["pytest", "tests/test_model_sequential.py", "tests/test_model_strategies.py", "--no-cov"]
+
+# --- robot -------------------------------------------------------------
+# Local-only Robot Framework black-box/system tests (docker-compose.robot.yml,
+# system_tests/) against the real recommender/serve/dashboard containers over
+# HTTP. Not part of CI, not torch/rectools-related — plain python base image.
+FROM python:3.11-slim-bookworm AS robot
+WORKDIR /app
+COPY requirements-robot.txt ./
+RUN pip install --no-cache-dir -r requirements-robot.txt
+COPY system_tests/ ./system_tests/
+ENTRYPOINT ["robot"]
+CMD ["--outputdir", "system_tests/results", "system_tests"]

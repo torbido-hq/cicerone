@@ -1,0 +1,25 @@
+# Serve-mode config for the local-only Robot Framework system tests
+# (docker-compose.robot.yml / system_tests/). NOT used in production — see
+# config/cicerone.robot.toml for the matching batch/trigger config whose
+# [output] this must point at.
+
+[job]
+mode = "serve"
+
+[serve]
+auth_token = "robot-serve-token"
+host = "0.0.0.0"
+port = 8000
+default_k = 5
+
+[output]
+kind = "db"
+[output.options]
+database_url = "postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone_robot"
+
+# Required by load_settings() even in serve mode; never read from.
+[input]
+kind = "dataset"
+[input.options]
+storage_backend = "local"
+path = "/tmp/unused-in-serve-mode"

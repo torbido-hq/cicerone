@@ -1,0 +1,27 @@
+# Dashboard config for the local-only Robot Framework system tests
+# (docker-compose.robot.yml / system_tests/). NOT used in production — see
+# config/cicerone.robot.toml for the matching batch config whose [output]
+# this must point at. Basic-Auth users: config/dashboard_users.robot.toml
+# (user "robot" / password "robot-password").
+
+[output]
+kind = "db"
+[output.options]
+database_url = "postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone_robot"
+
+[dashboard]
+enabled = true
+host = "0.0.0.0"
+port = 8090
+users_path = "/app/config/dashboard_users.robot.toml"
+refresh_interval_seconds = 5
+history_limit = 20
+lookup_k = 5
+
+[job]
+cron_schedule = "0 3 * * *"
+
+[input]
+kind = "db"
+[input.options]
+database_url = "postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone_robot"

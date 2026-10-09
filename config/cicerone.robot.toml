@@ -1,0 +1,28 @@
+# Batch-job config for the local-only Robot Framework system tests
+# (docker-compose.robot.yml / system_tests/). NOT used in production — the
+# db credentials/tokens below are throwaway, dedicated-test-stack values,
+# matching the plaintext style already used in docker/postgres/defaults.env.
+
+[job]
+mode = "batch"
+top_k = 5
+cron_schedule = "0 3 * * *" # never fires during a test run; only the trigger matters
+feature_config_path = "/app/config/features.toml"
+models = ["collaborative", "popular"]
+
+[job.trigger]
+enabled = true
+auth_token = "robot-trigger-token"
+host = "0.0.0.0"
+port = 8080
+debounce_seconds = 2
+
+[input]
+kind = "db"
+[input.options]
+database_url = "postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone_robot"
+
+[output]
+kind = "db"
+[output.options]
+database_url = "postgresql+psycopg://cicerone:cicerone@postgres:5432/cicerone_robot"
