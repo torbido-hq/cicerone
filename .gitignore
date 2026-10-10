@@ -4,6 +4,7 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
+templates/
 .env
 
 # Compiled by docker/Dockerfile's "frontend" build stage (Tailwind CLI) --
@@ -39,3 +40,4 @@ AGENTS.md
 *.egg-info/
 /build/
 /dist/
+.sdd/runtime/
