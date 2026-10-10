@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import boto3
 import pytest
@@ -1088,3 +1089,48 @@ def test_s3_sqs_visibility_client_error_is_logged(monkeypatch):
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
     source.nack(events)
+
+
+@mock_aws
+def test_release_or_drop_malformed_logs_exc_info_release_path(caplog):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-excinfo-release")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    with caplog.at_level(logging.ERROR, logger="cicerone.events.s3"):
+        source._fetch_sqs(1)
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, "Expected at least one ERROR log from _release_or_drop_malformed"
+    record = error_records[-1]
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None and isinstance(record.exc_info[1], MalformedS3Notification)
+
+
+@mock_aws
+def test_release_or_drop_malformed_logs_exc_info_delete_path(monkeypatch, caplog):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-excinfo-delete")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    real = source._sqs.receive_message
+
+    def strip(**kwargs):  # type: ignore[no-untyped-def]
+        response = real(**kwargs)
+        for message in response.get("Messages") or []:
+            message.pop("Attributes", None)
+        return response
+
+    monkeypatch.setattr(source._sqs, "receive_message", strip)
+    with caplog.at_level(logging.ERROR, logger="cicerone.events.s3"):
+        source._fetch_sqs(1)
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, "Expected at least one ERROR log from _release_or_drop_malformed"
+    record = error_records[-1]
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None and isinstance(record.exc_info[1], MalformedS3Notification)
