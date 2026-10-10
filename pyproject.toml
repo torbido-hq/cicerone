@@ -89,3 +89,10 @@ exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
 ]
+
+[dependency-groups]
+dev = [
+    "moto>=5.2.3",
+    "pytest>=9.1.1",
+    "pytest-mock>=3.16.0",
+]
