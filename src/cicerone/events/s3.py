@@ -21,7 +21,6 @@ from cicerone.events.s3_parse import (
     _DEFAULT_LIST_PAGE_SIZE,
     _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS,
     _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS,
-    _LOAD_FAILURE_SKIP_AFTER,  # noqa: F401
     _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     _as_int,
@@ -71,7 +70,6 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._event_batch: dict[str, _Batch] = {}
         self._batches: OrderedDict[str, _Batch] = OrderedDict()
         self._batch_seq = 0
-        self._load_failures: dict[str, int] = {}
         self._sqs_visible_lag: int | None = None
         self._sqs_visible_lag_at: float = 0.0
 
