@@ -45,19 +45,23 @@ def _approximate_receive_count(message: dict[str, Any]) -> int:
     return count
 
 
-def _release_or_drop_malformed(sqs: Any, queue_url: str, message: dict[str, Any]) -> bool:
+def _release_or_drop_malformed(
+    sqs: Any, queue_url: str, message: dict[str, Any], exc: MalformedS3Notification
+) -> bool:
     receipt = message["ReceiptHandle"]
     count = _approximate_receive_count(message)
     if count >= _SQS_MALFORMED_RECEIVE_LIMIT:
-        logger.exception(
+        logger.error(
             "Malformed nested S3 notification reached %s receives; deleting poison message",
             count,
+            exc_info=exc,
         )
         return _delete_poison_message(sqs, queue_url, receipt)
-    logger.exception(
+    logger.error(
         "Malformed nested S3 notification; releasing SQS message for retry (receive %s of %s)",
         count,
         _SQS_MALFORMED_RECEIVE_LIMIT,
+        exc_info=exc,
     )
     try:
         sqs.change_message_visibility(QueueUrl=queue_url, ReceiptHandle=receipt, VisibilityTimeout=0)
@@ -120,8 +124,8 @@ class S3SqsPoll:
                 receipt = message["ReceiptHandle"]
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
-                except MalformedS3Notification:
-                    if _release_or_drop_malformed(sqs, queue_url, message):
+                except MalformedS3Notification as exc:
+                    if _release_or_drop_malformed(sqs, queue_url, message, exc):
                         made_progress = True
                     continue
                 except Exception:
