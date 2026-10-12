@@ -71,6 +71,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A non-object S3 notification record and a malformed nested SNS
   Message use that same bounded retry. A malformed top-level SQS body
   is still deleted on the first receive.
+- S3 SQS health adds `sqs_lag=stale` or `sqs_lag=unavailable` to its
+  detail when the queue depth lookup fails.
 
 ## [0.8.4] - 2026-09-25
 

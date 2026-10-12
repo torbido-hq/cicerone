@@ -946,6 +946,34 @@ def test_s3_list_marker_read_error_propagates(tmp_path, monkeypatch):
         source.connect()
 
 
+def test_s3_list_marker_path_not_a_file_propagates(tmp_path):
+    marker = tmp_path / "marker.json"
+    marker.mkdir()
+    source = S3EventSource(_creds(mode="list", marker_path=str(marker)))
+    with pytest.raises(IsADirectoryError):
+        source.connect()
+
+
+@mock_aws
+def test_s3_list_missing_marker_starts_from_initial_marker(tmp_path):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="a"))
+    _put_event(client, "events/b.json", event_payload(event_id="b"))
+    marker = tmp_path / "missing" / "marker.json"
+    source = S3EventSource(
+        _creds(
+            mode="list",
+            prefix="events/",
+            marker_path=str(marker),
+            initial_marker="events/a.json",
+        )
+    )
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["b"]
+    source.close()
+
+
 @mock_aws
 def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
@@ -1003,6 +1031,30 @@ def test_s3_sqs_health_lag_error_keeps_cached_lag(monkeypatch, error):
     health = source.health()
     assert health.connected is True
     assert health.lag == 2
+
+
+@mock_aws
+def test_s3_sqs_health_detail_reports_lag_lookup_state(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-detail")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    real = source._sqs.get_queue_attributes
+
+    def boom(**kwargs):
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+    assert "sqs_lag=unavailable" in (source.health().detail or "")
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", real)
+    assert "sqs_lag=" not in (source.health().detail or "")
+
+    source._sqs_lag_cache_ttl_seconds = 0.0
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+    assert "sqs_lag=stale" in (source.health().detail or "")
 
 
 @mock_aws

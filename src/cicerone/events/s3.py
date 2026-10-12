@@ -223,6 +223,8 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                 except Exception:
                     logger.exception("Failed to estimate SQS event lag")
                     visible = cached_visible
+                    lag_state = "stale" if visible is not None else "unavailable"
+                    detail = f"{detail} sqs_lag={lag_state}"
             if visible is not None:
                 # Visible queue depth + local held work (not_visible is already in held
                 # once received/parsed; avoid double-counting it).
