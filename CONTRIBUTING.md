@@ -206,7 +206,8 @@ patch train and `release/X.Y.0` is the minor train.
 - After dual-train ends, see
   [Single train](#single-train).
 
-Checklist:
+Checklist while trains are split (on a [Single train](#single-train),
+everything lands on `main` — no cherry-picks or merge-backs):
 
 1. **Fix** — PR to `main`, then cherry-pick onto `release/X.Y.0`.
 2. **Feature** — PR to `release/X.Y.0` (not `main`).
@@ -230,6 +231,8 @@ Update this line in the same PR that changes the split.
 When **Current trains** is `no split; main is …`, there is one train —
 `main`. Fixes and features both land on `main`. No `release/X.Y.0` PRs
 and no cherry-picks. New notes go under that version heading.
+
+The procedures below apply only while trains are split.
 
 <a id="cherry-picks" name="cherry-picks"></a>
 
@@ -323,6 +326,8 @@ for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow
    (`src/cicerone/__init__.py`) to the same `X.Y.Z` (serve OpenAPI
    metadata uses it via `SERVE_API_VERSION` — regenerate
    `docs/openapi/serve.openapi.json` if the version string changed).
+   Update [Current trains](#current-trains) to the new version in the
+   same PR.
 2. Tagging always happens from `main`, even when the completing PR
    lands on the minor train. Never tag `release/X.Y.0`.
    - **Patch:** merge the completing PR to `main`. Tag that commit on
