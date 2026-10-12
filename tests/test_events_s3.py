@@ -930,6 +930,22 @@ def test_s3_list_unexpected_marker_error_propagates(tmp_path, monkeypatch):
         source.connect()
 
 
+def test_s3_list_marker_read_error_propagates(tmp_path, monkeypatch):
+    marker = tmp_path / "marker.json"
+    marker.write_text(json.dumps({"key": "events/a.json"}))
+    source = S3EventSource(_creds(mode="list", marker_path=str(marker)))
+    real = type(marker).read_text
+
+    def boom(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self == marker:
+            raise PermissionError("marker unreadable")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(marker), "read_text", boom)
+    with pytest.raises(PermissionError, match="marker unreadable"):
+        source.connect()
+
+
 @mock_aws
 def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
@@ -964,6 +980,29 @@ def test_s3_sqs_health_recovers_from_client_error(monkeypatch):
     health = source.health()
     assert health.connected is True
     assert health.lag == 0
+
+
+@pytest.mark.parametrize("error", [RuntimeError("attrs"), BotoCoreError()])
+@mock_aws
+def test_s3_sqs_health_lag_error_keeps_cached_lag(monkeypatch, error):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-cached")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody="{}")
+    sqs.send_message(QueueUrl=queue_url, MessageBody="{}")
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert source.health().lag == 2
+    source._sqs_lag_cache_ttl_seconds = 0.0
+
+    def boom(**kwargs):
+        raise error
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+    health = source.health()
+    assert health.connected is True
+    assert health.lag == 2
 
 
 @mock_aws

@@ -90,7 +90,7 @@ class S3ListPoll:
             key = raw.get("key")
             if key:
                 self._marker_key = str(key)
-        except (OSError, ValueError):
+        except ValueError:
             logger.exception(
                 "Ignoring corrupt marker file %s; keeping marker %r",
                 self._marker_path,
