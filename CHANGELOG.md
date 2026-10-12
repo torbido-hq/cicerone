@@ -59,8 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   GetObject for OS and Arrow errors. Unexpected exceptions now
   propagate.
 - S3 list loads retry an object on S3 client errors and leave the marker
-  where it is. A corrupt marker file is still ignored. Unexpected list
-  and marker errors propagate.
+  where it is. A corrupt marker file is still ignored. Marker read
+  errors and unexpected list or marker errors propagate.
 - A malformed nested S3 notification, including a missing or null
   bucket or object and a missing name or key, is made visible again
   for retry and deleted after a fixed number of receives. Other
