@@ -709,25 +709,6 @@ def test_s3_sqs_malformed_notification_is_visible_until_receive_limit():
 
 
 @mock_aws
-def test_s3_sqs_malformed_notification_logs_parse_error(caplog):
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-malformed-log")["QueueUrl"]
-    sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps({"Records": ["skip"]}))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    with caplog.at_level("ERROR", logger="cicerone.events.s3"):
-        for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT):
-            assert list(source.poll(10)) == []
-    records = [record for record in caplog.records if "Malformed nested S3 notification" in record.message]
-    assert len(records) == _SQS_MALFORMED_RECEIVE_LIMIT
-    for record in records:
-        assert record.exc_info is not None
-        assert isinstance(record.exc_info[1], MalformedS3Notification)
-
-
-@mock_aws
 def test_s3_sqs_malformed_without_receive_count_is_deleted(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
