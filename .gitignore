@@ -29,14 +29,12 @@ config/dashboard_users.toml
 # Local virtualenv (never commit)
 .venv/
 
-# Optional local-only agent notes. Cloud Agent VMs never see this file
-# (clone skips gitignored paths). Do not rely on it for Cloud sessions.
-# Cross-session agent policy that Cloud must always see lives in:
-#   - CONTRIBUTING.md (Pull requests / Releasing)
-#   - .cursor/rules/*.mdc (alwaysApply)
-# Non-git alternative: Cursor Customize → Rules → User Rules / Team Rules
-# (paste the same content once; it is injected every Agent session).
+# Local-only agent configuration (never commit). Repo policy lives in
+# CONTRIBUTING.md.
 AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
 
 *.egg-info/
 /build/
