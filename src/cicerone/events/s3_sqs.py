@@ -32,6 +32,10 @@ def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
 
 
 def _approximate_receive_count(message: dict[str, Any]) -> int:
+    # _fetch_sqs always requests ApproximateReceiveCount, so a missing or invalid
+    # value means the response itself is suspect. Treat it as the limit reached:
+    # the malformed message is deleted now rather than retried forever, because
+    # without a count the retry could never be bounded.
     attributes = message.get("Attributes")
     raw = attributes.get("ApproximateReceiveCount") if isinstance(attributes, dict) else None
     if isinstance(raw, bool) or not isinstance(raw, int | str):

@@ -81,10 +81,16 @@ class S3ListPoll:
             loaded += len(novel)
 
     def _load_marker_unlocked(self) -> None:
-        if self._marker_path is None or not self._marker_path.is_file():
+        if self._marker_path is None:
+            return
+        # Read directly rather than probing with is_file(), which reports an
+        # inaccessible marker as absent and would restart from a stale marker.
+        try:
+            text = self._marker_path.read_text()
+        except FileNotFoundError:
             return
         try:
-            raw = json.loads(self._marker_path.read_text())
+            raw = json.loads(text)
             if not isinstance(raw, dict):
                 raise ValueError("marker root must be an object")
             key = raw.get("key")
