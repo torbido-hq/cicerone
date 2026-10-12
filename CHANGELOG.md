@@ -175,8 +175,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   errors and unexpected list or marker errors propagate.
 - A malformed nested S3 notification, including a missing or null
   bucket or object and a missing name or key, is made visible again
-  for retry and deleted after a fixed number of receives. Other
-  records in that message are not applied.
+  for retry. Other records in that message are held back until a
+  fixed number of receives, then applied while the malformed records
+  are dropped. A message with no well-formed records is deleted.
 - A client or transport error while deleting a poison S3 notification
   is logged and leaves the SQS message for retry. Unexpected delete
   errors still propagate.

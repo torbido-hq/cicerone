@@ -783,6 +783,59 @@ def test_s3_sqs_malformed_nested_notification_is_left():
     assert held == 1
 
 
+def test_s3_malformed_notification_carries_valid_sibling_records():
+    body = {
+        "Records": [
+            {"eventName": "ObjectCreated:Put", "s3": "bad"},
+            {
+                "eventName": "ObjectRemoved:Delete",
+                "s3": {"bucket": {"name": "b"}, "object": {"key": "removed"}},
+            },
+            {
+                "eventName": "ObjectCreated:Put",
+                "s3": {"bucket": {"name": "b"}, "object": {"key": "a%2Fb.json"}},
+            },
+            "not-a-record",
+        ]
+    }
+    with pytest.raises(MalformedS3Notification, match="object descriptor") as caught:
+        _s3_records_from_sqs_body(json.dumps(body))
+    assert caught.value.valid_pairs == (("b", "a/b.json"),)
+
+
+@mock_aws
+def test_s3_sqs_malformed_notification_applies_valid_siblings_at_receive_limit():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-siblings")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-sibling"))
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Records": [
+                    {"eventName": "ObjectCreated:Put", "s3": {"bucket": {"name": "events-bucket"}}},
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": {"name": "events-bucket"}, "object": {"key": "ok.json"}},
+                    },
+                ]
+            }
+        ),
+    )
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+        assert list(source.poll(10)) == []
+        assert _sqs_counts(sqs, queue_url) == (1, 0)
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok-sibling"]
+    assert _sqs_held(sqs, queue_url) == 1
+    source.ack([event.event_id for event in events])
+    assert _sqs_held(sqs, queue_url) == 0
+
+
 @mock_aws
 def test_s3_sqs_filters_bucket_and_prefix():
     s3 = boto3.client("s3", region_name="us-east-1")
