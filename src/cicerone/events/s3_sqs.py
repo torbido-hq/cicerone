@@ -34,7 +34,7 @@ def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
 def _approximate_receive_count(message: dict[str, Any]) -> int:
     # _fetch_sqs always requests ApproximateReceiveCount, so a missing or invalid
     # value means the response itself is suspect. Treat it as the limit reached:
-    # the malformed message is deleted now rather than retried forever, because
+    # the malformed message is settled now rather than retried forever, because
     # without a count the retry could never be bounded.
     attributes = message.get("Attributes")
     raw = attributes.get("ApproximateReceiveCount") if isinstance(attributes, dict) else None
@@ -129,9 +129,21 @@ class S3SqsPoll:
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
                 except MalformedS3Notification as exc:
-                    if _release_or_drop_malformed(sqs, queue_url, message, exc):
-                        made_progress = True
-                    continue
+                    count = _approximate_receive_count(message)
+                    if count < _SQS_MALFORMED_RECEIVE_LIMIT or not exc.valid_pairs:
+                        if _release_or_drop_malformed(sqs, queue_url, message, exc):
+                            made_progress = True
+                        continue
+                    # Retries are exhausted: apply the well-formed sibling records so
+                    # they are not lost with the message, and drop the malformed ones.
+                    logger.error(
+                        "Malformed nested S3 notification reached %s receives; "
+                        "applying %s well-formed records and dropping the rest",
+                        count,
+                        len(exc.valid_pairs),
+                        exc_info=exc,
+                    )
+                    pairs = list(exc.valid_pairs)
                 except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     if _delete_poison_message(sqs, queue_url, receipt):

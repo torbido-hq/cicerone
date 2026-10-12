@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote_plus
@@ -22,7 +23,8 @@ _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 # In-flight apply (online fit_partial) can outlast the receive visibility window.
 _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
-# A malformed nested notification is released for another attempt, then deleted.
+# A malformed nested notification is released for another attempt. At the limit
+# its well-formed records are applied and the malformed ones dropped.
 _SQS_MALFORMED_RECEIVE_LIMIT = 3
 
 
@@ -143,7 +145,10 @@ def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[
 
 
 class MalformedS3Notification(ValueError):
-    pass
+    def __init__(self, message: str, valid_pairs: Sequence[tuple[str, str]] = ()) -> None:
+        super().__init__(message)
+        # Well-formed sibling records, applied once the receive limit is reached.
+        self.valid_pairs = tuple(valid_pairs)
 
 
 def _notification_document(body: str) -> tuple[Any, bool]:
@@ -171,22 +176,35 @@ def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
             raise MalformedS3Notification("SNS notification Message is missing S3 Records")
         raise ValueError("SQS message missing S3 Records")
     out: list[tuple[str, str]] = []
+    first_error: MalformedS3Notification | None = None
     for record in records:
-        if not isinstance(record, dict):
-            raise MalformedS3Notification("S3 notification record is not an object")
-        event_name = str(record.get("eventName") or "")
-        if event_name and not event_name.startswith("ObjectCreated"):
+        try:
+            pair = _s3_record_pair(record)
+        except MalformedS3Notification as exc:
+            first_error = first_error or exc
             continue
-        s3 = record.get("s3")
-        if not isinstance(s3, dict):
-            raise MalformedS3Notification("S3 notification record is missing an object descriptor")
-        bucket_info = s3.get("bucket")
-        object_info = s3.get("object")
-        if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
-            raise MalformedS3Notification("S3 notification record is missing bucket or object")
-        bucket = bucket_info.get("name")
-        key = object_info.get("key")
-        if not bucket or not key:
-            raise MalformedS3Notification("S3 notification record is missing bucket name or object key")
-        out.append((str(bucket), unquote_plus(str(key))))
+        if pair is not None:
+            out.append(pair)
+    if first_error is not None:
+        raise MalformedS3Notification(str(first_error), valid_pairs=out)
     return out
+
+
+def _s3_record_pair(record: Any) -> tuple[str, str] | None:
+    if not isinstance(record, dict):
+        raise MalformedS3Notification("S3 notification record is not an object")
+    event_name = str(record.get("eventName") or "")
+    if event_name and not event_name.startswith("ObjectCreated"):
+        return None
+    s3 = record.get("s3")
+    if not isinstance(s3, dict):
+        raise MalformedS3Notification("S3 notification record is missing an object descriptor")
+    bucket_info = s3.get("bucket")
+    object_info = s3.get("object")
+    if not isinstance(bucket_info, dict) or not isinstance(object_info, dict):
+        raise MalformedS3Notification("S3 notification record is missing bucket or object")
+    bucket = bucket_info.get("name")
+    key = object_info.get("key")
+    if not bucket or not key:
+        raise MalformedS3Notification("S3 notification record is missing bucket name or object key")
+    return str(bucket), unquote_plus(str(key))
