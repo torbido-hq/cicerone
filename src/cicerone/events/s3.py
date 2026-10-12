@@ -222,7 +222,9 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                         self._sqs_visible_lag_at = now
                 except Exception:
                     logger.exception("Failed to estimate SQS event lag")
-                    visible = cached_visible
+                    # Another health() call may have refreshed the cache meanwhile.
+                    with self._lock:
+                        visible = self._sqs_visible_lag
                     lag_state = "stale" if visible is not None else "unavailable"
                     detail = f"{detail} sqs_lag={lag_state}"
             if visible is not None:

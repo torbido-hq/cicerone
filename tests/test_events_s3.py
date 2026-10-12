@@ -1058,6 +1058,26 @@ def test_s3_sqs_health_detail_reports_lag_lookup_state(monkeypatch):
 
 
 @mock_aws
+def test_s3_sqs_health_lag_error_uses_concurrently_refreshed_cache(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-race")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+
+    def refreshed_then_boom(**kwargs):
+        # A concurrent health() call refreshes the cache before this lookup fails.
+        source._sqs_visible_lag = 5
+        raise BotoCoreError()
+
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", refreshed_then_boom)
+    health = source.health()
+    assert health.lag == 5
+    assert "sqs_lag=stale" in (health.detail or "")
+
+
+@mock_aws
 def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
