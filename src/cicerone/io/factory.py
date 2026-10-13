@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
+from cicerone.locks import LockBackend
 
 if TYPE_CHECKING:
     from cicerone.io.catalog import CatalogStore
     from cicerone.io.surfaces_reader import SurfacesReader
-    from cicerone.locks import LockBackend  # type-only: a runtime import loads every lock backend
 
 T = TypeVar("T")
 

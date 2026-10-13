@@ -280,6 +280,15 @@ def test_build_manifest_reader_unknown_kind_raises():
         build_manifest_reader(settings)
 
 
+def test_build_output_sink_type_hints_resolve_at_runtime():
+    import typing
+
+    from cicerone.io.factory import build_output_sink
+    from cicerone.locks import LockBackend
+
+    assert typing.get_type_hints(build_output_sink)["writer_lock"] == LockBackend | None
+
+
 def test_build_catalog_store_dataset(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     assert isinstance(build_catalog_store(settings), DatasetCatalogStore)
