@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
@@ -40,15 +40,12 @@ class RecommendationService:
         reader: RecommendationReader,
         *,
         items_cache: ItemsFilterCache,
-        availability_filters: Sequence[str],
         assignment_overlay: Callable[[], AssignmentOverlay],
     ) -> None:
         self._settings = settings
         self._reader = reader
         self._items_cache = items_cache
-        self._availability_filters = list(availability_filters)
         self._assignment_overlay = assignment_overlay
-        self._category_column = settings.serve.category_column
         self._missing_category_warned = False
 
     def get(
@@ -75,7 +72,7 @@ class RecommendationService:
             (
                 items is not None
                 and not items.empty
-                and (category is not None or (exclude_unavailable and self._availability_filters))
+                and (category is not None or (exclude_unavailable and self._items_cache.availability_filters))
             )
             or consumed_ids
         )
@@ -102,7 +99,7 @@ class RecommendationService:
             items=items,
             available_ids=available_ids,
             category=None,
-            category_column=self._category_column,
+            category_column=self._items_cache.category_column,
             exclude_unavailable=exclude_unavailable,
             ids_by_category=ids_by_category,
             on_missing_category_column=self.warn_missing_category_column,
@@ -114,7 +111,7 @@ class RecommendationService:
             items=items,
             available_ids=available_ids,
             category=category,
-            category_column=self._category_column,
+            category_column=self._items_cache.category_column,
             exclude_unavailable=False,
             ids_by_category=ids_by_category,
             on_missing_category_column=self.warn_missing_category_column,
@@ -130,7 +127,7 @@ class RecommendationService:
                 items=items,
                 available_ids=available_ids,
                 category=category,
-                category_column=self._category_column,
+                category_column=self._items_cache.category_column,
                 exclude_unavailable=exclude_unavailable,
                 ids_by_category=ids_by_category,
                 on_missing_category_column=self.warn_missing_category_column,
@@ -185,5 +182,5 @@ class RecommendationService:
         self._missing_category_warned = True
         logger.warning(
             "Serve category filter requested but items have no column %r — returning empty",
-            self._category_column,
+            self._items_cache.category_column,
         )

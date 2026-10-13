@@ -320,7 +320,6 @@ def create_app(
         settings,
         reader,
         items_cache=items_cache,
-        availability_filters=availability_filters,
         assignment_overlay=overlay_cache.get,
     )
 

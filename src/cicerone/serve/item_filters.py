@@ -55,6 +55,14 @@ class ItemsFilterCache:
         ) = None
         self._lock = threading.Lock()
 
+    @property
+    def category_column(self) -> str:
+        return self._category_column
+
+    @property
+    def availability_filters(self) -> tuple[str, ...]:
+        return tuple(self._availability_filters)
+
     def get(self) -> tuple[pd.DataFrame | None, frozenset[str] | None, dict[str, frozenset[str]]]:
         for _ in range(_FILTER_CACHE_REBUILDS):
             version = self._reader.items_version()
