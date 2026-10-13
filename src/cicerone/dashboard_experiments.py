@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -278,7 +278,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             lambda: load_recommendation_guardrail_rows(settings.output),
             None,
         )
-        exposures_f = pool.submit(
+        exposures_f: Future[list[dict[str, Any]] | None] = pool.submit(
             try_load,
             "read experiment exposures",
             lambda: store.read_exposures(experiment_id=experiment.id) if experiment.log_exposures else None,
