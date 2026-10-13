@@ -21,6 +21,8 @@ from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
 
+_SQS_LOCAL_RECEIVES_MAX = 1024
+
 
 def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
     try:
@@ -31,29 +33,22 @@ def _delete_poison_message(sqs: Any, queue_url: str, receipt: str) -> bool:
     return True
 
 
-def _approximate_receive_count(message: dict[str, Any]) -> int:
-    # _fetch_sqs always requests ApproximateReceiveCount, so a missing or invalid
-    # value means the response itself is suspect. Treat it as the limit reached:
-    # the malformed message is settled now rather than retried forever, because
-    # without a count the retry could never be bounded.
+def _approximate_receive_count(message: dict[str, Any]) -> int | None:
     attributes = message.get("Attributes")
     raw = attributes.get("ApproximateReceiveCount") if isinstance(attributes, dict) else None
     if isinstance(raw, bool) or not isinstance(raw, int | str):
-        return _SQS_MALFORMED_RECEIVE_LIMIT
+        return None
     try:
         count = int(raw)
     except ValueError:
-        return _SQS_MALFORMED_RECEIVE_LIMIT
-    if count < 1:
-        return _SQS_MALFORMED_RECEIVE_LIMIT
-    return count
+        return None
+    return count if count >= 1 else None
 
 
 def _release_or_drop_malformed(
-    sqs: Any, queue_url: str, message: dict[str, Any], error: MalformedS3Notification
+    sqs: Any, queue_url: str, message: dict[str, Any], count: int, error: MalformedS3Notification
 ) -> bool:
     receipt = message["ReceiptHandle"]
-    count = _approximate_receive_count(message)
     if count >= _SQS_MALFORMED_RECEIVE_LIMIT:
         logger.error(
             "Malformed nested S3 notification reached %s receives; deleting poison message",
@@ -88,6 +83,7 @@ class S3SqsPoll:
     _event_batch: dict[str, _Batch]
     _load_object_events: Callable[..., list[NormalizedEvent]]
     _register_batch: Callable[..., None]
+    _sqs_local_receives: OrderedDict[str, int]
 
     def _matching_sqs_records(self, pairs: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
         matched: list[tuple[str, str]] = []
@@ -98,6 +94,24 @@ class S3SqsPoll:
                 continue
             matched.append((bucket, key))
         return matched
+
+    def _malformed_receive_count(self, message: dict[str, Any], has_valid_pairs: bool) -> int:
+        count = _approximate_receive_count(message)
+        if count is not None:
+            return count
+        message_id = message.get("MessageId")
+        # Without siblings to apply, settle now; with them, bound retries locally.
+        if not has_valid_pairs or not isinstance(message_id, str):
+            logger.warning("SQS message has no ApproximateReceiveCount; treating it as at the limit")
+            return _SQS_MALFORMED_RECEIVE_LIMIT
+        logger.warning("SQS message %s has no ApproximateReceiveCount; counting receives locally", message_id)
+        with self._lock:
+            count = self._sqs_local_receives.pop(message_id, 0) + 1
+            if count < _SQS_MALFORMED_RECEIVE_LIMIT:
+                self._sqs_local_receives[message_id] = count
+                while len(self._sqs_local_receives) > _SQS_LOCAL_RECEIVES_MAX:
+                    self._sqs_local_receives.popitem(last=False)
+        return count
 
     def _fetch_sqs(self, need: int) -> None:
         if need < 1:
@@ -129,9 +143,9 @@ class S3SqsPoll:
                 try:
                     pairs = _s3_records_from_sqs_body(message["Body"])
                 except MalformedS3Notification as exc:
-                    count = _approximate_receive_count(message)
+                    count = self._malformed_receive_count(message, bool(exc.valid_pairs))
                     if count < _SQS_MALFORMED_RECEIVE_LIMIT or not exc.valid_pairs:
-                        if _release_or_drop_malformed(sqs, queue_url, message, exc):
+                        if _release_or_drop_malformed(sqs, queue_url, message, count, exc):
                             made_progress = True
                         continue
                     # Retries are exhausted: apply the well-formed sibling records so

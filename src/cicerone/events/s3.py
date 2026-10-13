@@ -72,6 +72,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._batch_seq = 0
         self._sqs_visible_lag: int | None = None
         self._sqs_visible_lag_at: float = 0.0
+        self._sqs_local_receives: OrderedDict[str, int] = OrderedDict()
 
     def connect(self) -> None:
         with self._lock:
