@@ -1014,6 +1014,48 @@ def test_read_exposures_missing_other_column_returns_rows(tmp_path) -> None:
     assert "exposed_at" not in unfiltered[0]
 
 
+def test_read_exposures_skips_columns_outside_the_exposure_schema(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE recommendation_exposures (user_id TEXT, experiment_id TEXT, note TEXT)")
+        )
+        conn.execute(text("INSERT INTO recommendation_exposures VALUES ('u1', 'exp', 'extra')"))
+    rows = ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures()
+    assert rows == [{"user_id": "u1", "experiment_id": "exp"}]
+
+
+def test_read_exposures_table_without_exposure_columns_is_empty(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE recommendation_exposures (note TEXT)"))
+        conn.execute(text("INSERT INTO recommendation_exposures VALUES ('extra')"))
+    assert ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures() == []
+
+
+def test_read_exposures_missing_table_with_filter_is_empty(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    assert store.read_exposures(experiment_id="exp") == []
+
+
+def test_read_exposures_inspect_error_reraises(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    class _Inspector:
+        def get_columns(self, _table):
+            raise OperationalError("PRAGMA", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr("cicerone.experiment.store.inspect", lambda _engine: _Inspector())
+    with pytest.raises(OperationalError, match="disk I/O error"):
+        store.read_exposures()
+
+
 def test_jsonish_numpy_scalar_and_na() -> None:
     import numpy as np
     import pandas as pd
