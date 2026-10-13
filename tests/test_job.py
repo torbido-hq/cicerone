@@ -1613,7 +1613,7 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
 
     from cicerone.config import load_settings
     from cicerone.feature_config import load_feature_config
-    from cicerone.job import JobManifest, _write_job_outputs
+    from cicerone.job import JobManifest, JobRecommendations, JobRun, _write_job_outputs
     from cicerone.model import ModelRunPlan
 
     input_dir = tmp_path / "in"
@@ -1636,27 +1636,30 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
 
     manifest = JobManifest(triggered_by="test", top_k=10)
     result = _write_job_outputs(
-        settings,
-        sink=_Sink(),
-        publication_lock=None,
-        manifest=manifest,
-        fence_check=None,
-        started_at="2026-01-01T00:00:00+00:00",
+        JobRun(
+            settings=settings,
+            sink=_Sink(),
+            publication_lock=None,
+            writer_lock=None,
+            manifest=manifest,
+            fence_check=None,
+            started_at="2026-01-01T00:00:00+00:00",
+        ),
+        JobRecommendations(
+            recommendations=recs,
+            fitted={},
+            run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
+            models=None,
+            weights=None,
+            rrf_k=None,
+        ),
         events=events,
         items=None,
         built=SimpleNamespace(
             dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
         ),
         target_users=["u1"],
-        recommendations=recs,
-        fitted={},
-        run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
-        weights=None,
-        rrf_k=None,
         automl_result=None,
-        track_eval_payload=None,
-        served_eval_payload=None,
-        pending_thompson=None,
         feature_config=load_feature_config(settings.feature_config_path),
     )
     assert result.manifest_written is True
@@ -1671,7 +1674,7 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
 
     from cicerone.config import load_settings
     from cicerone.feature_config import load_feature_config
-    from cicerone.job import JobManifest, JobWriteResult, _write_job_outputs
+    from cicerone.job import JobManifest, JobRecommendations, JobRun, JobWriteResult, _write_job_outputs
     from cicerone.model import ModelRunPlan
 
     input_dir = tmp_path / "in"
@@ -1693,29 +1696,32 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
     result = JobWriteResult()
     with pytest.raises(RuntimeError, match="disk full"):
         _write_job_outputs(
-            settings,
-            sink=_Sink(),
-            publication_lock=None,
-            manifest=JobManifest(triggered_by="test", top_k=10),
-            fence_check=None,
-            started_at="2026-01-01T00:00:00+00:00",
+            JobRun(
+                settings=settings,
+                sink=_Sink(),
+                publication_lock=None,
+                writer_lock=None,
+                manifest=JobManifest(triggered_by="test", top_k=10),
+                fence_check=None,
+                started_at="2026-01-01T00:00:00+00:00",
+                written=result,
+            ),
+            JobRecommendations(
+                recommendations=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
+                fitted={},
+                run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
+                models=None,
+                weights=None,
+                rrf_k=None,
+            ),
             events=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
             items=None,
             built=SimpleNamespace(
                 dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
             ),
             target_users=["u1"],
-            recommendations=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
-            fitted={},
-            run_plan=ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",)),
-            weights=None,
-            rrf_k=None,
             automl_result=None,
-            track_eval_payload=None,
-            served_eval_payload=None,
-            pending_thompson=None,
             feature_config=load_feature_config(settings.feature_config_path),
-            written=result,
         )
     assert result.manifest_written is True
     assert len(payloads) == 1
@@ -1725,7 +1731,7 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
 
 def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
     from cicerone.config import load_settings
-    from cicerone.job import JobManifest, _finalize_job
+    from cicerone.job import JobManifest, JobRun, _finalize_job
 
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -1745,24 +1751,86 @@ def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
             return True
 
     _finalize_job(
-        load_settings(),
-        sink=_Sink(),
-        publisher=_Pub(),
-        writer_lock=None,
-        manifest=JobManifest(status="failed", error="boom"),
-        fence_check=None,
-        started_at="2026-01-01T00:00:00+00:00",
-        manifest_written=False,
-        replace_success_manifest=False,
-        success_generated_at=None,
-        eval_generated_at=None,
-        track_eval_payload=None,
-        served_eval_payload=None,
-        recommendations=None,
+        JobRun(
+            settings=load_settings(),
+            sink=_Sink(),
+            publication_lock=None,
+            writer_lock=None,
+            manifest=JobManifest(status="failed", error="boom"),
+            fence_check=None,
+            started_at="2026-01-01T00:00:00+00:00",
+            publisher=_Pub(),
+        ),
+        None,
     )
     assert closed == [True]
     assert payloads[0]["status"] == "failed"
     assert payloads[0]["error"] == "boom"
+
+
+def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_path, monkeypatch):
+    from cicerone.config import load_settings
+    from cicerone.job import JobManifest, JobRun, _finalize_job
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    payloads: list[dict[str, object]] = []
+
+    class _Pub:
+        def close(self) -> None:
+            raise KeyError("close failed")
+
+    class _Sink:
+        def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
+            payloads.append(payload)
+            return True
+
+    def _run(error: BaseException | None) -> None:
+        _finalize_job(
+            JobRun(
+                settings=load_settings(),
+                sink=_Sink(),
+                publication_lock=None,
+                writer_lock=None,
+                manifest=JobManifest(status="failed", error="boom"),
+                fence_check=None,
+                started_at="2026-01-01T00:00:00+00:00",
+                publisher=_Pub(),
+            ),
+            error,
+        )
+
+    _run(RuntimeError("boom"))
+    with pytest.raises(KeyError, match="close failed"):
+        _run(None)
+    assert [payload["error"] for payload in payloads] == ["boom", "boom"]
+
+
+def test_job_run_finalizes_with_error_raised_while_recording_failure(tmp_path, monkeypatch):
+    from cicerone.locks import LockLostError
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    manifests: list[object] = []
+
+    class _Unprintable(RuntimeError):
+        def __str__(self) -> str:
+            raise LockLostError("lost while formatting")
+
+    def _build_publisher(_settings, **_kwargs):
+        raise _Unprintable()
+
+    monkeypatch.setattr("cicerone.job.build_publisher", _build_publisher)
+    monkeypatch.setattr("cicerone.job.write_job_manifest", lambda *args, **kwargs: manifests.append(args))
+    with pytest.raises(LockLostError, match="lost while formatting"):
+        job.run()
+    assert manifests == []
 
 
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
