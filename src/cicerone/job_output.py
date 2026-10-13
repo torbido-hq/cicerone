@@ -110,7 +110,7 @@ def ensure_publication_fence(sink: object, fence_check: Callable[[], bool] | Non
 
 
 class ManifestWriter(Protocol):
-    # Legacy sinks may omit skip_if_newer_than or return None.
+    # A property, so legacy write_manifest signatures (no skip_if_newer_than, None return) still match.
     @property
     def write_manifest(self) -> Callable[..., object]: ...
 
