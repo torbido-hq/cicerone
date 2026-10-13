@@ -447,6 +447,7 @@ class ExperimentStore:
         engine = self._db_engine()
         selected = self._stored_exposure_columns(engine, table)
         if selected is not None and not selected:
+            logger.warning("Exposures table %r has none of the exposure columns; ignoring rows", table)
             return []
         if experiment_id and selected is not None and "experiment_id" not in selected:
             logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
@@ -467,6 +468,10 @@ class ExperimentStore:
             frame = pd.read_sql(sql, engine, params=params)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
+                return []
+            # The table may appear after inspection without an experiment_id column.
+            if experiment_id and selected is None and is_missing_column_error(exc):
+                logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
                 return []
             logger.exception("Failed to read exposures table %r", table)
             raise
