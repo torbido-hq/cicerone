@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
-from cicerone.events.s3_parse import _LOAD_FAILURE_SKIP_AFTER, _Batch
+from cicerone.events.s3_parse import _Batch
+from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -28,7 +29,6 @@ class S3ListPoll:
     _in_flight: OrderedDict[str, NormalizedEvent]
     _pending: deque[NormalizedEvent]
     _batches: OrderedDict[str, _Batch]
-    _load_failures: dict[str, int]
     _load_object_events: Callable[..., list[NormalizedEvent]]
     _register_batch: Callable[..., None]
 
@@ -67,30 +67,10 @@ class S3ListPoll:
             except ValueError:
                 logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
                 self._register_batch([], object_key=key, object_etag=etag)
-                self._load_failures.pop(key, None)
                 continue
-            except Exception:
-                failures = self._load_failures.get(key, 0) + 1
-                self._load_failures[key] = failures
-                logger.exception(
-                    "Failed to read s3://%s/%s (%d/%d)",
-                    bucket,
-                    key,
-                    failures,
-                    _LOAD_FAILURE_SKIP_AFTER,
-                )
-                if failures >= _LOAD_FAILURE_SKIP_AFTER:
-                    logger.error(
-                        "Skipping unreadable s3://%s/%s after %d load failures",
-                        bucket,
-                        key,
-                        failures,
-                    )
-                    self._register_batch([], object_key=key, object_etag=etag)
-                    self._load_failures.pop(key, None)
-                    continue
+            except S3_READ_ERRORS:
+                logger.exception("Failed to read s3://%s/%s; leaving it for retry", bucket, key)
                 break
-            self._load_failures.pop(key, None)
             novel = [event for event in events if event.event_id not in held_ids]
             if not novel:
                 self._register_batch([], object_key=key, object_etag=etag)
@@ -101,16 +81,22 @@ class S3ListPoll:
             loaded += len(novel)
 
     def _load_marker_unlocked(self) -> None:
-        if self._marker_path is None or not self._marker_path.is_file():
+        if self._marker_path is None:
+            return
+        # Read directly rather than probing with is_file(), which reports an
+        # inaccessible marker as absent and would restart from a stale marker.
+        try:
+            text = self._marker_path.read_text()
+        except FileNotFoundError:
             return
         try:
-            raw = json.loads(self._marker_path.read_text())
+            raw = json.loads(text)
             if not isinstance(raw, dict):
                 raise ValueError("marker root must be an object")
             key = raw.get("key")
             if key:
                 self._marker_key = str(key)
-        except Exception:
+        except ValueError:
             logger.exception(
                 "Ignoring corrupt marker file %s; keeping marker %r",
                 self._marker_path,
