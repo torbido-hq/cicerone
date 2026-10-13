@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
-
-if TYPE_CHECKING:
-    # Type-only: a runtime import would load every lock backend module.
-    from cicerone.locks import LockBackend
+from cicerone.locks import LockBackend
 
 T = TypeVar("T")
 

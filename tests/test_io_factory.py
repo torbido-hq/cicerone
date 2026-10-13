@@ -273,3 +273,12 @@ def test_build_manifest_reader_unknown_kind_raises():
     settings = IOSettings(kind="carrier-pigeon", options={})
     with pytest.raises(ValueError, match="Unknown manifest kind"):
         build_manifest_reader(settings)
+
+
+def test_build_output_sink_type_hints_resolve_at_runtime():
+    import typing
+
+    from cicerone.io.factory import build_output_sink
+    from cicerone.locks import LockBackend
+
+    assert typing.get_type_hints(build_output_sink)["writer_lock"] == LockBackend | None
