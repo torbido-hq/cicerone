@@ -837,6 +837,48 @@ def test_s3_sqs_malformed_notification_applies_valid_siblings_at_receive_limit()
 
 
 @mock_aws
+def test_s3_sqs_malformed_siblings_without_receive_count_are_retried_locally(monkeypatch):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-malformed-siblings-uncounted")["QueueUrl"]
+    _put_event(s3, "ok.json", event_payload(event_id="ok-uncounted"))
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "Records": [
+                    "bad",
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {"bucket": {"name": "events-bucket"}, "object": {"key": "ok.json"}},
+                    },
+                ]
+            }
+        ),
+    )
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    real = source._sqs.receive_message
+
+    def strip(**kwargs):
+        response = real(**kwargs)
+        for message in response.get("Messages") or []:
+            message.pop("Attributes", None)
+        return response
+
+    monkeypatch.setattr(source._sqs, "receive_message", strip)
+    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+        assert list(source.poll(10)) == []
+        assert _sqs_counts(sqs, queue_url) == (1, 0)
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok-uncounted"]
+    assert source._sqs_local_receives == {}
+    source.ack([event.event_id for event in events])
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
 def test_s3_sqs_filters_bucket_and_prefix():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
