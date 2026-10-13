@@ -231,14 +231,18 @@ def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
         reader=reader,
         start_worker=start_events_worker,
     )
-    app = create_app(
-        settings,
-        reader,
-        manifest_reader=build_manifest_reader(settings.output),
-        feature_config=feature_config,
-        event_source=events_runtime.webhook_source,
-        events_worker=events_runtime.worker,
-    )
+    try:
+        app = create_app(
+            settings,
+            reader,
+            manifest_reader=build_manifest_reader(settings.output),
+            feature_config=feature_config,
+            event_source=events_runtime.webhook_source,
+            events_worker=events_runtime.worker,
+        )
+    except Exception:
+        events_runtime.stop()
+        raise
     app.state.events_runtime = events_runtime
     return app
 

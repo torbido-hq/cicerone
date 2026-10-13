@@ -217,3 +217,28 @@ def test_dashboard_users_hashes_password() -> None:
     users = dashboard_users("alice", "s3cret")
     assert set(users) == {"alice"}
     assert bcrypt.checkpw(b"s3cret", users["alice"].encode("ascii"))
+
+
+def test_mount_serve_app_stops_events_runtime_when_create_app_fails(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from support.system_spec import mount_serve_app
+
+    import cicerone.serve as serve
+    import cicerone.serve.bootstrap_events as bootstrap
+    from cicerone.config import IOSettings, make_settings
+
+    stopped: list[bool] = []
+    runtime = SimpleNamespace(webhook_source=None, worker=None, stop=lambda: stopped.append(True))
+    monkeypatch.setattr(bootstrap, "start_events_runtime", lambda *_args, **_kwargs: runtime)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("create_app failed")
+
+    monkeypatch.setattr(serve, "create_app", boom)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    with pytest.raises(RuntimeError, match="create_app failed"):
+        mount_serve_app(settings)
+    assert stopped == [True]

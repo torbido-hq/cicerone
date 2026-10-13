@@ -190,6 +190,37 @@ def test_start_events_runtime_without_worker_connects_source(tmp_path, feature_c
     assert runtime.webhook_source.health().connected is False
 
 
+def test_start_events_runtime_without_worker_reports_source_health(
+    tmp_path, feature_config: FeatureConfig, monkeypatch: pytest.MonkeyPatch
+):
+    import cicerone.events.worker as worker_module
+
+    out = tmp_path / "out"
+    out.mkdir()
+    reported: list[bool] = []
+    monkeypatch.setattr(
+        worker_module,
+        "update_events_source_health",
+        lambda *, connected, lag: reported.append(connected),
+    )
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(enabled=True, kind="webhook"),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    assert reported == [True]
+    runtime.stop()
+
+
 def test_start_events_runtime_closes_publisher(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()

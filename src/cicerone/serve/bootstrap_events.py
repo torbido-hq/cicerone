@@ -261,6 +261,7 @@ def start_events_runtime(
         else:
             # A manual tick() still needs the source connected; only the thread is skipped.
             source.connect()
+            worker.refresh_source_health_metrics()
         if apply_lock is None:
             logger.warning(
                 "Incremental events assume a single writer process "
