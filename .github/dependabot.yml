@@ -21,6 +21,9 @@ updates:
       # scipy>=1.18 needs Python>=3.12 and numpy>=2. Stay on 1.17.x for 3.11 CI.
       - dependency-name: "scipy"
         versions: [">=1.18.0"]
+      # pyarrow>=26 needs numpy>=2. Stay on 25.x while numpy is pinned to 1.26.
+      - dependency-name: "pyarrow"
+        versions: [">=26.0.0"]
 
   - package-ecosystem: "docker"
     directory: "/docker"
