@@ -167,6 +167,29 @@ def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_confi
     assert runtime.worker._thread is None
 
 
+def test_start_events_runtime_without_worker_connects_source(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+
+    class _Reader:
+        def refresh(self) -> None:
+            return None
+
+    runtime = start_events_runtime(
+        make_settings(
+            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            events=EventsSettings(enabled=True, kind="webhook"),
+        ),
+        feature_config=feature_config,
+        reader=_Reader(),  # type: ignore[arg-type]
+        start_worker=False,
+    )
+    assert isinstance(runtime.webhook_source, WebhookEventSource)
+    assert runtime.webhook_source.health().connected is True
+    runtime.stop()
+    assert runtime.webhook_source.health().connected is False
+
+
 def test_start_events_runtime_closes_publisher(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
