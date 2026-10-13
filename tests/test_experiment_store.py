@@ -987,6 +987,92 @@ def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> 
     assert ExperimentStore(output).read_exposures(experiment_id="exp") == []
 
 
+def test_read_exposures_missing_other_column_returns_rows(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    output = IOSettings(kind="db", options={"database_url": url})
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE recommendation_exposures ("
+                "user_id TEXT, experiment_id TEXT, variant TEXT, generated_at TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO recommendation_exposures "
+                "(user_id, experiment_id, variant, generated_at) "
+                "VALUES ('u1', 'exp', 'control', 't')"
+            )
+        )
+    store = ExperimentStore(output)
+    filtered = store.read_exposures(experiment_id="exp")
+    assert [row["user_id"] for row in filtered] == ["u1"]
+    assert "exposed_at" not in filtered[0]
+    unfiltered = store.read_exposures()
+    assert [row["user_id"] for row in unfiltered] == ["u1"]
+    assert "exposed_at" not in unfiltered[0]
+
+
+def test_read_exposures_skips_columns_outside_the_exposure_schema(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE TABLE recommendation_exposures (user_id TEXT, experiment_id TEXT, note TEXT)")
+        )
+        conn.execute(text("INSERT INTO recommendation_exposures VALUES ('u1', 'exp', 'extra')"))
+    rows = ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures()
+    assert rows == [{"user_id": "u1", "experiment_id": "exp"}]
+
+
+def test_read_exposures_table_without_exposure_columns_is_empty(tmp_path, caplog) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE recommendation_exposures (note TEXT)"))
+        conn.execute(text("INSERT INTO recommendation_exposures VALUES ('extra')"))
+    with caplog.at_level("WARNING", logger="cicerone.experiment.store"):
+        assert ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures() == []
+    assert "none of the exposure columns" in caplog.text
+
+
+def test_read_exposures_missing_table_with_filter_is_empty(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    assert store.read_exposures(experiment_id="exp") == []
+
+
+def test_read_exposures_late_table_without_filter_column_is_empty(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    real = store._stored_exposure_columns
+
+    def inspect_then_create(engine, table):
+        columns = real(engine, table)
+        with engine.begin() as conn:
+            conn.execute(text(f'CREATE TABLE "{table}" (user_id TEXT, variant TEXT)'))
+        return columns
+
+    monkeypatch.setattr(store, "_stored_exposure_columns", inspect_then_create)
+    assert store.read_exposures(experiment_id="exp") == []
+
+
+def test_read_exposures_inspect_error_reraises(tmp_path, monkeypatch) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+
+    class _Inspector:
+        def get_columns(self, _table):
+            raise OperationalError("PRAGMA", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr("cicerone.experiment.store.inspect", lambda _engine: _Inspector())
+    with pytest.raises(OperationalError, match="disk I/O error"):
+        store.read_exposures()
+
+
 def test_jsonish_numpy_scalar_and_na() -> None:
     import numpy as np
     import pandas as pd
