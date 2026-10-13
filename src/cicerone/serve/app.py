@@ -20,11 +20,7 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import (
-    assignment_needs_snapshot,
-    resolve_assignment,
-    snapshot_variant_names,
-)
+from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
@@ -32,17 +28,12 @@ from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
-from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.reasons import parse_reasons
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import (
-    ItemsFilterCache,
-    configure_reader_item_filters,
-    filter_recommendations,
-)
+from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -52,6 +43,7 @@ from cicerone.serve.metrics import (
     update_cache_age_gauge,
     update_events_source_health,
 )
+from cicerone.serve.recommendations import RecommendationService
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
 from cicerone.track.store import TrackStore
@@ -238,10 +230,9 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
     availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    category_column = settings.serve.category_column
     items_cache = ItemsFilterCache(
         reader,
-        category_column=category_column,
+        category_column=settings.serve.category_column,
         availability_filters=availability_filters,
     )
     generated_at_cache = _GeneratedAtCache(manifest_reader)
@@ -259,7 +250,12 @@ def create_app(
         if settings.track.enabled
         else None
     )
-    missing_category_warned = False
+    recommendation_service = RecommendationService(
+        settings,
+        reader,
+        items_cache=items_cache,
+        assignment_overlay=overlay_cache.get,
+    )
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):
@@ -275,16 +271,6 @@ def create_app(
         ).inc()
         REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(time.perf_counter() - start)
         return response
-
-    def _warn_missing_category_column() -> None:
-        nonlocal missing_category_warned
-        if missing_category_warned:
-            return
-        missing_category_warned = True
-        logger.warning(
-            "Serve category filter requested but items have no column %r — returning empty",
-            category_column,
-        )
 
     @app.get(
         HEALTH_PATH,
@@ -353,69 +339,15 @@ def create_app(
         else:
             top_k = settings.serve.default_k
         top_k = min(top_k, DEFAULT_SERVE_MAX_K)
-        items, available_ids, ids_by_category = items_cache.get()
-        can_filter = bool(
-            items is not None
-            and not items.empty
-            and (category is not None or (exclude_unavailable and availability_filters))
+        served = recommendation_service.get(
+            user_id, top_k, category=category, exclude_unavailable=exclude_unavailable
         )
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
-        promoted, active_pair = overlay_cache.get()
-        snapshot = (
-            _snapshot_variant_names(reader)
-            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
-        experiment_id, variant = resolve_assignment(
-            settings,
-            user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
-        )
-        recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
-        used_fallback = False
-        if recs.empty and variant is not None:
-            leftover = reader.get_recommendations(user_id, fetch_k, variant=None)
-            if not leftover.empty:
-                recs = leftover
-                picked = (
-                    pick_fallback_variant(leftover[VARIANT_COLUMN].tolist())
-                    if has_variant_column(leftover)
-                    else None
-                )
-                if picked:
-                    variant = picked
-        if recs.empty:
-            used_fallback = True
-            recs = reader.get_cold_start_fallback(fetch_k, variant=variant)
-            if recs.empty and variant is not None:
-                recs = reader.get_cold_start_fallback(fetch_k, variant=None)
-                if not recs.empty and has_variant_column(recs):
-                    picked = pick_fallback_variant(recs[VARIANT_COLUMN].tolist())
-                    if picked:
-                        variant = picked
-        if recs.empty:
+        if served is None:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
-        if not has_variant_column(recs):
-            experiment_id, variant = None, None
-
-        filtered = filter_recommendations(
-            recs,
-            items=items,
-            available_ids=available_ids,
-            category=category,
-            category_column=category_column,
-            exclude_unavailable=exclude_unavailable,
-            ids_by_category=ids_by_category,
-            on_missing_category_column=_warn_missing_category_column,
-        )
-        filtered = filtered.head(top_k).reset_index(drop=True)
-        if not filtered.empty:
-            filtered = filtered.copy()
-            filtered["rank"] = range(1, len(filtered) + 1)
-            if SOURCE_COLUMN in filtered.columns:
-                record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
+        filtered = served.recs
+        experiment_id, variant = served.experiment_id, served.variant
+        if not filtered.empty and SOURCE_COLUMN in filtered.columns:
+            record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
         generated_at = generated_at_cache.get()
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
@@ -454,7 +386,7 @@ def create_app(
         body = RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
-            fallback=used_fallback,
+            fallback=served.used_fallback,
             experiment_id=experiment_id,
             variant=variant,
             items=[
