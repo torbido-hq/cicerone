@@ -31,12 +31,14 @@ from support.system_spec import (
     run_system_job,
     sample_system_catalog,
     seed_dataset_catalog,
+    stop_serve_events,
     write_system_config,
 )
 
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
+from cicerone.events.updater_merge import INCREMENTAL_SOURCE
 from cicerone.feature_config import load_feature_config
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.track.store import TrackStore
@@ -65,6 +67,9 @@ class CiceroneSystemLibrary:
         self.users: pd.DataFrame | None = None
         self.items: pd.DataFrame | None = None
         self.settings: Any = None
+        self.events_app: Any = None
+        self.events_serve: TestClient | None = None
+        self.cold_items: list[dict[str, Any]] | None = None
 
     # -- environment ---------------------------------------------------
     def _resolve_database_url(self) -> str | None:
@@ -85,11 +90,15 @@ class CiceroneSystemLibrary:
         reset_schema(self.engine)
 
     # -- setup -----------------------------------------------------------
-    def seed_and_train_postgres_system(self, triggered_by: str = "system-spec") -> None:
+    def seed_and_train_postgres_system(
+        self, triggered_by: str = "system-spec", events_webhook: bool = False
+    ) -> None:
         self.events, self.users, self.items = sample_system_catalog()
         seed_catalog(self.engine, self.events, self.users, self.items)
         root = Path(tempfile.mkdtemp(prefix="cicerone-robot-db-"))
-        self.config_path = write_system_config(root / "cicerone.toml", database_url=self.database_url)
+        self.config_path = write_system_config(
+            root / "cicerone.toml", database_url=self.database_url, events_webhook=events_webhook
+        )
         self.run_system_job_again(triggered_by)
 
     def seed_and_train_dataset_system(self, triggered_by: str = "system-spec") -> None:
@@ -350,3 +359,94 @@ class CiceroneSystemLibrary:
         assert int(eval_file["track_eval"]["overall"]["n_impressions"]) == impression_count
         history_parts = list((self.output_path / HISTORY_DIR).glob("*.parquet"))
         assert history_parts
+
+    # -- webhook events write-through ----------------------------------------
+    def start_serve_with_events_runtime(self) -> None:
+        # No worker thread: the flush happens on an explicit tick so POST /events
+        # cannot race the first poll.
+        self.events_app = mount_serve_app(self.settings, start_events_worker=False)
+        self.events_serve = TestClient(self.events_app)
+
+    def stop_serve_events_runtime(self) -> None:
+        if self.events_app is not None:
+            stop_serve_events(self.events_app)
+            self.events_app = None
+            self.events_serve = None
+
+    def _events_serve_get(self, user_id: str) -> dict[str, Any]:
+        assert self.events_serve is not None, "Start Serve With Events Runtime first"
+        response = self.events_serve.get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
+        assert response.status_code == 200
+        return response.json()
+
+    def serve_should_fall_back_without_incremental_rows(self, user_id: str) -> None:
+        body = self._events_serve_get(user_id)
+        assert body["fallback"] is True
+        assert INCREMENTAL_SOURCE not in {row["source"] for row in body["items"]}
+        if self.cold_items is None:
+            self.cold_items = body["items"]
+        else:
+            assert body["items"] == self.cold_items
+
+    def post_webhook_purchase(self, user_id: str, item_id: str, event_id: str) -> None:
+        assert self.events_serve is not None, "Start Serve With Events Runtime first"
+        response = self.events_serve.post(
+            "/events",
+            headers=_SERVE_HEADERS,
+            json={
+                "user_id": user_id,
+                "item_id": item_id,
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": "2026-09-22T12:00:00Z",
+                "event_id": event_id,
+            },
+        )
+        assert response.status_code == 202
+        assert response.json()["accepted"] == 1
+        assert response.json()["event_ids"] == [event_id]
+
+    def flush_events_worker_once(self) -> None:
+        worker = self.events_app.state.events_worker if self.events_app is not None else None
+        assert worker is not None
+        assert worker.tick() == 1
+
+    def serve_should_return_incremental_item(self, user_id: str, item_id: str, *excluded_ids: str) -> None:
+        body = self._events_serve_get(user_id)
+        assert body["fallback"] is False
+        incremental = [row for row in body["items"] if row["item_id"] == item_id]
+        assert incremental
+        assert incremental[0]["source"] == INCREMENTAL_SOURCE
+        assert {row["item_id"] for row in body["items"]}.isdisjoint(excluded_ids)
+
+    def manifest_should_record_incremental_flush(self, applied: int) -> None:
+        latest = self._manifest_reader().read_latest()
+        assert latest is not None
+        assert latest["triggered_by"] == "incremental"
+        assert latest["status"] == "success"
+        assert int(latest["n_events"]) == int(applied)
+        assert int(latest["incremental_events_applied"]) == int(applied)
+
+    def postgres_recommendations_should_contain_incremental_row(self, user_id: str, item_id: str) -> None:
+        live = self._rec_reader().get_recommendations(user_id, k=10)
+        assert item_id in set(live["item_id"].astype(str))
+        assert INCREMENTAL_SOURCE in set(live["source"].astype(str))
+        stored = pd.read_sql("SELECT user_id, item_id, source FROM recommendations", self.engine)
+        rows = stored.loc[stored["user_id"].astype(str) == user_id]
+        assert item_id in set(rows["item_id"].astype(str))
+        assert INCREMENTAL_SOURCE in set(rows["source"].astype(str))
+
+    def dashboard_should_show_no_incremental_flushes(self) -> None:
+        response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
+        assert response.status_code == 200
+        assert "Incremental events" in response.text
+        assert "Source: webhook" in response.text
+        assert "No incremental flushes recorded in recent manifests yet." in response.text
+
+    def dashboard_should_show_incremental_flush(self, applied: int) -> None:
+        response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
+        assert response.status_code == 200
+        assert "Source: webhook" in response.text
+        assert "No incremental flushes recorded in recent manifests yet." not in response.text
+        assert "Events applied" in response.text
+        assert f"<dd>{int(applied)}</dd>" in response.text

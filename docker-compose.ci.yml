@@ -3,8 +3,8 @@ version: "3.9"
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
 # database-backend tests. The Robot Framework system/E2E suites
-# (tests/robot/system_db*.robot, tests/robot/system_dataset*.robot) run in
-# the separate `robot` service — the local parquet suites don't need
+# (tests/robot/system_db*.robot, tests/robot/system_events_db.robot,
+# tests/robot/system_dataset*.robot) run in the separate `robot` service — the local parquet suites don't need
 # Postgres, the db ones share this same throwaway instance. `robot` runs
 # under `coverage run` into the `coverage-data` bind mount shared with
 # `test`; the `coverage-report` service combines both and re-checks the
