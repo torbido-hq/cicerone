@@ -46,7 +46,6 @@ from cicerone.io.base import (
 )
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
-from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
 from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
@@ -60,13 +59,9 @@ from cicerone.serve.code_samples import (
     RECOMMENDATIONS_PATH,
     attach_code_samples,
 )
-from cicerone.serve.consumed import consumed_item_ids, consumed_item_ids_for_users, drop_consumed, merge_fill
+from cicerone.serve.consumed import consumed_item_ids, consumed_item_ids_for_users
 from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import (
-    ItemsFilterCache,
-    configure_reader_item_filters,
-    filter_recommendations,
-)
+from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
 from cicerone.serve.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
@@ -76,6 +71,7 @@ from cicerone.serve.metrics import (
     update_cache_age_gauge,
     update_events_source_health,
 )
+from cicerone.serve.recommendations import RecommendationService
 from cicerone.serve.surfaces import mount_surface_routes
 from cicerone.serve_schemas import (
     ErrorDetail,
@@ -320,7 +316,13 @@ def create_app(
         )
     )
     surfaces_reader = surfaces if surfaces is not None else EmptySurfacesReader()
-    missing_category_warned = False
+    recommendation_service = RecommendationService(
+        settings,
+        reader,
+        items_cache=items_cache,
+        availability_filters=availability_filters,
+        assignment_overlay=overlay_cache.get,
+    )
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):
@@ -336,16 +338,6 @@ def create_app(
         ).inc()
         REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(time.perf_counter() - start)
         return response
-
-    def _warn_missing_category_column() -> None:
-        nonlocal missing_category_warned
-        if missing_category_warned:
-            return
-        missing_category_warned = True
-        logger.warning(
-            "Serve category filter requested but items have no column %r — returning empty",
-            category_column,
-        )
 
     @app.get(
         HEALTH_PATH,
@@ -398,108 +390,23 @@ def create_app(
                 )
         else:
             consumed_ids = set()
-        can_filter = bool(
-            (
-                items is not None
-                and not items.empty
-                and (category is not None or (exclude_unavailable and availability_filters))
-            )
-            or consumed_ids
-        )
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
-        if assignment is None:
-            promoted, active_pair = overlay_cache.get()
-            snapshot = (
-                _snapshot_variant_names(reader)
-                if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-                else None
-            )
-            experiment_id, variant = resolve_assignment(
-                settings,
-                user_id,
-                promoted_variant=promoted,
-                active_pair=active_pair,
-                snapshot_names=snapshot,
-            )
-        else:
-            experiment_id, variant = assignment
-        if recs is None:
-            recs = reader.get_recommendations(user_id, fetch_k, variant=variant)
-        used_fallback = False
-        if recs.empty and variant is not None:
-            leftover = reader.get_recommendations(user_id, fetch_k, variant=None)
-            if not leftover.empty:
-                recs = leftover
-                picked = (
-                    pick_fallback_variant(leftover[VARIANT_COLUMN].tolist())
-                    if has_variant_column(leftover)
-                    else None
-                )
-                if picked:
-                    variant = picked
-        if recs.empty:
-            used_fallback = True
-            recs = (
-                fallback_recs
-                if fallback_recs is not None
-                else reader.get_cold_start_fallback(fetch_k, variant=variant)
-            )
-            if recs.empty and variant is not None:
-                recs = reader.get_cold_start_fallback(fetch_k, variant=None)
-                if not recs.empty and has_variant_column(recs):
-                    picked = pick_fallback_variant(recs[VARIANT_COLUMN].tolist())
-                    if picked:
-                        variant = picked
-        if recs.empty:
-            return None
-        if not has_variant_column(recs):
-            experiment_id, variant = None, None
-
-        after_availability = filter_recommendations(
-            recs,
-            items=items,
-            available_ids=available_ids,
-            category=None,
-            category_column=category_column,
-            exclude_unavailable=exclude_unavailable,
-            ids_by_category=ids_by_category,
-            on_missing_category_column=_warn_missing_category_column,
-        )
-        after_hide = drop_consumed(after_availability, consumed_ids)
-        dropped_by_hide_or_availability = len(after_hide) < len(recs)
-        filtered = filter_recommendations(
-            after_hide,
-            items=items,
-            available_ids=available_ids,
+        served = recommendation_service.get(
+            user_id,
+            top_k,
             category=category,
-            category_column=category_column,
-            exclude_unavailable=False,
-            ids_by_category=ids_by_category,
-            on_missing_category_column=_warn_missing_category_column,
+            exclude_unavailable=exclude_unavailable,
+            consumed_ids=consumed_ids,
+            items_snapshot=(items, available_ids, ids_by_category),
+            recs=recs,
+            fallback_recs=fallback_recs,
+            assignment=assignment,
         )
-        if settings.serve.fallback_fill and len(filtered) < top_k and dropped_by_hide_or_availability:
-            filler = (
-                fallback_recs
-                if fallback_recs is not None
-                else reader.get_cold_start_fallback(fetch_k, variant=variant)
-            )
-            filler = filter_recommendations(
-                filler,
-                items=items,
-                available_ids=available_ids,
-                category=category,
-                category_column=category_column,
-                exclude_unavailable=exclude_unavailable,
-                ids_by_category=ids_by_category,
-                on_missing_category_column=_warn_missing_category_column,
-            )
-            filtered = merge_fill(filtered, filler, k=top_k, exclude=consumed_ids)
-        filtered = filtered.head(top_k).reset_index(drop=True)
-        if not filtered.empty:
-            filtered = filtered.copy()
-            filtered["rank"] = range(1, len(filtered) + 1)
-            if SOURCE_COLUMN in filtered.columns:
-                record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
+        if served is None:
+            return None
+        filtered = served.recs
+        experiment_id, variant = served.experiment_id, served.variant
+        if not filtered.empty and SOURCE_COLUMN in filtered.columns:
+            record_recommendations_served(set(filtered[SOURCE_COLUMN].astype(str)))
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
@@ -536,7 +443,7 @@ def create_app(
         return RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
-            fallback=used_fallback,
+            fallback=served.used_fallback,
             experiment_id=experiment_id,
             variant=variant,
             items=[
@@ -781,7 +688,7 @@ def create_app(
             "available_ids": snap_available,
             "ids_by_category": snap_by_category,
             "category_column": category_column,
-            "on_missing_category_column": _warn_missing_category_column,
+            "on_missing_category_column": recommendation_service.warn_missing_category_column,
             "history": history_reader,
             "overlay": overlay,
             "generated_at": generated_at_cache.get,
