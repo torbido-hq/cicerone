@@ -7,7 +7,7 @@ import logging
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -118,6 +118,28 @@ class JobRecommendations(NamedTuple):
 class JobWriteResult:
     manifest_written: bool = False
     success_generated_at: str | None = None
+
+
+@dataclass
+class JobRun:
+    settings: Settings
+    sink: Any
+    publication_lock: Any
+    writer_lock: Any
+    manifest: JobManifest
+    fence_check: Callable[[], bool] | None
+    started_at: str
+    publisher: Any = None
+    eval_generated_at: str | None = None
+    track_eval_payload: dict[str, Any] | None = None
+    served_eval_payload: dict[str, Any] | None = None
+    pending_thompson: dict[str, Any] | None = None
+    recommendations: pd.DataFrame | None = None
+    written: JobWriteResult = field(default_factory=JobWriteResult)
+    # Snapshot of ``written`` taken when the write step returns or fails.
+    manifest_written: bool = False
+    success_generated_at: str | None = None
+    replace_success_manifest: bool = False
 
 
 def _target_user_ids(events: pd.DataFrame, users: pd.DataFrame | None) -> list[str]:
@@ -504,31 +526,21 @@ def _recommend_job(
 
 
 def _write_job_outputs(
-    settings: Settings,
+    run: JobRun,
+    scored: JobRecommendations,
     *,
-    sink: Any,
-    publication_lock: Any,
-    manifest: JobManifest,
-    fence_check: Callable[[], bool] | None,
-    started_at: str,
     events: pd.DataFrame,
     items: pd.DataFrame | None,
     built: BuiltDataset,
     target_users: list[str],
-    recommendations: pd.DataFrame,
-    fitted: dict[str, RecommenderModel],
-    run_plan: ModelRunPlan,
-    weights: dict[str, float] | None,
-    rrf_k: float | None,
     automl_result: CandidateResult | None,
-    track_eval_payload: dict[str, Any] | None,
-    served_eval_payload: dict[str, Any] | None,
-    pending_thompson: dict[str, Any] | None,
     feature_config: FeatureConfig,
     weighting_now: datetime | None = None,
-    written: JobWriteResult | None = None,
 ) -> JobWriteResult:
-    run_models = list(run_plan.recommend_models)
+    settings, sink, manifest, fence_check = run.settings, run.sink, run.manifest, run.fence_check
+    recommendations, fitted = scored.recommendations, scored.fitted
+    weights, rrf_k = scored.weights, scored.rrf_k
+    run_models = list(scored.run_plan.recommend_models)
     model_weights_str = (
         ",".join(f"{name}={weights.get(name, 1.0)}" for name in run_models) if weights is not None else ""
     )
@@ -550,7 +562,7 @@ def _write_job_outputs(
             hmac_key=settings.output.artifact_hmac_key,
         )
 
-    result = written if written is not None else JobWriteResult()
+    result = run.written
     # Artifact → snapshot → recommendations; success only after all writes.
     outputs_written = False
     recs_write = getattr(sink, "recommendations_write", None)
@@ -613,16 +625,16 @@ def _write_job_outputs(
                 ensure_publication_fence(sink, fence_check)
                 sink.write_recommendations(recommendations)
                 outputs_written = True
-                if pending_thompson is not None:
+                if run.pending_thompson is not None:
                     ensure_publication_fence(sink, fence_check)
                     store = ExperimentStore(
                         settings.output,
-                        writer_lock=publication_lock,
+                        writer_lock=run.publication_lock,
                         fence_check=fence_check,
                         fence_lost="retrain lock lost before write",
                         fence_kind="retrain",
                     )
-                    store.write_state(_refresh_pending_thompson(store, pending_thompson))
+                    store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
                 ensure_publication_fence(sink, fence_check)
                 manifest.update(
                     {
@@ -643,8 +655,8 @@ def _write_job_outputs(
                             if automl_result is not None
                             else ""
                         ),
-                        "track_eval": json.dumps(track_eval_payload) if track_eval_payload else "",
-                        "served_eval": json.dumps(served_eval_payload) if served_eval_payload else "",
+                        "track_eval": json.dumps(run.track_eval_payload) if run.track_eval_payload else "",
+                        "served_eval": json.dumps(run.served_eval_payload) if run.served_eval_payload else "",
                     }
                 )
                 manifest["generated_at"] = datetime.now(UTC).isoformat()
@@ -666,7 +678,7 @@ def _write_job_outputs(
                     manifest["error"] = truncate_job_error(exc)
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
                     try:
-                        if write_job_manifest(sink, manifest, skip_if_newer_than=started_at):
+                        if write_job_manifest(sink, manifest, skip_if_newer_than=run.started_at):
                             result.manifest_written = True
                     except _SINK_WRITE_ERRORS as manifest_exc:
                         _log_caught(
@@ -682,22 +694,17 @@ def _write_job_outputs(
     return result
 
 
-def _publish_job_sidecar(
-    settings: Settings,
-    publisher: Any,
-    recommendations: pd.DataFrame,
-    manifest: JobManifest,
-    fence_check: Callable[[], bool] | None,
-) -> None:
+def _publish_job_sidecar(run: JobRun) -> None:
+    publisher, manifest, fence_check = run.publisher, run.manifest, run.fence_check
     if publisher is None or manifest.get("status") != "success":
         return
     try:
         ensure_fence(fence_check)
         publisher.connect()
         ensure_fence(fence_check)
-        current = sidecar_generation_current(settings.output, str(manifest.get("generated_at") or ""))
+        current = sidecar_generation_current(run.settings.output, str(manifest.get("generated_at") or ""))
         if current:
-            publisher.publish(recommendations)
+            publisher.publish(run.recommendations)
         else:
             log_sidecar_generation_skip(current)
     except LockLostError:
@@ -706,28 +713,15 @@ def _publish_job_sidecar(
         _log_caught("Publish failed after successful write", exc, log=logger)
 
 
-def _finalize_job(
-    settings: Settings,
-    *,
-    sink: Any,
-    publisher: Any,
-    writer_lock: Any,
-    manifest: JobManifest,
-    fence_check: Callable[[], bool] | None,
-    started_at: str,
-    manifest_written: bool,
-    replace_success_manifest: bool,
-    success_generated_at: str | None,
-    eval_generated_at: str | None,
-    track_eval_payload: dict[str, Any] | None,
-    served_eval_payload: dict[str, Any] | None,
-    recommendations: pd.DataFrame | None,
-) -> None:
+def _finalize_job(run: JobRun, error: BaseException | None) -> None:
+    settings, manifest, fence_check = run.settings, run.manifest, run.fence_check
+    manifest_written = run.manifest_written
+    replace_success_manifest = run.replace_success_manifest
     persist_exc: BaseException | None = None
     close_exc: BaseException | None = None
-    if publisher is not None:
+    if run.publisher is not None:
         try:
-            publisher.close()
+            run.publisher.close()
         except _PUBLISH_ERRORS as exc:
             _log_caught("Failed to close recommendation publisher", exc, log=logger)
         except Exception as exc:
@@ -738,18 +732,18 @@ def _finalize_job(
             _persist_track_outputs(
                 TrackStore(
                     settings.output,
-                    writer_lock=writer_lock,
+                    writer_lock=run.writer_lock,
                     fence_check=fence_check,
                     fence_lost="retrain lock lost before write",
                     fence_kind="retrain",
                 ),
                 kind=settings.output.kind,
                 eval_report={
-                    "generated_at": eval_generated_at,
-                    "track_eval": track_eval_payload,
-                    "served_eval": served_eval_payload,
+                    "generated_at": run.eval_generated_at,
+                    "track_eval": run.track_eval_payload,
+                    "served_eval": run.served_eval_payload,
                 },
-                recommendations=recommendations,
+                recommendations=run.recommendations,
                 generated_at=str(manifest["generated_at"]),
                 fence_check=fence_check,
             )
@@ -768,22 +762,24 @@ def _finalize_job(
         manifest["error"] = truncate_job_error(close_exc)
         manifest_written = False
         replace_success_manifest = True
-    leftover_exc = persist_exc or sys.exc_info()[1]
+    leftover_exc = persist_exc or error
     if isinstance(close_exc, LockLostError) and persist_exc is not None:
         leftover_exc = close_exc
-    skip_if_newer_than = (success_generated_at or started_at) if replace_success_manifest else started_at
+    skip_if_newer_than = (
+        (run.success_generated_at or run.started_at) if replace_success_manifest else run.started_at
+    )
     if not manifest_written and not skip_stale_job_manifest(
         fence_check=fence_check,
         exc=leftover_exc,
     ):
         manifest["generated_at"] = datetime.now(UTC).isoformat()
         try:
-            holder = getattr(sink, "recommendations_write", None)
+            holder = getattr(run.sink, "recommendations_write", None)
             if callable(holder):
                 with holder():
-                    write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+                    write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
             else:
-                write_job_manifest(sink, manifest, skip_if_newer_than=skip_if_newer_than)
+                write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
         except _SINK_WRITE_ERRORS as exc:
             _log_caught(
                 "Failed to write manifest; original job error (if any) is preserved",
@@ -797,7 +793,7 @@ def _finalize_job(
         raise close_exc
     if persist_exc is not None:
         raise persist_exc
-    if close_exc is not None and sys.exc_info()[1] is None:
+    if close_exc is not None and error is None:
         raise close_exc
 
 
@@ -813,6 +809,16 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             retrain_lock.release()
 
 
+def _record_run_failure(run: JobRun, exc: Exception) -> None:
+    run.manifest["error"] = truncate_job_error(exc)
+    if run.manifest.get("status") == "success":
+        run.manifest["status"] = "failed"
+        run.written.manifest_written = False
+        run.replace_success_manifest = True
+    run.manifest_written = run.written.manifest_written
+    run.success_generated_at = run.written.success_generated_at
+
+
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
     started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
@@ -825,26 +831,24 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         fence_lost="retrain lock lost before write",
         fence_kind="retrain",
     )
-    publisher = None
-
-    manifest = JobManifest(
-        triggered_by=triggered_by,
-        lock_backend=settings.trigger.lock_backend,
-        top_k=settings.top_k,
-        automl_enabled=settings.automl.enabled,
+    run = JobRun(
+        settings=settings,
+        sink=sink,
+        publication_lock=publication_lock,
+        writer_lock=writer_lock,
+        manifest=JobManifest(
+            triggered_by=triggered_by,
+            lock_backend=settings.trigger.lock_backend,
+            top_k=settings.top_k,
+            automl_enabled=settings.automl.enabled,
+        ),
+        fence_check=fence_check,
+        started_at=started_at,
     )
-    track_eval_payload: dict[str, Any] | None = None
-    served_eval_payload: dict[str, Any] | None = None
-    recommendations: pd.DataFrame | None = None
-    eval_generated_at: str | None = None
-    pending_thompson: dict[str, Any] | None = None
-    manifest_written = False
-    replace_success_manifest = False
-    success_generated_at: str | None = None
-    written = JobWriteResult()
+    error: BaseException | None = None
 
     try:
-        publisher = build_publisher(settings, connect=False)
+        run.publisher = build_publisher(settings, connect=False)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
@@ -856,9 +860,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         )
 
         if last_manifest and last_manifest.get("generated_at"):
-            eval_generated_at = str(last_manifest["generated_at"])
+            run.eval_generated_at = str(last_manifest["generated_at"])
         preloaded_track, preloaded_recs = _load_shared_eval_inputs(settings)
-        track_eval_payload, served_eval_payload = _score_previous_run(
+        run.track_eval_payload, run.served_eval_payload = _score_previous_run(
             settings,
             events,
             last_manifest,
@@ -880,8 +884,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         target_users = _target_user_ids(events, users)
 
         automl = _select_automl_models(settings, events, users, items, feature_config)
-        enabled_models, weights, rrf_k = automl.models, automl.weights, automl.rrf_k
-        automl_result = automl.result
         job_recipes = _select_job_recipes(
             settings,
             feature_config,
@@ -892,78 +894,50 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             preloaded_recs,
         )
         recipes = job_recipes.recipes
-        pending_thompson = job_recipes.pending_thompson
+        run.pending_thompson = job_recipes.pending_thompson
         scored = _recommend_job(
             settings,
             feature_config,
             built,
             target_users,
             recipes,
-            enabled_models,
-            weights,
-            rrf_k,
+            automl.models,
+            automl.weights,
+            automl.rrf_k,
         )
-        recommendations = scored.recommendations
-        fitted = scored.fitted
-        run_plan = scored.run_plan
-        enabled_models, weights, rrf_k = scored.models, scored.weights, scored.rrf_k
+        run.recommendations = scored.recommendations
         if recipes:
-            manifest["experiment_id"] = settings.experiment.id
-            manifest["experiment_variants"] = recipes_manifest_json(recipes)
+            run.manifest["experiment_id"] = settings.experiment.id
+            run.manifest["experiment_variants"] = recipes_manifest_json(recipes)
 
         _write_job_outputs(
-            settings,
-            sink=sink,
-            publication_lock=publication_lock,
-            manifest=manifest,
-            fence_check=fence_check,
-            started_at=started_at,
+            run,
+            scored,
             events=events,
             items=items,
             built=built,
             target_users=target_users,
-            recommendations=recommendations,
-            fitted=fitted,
-            run_plan=run_plan,
-            weights=weights,
-            rrf_k=rrf_k,
-            automl_result=automl_result,
-            track_eval_payload=track_eval_payload,
-            served_eval_payload=served_eval_payload,
-            pending_thompson=pending_thompson,
+            automl_result=automl.result,
             feature_config=feature_config,
             weighting_now=weighting_now,
-            written=written,
         )
-        manifest_written = written.manifest_written
-        success_generated_at = written.success_generated_at
-        _publish_job_sidecar(settings, publisher, recommendations, manifest, fence_check)
+        run.manifest_written = run.written.manifest_written
+        run.success_generated_at = run.written.success_generated_at
+        _publish_job_sidecar(run)
     except Exception as exc:
-        manifest["error"] = truncate_job_error(exc)
-        if manifest.get("status") == "success":
-            manifest["status"] = "failed"
-            written.manifest_written = False
-            replace_success_manifest = True
-        manifest_written = written.manifest_written
-        success_generated_at = written.success_generated_at
+        error = exc
+        try:
+            _record_run_failure(run, exc)
+        except BaseException as record_exc:
+            # Finalize must see the exception that actually propagates.
+            error = record_exc
+            raise
+        raise
+    except BaseException as exc:
+        error = exc
         raise
     finally:
-        _finalize_job(
-            settings,
-            sink=sink,
-            publisher=publisher,
-            writer_lock=writer_lock,
-            manifest=manifest,
-            fence_check=fence_check,
-            started_at=started_at,
-            manifest_written=manifest_written,
-            replace_success_manifest=replace_success_manifest,
-            success_generated_at=success_generated_at,
-            eval_generated_at=eval_generated_at,
-            track_eval_payload=track_eval_payload,
-            served_eval_payload=served_eval_payload,
-            recommendations=recommendations,
-        )
+        _finalize_job(run, error)
 
 
 if __name__ == "__main__":
