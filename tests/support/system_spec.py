@@ -88,6 +88,7 @@ def write_system_config(
     output_path: Path | str | None = None,
     feature_config_path: Path | str = REPO_FEATURES_CONFIG,
     serve_token: str = SYSTEM_SERVE_TOKEN,
+    events_webhook: bool = False,
 ) -> Path:
     """Write the shared system-spec TOML (artifact, serve, dashboard, track, eval)."""
     if kind == "db":
@@ -122,6 +123,18 @@ def write_system_config(
         """
     else:
         raise ValueError(f"Unknown system-spec kind: {kind!r}")
+    events_block = ""
+    if events_webhook:
+        events_block = """
+        [events]
+        enabled = true
+        kind = "webhook"
+
+        [events.incremental]
+        batch_size = 1
+        batch_window_seconds = 60
+        poll_interval_seconds = 60
+        """
 
     path.write_text(
         f"""
@@ -146,6 +159,7 @@ def write_system_config(
 
         [track]
         enabled = true
+        {events_block}
         """
     )
     return path
@@ -195,10 +209,11 @@ def dashboard_users(
     return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
 
 
-def mount_serve_app(settings: Any):
+def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
     from cicerone.feature_config import load_feature_config
     from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
     from cicerone.serve import create_app
+    from cicerone.serve.bootstrap_events import start_events_runtime
     from cicerone.serve.item_filters import configure_reader_item_filters
 
     reader = build_recommendation_reader(settings.output)
@@ -210,12 +225,22 @@ def mount_serve_app(settings: Any):
         category_column=settings.serve.category_column,
         availability_filters=availability,
     )
-    return create_app(
+    events_runtime = start_events_runtime(
+        settings,
+        feature_config=feature_config,
+        reader=reader,
+        start_worker=start_events_worker,
+    )
+    app = create_app(
         settings,
         reader,
         manifest_reader=build_manifest_reader(settings.output),
         feature_config=feature_config,
+        event_source=events_runtime.webhook_source,
+        events_worker=events_runtime.worker,
     )
+    app.state.events_runtime = events_runtime
+    return app
 
 
 def mount_dashboard_app(
@@ -239,3 +264,9 @@ def mount_dashboard_app(
         build_user_history_reader(settings.input),
         config_path=None if config_path is None else str(config_path),
     )
+
+
+def stop_serve_events(app: Any) -> None:
+    runtime = getattr(app.state, "events_runtime", None)
+    if runtime is not None:
+        runtime.stop()
