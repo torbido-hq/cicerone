@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Literal
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
+DEFAULT_FEATURE_CONFIG_PATH = "/app/config/features.toml"
+DEFAULT_TOP_K = 10
+DEFAULT_HALF_LIFE_DAYS = 90
+DEFAULT_CRON_SCHEDULE = "0 3 * * *"
 
 # Kept here (not cicerone.model) so Settings.models validates without ML deps.
 STRATEGY_NAMES: tuple[str, ...] = (
@@ -46,6 +50,7 @@ Mode = Literal["batch", "serve"]
 StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
+DEFAULT_MODE: Mode = "batch"
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60

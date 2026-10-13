@@ -13,19 +13,16 @@ from typing import Any, cast
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     ARTIFACT_HMAC_KEY_MIN_BYTES,
-    AUTOML_DEFAULT_N_SPLITS,
-    AUTOML_DEFAULT_PRIMARY_METRIC,
-    AUTOML_DEFAULT_TEST_DAYS,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    DEFAULT_EXPLAIN_MAX_ATTRIBUTES,
-    DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS,
+    DEFAULT_CRON_SCHEDULE,
+    DEFAULT_FEATURE_CONFIG_PATH,
+    DEFAULT_HALF_LIFE_DAYS,
     DEFAULT_ITEM_BASED_K_NEIGHBORS,
-    DEFAULT_LOCK_KEY,
-    DEFAULT_LOCK_TTL_SECONDS,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_MODE,
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
-    DEFAULT_SERVE_CONSUMED_LOOKBACK,
     DEFAULT_SERVE_MAX_K,
+    DEFAULT_TOP_K,
     LOCK_BACKENDS,
     MODES,
     PRIMARY_METRIC_CONVERSION,
@@ -49,6 +46,7 @@ from cicerone.config.settings import (
     TriggerSettings,
 )
 from cicerone.config.track import load_eval_settings, load_track_settings
+from cicerone.config.unknown_keys import warn_unknown_keys
 from cicerone.config.validation import (
     require_non_negative_int,
     require_positive_float,
@@ -172,7 +170,9 @@ def _coerce_nested(
 
 
 def _serve_default_k(serve_raw: dict[str, Any]) -> int:
-    value = require_positive_int(int(serve_raw.get("default_k", 10)), name="serve.default_k")
+    value = require_positive_int(
+        int(serve_raw.get("default_k", ServeSettings.default_k)), name="serve.default_k"
+    )
     if value > DEFAULT_SERVE_MAX_K:
         raise ConfigError(f"serve.default_k must be <= {DEFAULT_SERVE_MAX_K}, got {value}")
     return value
@@ -205,10 +205,10 @@ def make_settings(**overrides: Any) -> Settings:
     base: dict[str, Any] = dict(
         input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/in"}),
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
-        feature_config_path="/app/config/features.toml",
-        top_k=10,
-        half_life_days=90,
-        cron_schedule="0 3 * * *",
+        feature_config_path=DEFAULT_FEATURE_CONFIG_PATH,
+        top_k=DEFAULT_TOP_K,
+        half_life_days=DEFAULT_HALF_LIFE_DAYS,
+        cron_schedule=DEFAULT_CRON_SCHEDULE,
         models=None,
         model_weights=None,
         rrf_k=None,
@@ -221,7 +221,7 @@ def make_settings(**overrides: Any) -> Settings:
         content_fallback_max_neighbors=DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
         sequential_min_median_interactions=DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
         automl=automl,
-        mode="batch",
+        mode=DEFAULT_MODE,
         serve=serve,
         trigger=trigger,
         dashboard=dashboard,
@@ -399,13 +399,13 @@ def _warn_online_skipped_for_sequential(settings: Settings) -> None:
 
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
     return ExplainSettings(
-        enabled=bool(raw.get("enabled", True)),
+        enabled=bool(raw.get("enabled", ExplainSettings.enabled)),
         max_similar_items=require_non_negative_int(
-            int(raw.get("max_similar_items", DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS)),
+            int(raw.get("max_similar_items", ExplainSettings.max_similar_items)),
             name="job.explain.max_similar_items",
         ),
         max_attributes=require_non_negative_int(
-            int(raw.get("max_attributes", DEFAULT_EXPLAIN_MAX_ATTRIBUTES)),
+            int(raw.get("max_attributes", ExplainSettings.max_attributes)),
             name="job.explain.max_attributes",
         ),
     )
@@ -423,6 +423,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     with path.open("rb") as f:
         raw = tomllib.load(f)
 
+    warn_unknown_keys(raw)
     job = raw.get("job", {})
     automl = job.get("automl", {})
     models = list(job["models"]) if "models" in job else None
@@ -450,7 +451,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     rrf_k = float(job["rrf_k"]) if "rrf_k" in job else None
     validate_rrf_k(rrf_k, context="job.rrf_k")
 
-    mode = str(job.get("mode", "batch")).lower()
+    mode = str(job.get("mode", DEFAULT_MODE)).lower()
     if mode not in MODES:
         raise ConfigError(f"job.mode must be one of {list(MODES)}, got {mode!r}")
 
@@ -470,12 +471,12 @@ def load_settings(config_path: str | None = None) -> Settings:
     )
     if isinstance(serve_metrics_token, str):
         serve_metrics_token = serve_metrics_token.strip() or None
-    serve_metrics_enabled = bool(serve_raw.get("metrics_enabled", False))
+    serve_metrics_enabled = bool(serve_raw.get("metrics_enabled", ServeSettings.metrics_enabled))
     if serve_metrics_enabled and not serve_metrics_token:
         raise ConfigError("serve.metrics_token is required when serve.metrics_enabled = true")
 
     trigger_raw = job.get("trigger", {})
-    trigger_enabled = bool(trigger_raw.get("enabled", False))
+    trigger_enabled = bool(trigger_raw.get("enabled", TriggerSettings.enabled))
     trigger_auth_token = (
         _resolve_env_placeholders(trigger_raw["auth_token"], "job.trigger.auth_token")
         if "auth_token" in trigger_raw
@@ -484,7 +485,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     if trigger_enabled and not trigger_auth_token:
         raise ConfigError("job.trigger.auth_token is required when job.trigger.enabled = true")
 
-    lock_backend = str(trigger_raw.get("lock_backend", "in_process")).lower()
+    lock_backend = str(trigger_raw.get("lock_backend", TriggerSettings.lock_backend)).lower()
     if lock_backend not in LOCK_BACKENDS:
         raise ConfigError(
             f"job.trigger.lock_backend must be one of {list(LOCK_BACKENDS)}, got {lock_backend!r}"
@@ -503,7 +504,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         raise ConfigError('job.trigger.redis_url is required when lock_backend = "redis"')
 
     dashboard_raw = raw.get("dashboard", {})
-    dashboard_enabled = bool(dashboard_raw.get("enabled", False))
+    dashboard_enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
 
     events = load_events_settings(
         raw.get("events", {}) or {},
@@ -552,11 +553,11 @@ def load_settings(config_path: str | None = None) -> Settings:
             output_options=output_settings.options,
         )
 
-    trigger_lock_key = str(trigger_raw.get("lock_key", DEFAULT_LOCK_KEY)).strip()
+    trigger_lock_key = str(trigger_raw.get("lock_key", TriggerSettings.lock_key)).strip()
     if not trigger_lock_key:
         raise ConfigError("job.trigger.lock_key must be a non-empty string")
     trigger_lock_ttl_seconds = require_positive_float(
-        float(trigger_raw.get("lock_ttl_seconds", DEFAULT_LOCK_TTL_SECONDS)),
+        float(trigger_raw.get("lock_ttl_seconds", TriggerSettings.lock_ttl_seconds)),
         name="job.trigger.lock_ttl_seconds",
     )
 
@@ -569,12 +570,12 @@ def load_settings(config_path: str | None = None) -> Settings:
     settings = Settings(
         input=input_settings,
         output=output_settings,
-        feature_config_path=job.get("feature_config_path", "/app/config/features.toml"),
-        top_k=require_positive_int(int(job.get("top_k", 10)), name="job.top_k"),
+        feature_config_path=job.get("feature_config_path", DEFAULT_FEATURE_CONFIG_PATH),
+        top_k=require_positive_int(int(job.get("top_k", DEFAULT_TOP_K)), name="job.top_k"),
         half_life_days=require_positive_float(
-            float(job.get("half_life_days", 90)), name="job.half_life_days"
+            float(job.get("half_life_days", DEFAULT_HALF_LIFE_DAYS)), name="job.half_life_days"
         ),
-        cron_schedule=job.get("cron_schedule", "0 3 * * *"),
+        cron_schedule=job.get("cron_schedule", DEFAULT_CRON_SCHEDULE),
         models=models,
         model_weights=model_weights,
         rrf_k=rrf_k,
@@ -601,52 +602,52 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         explain=_load_explain_settings(job.get("explain", {}) or {}),
         automl=AutomlSettings(
-            enabled=bool(automl.get("enabled", False)),
+            enabled=bool(automl.get("enabled", AutomlSettings.enabled)),
             n_splits=require_positive_int(
-                int(automl.get("n_splits", AUTOML_DEFAULT_N_SPLITS)), name="job.automl.n_splits"
+                int(automl.get("n_splits", AutomlSettings.n_splits)), name="job.automl.n_splits"
             ),
             test_days=require_positive_int(
-                int(automl.get("test_days", AUTOML_DEFAULT_TEST_DAYS)), name="job.automl.test_days"
+                int(automl.get("test_days", AutomlSettings.test_days)), name="job.automl.test_days"
             ),
-            primary_metric=automl.get("primary_metric", AUTOML_DEFAULT_PRIMARY_METRIC),
+            primary_metric=automl.get("primary_metric", AutomlSettings.primary_metric),
             candidates=(
                 [dict(candidate) for candidate in automl["candidates"]] if "candidates" in automl else None
             ),
-            debias=bool(automl.get("debias", False)),
+            debias=bool(automl.get("debias", AutomlSettings.debias)),
         ),
         mode=cast(Mode, mode),
         serve=ServeSettings(
-            host=serve_raw.get("host", "127.0.0.1"),
-            port=int(serve_raw.get("port", 8000)),
+            host=serve_raw.get("host", ServeSettings.host),
+            port=int(serve_raw.get("port", ServeSettings.port)),
             auth_token=serve_auth_token,
             default_k=_serve_default_k(serve_raw),
             refresh_interval_seconds=require_positive_float(
-                float(serve_raw.get("refresh_interval_seconds", 60)),
+                float(serve_raw.get("refresh_interval_seconds", ServeSettings.refresh_interval_seconds)),
                 name="serve.refresh_interval_seconds",
             ),
-            category_column=str(serve_raw.get("category_column", "category")),
+            category_column=str(serve_raw.get("category_column", ServeSettings.category_column)),
             metrics_enabled=serve_metrics_enabled,
             metrics_token=serve_metrics_token,
-            log_impressions=bool(serve_raw.get("log_impressions", False)),
-            exclude_consumed=bool(serve_raw.get("exclude_consumed", True)),
-            fallback_fill=bool(serve_raw.get("fallback_fill", True)),
+            log_impressions=bool(serve_raw.get("log_impressions", ServeSettings.log_impressions)),
+            exclude_consumed=bool(serve_raw.get("exclude_consumed", ServeSettings.exclude_consumed)),
+            fallback_fill=bool(serve_raw.get("fallback_fill", ServeSettings.fallback_fill)),
             consumed_lookback=require_positive_int(
-                int(serve_raw.get("consumed_lookback", DEFAULT_SERVE_CONSUMED_LOOKBACK)),
+                int(serve_raw.get("consumed_lookback", ServeSettings.consumed_lookback)),
                 name="serve.consumed_lookback",
             ),
         ),
         trigger=TriggerSettings(
             enabled=trigger_enabled,
-            host=trigger_raw.get("host", "127.0.0.1"),
-            port=int(trigger_raw.get("port", 8080)),
+            host=trigger_raw.get("host", TriggerSettings.host),
+            port=int(trigger_raw.get("port", TriggerSettings.port)),
             auth_token=trigger_auth_token,
             debounce_seconds=require_positive_float(
-                float(trigger_raw.get("debounce_seconds", 60)),
+                float(trigger_raw.get("debounce_seconds", TriggerSettings.debounce_seconds)),
                 name="job.trigger.debounce_seconds",
             ),
-            poll_input_bucket=bool(trigger_raw.get("poll_input_bucket", False)),
+            poll_input_bucket=bool(trigger_raw.get("poll_input_bucket", TriggerSettings.poll_input_bucket)),
             poll_interval_seconds=require_positive_float(
-                float(trigger_raw.get("poll_interval_seconds", 300)),
+                float(trigger_raw.get("poll_interval_seconds", TriggerSettings.poll_interval_seconds)),
                 name="job.trigger.poll_interval_seconds",
             ),
             lock_backend=lock_backend,
@@ -657,19 +658,25 @@ def load_settings(config_path: str | None = None) -> Settings:
         ),
         dashboard=DashboardSettings(
             enabled=dashboard_enabled,
-            host=dashboard_raw.get("host", "127.0.0.1"),
-            port=int(dashboard_raw.get("port", 8090)),
-            users_path=dashboard_raw.get("users_path", "/app/config/dashboard_users.toml"),
+            host=dashboard_raw.get("host", DashboardSettings.host),
+            port=int(dashboard_raw.get("port", DashboardSettings.port)),
+            users_path=dashboard_raw.get("users_path", DashboardSettings.users_path),
             refresh_interval_seconds=require_positive_float(
-                float(dashboard_raw.get("refresh_interval_seconds", 30)),
+                float(
+                    dashboard_raw.get("refresh_interval_seconds", DashboardSettings.refresh_interval_seconds)
+                ),
                 name="dashboard.refresh_interval_seconds",
             ),
             history_limit=require_positive_int(
-                int(dashboard_raw.get("history_limit", 20)), name="dashboard.history_limit"
+                int(dashboard_raw.get("history_limit", DashboardSettings.history_limit)),
+                name="dashboard.history_limit",
             ),
-            lookup_k=require_positive_int(int(dashboard_raw.get("lookup_k", 20)), name="dashboard.lookup_k"),
+            lookup_k=require_positive_int(
+                int(dashboard_raw.get("lookup_k", DashboardSettings.lookup_k)), name="dashboard.lookup_k"
+            ),
             lookup_events=require_positive_int(
-                int(dashboard_raw.get("lookup_events", 20)), name="dashboard.lookup_events"
+                int(dashboard_raw.get("lookup_events", DashboardSettings.lookup_events)),
+                name="dashboard.lookup_events",
             ),
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),
