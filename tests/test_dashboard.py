@@ -415,6 +415,33 @@ def test_require_basic_auth_used_directly_rejects_unknown_user():
         dependency(HTTPBasicCredentials(username="ghost", password="whatever"))
 
 
+def test_require_basic_auth_rejects_malformed_hash_and_overlong_password():
+    from fastapi import HTTPException
+    from fastapi.security import HTTPBasicCredentials
+
+    malformed = require_basic_auth({"alice": "not-a-valid-bcrypt-hash"})
+    with pytest.raises(HTTPException) as bad_hash:
+        malformed(HTTPBasicCredentials(username="alice", password="s3cret"))
+    assert bad_hash.value.status_code == 401
+
+    overlong = require_basic_auth(_users_with("alice", "s3cret"))
+    with pytest.raises(HTTPException) as too_long:
+        overlong(HTTPBasicCredentials(username="alice", password="x" * 80))
+    assert too_long.value.status_code == 401
+
+
+def test_require_basic_auth_propagates_unexpected_check_error(monkeypatch):
+    from fastapi.security import HTTPBasicCredentials
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("bcrypt bug")
+
+    monkeypatch.setattr("cicerone.http_auth.bcrypt.checkpw", _boom)
+    dependency = require_basic_auth(_users_with("alice", "s3cret"))
+    with pytest.raises(RuntimeError, match="bcrypt bug"):
+        dependency(HTTPBasicCredentials(username="alice", password="s3cret"))
+
+
 def test_compute_staleness_no_manifest_is_stale():
     from cicerone.dashboard import _compute_staleness
 

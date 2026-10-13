@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
@@ -27,6 +28,7 @@ from cicerone.io.recommendation_reader_common import (
     USER_COLUMN,
     VARIANT_COLUMN,
     _ItemFilterMixin,
+    item_snapshot_columns,
     normalize_items_snapshot,
 )
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
@@ -51,13 +53,38 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         self._init_item_filter_state()
         self.refresh()
 
-    def refresh(self) -> None:
-        self._variant_supported = None
-        self._present_variants = None
-        started = time.perf_counter()
-        items_ok = False
+    def configure_item_filters(
+        self,
+        *,
+        category_column: str | None = None,
+        availability_filters: Sequence[str] = (),
+    ) -> None:
+        super().configure_item_filters(
+            category_column=category_column,
+            availability_filters=availability_filters,
+        )
+        self._reload_items()
+
+    def _items_select(self):
+        wanted = item_snapshot_columns(
+            category_column=self._category_column,
+            availability_filters=self._availability_filters,
+        )
+        if wanted is None:
+            return text(f'SELECT * FROM "{self._items_table}"')
         try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{self._items_table}"'), self._engine)
+            existing = {col["name"] for col in inspect(self._engine).get_columns(self._items_table)}
+        except SQLAlchemyError:
+            return text(f'SELECT * FROM "{self._items_table}"')
+        chosen = [name for name in wanted if name in existing]
+        if not chosen:
+            return text(f'SELECT * FROM "{self._items_table}"')
+        quoted = ", ".join(f'"{sql_identifier(name, option="items snapshot column")}"' for name in chosen)
+        return text(f'SELECT {quoted} FROM "{self._items_table}"')
+
+    def _reload_items(self) -> bool:
+        try:
+            frame = pd.read_sql(self._items_select(), self._engine)
             items = normalize_items_snapshot(
                 frame,
                 category_column=self._category_column,
@@ -66,7 +93,7 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             with self._lock:
                 self._items = items
                 self._items_version += 1
-            items_ok = True
+            return True
         except MISSING_TABLE_ERRORS:
             logger.debug(
                 "recommendation items table %r not present; continuing without it",
@@ -75,9 +102,16 @@ class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
             with self._lock:
                 self._items = None
                 self._items_version += 1
-            items_ok = True
+            return True
         except SQL_READ_ERRORS:
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
+            return False
+
+    def refresh(self) -> None:
+        self._variant_supported = None
+        self._present_variants = None
+        started = time.perf_counter()
+        items_ok = self._reload_items()
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
 
     def _supports_variant_column(self) -> bool | None:
