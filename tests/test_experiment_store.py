@@ -1026,18 +1026,35 @@ def test_read_exposures_skips_columns_outside_the_exposure_schema(tmp_path) -> N
     assert rows == [{"user_id": "u1", "experiment_id": "exp"}]
 
 
-def test_read_exposures_table_without_exposure_columns_is_empty(tmp_path) -> None:
+def test_read_exposures_table_without_exposure_columns_is_empty(tmp_path, caplog) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE recommendation_exposures (note TEXT)"))
         conn.execute(text("INSERT INTO recommendation_exposures VALUES ('extra')"))
-    assert ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures() == []
+    with caplog.at_level("WARNING", logger="cicerone.experiment.store"):
+        assert ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures() == []
+    assert "none of the exposure columns" in caplog.text
 
 
 def test_read_exposures_missing_table_with_filter_is_empty(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    assert store.read_exposures(experiment_id="exp") == []
+
+
+def test_read_exposures_late_table_without_filter_column_is_empty(tmp_path, monkeypatch) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    real = store._stored_exposure_columns
+
+    def inspect_then_create(engine, table):
+        columns = real(engine, table)
+        with engine.begin() as conn:
+            conn.execute(text(f'CREATE TABLE "{table}" (user_id TEXT, variant TEXT)'))
+        return columns
+
+    monkeypatch.setattr(store, "_stored_exposure_columns", inspect_then_create)
     assert store.read_exposures(experiment_id="exp") == []
 
 
