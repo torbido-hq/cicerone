@@ -67,6 +67,7 @@ KNOWN_KEYS: dict[str, frozenset[str]] = {
     "job.sequential": frozenset({"min_median_interactions"}),
     "job.explain": _field_names(ExplainSettings),
     "job.automl": _field_names(AutomlSettings),
+    "job.automl.candidates": frozenset({"models", "weights", "rrf_k"}),
     "job.trigger": _field_names(TriggerSettings),
     "job.eval": _field_names(EvalSettings),
     "input": _IO_KEYS,

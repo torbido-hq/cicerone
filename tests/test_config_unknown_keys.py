@@ -41,6 +41,10 @@ def test_unknown_keys_warn_and_defaults_still_apply(tmp_path, caplog):
 [job]
 top_K = 50
 
+[[job.automl.candidates]]
+models = ["popular"]
+wieghts = { popular = 1.0 }
+
 [job.trigger]
 enabeld = true
 
@@ -66,6 +70,7 @@ port = 1
     assert _unknown_warnings(caplog) == [
         "Unknown config key 'servee' is ignored",
         "Unknown config key 'job.top_K' is ignored",
+        "Unknown config key 'job.automl.candidates[0].wieghts' is ignored",
         "Unknown config key 'job.trigger.enabeld' is ignored",
         "Unknown config key 'serve.prot' is ignored",
         "Unknown config key 'events.online.fit_partial_epoch' is ignored",
@@ -78,7 +83,12 @@ port = 1
 
 def test_documented_keys_and_free_form_tables_do_not_warn():
     raw = {
-        "job": {"top_k": 5, "explain": {"enabled": False}, "eval": {"ks": [5]}},
+        "job": {
+            "top_k": 5,
+            "explain": {"enabled": False},
+            "eval": {"ks": [5]},
+            "automl": {"candidates": [{"models": ["popular"], "weights": {"popular": 1.0}, "rrf_k": 60}]},
+        },
         "input": {"kind": "dataset", "options": {"anything": 1}},
         "output": {"kind": "db", "options": {"url": "x"}, "artifact_hmac_key": "k"},
         "model": {"collaborative": {"cls": "x", "model": {"epochs": 3}}},
