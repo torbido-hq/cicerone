@@ -37,6 +37,7 @@ from cicerone.experiment.thompson import (
     window_trials_from_slices,
 )
 from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.io.base import OutputSink
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
@@ -80,6 +81,7 @@ from cicerone.model import (
 )
 from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
+from cicerone.publish.base import RecommendationPublisher
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 from cicerone.track.store import TrackStore
 
@@ -121,13 +123,13 @@ class JobWriteResult:
 @dataclass
 class JobRun:
     settings: Settings
-    sink: Any
-    publication_lock: Any
-    writer_lock: Any
+    sink: OutputSink
+    publication_lock: LockBackend | None
+    writer_lock: LockBackend | None
     manifest: JobManifest
     fence_check: Callable[[], bool] | None
     started_at: str
-    publisher: Any = None
+    publisher: RecommendationPublisher | None = None
     eval_generated_at: str | None = None
     track_eval_payload: dict[str, Any] | None = None
     served_eval_payload: dict[str, Any] | None = None

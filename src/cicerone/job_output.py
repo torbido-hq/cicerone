@@ -6,7 +6,7 @@ import inspect
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
-from typing import Any
+from typing import Any, Protocol
 
 from cicerone.locks import LockLostError
 
@@ -102,11 +102,17 @@ def ensure_fence(fence_check: Callable[[], bool] | None) -> None:
         raise LockLostError("retrain lock lost before write", kind="retrain")
 
 
-def ensure_publication_fence(sink: Any, fence_check: Callable[[], bool] | None) -> None:
+def ensure_publication_fence(sink: object, fence_check: Callable[[], bool] | None) -> None:
     ensure_fence(fence_check)
     ensure = getattr(sink, "ensure_writer_held", None)
     if callable(ensure):
         ensure()
+
+
+class ManifestWriter(Protocol):
+    # A property, so legacy write_manifest signatures (no skip_if_newer_than, None return) still match.
+    @property
+    def write_manifest(self) -> Callable[..., object]: ...
 
 
 def write_manifest_accepts_skip(write: Any) -> bool:
@@ -117,7 +123,7 @@ def write_manifest_accepts_skip(write: Any) -> bool:
 
 
 def write_job_manifest(
-    sink: Any, manifest: JobManifest | Mapping[str, Any], *, skip_if_newer_than: str | None = None
+    sink: ManifestWriter, manifest: JobManifest | Mapping[str, Any], *, skip_if_newer_than: str | None = None
 ) -> bool:
     payload = manifest.as_dict() if isinstance(manifest, JobManifest) else dict(manifest)
     write = sink.write_manifest

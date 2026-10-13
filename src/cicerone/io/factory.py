@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
+from cicerone.locks import LockBackend
 
 T = TypeVar("T")
 
@@ -103,8 +104,8 @@ def build_user_history_reader(settings: IOSettings) -> UserHistoryReader:
 def build_output_sink(
     settings: IOSettings,
     *,
-    writer_lock: Any = None,
-    fence_check: Any = None,
+    writer_lock: LockBackend | None = None,
+    fence_check: Callable[[], bool] | None = None,
     fence_lost: str = "lock lost before write",
     fence_kind: str = "lock",
 ) -> OutputSink:
