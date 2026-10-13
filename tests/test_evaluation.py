@@ -706,6 +706,33 @@ def test_score_previous_run_fail_open(tmp_path) -> None:
     assert served is None
 
 
+def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, monkeypatch) -> None:
+    from cicerone.config import IOSettings, make_settings
+    from cicerone.job import _score_previous_run
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = make_settings(eval={"enabled": True}, output=output)
+    recs = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"], "variant": ["a"]})
+    assigned_seen: list[object] = []
+
+    def _served(*_args, assigned=None, **_kwargs):
+        assigned_seen.append(assigned)
+        return None
+
+    monkeypatch.setattr("cicerone.job_eval.evaluate_served", _served)
+
+    def _fail(*_args, **_kwargs):
+        raise ValueError("replay")
+
+    monkeypatch.setattr("cicerone.job_eval.replay_assignments", _fail)
+    _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
+    assert assigned_seen == []
+
+    monkeypatch.setattr("cicerone.job_eval.replay_assignments", lambda *_args, **_kwargs: None)
+    _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
+    assert assigned_seen == [None]
+
+
 def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> None:
     from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
@@ -40,6 +40,11 @@ from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, _utc_stamp,
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
+U = TypeVar("U")
+D = TypeVar("D")
+E = TypeVar("E")
+
 _JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
 
 OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
@@ -70,11 +75,11 @@ def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None =
 
 def try_load(
     label: str,
-    fn: Callable[[], Any],
-    default: Any,
+    fn: Callable[[], T],
+    default: D,
     *,
     errors: tuple[type[BaseException], ...] = OPTIONAL_IO_ERRORS,
-) -> Any:
+) -> T | D:
     try:
         return fn()
     except _JOB_CONTROL_ERRORS:
@@ -86,14 +91,14 @@ def try_load(
 
 def try_load_pair(
     left_label: str,
-    left: Callable[[], Any],
-    left_default: Any,
+    left: Callable[[], T],
+    left_default: D,
     right_label: str,
-    right: Callable[[], Any],
-    right_default: Any,
+    right: Callable[[], U],
+    right_default: E,
     *,
     parallel: bool,
-) -> tuple[Any, Any]:
+) -> tuple[T | D, U | E]:
     if not parallel:
         return try_load(left_label, left, left_default), try_load(right_label, right, right_default)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -287,17 +292,17 @@ def score_previous_run(
     assigned: dict[str, str] | None = None
     replay_failed = False
     if settings.eval.enabled and previous_recs is not None and previous_generated_at:
-        missing = object()
-        assigned_or_missing = try_load(
+        # Wrapped in a tuple so a failed replay (None) differs from "no assignments".
+        replayed = try_load(
             "compute served eval",
-            lambda: replay_assignments(settings, previous_recs, track_rows),
-            missing,
+            lambda: (replay_assignments(settings, previous_recs, track_rows),),
+            None,
             errors=OPTIONAL_EVAL_ERRORS,
         )
-        if assigned_or_missing is missing:
+        if replayed is None:
             replay_failed = True
         else:
-            assigned = assigned_or_missing
+            assigned = replayed[0]
 
     def _compute_track() -> dict[str, Any] | None:
         if not settings.track.enabled:

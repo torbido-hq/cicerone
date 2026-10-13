@@ -11,6 +11,7 @@ from cicerone.io.base import InputSource, ManifestReader, OutputSink, Recommenda
 if TYPE_CHECKING:
     from cicerone.io.catalog import CatalogStore
     from cicerone.io.surfaces_reader import SurfacesReader
+    from cicerone.locks import LockBackend  # type-only: a runtime import loads every lock backend
 
 T = TypeVar("T")
 
@@ -107,8 +108,8 @@ def build_user_history_reader(settings: IOSettings) -> UserHistoryReader:
 def build_output_sink(
     settings: IOSettings,
     *,
-    writer_lock: Any = None,
-    fence_check: Any = None,
+    writer_lock: LockBackend | None = None,
+    fence_check: Callable[[], bool] | None = None,
     fence_lost: str = "lock lost before write",
     fence_kind: str = "lock",
 ) -> OutputSink:
