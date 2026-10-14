@@ -10,7 +10,7 @@ from cicerone.config import ConfigError
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
-from cicerone.model.recommend import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
+from cicerone.model.recommend_cache import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 from cicerone.reasons import parse_reasons
 

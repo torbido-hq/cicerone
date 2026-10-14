@@ -29,12 +29,10 @@ from cicerone.track.store_common import (
     TRACK_LOG_HA_ERROR,
     _filter_history,
     _history_frame,
-    _history_stem_before,  # noqa: F401
     _iso_utc,
     _jsonish,
     _row_matches,
     _row_with_event_id,
-    _unslug_history_stem,  # noqa: F401
     require_appendable_track_log,
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, _history_part_name
@@ -57,9 +55,7 @@ __all__ = [
     "TrackStore",
     "_history_frame",
     "_history_part_name",
-    "_history_stem_before",
     "_jsonish",
-    "_unslug_history_stem",
     "require_appendable_track_log",
 ]
 

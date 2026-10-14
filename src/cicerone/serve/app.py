@@ -263,9 +263,6 @@ def _assignment_overlay(
     return store.assignment_overlay(settings.experiment.id)
 
 
-_snapshot_variant_names = snapshot_variant_names
-
-
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -574,7 +571,7 @@ def create_app(
         fetch_k = max(top_k * 5, top_k) if request_can_filter or hide_consumed else top_k
         promoted, active_pair = overlay_cache.get()
         snapshot = (
-            _snapshot_variant_names(reader)
+            snapshot_variant_names(reader)
             if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
             else None
         )

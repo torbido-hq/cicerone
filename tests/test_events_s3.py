@@ -15,9 +15,12 @@ from cicerone.events.s3 import (
     _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
     _events_from_body,
+)
+from cicerone.events.s3_parse import (
+    _SQS_MALFORMED_RECEIVE_LIMIT,
+    MalformedS3Notification,
     _s3_records_from_sqs_body,
 )
-from cicerone.events.s3_parse import _SQS_MALFORMED_RECEIVE_LIMIT, MalformedS3Notification
 
 
 def _creds(**extra):

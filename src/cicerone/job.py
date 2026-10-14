@@ -49,7 +49,6 @@ from cicerone.job_eval import job_track_since as _job_track_since
 from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
-from cicerone.job_eval import replay_assignments as _replay_assignments  # noqa: F401
 from cicerone.job_eval import score_previous_run as _score_previous_run
 from cicerone.job_eval import try_load as _try_load
 from cicerone.job_eval import try_load_pair as _try_load_pair

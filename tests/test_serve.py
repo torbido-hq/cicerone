@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
+from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
@@ -17,7 +18,6 @@ from cicerone.serve.app import (
     _assignment_overlay,
     _AssignmentOverlayCache,
     _GeneratedAtCache,
-    _snapshot_variant_names,
     _start_refresh_loop,
 )
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
@@ -843,19 +843,19 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
 
 
 def test_snapshot_variant_names_from_reader():
-    assert _snapshot_variant_names(_FakeReader(_recs_df())) is None
+    assert snapshot_variant_names(_FakeReader(_recs_df())) is None
 
     class _Named(_FakeReader):
         def present_variant_names(self):
             return None
 
-    assert _snapshot_variant_names(_Named(_recs_df())) is None
+    assert snapshot_variant_names(_Named(_recs_df())) is None
 
     class _Present(_FakeReader):
         def present_variant_names(self):
             return ("control", "blend")
 
-    assert _snapshot_variant_names(_Present(_recs_df())) == ("control", "blend")
+    assert snapshot_variant_names(_Present(_recs_df())) == ("control", "blend")
 
 
 def test_main_requires_serve_mode(tmp_path, monkeypatch):
