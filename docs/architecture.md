@@ -144,6 +144,13 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 
 ![Architecture: dataset or database input into job.run, then dataset build and train, then dataset or database output; optional EventSource write-through](images/architecture-flow.svg)
 
+| Store | Track log | History and eval | More than one replica |
+| --- | --- | --- | --- |
+| `db` | `recommendation_track` | tables | yes |
+| local dataset | `track.jsonl` | parquet parts | no |
+| object store | refused (JSONL append is not atomic) | single-file overwrite only | no |
+| `track.redis_url` | Redis list | still on `[output]` | yes, for the log |
+
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
    (`feature_config.load_feature_config`), builds the configured
    `InputSource`/`OutputSink` via `io.factory`, and reads `events`

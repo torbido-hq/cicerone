@@ -117,6 +117,7 @@ _TRACK_FLAT_KEYS = (
     ("track_attribution_window_hours", "attribution_window_hours"),
     ("track_conversion_event_types", "conversion_event_types"),
     ("track_min_impressions", "min_impressions"),
+    ("track_redis_url", "redis_url"),
 )
 _EVAL_FLAT_KEYS = (
     ("eval_enabled", "enabled"),
@@ -395,6 +396,13 @@ def _require_online_output_backend(settings: Settings) -> None:
     raise ConfigError(ONLINE_OUTPUT_ERROR)
 
 
+def _track_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    track_raw = dict(raw.get("track") or {})
+    if "redis_url" in track_raw:
+        track_raw["redis_url"] = _resolve_env_placeholders(track_raw["redis_url"], "track.redis_url")
+    return track_raw
+
+
 def _require_track_backend(settings: Settings) -> None:
     if settings.serve.log_impressions and not settings.track.enabled:
         raise ConfigError("serve.log_impressions requires track.enabled = true")
@@ -402,6 +410,8 @@ def _require_track_backend(settings: Settings) -> None:
     if settings.experiment.enabled and rec_metric and not settings.track.enabled:
         raise ConfigError("experiment.primary_metric 'ctr'/'conversion' requires track.enabled = true")
     if not settings.track.enabled:
+        return
+    if settings.track.redis_url:
         return
     from cicerone.track.store import TRACK_LOG_HA_ERROR, require_appendable_track_log
 
@@ -739,7 +749,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         events=events,
         publish=publish,
         experiment=load_experiment_settings(raw.get("experiment") or {}),
-        track=load_track_settings(raw.get("track") or {}),
+        track=load_track_settings(_track_raw(raw)),
         eval=load_eval_settings(job.get("eval") or {}),
     )
     _require_online_artifact_hmac(settings)

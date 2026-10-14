@@ -437,6 +437,7 @@ prefix = "recommendations/latest"
 # attribution_window_hours = 24
 # conversion_event_types = ["purchase"]
 # min_impressions = 100
+# redis_url = "redis://localhost:6379/0"  # optional; needs cicerone-recommender[redis]
 # [job.eval]
 # enabled = true
 # # event_types = ["purchase"]
