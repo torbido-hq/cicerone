@@ -30,7 +30,6 @@ from cicerone.events.s3_parse import (
     _optional_aws_region,
     _positive_float,
     _positive_int,
-    _s3_records_from_sqs_body,  # noqa: F401
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll

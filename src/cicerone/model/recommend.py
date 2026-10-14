@@ -18,12 +18,7 @@ from cicerone.dataset import BuiltDataset
 from cicerone.explain import attach_reasons
 from cicerone.feature_config import FeatureConfig
 from cicerone.model.fit import ModelRunPlan, fit_strategies, plan_model_run
-from cicerone.model.recommend_cache import (  # noqa: F401
-    RecommendCache,
-    _dataset_fingerprint,
-    _items_fingerprint,
-    _recommend_cache_key,
-)
+from cicerone.model.recommend_cache import RecommendCache
 from cicerone.model.recommend_cohort import (
     _resolve_cohort_plan,
     boost_overfetch_k,  # noqa: F401

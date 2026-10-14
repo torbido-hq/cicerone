@@ -388,7 +388,7 @@ def test_main_uses_package_default_config_path(monkeypatch):
         return object()
 
     monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
-    monkeypatch.setattr("cicerone.config.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
+    monkeypatch.setattr("cicerone.dashboard.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
