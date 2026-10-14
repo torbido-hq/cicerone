@@ -619,9 +619,12 @@ def _write_job_outputs(
                 )
                 manifest["generated_at"] = datetime.now(UTC).isoformat()
                 ensure_publication_fence(sink, fence_check)
+                # Set before writing, so a failure rewrite can replace a manifest that committed then raised.
+                result.success_generated_at = str(manifest.get("generated_at") or "")
                 if write_job_manifest(sink, manifest):
                     result.manifest_written = True
-                    result.success_generated_at = str(manifest.get("generated_at") or "")
+                else:
+                    result.success_generated_at = None
             except _SINK_WRITE_ERRORS as exc:
                 if outputs_written or manifest.get("artifact_written"):
                     manifest["partial_outputs"] = True
@@ -875,6 +878,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         _publish_job_sidecar(run)
     except BaseException as exc:
         error = exc
+        # An interrupt after the success manifest is committed must not rewrite the finished run.
+        if not isinstance(exc, Exception) and run.written.manifest_written:
+            raise
         try:
             _record_run_failure(run, exc)
         except BaseException as record_exc:

@@ -2383,6 +2383,111 @@ def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monke
     assert manifest["partial_outputs"] is True
 
 
+def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def commit_then_timeout(sink, manifest, **kwargs):
+        written = real_write(sink, manifest, **kwargs)
+        if manifest.get("status") == "success":
+            raise TimeoutError("manifest response lost")
+        return written
+
+    monkeypatch.setattr(job, "write_job_manifest", commit_then_timeout)
+
+    with pytest.raises(TimeoutError, match="manifest response lost"):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "manifest response lost" in manifest["error"]
+
+
+def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skipped(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def skip_success_after_foreign_write(sink, manifest, **kwargs):
+        if manifest.get("status") != "success":
+            return real_write(sink, manifest, **kwargs)
+        ours = pd.Timestamp(manifest["generated_at"])
+        foreign = {
+            "status": "success",
+            "triggered_by": "other",
+            "generated_at": (ours - pd.Timedelta("1us")).isoformat(),
+        }
+        real_write(sink, foreign)
+        return False
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(job, "write_job_manifest", skip_success_after_foreign_write)
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
+    )
+    with pytest.raises(RuntimeError, match="generation check bug"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["triggered_by"] == "other"
+
+
+def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    class _Pub:
+        def connect(self) -> None:
+            raise KeyboardInterrupt
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert (output_dir / "recommendations.parquet").exists()
+
+
 def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
