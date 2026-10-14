@@ -333,7 +333,8 @@ different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`,
 
 `pyproject.toml` declares compatible ranges (`>=pin,<next breaking`) for
 the package metadata; `requirements*.txt` hold the exact pins the image
-and CI install. When a bump leaves its range, widen the range in the same
+and CI install. A tighter cap (e.g. `<1.18`) is fine; a range must not span
+a breaking release. When a bump leaves its range, move the range in the same
 PR (`tests/test_packaging.py` checks every pin is inside its range).
 
 One-time PyPI setup (before the first upload): create a GitHub Environment
