@@ -39,6 +39,7 @@ from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_genera
 
 logger = logging.getLogger(__name__)
 
+# After the incremental write, raising would nack the applied flush and re-apply it on redelivery.
 _SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
 _ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
     *OPTIONAL_IO_ERRORS,

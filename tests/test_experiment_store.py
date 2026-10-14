@@ -183,6 +183,20 @@ def test_assignment_overlay_reraises_unexpected_read_error(tmp_path, monkeypatch
         store.assignment_overlay("exp")
 
 
+def test_assignment_overlay_reraises_type_error(tmp_path, monkeypatch) -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = ExperimentStore(output)
+    store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
+    store.assignment_overlay("exp")
+
+    def _boom(self):
+        raise TypeError("state bug")
+
+    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    with pytest.raises(TypeError, match="state bug"):
+        store.assignment_overlay("exp")
+
+
 def test_append_exposures_rejects_object_store() -> None:
     output = IOSettings(
         kind="dataset",

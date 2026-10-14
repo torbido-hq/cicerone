@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from pyarrow.lib import ArrowNotImplementedError, ArrowTypeError
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.evaluation import (
@@ -1966,7 +1967,7 @@ def test_load_metric_events_dataset_retries_string_since_filter(tmp_path, monkey
         )
         calls.append(bound)
         if not isinstance(bound, str):
-            raise TypeError("datetime bound")
+            raise ArrowNotImplementedError("greater_equal has no kernel for (string, timestamp)")
         return pd.DataFrame(
             [
                 {
@@ -1999,7 +2000,7 @@ def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatc
 
     def _read(_options, _filename, **_kwargs):
         calls["n"] += 1
-        raise TypeError("unsupported occurred_at")
+        raise ArrowNotImplementedError("unsupported occurred_at")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
@@ -2038,7 +2039,7 @@ def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> 
     def _read(_options, _filename, **kwargs):
         calls.append(kwargs.get("filters"))
         if kwargs.get("filters"):
-            raise TypeError("event_type filter")
+            raise ArrowTypeError("event_type filter")
         return pd.DataFrame(
             [
                 {
@@ -2368,6 +2369,64 @@ def test_load_metric_events_dataset_arrow_invalid_is_empty(tmp_path, monkeypatch
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.empty
+
+
+def test_load_metric_events_dataset_arrow_type_error_is_empty(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+    from pyarrow.lib import ArrowTypeError
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise ArrowTypeError("filter type mismatch")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    assert load_metric_events(settings, since="2026-08-29T05:00:00+00:00").empty
+
+
+def test_load_metric_events_dataset_propagates_type_error(tmp_path, monkeypatch) -> None:
+    from conftest import make_settings
+
+    from cicerone.config import IOSettings
+
+    settings = make_settings(
+        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+
+    def _read(*_args, **_kwargs):
+        raise TypeError("bug")
+
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    with pytest.raises(TypeError, match="bug"):
+        load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
+
+
+def test_evaluate_served_propagates_rectools_type_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "cicerone.evaluation.served.calc_metrics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TypeError("bug")),
+    )
+    with pytest.raises(TypeError, match="bug"):
+        evaluate_served(
+            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "alice",
+                        "item_id": "ipa",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    }
+                ]
+            ),
+            generated_at=None,
+            ks=(1,),
+            event_types=("purchase",),
+        )
 
 
 def test_load_metric_events_dataset_arrow_io_is_empty(tmp_path, monkeypatch) -> None:

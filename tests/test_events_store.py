@@ -5,6 +5,7 @@ import sqlite3
 
 import pandas as pd
 import pytest
+from pyarrow.lib import ArrowTypeError
 from sqlalchemy import create_engine, text
 
 from cicerone.config import IOSettings, make_settings
@@ -304,6 +305,28 @@ def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         assert count_recommendation_users(settings.output) == 0
     assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [(TypeError("bad user_id arg"), None), (ArrowTypeError("user_id: type mismatch"), 0)],
+)
+def test_count_recommendation_users_dataset_type_error_is_not_a_schema_mismatch(
+    tmp_path, monkeypatch, exc, expected
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    )
+
+    def boom(*_args, **_kwargs):
+        raise exc
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", boom)
+    if expected is None:
+        with pytest.raises(TypeError, match="bad user_id arg"):
+            count_recommendation_users(settings.output)
+    else:
+        assert count_recommendation_users(settings.output) == expected
 
 
 def test_load_recommendations_for_users_unsupported_kind():

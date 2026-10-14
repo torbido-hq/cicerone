@@ -34,7 +34,7 @@ from cicerone.io.recommendation_schema import (
 )
 
 logger = logging.getLogger(__name__)
-_RECTOOLS_ERRORS = (ValueError, TypeError, LookupError)
+_RECTOOLS_ERRORS = (ValueError, LookupError)
 
 
 @dataclass(frozen=True)

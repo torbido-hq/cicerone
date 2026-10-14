@@ -571,17 +571,20 @@ def _write_job_outputs(
             try:
                 if artifact_bytes is not None:
                     ensure_publication_fence(sink, fence_check)
+                    # Set before each write: a store can commit and still raise (e.g. a response timeout).
+                    outputs_written = True
                     sink.write_model_artifact(artifact_bytes)
                     manifest["artifact_written"] = True
                     manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                 if items is not None and not items.empty:
                     ensure_publication_fence(sink, fence_check)
+                    outputs_written = True
                     sink.write_items_snapshot(items)
 
                 ensure_publication_fence(sink, fence_check)
-                sink.write_recommendations(recommendations)
                 outputs_written = True
+                sink.write_recommendations(recommendations)
                 if run.pending_thompson is not None:
                     ensure_publication_fence(sink, fence_check)
                     store = ExperimentStore(
@@ -613,9 +616,12 @@ def _write_job_outputs(
                 )
                 manifest["generated_at"] = datetime.now(UTC).isoformat()
                 ensure_publication_fence(sink, fence_check)
+                # Set before writing, so a failure rewrite can replace a manifest that committed then raised.
+                result.success_generated_at = str(manifest.get("generated_at") or "")
                 if write_job_manifest(sink, manifest):
                     result.manifest_written = True
-                    result.success_generated_at = str(manifest.get("generated_at") or "")
+                else:
+                    result.success_generated_at = None
             except _SINK_WRITE_ERRORS as exc:
                 if outputs_written or manifest.get("artifact_written"):
                     manifest["partial_outputs"] = True
@@ -639,7 +645,7 @@ def _write_job_outputs(
                             log=logger,
                         )
                 raise
-    except _SINK_WRITE_ERRORS:
+    except BaseException:
         if outputs_written or manifest.get("artifact_written"):
             manifest["partial_outputs"] = True
         raise
@@ -755,8 +761,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             retrain_lock.release()
 
 
-def _record_run_failure(run: JobRun, exc: Exception) -> None:
-    run.manifest["error"] = truncate_job_error(exc)
+def _record_run_failure(run: JobRun, exc: BaseException) -> None:
+    run.manifest["error"] = truncate_job_error(exc) or type(exc).__name__
     if run.manifest.get("status") == "success":
         run.manifest["status"] = "failed"
         run.written.manifest_written = False
@@ -855,17 +861,17 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         run.manifest_written = run.written.manifest_written
         run.success_generated_at = run.written.success_generated_at
         _publish_job_sidecar(run)
-    except Exception as exc:
+    except BaseException as exc:
         error = exc
+        # An interrupt after the success manifest is committed must not rewrite the finished run.
+        if not isinstance(exc, Exception) and run.written.manifest_written:
+            raise
         try:
             _record_run_failure(run, exc)
         except BaseException as record_exc:
             # Finalize must see the exception that actually propagates.
             error = record_exc
             raise
-        raise
-    except BaseException as exc:
-        error = exc
         raise
     finally:
         _finalize_job(run, error)

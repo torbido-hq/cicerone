@@ -492,6 +492,42 @@ def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config:
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
+def test_updater_does_not_nack_after_sidecar_connect_type_error(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    calls: list[object] = []
+
+    class _Pub:
+        def connect(self) -> None:
+            raise TypeError("connect bug")
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            calls.append(user_ids)
+
+        def close(self) -> None:
+            return None
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        publisher=_Pub(),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    assert updater.apply(events) == 1
+    assert calls == []
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+
 def test_kafka_publisher_not_connected():
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     with pytest.raises(RuntimeError, match="not connected"):

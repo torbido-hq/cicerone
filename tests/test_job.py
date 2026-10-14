@@ -1076,6 +1076,34 @@ def test_try_load_does_not_swallow_unexpected_errors():
         )
 
 
+@pytest.mark.parametrize("errors", ["io", "eval"])
+def test_try_load_does_not_swallow_type_errors(errors):
+    from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, try_load
+
+    with pytest.raises(TypeError, match="bug"):
+        try_load(
+            "compute track eval",
+            lambda: (_ for _ in ()).throw(TypeError("bug")),
+            None,
+            errors=OPTIONAL_IO_ERRORS if errors == "io" else OPTIONAL_EVAL_ERRORS,
+        )
+
+
+def test_try_load_treats_arrow_type_errors_as_optional():
+    from pyarrow.lib import ArrowTypeError
+
+    from cicerone.job_eval import try_load
+
+    assert (
+        try_load(
+            "load previous recommendations for eval",
+            lambda: (_ for _ in ()).throw(ArrowTypeError("schema mismatch")),
+            None,
+        )
+        is None
+    )
+
+
 def test_try_load_reraises_lock_errors():
     from cicerone.job_eval import try_load
     from cicerone.locks import LockLostError, WriterLockBusyError
@@ -2250,6 +2278,273 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     assert manifest["partial_outputs"] is True
     assert manifest["artifact_written"] is True
     del original_write
+
+
+def test_job_marks_partial_outputs_when_only_items_snapshot_was_written(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+    from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
+
+    real_snapshot = DatasetOutputSink.write_items_snapshot
+    real_fence = job.ensure_publication_fence
+    snapshot_written: list[bool] = []
+
+    def write_snapshot(self, df):
+        real_snapshot(self, df)
+        snapshot_written.append(True)
+
+    def fence_lost_after_snapshot(sink, fence_check):
+        if snapshot_written:
+            raise RuntimeError("fence lost after snapshot")
+        real_fence(sink, fence_check)
+
+    monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", write_snapshot)
+    monkeypatch.setattr(job, "ensure_publication_fence", fence_lost_after_snapshot)
+
+    with pytest.raises(RuntimeError, match="fence lost after snapshot"):
+        job.run()
+
+    assert (output_dir / ITEMS_SNAPSHOT_FILENAME).exists()
+    assert not (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest.get("artifact_written") is not True
+    assert manifest["partial_outputs"] is True
+
+
+def test_job_marks_partial_outputs_when_write_commits_then_raises(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+    from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
+
+    real_write = DatasetOutputSink.write_items_snapshot
+
+    def commit_then_timeout(self, df):
+        real_write(self, df)
+        raise TimeoutError("response lost after commit")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", commit_then_timeout)
+
+    with pytest.raises(TimeoutError, match="response lost"):
+        job.run()
+
+    assert (output_dir / ITEMS_SNAPSHOT_FILENAME).exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+
+
+def test_job_marks_partial_outputs_when_interrupted_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    real_write = DatasetOutputSink.write_recommendations
+
+    def commit_then_interrupt(self, df):
+        real_write(self, df)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", commit_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+
+
+def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def interrupt_success_write(sink, manifest, **kwargs):
+        if manifest.get("status") == "success":
+            raise KeyboardInterrupt
+        return real_write(sink, manifest, **kwargs)
+
+    monkeypatch.setattr(job, "write_job_manifest", interrupt_success_write)
+
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["error"] == "KeyboardInterrupt"
+    assert manifest["partial_outputs"] is True
+
+
+def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def commit_then_timeout(sink, manifest, **kwargs):
+        written = real_write(sink, manifest, **kwargs)
+        if manifest.get("status") == "success":
+            raise TimeoutError("manifest response lost")
+        return written
+
+    monkeypatch.setattr(job, "write_job_manifest", commit_then_timeout)
+
+    with pytest.raises(TimeoutError, match="manifest response lost"):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert "manifest response lost" in manifest["error"]
+
+
+def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skipped(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def skip_success_after_foreign_write(sink, manifest, **kwargs):
+        if manifest.get("status") != "success":
+            return real_write(sink, manifest, **kwargs)
+        ours = pd.Timestamp(manifest["generated_at"])
+        foreign = {
+            "status": "success",
+            "triggered_by": "other",
+            "generated_at": (ours - pd.Timedelta("1us")).isoformat(),
+        }
+        real_write(sink, foreign)
+        return False
+
+    class _Pub:
+        def connect(self) -> None:
+            return None
+
+        def publish(self, df: pd.DataFrame) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(job, "write_job_manifest", skip_success_after_foreign_write)
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.sidecar_generation_current",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
+    )
+    with pytest.raises(RuntimeError, match="generation check bug"):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["triggered_by"] == "other"
+
+
+def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    class _Pub:
+        def connect(self) -> None:
+            raise KeyboardInterrupt
+
+        def publish(self, df: pd.DataFrame) -> None:
+            raise AssertionError("publish should not run")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    assert (output_dir / "recommendations.parquet").exists()
+
+
+def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    def boom(recommendations):
+        raise TypeError("bug after write")
+
+    monkeypatch.setattr(job, "_recommendation_user_count", boom)
+
+    with pytest.raises(TypeError, match="bug after write"):
+        job.run()
+
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
 
 
 def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
