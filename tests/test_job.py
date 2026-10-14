@@ -2344,6 +2344,31 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     del original_write
 
 
+def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    def boom(recommendations):
+        raise TypeError("bug after write")
+
+    monkeypatch.setattr(job, "_recommendation_user_count", boom)
+
+    with pytest.raises(TypeError, match="bug after write"):
+        job.run()
+
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+
+
 def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
