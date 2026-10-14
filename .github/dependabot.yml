@@ -4,6 +4,9 @@ version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
+    # Bump the exact pins in requirements*.txt; widen a pyproject range only
+    # when the new version falls outside it.
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: "weekly"
       day: "monday"

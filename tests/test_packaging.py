@@ -7,6 +7,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 from cicerone import __version__
 
@@ -23,9 +25,7 @@ def test_distribution_name_is_not_taken_cicerone():
     project = _project()["project"]
     assert project["name"] == "cicerone-recommender"
     assert project["requires-python"] == ">=3.11,<3.12"
-    assert "version" in project["dynamic"]
-    assert "dependencies" in project["dynamic"]
-    assert "optional-dependencies" in project["dynamic"]
+    assert project["dynamic"] == ["version"]
 
 
 def test_version_is_read_from_package_attr():
@@ -35,19 +35,41 @@ def test_version_is_read_from_package_attr():
     assert __version__.count(".") >= 2
 
 
-def test_optional_extras_match_requirements_files():
-    extras = _project()["tool"]["setuptools"]["dynamic"]["optional-dependencies"]
-    assert extras["redis"]["file"] == ["requirements-redis.txt"]
-    assert extras["sequential"]["file"] == ["requirements-sequential.txt"]
-    assert extras["kafka"]["file"] == ["requirements-kafka.txt"]
-    assert extras["rabbitmq"]["file"] == ["requirements-rabbitmq.txt"]
-    assert extras["bandits"]["file"] == ["requirements-bandits.txt"]
-    root = _PYPROJECT.parent
-    assert (root / "requirements-redis.txt").is_file()
-    assert (root / "requirements-sequential.txt").is_file()
-    assert (root / "requirements-kafka.txt").is_file()
-    assert (root / "requirements-rabbitmq.txt").is_file()
-    assert (root / "requirements-bandits.txt").is_file()
+def _pins(filename: str) -> dict[str, Requirement]:
+    lines = (_ROOT / filename).read_text(encoding="utf-8").splitlines()
+    reqs = [Requirement(line.split("#")[0]) for line in lines if line.split("#")[0].strip()]
+    return _by_name(reqs, filename)
+
+
+def _by_name(reqs: list[Requirement], source: str) -> dict[str, Requirement]:
+    named = {canonicalize_name(req.name): req for req in reqs}
+    assert len(named) == len(reqs), f"{source}: duplicate requirement"
+    return named
+
+
+@pytest.mark.parametrize(
+    ("extra", "filename"),
+    [
+        (None, "requirements.txt"),
+        ("redis", "requirements-redis.txt"),
+        ("sequential", "requirements-sequential.txt"),
+        ("kafka", "requirements-kafka.txt"),
+        ("rabbitmq", "requirements-rabbitmq.txt"),
+        ("bandits", "requirements-bandits.txt"),
+    ],
+)
+def test_metadata_ranges_admit_image_pins(extra, filename):
+    project = _project()["project"]
+    declared = project["dependencies"] if extra is None else project["optional-dependencies"][extra]
+    ranges = _by_name([Requirement(item) for item in declared], f"pyproject.toml [{extra or 'dependencies'}]")
+    pins = _pins(filename)
+    assert ranges.keys() == pins.keys()
+    for name, pin in pins.items():
+        (spec,) = pin.specifier
+        assert spec.operator == "==", f"{filename}: {name} must be an exact pin"
+        assert ranges[name].extras == pin.extras
+        assert ranges[name].specifier.contains(spec.version), f"{name}=={spec.version} outside {ranges[name]}"
+        assert not ranges[name].specifier.contains("0"), f"{name} range needs a lower bound"
 
 
 def test_console_script_entry_point():
