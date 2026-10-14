@@ -15,7 +15,7 @@ search weights, see [search-weights.md](search-weights.md).
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases, deprecated); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |

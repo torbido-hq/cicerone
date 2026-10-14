@@ -63,12 +63,12 @@ def test_load_settings_dataset_backends(tmp_path):
     assert settings.explain.enabled is True
     assert settings.explain.max_similar_items == 3
     assert settings.explain.max_attributes == 5
-    assert settings.automl_enabled is False
-    assert settings.automl_n_splits == 2
-    assert settings.automl_test_days == 14
-    assert settings.automl_primary_metric == "MAP"
-    assert settings.automl_candidates is None
-    assert settings.automl_debias is False
+    assert settings.automl.enabled is False
+    assert settings.automl.n_splits == 2
+    assert settings.automl.test_days == 14
+    assert settings.automl.primary_metric == "MAP"
+    assert settings.automl.candidates is None
+    assert settings.automl.debias is False
 
 
 def test_load_settings_with_explicit_models(tmp_path):
@@ -470,12 +470,12 @@ def test_load_settings_with_explicit_automl(tmp_path):
 
     settings = load_settings(config_path)
 
-    assert settings.automl_enabled is True
-    assert settings.automl_n_splits == 3
-    assert settings.automl_test_days == 7
-    assert settings.automl_primary_metric == "NDCG"
-    assert settings.automl_debias is True
-    assert settings.automl_candidates == [
+    assert settings.automl.enabled is True
+    assert settings.automl.n_splits == 3
+    assert settings.automl.test_days == 7
+    assert settings.automl.primary_metric == "NDCG"
+    assert settings.automl.debias is True
+    assert settings.automl.candidates == [
         {"models": ["popular"]},
         {"models": ["popular", "latest"], "weights": {"popular": 1.0, "latest": 0.5}},
     ]
@@ -511,12 +511,12 @@ def test_load_settings_defaults_when_job_section_missing(tmp_path):
     assert settings.save_model_artifact is False
     assert settings.max_workers == 1
     assert settings.epoch_metrics is None
-    assert settings.automl_enabled is False
-    assert settings.automl_n_splits == 2
-    assert settings.automl_test_days == 14
-    assert settings.automl_primary_metric == "MAP"
-    assert settings.automl_candidates is None
-    assert settings.automl_debias is False
+    assert settings.automl.enabled is False
+    assert settings.automl.n_splits == 2
+    assert settings.automl.test_days == 14
+    assert settings.automl.primary_metric == "MAP"
+    assert settings.automl.candidates is None
+    assert settings.automl.debias is False
 
 
 def test_load_settings_save_model_artifact(tmp_path):
@@ -1074,14 +1074,14 @@ def test_load_settings_dashboard_lookup_k(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.dashboard.lookup_k == 8
-    assert settings.dashboard_lookup_k == 8
+    assert settings.dashboard.lookup_k == 8
 
 
 def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path):
     settings = load_settings(write_toml(tmp_path, _base_io_toml()))
 
     assert settings.dashboard.lookup_k == 20
-    assert settings.dashboard_host == "127.0.0.1"
+    assert settings.dashboard.host == "127.0.0.1"
 
 
 def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
@@ -1112,7 +1112,7 @@ def test_load_settings_dashboard_lookup_events(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.dashboard.lookup_events == 8
-    assert settings.dashboard_lookup_events == 8
+    assert settings.dashboard.lookup_events == 8
 
 
 def test_load_settings_dashboard_lookup_events_defaults_to_20(tmp_path):
@@ -1177,8 +1177,8 @@ def test_load_settings_mode_defaults_to_batch(tmp_path):
     settings = load_settings(config_path)
 
     assert settings.mode == "batch"
-    assert settings.serve_auth_token is None
-    assert settings.trigger_enabled is False
+    assert settings.serve.auth_token is None
+    assert settings.trigger.enabled is False
 
 
 def test_load_settings_rejects_unknown_mode(tmp_path):
@@ -1216,20 +1216,17 @@ def test_load_settings_serve_mode_with_auth_token(tmp_path, monkeypatch):
     settings = load_settings(config_path)
 
     assert settings.mode == "serve"
-    assert settings.serve_auth_token == "secret-token"
-    assert settings.serve_host == "127.0.0.1"
-    assert settings.serve_port == 9000
-    assert settings.serve_default_k == 5
-    assert settings.serve_refresh_interval_seconds == 30.0
-    assert settings.serve_category_column == "category"
-    assert settings.serve_metrics_enabled is False
-    assert settings.serve_metrics_token is None
+    assert settings.serve.auth_token == "secret-token"
+    assert settings.serve.host == "127.0.0.1"
+    assert settings.serve.port == 9000
+    assert settings.serve.default_k == 5
+    assert settings.serve.refresh_interval_seconds == 30.0
+    assert settings.serve.category_column == "category"
+    assert settings.serve.metrics_enabled is False
+    assert settings.serve.metrics_token is None
     assert settings.serve.exclude_consumed is True
     assert settings.serve.fallback_fill is True
     assert settings.serve.consumed_lookback == 1000
-    assert settings.serve_exclude_consumed is True
-    assert settings.serve_fallback_fill is True
-    assert settings.serve_consumed_lookback == 1000
 
 
 def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
@@ -1250,8 +1247,8 @@ def test_load_settings_serve_metrics_token(tmp_path, monkeypatch):
 
     settings = load_settings(config_path)
 
-    assert settings.serve_metrics_token == "metrics-secret"
-    assert settings.serve_metrics_enabled is True
+    assert settings.serve.metrics_token == "metrics-secret"
+    assert settings.serve.metrics_enabled is True
 
 
 def test_load_settings_serve_metrics_disabled(tmp_path):
@@ -1270,7 +1267,7 @@ def test_load_settings_serve_metrics_disabled(tmp_path):
 
     settings = load_settings(config_path)
 
-    assert settings.serve_metrics_enabled is False
+    assert settings.serve.metrics_enabled is False
 
 
 def test_load_settings_serve_metrics_enabled_requires_token(tmp_path):
@@ -1340,13 +1337,13 @@ def test_load_settings_serve_defaults(tmp_path, monkeypatch):
 
     settings = load_settings(config_path)
 
-    assert settings.serve_host == "127.0.0.1"
-    assert settings.serve_port == 8000
-    assert settings.serve_default_k == 10
-    assert settings.serve_refresh_interval_seconds == 60.0
-    assert settings.serve_category_column == "category"
-    assert settings.serve_metrics_enabled is False
-    assert settings.serve_metrics_token is None
+    assert settings.serve.host == "127.0.0.1"
+    assert settings.serve.port == 8000
+    assert settings.serve.default_k == 10
+    assert settings.serve.refresh_interval_seconds == 60.0
+    assert settings.serve.category_column == "category"
+    assert settings.serve.metrics_enabled is False
+    assert settings.serve.metrics_token is None
 
 
 def test_load_settings_trigger_enabled_requires_auth_token(tmp_path):
@@ -1377,18 +1374,18 @@ def test_load_settings_trigger_enabled_with_auth_token(tmp_path, monkeypatch):
 
     settings = load_settings(config_path)
 
-    assert settings.trigger_enabled is True
-    assert settings.trigger_auth_token == "trigger-secret"
-    assert settings.trigger_host == "127.0.0.1"
-    assert settings.trigger_port == 9090
-    assert settings.trigger_debounce_seconds == 30.0
-    assert settings.trigger_poll_input_bucket is True
-    assert settings.trigger_poll_interval_seconds == 120.0
-    assert settings.trigger_lock_backend == "in_process"
-    assert settings.trigger_lock_key == "cicerone:scheduler:run_guard"
-    assert settings.trigger_lock_ttl_seconds == 86400.0
-    assert settings.trigger_postgres_url is None
-    assert settings.trigger_redis_url is None
+    assert settings.trigger.enabled is True
+    assert settings.trigger.auth_token == "trigger-secret"
+    assert settings.trigger.host == "127.0.0.1"
+    assert settings.trigger.port == 9090
+    assert settings.trigger.debounce_seconds == 30.0
+    assert settings.trigger.poll_input_bucket is True
+    assert settings.trigger.poll_interval_seconds == 120.0
+    assert settings.trigger.lock_backend == "in_process"
+    assert settings.trigger.lock_key == "cicerone:scheduler:run_guard"
+    assert settings.trigger.lock_ttl_seconds == 86400.0
+    assert settings.trigger.postgres_url is None
+    assert settings.trigger.redis_url is None
 
 
 def test_load_settings_trigger_defaults_when_disabled(tmp_path):
@@ -1396,15 +1393,15 @@ def test_load_settings_trigger_defaults_when_disabled(tmp_path):
 
     settings = load_settings(config_path)
 
-    assert settings.trigger_enabled is False
-    assert settings.trigger_host == "127.0.0.1"
-    assert settings.trigger_port == 8080
-    assert settings.trigger_debounce_seconds == 60.0
-    assert settings.trigger_poll_input_bucket is False
-    assert settings.trigger_poll_interval_seconds == 300.0
-    assert settings.trigger_lock_backend == "in_process"
-    assert settings.trigger_lock_key == "cicerone:scheduler:run_guard"
-    assert settings.trigger_lock_ttl_seconds == 86400.0
+    assert settings.trigger.enabled is False
+    assert settings.trigger.host == "127.0.0.1"
+    assert settings.trigger.port == 8080
+    assert settings.trigger.debounce_seconds == 60.0
+    assert settings.trigger.poll_input_bucket is False
+    assert settings.trigger.poll_interval_seconds == 300.0
+    assert settings.trigger.lock_backend == "in_process"
+    assert settings.trigger.lock_key == "cicerone:scheduler:run_guard"
+    assert settings.trigger.lock_ttl_seconds == 86400.0
 
 
 def test_load_settings_lock_backend_rejects_unknown(tmp_path):
@@ -1448,8 +1445,8 @@ def test_load_settings_postgres_lock_accepts_explicit_url_with_dataset_output(tm
         """,
     )
     settings = load_settings(config_path)
-    assert settings.trigger_lock_backend == "postgres"
-    assert settings.trigger_postgres_url == "postgresql+psycopg://u:p@h/db"
+    assert settings.trigger.lock_backend == "postgres"
+    assert settings.trigger.postgres_url == "postgresql+psycopg://u:p@h/db"
 
 
 def test_load_settings_postgres_lock_accepts_output_db(tmp_path):
@@ -1473,7 +1470,7 @@ def test_load_settings_postgres_lock_accepts_output_db(tmp_path):
         """,
     )
     settings = load_settings(config_path)
-    assert settings.trigger_lock_backend == "postgres"
+    assert settings.trigger.lock_backend == "postgres"
     assert settings.output.kind == "db"
 
 
@@ -1504,8 +1501,8 @@ def test_load_settings_redis_lock_with_url(tmp_path, monkeypatch):
         """,
     )
     settings = load_settings(config_path)
-    assert settings.trigger_lock_backend == "redis"
-    assert settings.trigger_redis_url == "redis://localhost:6379/0"
+    assert settings.trigger.lock_backend == "redis"
+    assert settings.trigger.redis_url == "redis://localhost:6379/0"
 
 
 def test_load_settings_lock_key_and_ttl(tmp_path):
@@ -1522,8 +1519,8 @@ def test_load_settings_lock_key_and_ttl(tmp_path):
         """,
     )
     settings = load_settings(config_path)
-    assert settings.trigger_lock_key == "shop-a:scheduler"
-    assert settings.trigger_lock_ttl_seconds == 3600.0
+    assert settings.trigger.lock_key == "shop-a:scheduler"
+    assert settings.trigger.lock_ttl_seconds == 3600.0
 
 
 def test_load_settings_lock_ttl_seconds_must_be_positive(tmp_path):

@@ -67,6 +67,10 @@ check_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
+filterwarnings = [
+    "error:Settings\\.\\w+ is deprecated:DeprecationWarning",
+    "error:make_settings\\(\\w+=\\.\\.\\.\\) is deprecated:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["cicerone"]

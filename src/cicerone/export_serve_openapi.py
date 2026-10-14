@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cicerone.config import EventsSettings, make_settings
+from cicerone.config import EventsSettings, ServeSettings, make_settings
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 from cicerone.serve import create_app
@@ -34,7 +34,7 @@ def build_openapi() -> dict:
     # Enable webhook events so POST /events appears in the checked-in OpenAPI.
     settings = make_settings(
         mode="serve",
-        serve_auth_token="openapi-export",
+        serve=ServeSettings(auth_token="openapi-export"),
         events=EventsSettings(enabled=True, kind="webhook"),
         track={"enabled": True},
     )
