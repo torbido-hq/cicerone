@@ -203,7 +203,7 @@ class IOSettings:
 def _warn_flat_property(name: str, nested: str) -> None:
     warnings.warn(
         f"Settings.{name} is deprecated and will be removed in 0.9.0; use Settings.{nested}",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=3,
     )
 
