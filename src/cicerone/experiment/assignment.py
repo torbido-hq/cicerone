@@ -43,7 +43,7 @@ def assign_variant(
     return names[-1]
 
 
-def _active_pair_traffic(
+def active_pair_traffic(
     champion: str,
     challenger: str,
     *,
@@ -77,7 +77,7 @@ def resolve_assignment(
     names = {name for name, _traffic in variants}
     if experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
         if active_pair is not None and active_pair[0] in names and active_pair[1] in names:
-            variants = _active_pair_traffic(
+            variants = active_pair_traffic(
                 active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
             )
         elif snapshot_names is not None:

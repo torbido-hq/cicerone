@@ -13,10 +13,10 @@ from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.serve.events_routes import (
-    _max_body_bytes,
-    _payloads_from_body,
-    _put_pydantic_schema,
-    _read_limited_json,
+    max_body_bytes,
+    payloads_from_body,
+    put_pydantic_schema,
+    read_limited_json,
 )
 from cicerone.serve.metrics import record_track_ingest
 from cicerone.serve_schemas import (
@@ -48,8 +48,8 @@ def attach_track_ingest_openapi(schema: dict[str, Any]) -> None:
     if not isinstance(post, dict):
         return
     components = schema.setdefault("components", {}).setdefault("schemas", {})
-    _put_pydantic_schema(components, TrackEvent)
-    _put_pydantic_schema(components, TrackIngestRequest)
+    put_pydantic_schema(components, TrackEvent)
+    put_pydantic_schema(components, TrackIngestRequest)
     post["requestBody"] = {
         "required": True,
         "content": {
@@ -102,11 +102,11 @@ def mount_track_routes(
     )
     async def post_track(request: Request) -> TrackIngestResponse:
         try:
-            body = await _read_limited_json(request, _max_body_bytes(settings))
+            body = await read_limited_json(request, max_body_bytes(settings))
         except HTTPException:
             record_track_ingest(kind="other", status="error")
             raise
-        payloads = _payloads_from_body(body)
+        payloads = payloads_from_body(body)
         try:
             if isinstance(body, dict) and "events" in body:
                 TrackIngestRequest.model_validate(body)

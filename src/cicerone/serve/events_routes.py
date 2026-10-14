@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 EVENTS_PATH = "/events"
 
 
-def _max_body_bytes(settings: Settings) -> int:
+def max_body_bytes(settings: Settings) -> int:
     raw = settings.events.options.get("max_body_bytes", DEFAULT_EVENTS_MAX_BODY_BYTES)
     try:
         value = int(raw)
@@ -37,7 +37,7 @@ def _max_body_bytes(settings: Settings) -> int:
     return value if value >= 1 else DEFAULT_EVENTS_MAX_BODY_BYTES
 
 
-async def _read_limited_json(request: Request, max_bytes: int) -> object:
+async def read_limited_json(request: Request, max_bytes: int) -> object:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -70,7 +70,7 @@ def _rewrite_json_schema_defs(node: Any) -> Any:
     return node
 
 
-def _put_pydantic_schema(components: dict[str, Any], model: type[BaseModel]) -> None:
+def put_pydantic_schema(components: dict[str, Any], model: type[BaseModel]) -> None:
     generated = model.model_json_schema(ref_template="#/components/schemas/{model}")
     for name, subschema in (generated.pop("$defs", None) or {}).items():
         components.setdefault(name, _rewrite_json_schema_defs(subschema))
@@ -83,8 +83,8 @@ def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
     if not isinstance(post, dict):
         return
     components = schema.setdefault("components", {}).setdefault("schemas", {})
-    _put_pydantic_schema(components, InteractionEvent)
-    _put_pydantic_schema(components, EventsIngestRequest)
+    put_pydantic_schema(components, InteractionEvent)
+    put_pydantic_schema(components, EventsIngestRequest)
     post["requestBody"] = {
         "required": True,
         "content": {
@@ -105,7 +105,7 @@ def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
     }
 
 
-def _payloads_from_body(body: object) -> list[object]:
+def payloads_from_body(body: object) -> list[object]:
     if isinstance(body, list):
         return list(body)
     if isinstance(body, dict) and isinstance(body.get("events"), list):
@@ -166,8 +166,8 @@ def mount_events_routes(
         },
     )
     async def post_events(request: Request) -> EventsIngestResponse:
-        body = await _read_limited_json(request, _max_body_bytes(settings))
-        payloads = _payloads_from_body(body)
+        body = await read_limited_json(request, max_body_bytes(settings))
+        payloads = payloads_from_body(body)
         try:
             # Validate shape with the OpenAPI models (single or batch).
             if isinstance(body, dict) and "events" in body:

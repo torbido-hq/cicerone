@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 from cicerone.events.db import (
     DbEventSource,
-    _identity_bind_sort_key,
+    identity_bind_sort_key,
 )
 from cicerone.events.db_identity import (
     _identity_sort_key,
@@ -478,7 +478,7 @@ def test_identity_bind_sort_key_matches_identity_sort_order():
         "ctid:(0,9)",
         "ctid:(0,10)",
     ]
-    assert sorted(ids, key=_identity_sort_key) == sorted(ids, key=_identity_bind_sort_key)
+    assert sorted(ids, key=_identity_sort_key) == sorted(ids, key=identity_bind_sort_key)
 
 
 def test_sqlite_identity_sql_matches_bind_key_for_prefixed_non_numeric_ids(tmp_path):
@@ -500,7 +500,7 @@ def test_sqlite_identity_sql_matches_bind_key_for_prefixed_non_numeric_ids(tmp_p
     with engine.connect() as conn:
         rows = conn.execute(text(f"SELECT event_id, ({_SQLITE_IDENTITY_SORT}) AS sort_key FROM events"))
         got = {row.event_id: row.sort_key for row in rows}
-    assert got == {event_id: _identity_bind_sort_key(event_id) for event_id in ids}
+    assert got == {event_id: identity_bind_sort_key(event_id) for event_id in ids}
 
 
 def test_db_subsecond_timestamps_do_not_skip_later_event(tmp_path):

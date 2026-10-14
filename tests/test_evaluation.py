@@ -1095,9 +1095,9 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
 def test_evaluation_remaining_branches(monkeypatch) -> None:
     from datetime import timedelta
 
-    from cicerone.evaluation import _annotate_source, _merge_asof_events, _recs_from_history
+    from cicerone.evaluation import annotate_impression_source, merge_asof_events, recs_from_history
 
-    empty = _merge_asof_events(pd.DataFrame(), pd.DataFrame({"user_id": ["a"]}), window=timedelta(hours=1))
+    empty = merge_asof_events(pd.DataFrame(), pd.DataFrame({"user_id": ["a"]}), window=timedelta(hours=1))
     assert empty.empty
     earlier = pd.DataFrame(
         {
@@ -1113,9 +1113,9 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
             "occurred_at": [pd.Timestamp("2026-08-28T13:00:00Z")],
         }
     )
-    matched = _merge_asof_events(later, earlier, window=timedelta(hours=24))
+    matched = merge_asof_events(later, earlier, window=timedelta(hours=24))
     assert len(matched) == 1
-    assert _annotate_source(pd.DataFrame(), None).empty
+    assert annotate_impression_source(pd.DataFrame(), None).empty
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "source": "personalized", "variant": "control"}]
     )
@@ -1130,12 +1130,12 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
             }
         ]
     )
-    annotated = _annotate_source(impressions, recs)
+    annotated = annotate_impression_source(impressions, recs)
     assert annotated.iloc[0]["source"] == "personalized"
     assert annotated.iloc[0]["variant"] == "control"
     both = impressions.copy()
     both["source"] = None
-    filled = _annotate_source(both, recs)
+    filled = annotate_impression_source(both, recs)
     assert filled.iloc[0]["source"] == "personalized"
     snapshots = pd.DataFrame(
         [
@@ -1156,7 +1156,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
         ]
     )
     later_imp = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-28T00:00:00Z"}])
-    by_snap = _annotate_source(later_imp, snapshots)
+    by_snap = annotate_impression_source(later_imp, snapshots)
     assert by_snap.iloc[0]["source"] == "personalized"
     assert by_snap.iloc[0]["variant"] == "treatment"
     missing_time = evaluate_tracking(
@@ -1277,7 +1277,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     events = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "occurred_at": pd.Timestamp("2026-08-28T00:00:00Z")}]
     )
-    assert _recs_from_history(hist, events).empty
+    assert recs_from_history(hist, events).empty
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("x")),
@@ -1330,7 +1330,7 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
         "merge_asof",
         lambda *args, **kwargs: pd.DataFrame({"user_id": ["alice"], "item_id": ["ipa"]}),
     )
-    empty_asof = _merge_asof_events(later, earlier, window=timedelta(hours=24))
+    empty_asof = merge_asof_events(later, earlier, window=timedelta(hours=24))
     assert empty_asof.empty
 
 
@@ -1365,7 +1365,7 @@ def test_evaluate_served_source_rectools_unexpected_propagates(monkeypatch) -> N
 
 
 def test_annotate_source_latest_uses_newest_generated_at() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1386,7 +1386,7 @@ def test_annotate_source_latest_uses_newest_generated_at() -> None:
         ]
     )
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
@@ -1528,7 +1528,7 @@ def test_evaluate_tracking_overall_excludes_unattributed_click_and_conversion() 
 
 
 def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1551,7 +1551,7 @@ def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> No
     impressions = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "generated_at": "2026-08-21T00:00:00Z"}]
     )
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert pd.isna(annotated.iloc[0].get("source")) or annotated.iloc[0]["source"] != "personalized"
 
 
@@ -1688,7 +1688,7 @@ def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
 
 
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1709,12 +1709,12 @@ def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
         ]
     )
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
 def test_annotate_source_untimestamped_keeps_latest_source() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1735,13 +1735,13 @@ def test_annotate_source_untimestamped_keeps_latest_source() -> None:
         ]
     )
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "generated_at": None}])
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "personalized"
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
 def test_annotate_source_untimestamped_keeps_existing_source() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1757,13 +1757,13 @@ def test_annotate_source_untimestamped_keeps_existing_source() -> None:
     impressions = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
     )
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "logged"
     assert "variant" not in annotated.columns or pd.isna(annotated.iloc[0].get("variant"))
 
 
 def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1778,12 +1778,12 @@ def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> 
     impressions = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "generated_at": None, "source": "logged"}]
     )
-    annotated = _annotate_source(impressions, snapshots)
+    annotated = annotate_impression_source(impressions, snapshots)
     assert annotated.iloc[0]["source"] == "logged"
 
 
 def test_annotate_source_matches_shared_item_by_variant() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     recs = pd.DataFrame(
         [
@@ -1827,7 +1827,7 @@ def test_annotate_source_matches_shared_item_by_variant() -> None:
             {"user_id": "alice", "item_id": "ipa", "variant": None, "generated_at": None},
         ]
     )
-    annotated = _annotate_source(impressions, recs)
+    annotated = annotate_impression_source(impressions, recs)
     stamped = annotated.dropna(subset=["variant"]).set_index("variant")
     assert stamped.loc["control", "source"] == "control_model"
     assert stamped.loc["treatment", "source"] == "treatment_model"
@@ -1885,13 +1885,13 @@ def test_evaluate_tracking_attributes_shared_item_by_variant() -> None:
 
 
 def test_annotate_source_without_generated_at_keeps_variant() -> None:
-    from cicerone.evaluation import _annotate_source
+    from cicerone.evaluation import annotate_impression_source
 
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "source": "personalized", "variant": "control"}]
     )
     impressions = pd.DataFrame([{"user_id": "alice", "item_id": "ipa"}])
-    annotated = _annotate_source(impressions, recs)
+    annotated = annotate_impression_source(impressions, recs)
     assert annotated.iloc[0]["source"] == "personalized"
     assert annotated.iloc[0]["variant"] == "control"
 

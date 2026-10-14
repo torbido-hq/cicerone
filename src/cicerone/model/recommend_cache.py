@@ -23,17 +23,17 @@ def _cache_key_part(value: object) -> Hashable:
     return value
 
 
-def _recommend_cache_key(*parts: object) -> tuple[Hashable, ...]:
+def recommend_cache_key(*parts: object) -> tuple[Hashable, ...]:
     return tuple(_cache_key_part(p) for p in parts)
 
 
-def _items_fingerprint(allowed_items: Sequence | None) -> Hashable:
+def items_fingerprint(allowed_items: Sequence | None) -> Hashable:
     if not allowed_items:
         return None
     return frozenset(map(str, allowed_items))
 
 
-def _dataset_fingerprint(dataset: object) -> Hashable:
+def dataset_fingerprint(dataset: object) -> Hashable:
     fingerprint = getattr(dataset, "fingerprint", None)
     if callable(fingerprint):
         fingerprint = fingerprint()

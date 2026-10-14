@@ -10,12 +10,12 @@ from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
-    _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
-    _SQS_MALFORMED_RECEIVE_LIMIT,
-    _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_MALFORMED_RECEIVE_LIMIT,
+    SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    Batch,
     MalformedS3Notification,
-    _Batch,
-    _s3_records_from_sqs_body,
+    s3_records_from_sqs_body,
 )
 from cicerone.io.blob import S3_READ_ERRORS
 
@@ -49,7 +49,7 @@ def _release_or_drop_malformed(
     sqs: Any, queue_url: str, message: dict[str, Any], count: int, error: MalformedS3Notification
 ) -> bool:
     receipt = message["ReceiptHandle"]
-    if count >= _SQS_MALFORMED_RECEIVE_LIMIT:
+    if count >= SQS_MALFORMED_RECEIVE_LIMIT:
         logger.error(
             "Malformed nested S3 notification reached %s receives; deleting poison message",
             count,
@@ -59,7 +59,7 @@ def _release_or_drop_malformed(
     logger.error(
         "Malformed nested S3 notification; releasing SQS message for retry (receive %s of %s)",
         count,
-        _SQS_MALFORMED_RECEIVE_LIMIT,
+        SQS_MALFORMED_RECEIVE_LIMIT,
         exc_info=error,
     )
     try:
@@ -80,7 +80,7 @@ class S3SqsPoll:
     _wait_time_seconds: int
     _in_flight: OrderedDict[str, NormalizedEvent]
     _pending: deque[NormalizedEvent]
-    _event_batch: dict[str, _Batch]
+    _event_batch: dict[str, Batch]
     _load_object_events: Callable[..., list[NormalizedEvent]]
     _register_batch: Callable[..., None]
     _sqs_local_receives: OrderedDict[str, int]
@@ -103,11 +103,11 @@ class S3SqsPoll:
         # Without siblings to apply, settle now; with them, bound retries locally.
         if not has_valid_pairs or not isinstance(message_id, str):
             logger.warning("SQS message has no ApproximateReceiveCount; treating it as at the limit")
-            return _SQS_MALFORMED_RECEIVE_LIMIT
+            return SQS_MALFORMED_RECEIVE_LIMIT
         logger.warning("SQS message %s has no ApproximateReceiveCount; counting receives locally", message_id)
         with self._lock:
             count = self._sqs_local_receives.pop(message_id, 0) + 1
-            if count < _SQS_MALFORMED_RECEIVE_LIMIT:
+            if count < SQS_MALFORMED_RECEIVE_LIMIT:
                 self._sqs_local_receives[message_id] = count
                 while len(self._sqs_local_receives) > _SQS_LOCAL_RECEIVES_MAX:
                     self._sqs_local_receives.popitem(last=False)
@@ -129,7 +129,7 @@ class S3SqsPoll:
                 QueueUrl=queue_url,
                 MaxNumberOfMessages=min(self._max_messages, 10),
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
-                VisibilityTimeout=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+                VisibilityTimeout=SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
                 MessageSystemAttributeNames=["ApproximateReceiveCount"],
             )
             messages = response.get("Messages") or []
@@ -141,10 +141,10 @@ class S3SqsPoll:
                     break
                 receipt = message["ReceiptHandle"]
                 try:
-                    pairs = _s3_records_from_sqs_body(message["Body"])
+                    pairs = s3_records_from_sqs_body(message["Body"])
                 except MalformedS3Notification as exc:
                     count = self._malformed_receive_count(message, bool(exc.valid_pairs))
-                    if count < _SQS_MALFORMED_RECEIVE_LIMIT or not exc.valid_pairs:
+                    if count < SQS_MALFORMED_RECEIVE_LIMIT or not exc.valid_pairs:
                         if _release_or_drop_malformed(sqs, queue_url, message, count, exc):
                             made_progress = True
                         continue
@@ -224,7 +224,7 @@ class S3SqsPoll:
         *,
         sqs: Any,
         queue_url: str | None,
-        timeout_seconds: int = _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+        timeout_seconds: int = SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     ) -> None:
         if not receipts or sqs is None or queue_url is None:
             return

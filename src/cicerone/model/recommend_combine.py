@@ -18,19 +18,19 @@ from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
 from cicerone.model.constants import RRF_K, SOURCE_COLUMN, WEIGHT_COLUMN
-from cicerone.model.recommend_cohort import _CohortPlan
-from cicerone.model.recommend_strategy import _StrategyFrames
+from cicerone.model.recommend_cohort import CohortPlan
+from cicerone.model.recommend_strategy import StrategyFrames
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
 from cicerone.policy import allowed_items_for_cohort, is_user_scoped
 
 
-def _combine_strategy_frames(
+def combine_strategy_frames(
     models: dict[str, RecommenderModel],
     built: BuiltDataset,
     config: FeatureConfig,
     recommend_models: list[str],
-    cohort_plan: _CohortPlan,
-    strategy_frames: _StrategyFrames,
+    cohort_plan: CohortPlan,
+    strategy_frames: StrategyFrames,
     *,
     blending_enabled: bool,
     weights: dict[str, float] | None,

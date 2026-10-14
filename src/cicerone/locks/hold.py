@@ -37,7 +37,7 @@ class LockBackend(Protocol):
         ...
 
 
-def _acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
+def acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
     try_acquire = getattr(lock, "try_acquire", None)
     if callable(try_acquire):
         generation = try_acquire()
@@ -49,7 +49,7 @@ def _acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
     return False, None
 
 
-def _acquire_until(
+def acquire_until(
     lock: LockBackend,
     *,
     timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
@@ -57,7 +57,7 @@ def _acquire_until(
 ) -> tuple[bool, int | None]:
     deadline = time.monotonic() + timeout_seconds
     while True:
-        ok, generation = _acquire_once(lock)
+        ok, generation = acquire_once(lock)
         if ok:
             return True, generation
         if time.monotonic() >= deadline:
@@ -71,23 +71,23 @@ def acquire_blocking(
     timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
     interval_seconds: float = 0.05,
 ) -> bool:
-    ok, _generation = _acquire_until(lock, timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
+    ok, _generation = acquire_until(lock, timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
     return ok
 
 
-_writer_hold = threading.local()
+writer_hold = threading.local()
 
 
-def _bind_writer_generation(lock: LockBackend, generation: int | None) -> None:
-    stack = getattr(_writer_hold, "stack", None)
+def bind_writer_generation(lock: LockBackend, generation: int | None) -> None:
+    stack = getattr(writer_hold, "stack", None)
     if stack is None:
-        _writer_hold.stack = []
-        stack = _writer_hold.stack
+        writer_hold.stack = []
+        stack = writer_hold.stack
     stack.append((id(lock), generation))
 
 
-def _unbind_writer_generation() -> None:
-    stack = getattr(_writer_hold, "stack", None)
+def unbind_writer_generation() -> None:
+    stack = getattr(writer_hold, "stack", None)
     if stack:
         stack.pop()
 
@@ -95,15 +95,15 @@ def _unbind_writer_generation() -> None:
 def writer_lock_held_here(lock: LockBackend | None) -> bool:
     if lock is None:
         return False
-    stack = getattr(_writer_hold, "stack", None)
+    stack = getattr(writer_hold, "stack", None)
     if not stack:
         return False
     lock_id = id(lock)
     return any(stored_id == lock_id for stored_id, _generation in stack)
 
 
-def _bound_writer_generation(lock: LockBackend) -> int | None:
-    stack = getattr(_writer_hold, "stack", None)
+def bound_writer_generation(lock: LockBackend) -> int | None:
+    stack = getattr(writer_hold, "stack", None)
     if not stack:
         return None
     lock_id = id(lock)
@@ -113,8 +113,8 @@ def _bound_writer_generation(lock: LockBackend) -> int | None:
     return None
 
 
-def _lock_owned(lock: LockBackend, generation: int | None) -> bool:
-    expected = generation if generation is not None else _bound_writer_generation(lock)
+def lock_owned(lock: LockBackend, generation: int | None) -> bool:
+    expected = generation if generation is not None else bound_writer_generation(lock)
     owned = lock.owned
     if expected is None:
         return bool(owned())
@@ -133,7 +133,7 @@ def ensure_writer_owned(
     fence_lost: str = "lock lost before write",
     fence_kind: str = "lock",
 ) -> None:
-    if lock is not None and not _lock_owned(lock, generation):
+    if lock is not None and not lock_owned(lock, generation):
         raise LockLostError("dataset writer lock lost before write", kind="writer")
     if fence_check is not None and not fence_check():
         raise LockLostError(fence_lost, kind=fence_kind)
@@ -152,10 +152,10 @@ def held_writer_lock(
             raise LockLostError(fence_lost, kind=fence_kind)
         yield
         return
-    ok, generation = _acquire_until(lock)
+    ok, generation = acquire_until(lock)
     if not ok:
         raise WriterLockBusyError("dataset writer lock busy")
-    _bind_writer_generation(lock, generation)
+    bind_writer_generation(lock, generation)
     try:
         ensure_writer_owned(
             lock,
@@ -166,7 +166,7 @@ def held_writer_lock(
         )
         yield
     finally:
-        _unbind_writer_generation()
+        unbind_writer_generation()
         release_generation = getattr(lock, "release_generation", None)
         if callable(release_generation) and generation is not None:
             release_generation(generation)

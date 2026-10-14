@@ -21,18 +21,18 @@ def test_lookback_since_uses_floor() -> None:
 
 
 def test_track_row_sql_filter_since_uses_date_floor() -> None:
-    from cicerone.track.store_common import _track_row_sql_filter
+    from cicerone.track.store_common import track_row_sql_filter
 
-    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="2026-08-29T05:00:00+00:00")
+    clause, params = track_row_sql_filter(kind=None, experiment_id=None, since="2026-08-29T05:00:00+00:00")
     assert "occurred_at >= :since" in clause
     assert "!= ''" not in clause
     assert params["since"] == "2026-08-28"
 
 
 def test_track_row_sql_filter_invalid_since_is_empty() -> None:
-    from cicerone.track.store_common import _track_row_sql_filter
+    from cicerone.track.store_common import track_row_sql_filter
 
-    clause, params = _track_row_sql_filter(kind=None, experiment_id=None, since="not-a-date")
+    clause, params = track_row_sql_filter(kind=None, experiment_id=None, since="not-a-date")
     assert "1 = 0" in clause
     assert "occurred_at >= :since" not in clause
     assert "since" not in params
@@ -297,10 +297,10 @@ def test_require_appendable_track_log_allows_db_and_local(tmp_path) -> None:
 def test_jsonish_numpy_scalar_and_na() -> None:
     import numpy as np
 
-    from cicerone.track.store import _jsonish
+    from cicerone.track.store import jsonish
 
-    assert _jsonish(np.int64(3)) == 3
-    assert _jsonish(pd.NA) is None
+    assert jsonish(np.int64(3)) == 3
+    assert jsonish(pd.NA) is None
 
 
 def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
@@ -404,20 +404,20 @@ def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
 
 
 def test_history_part_name_sanitizes_timestamp() -> None:
-    from cicerone.track.store import _history_part_name
-    from cicerone.track.store_common import _history_stem_before, _unslug_history_stem
+    from cicerone.track.store import history_part_name
+    from cicerone.track.store_common import _unslug_history_stem, history_stem_before
 
-    assert _history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
-    assert _history_part_name("   ") == "snapshot.parquet"
+    assert history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
+    assert history_part_name("   ") == "snapshot.parquet"
     assert _unslug_history_stem("2026-08-28T03-00-00+00-00") == "2026-08-28T03:00:00+00:00"
     assert _unslug_history_stem("2026-08-28T03-00-00Z") == "2026-08-28T03:00:00Z"
     assert _unslug_history_stem("2026-08-28T03-00-00-05-00") == "2026-08-28T03:00:00-05:00"
     assert _unslug_history_stem("2026-08-28T03-00-00.123+00-00") == "2026-08-28T03:00:00.123+00:00"
-    assert _history_stem_before("2026-08-28T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
-    assert not _history_stem_before("2026-08-29T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
-    from cicerone.track.store import _history_frame
+    assert history_stem_before("2026-08-28T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
+    assert not history_stem_before("2026-08-29T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
+    from cicerone.track.store import history_frame
 
-    frame = _history_frame(
+    frame = history_frame(
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]),
         generated_at="t",
     )
@@ -425,14 +425,14 @@ def test_history_part_name_sanitizes_timestamp() -> None:
 
 
 def test_jsonish_item_raises() -> None:
-    from cicerone.track.store import _jsonish
+    from cicerone.track.store import jsonish
 
     class _Boom:
         def item(self):
             raise ValueError("nope")
 
     boom = _Boom()
-    assert _jsonish(boom) is boom
+    assert jsonish(boom) is boom
 
 
 def test_track_eval_ignores_non_object_json(tmp_path) -> None:
@@ -1210,7 +1210,7 @@ def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch) -> None:
 
     from cicerone.track import store_dataset
     from cicerone.track.store_common import HISTORY_COLUMNS, HISTORY_DIR
-    from cicerone.track.store_dataset import _history_part_name
+    from cicerone.track.store_dataset import history_part_name
 
     stamp = "2026-08-29T03:00:00+00:00"
     with mock_aws():
@@ -1220,7 +1220,7 @@ def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch) -> None:
         pd.DataFrame(columns=list(HISTORY_COLUMNS)).to_parquet(buf, index=False)
         client.put_object(
             Bucket="recs",
-            Key=f"{HISTORY_DIR}/{_history_part_name(stamp)}",
+            Key=f"{HISTORY_DIR}/{history_part_name(stamp)}",
             Body=buf.getvalue(),
         )
         output = IOSettings(

@@ -18,18 +18,18 @@ from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.s3_list import S3ListPoll
 from cicerone.events.s3_parse import (
-    _DEFAULT_LIST_PAGE_SIZE,
-    _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS,
-    _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS,
-    _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
-    _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
-    _as_int,
-    _Batch,
-    _events_from_body,
-    _normalize_prefix,
-    _optional_aws_region,
-    _positive_float,
-    _positive_int,
+    DEFAULT_LIST_PAGE_SIZE,
+    DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS,
+    DEFAULT_SQS_LAG_CACHE_TTL_SECONDS,
+    SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    Batch,
+    as_int,
+    events_from_body,
+    normalize_prefix,
+    optional_aws_region,
+    positive_float,
+    positive_int,
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
@@ -46,18 +46,18 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._options = options
         self._mode = validate_s3_event_options(options)
         self._bucket = str(options["bucket"])
-        self._prefix = _normalize_prefix(options.get("prefix"))
+        self._prefix = normalize_prefix(options.get("prefix"))
         self._queue_url = str(options["queue_url"]) if self._mode == "sqs" else None
         self._marker_path = Path(options["marker_path"]) if options.get("marker_path") else None
         self._marker_key = str(options.get("initial_marker") or "")
-        self._wait_time_seconds = max(0, _as_int(options, "wait_time_seconds", 0))
-        self._max_messages = max(1, min(10, _as_int(options, "max_messages", 10)))
-        self._list_page_size = _positive_int(options, "list_page_size", _DEFAULT_LIST_PAGE_SIZE)
-        self._sqs_lag_cache_ttl_seconds = _positive_float(
-            options, "sqs_lag_cache_ttl_seconds", _DEFAULT_SQS_LAG_CACHE_TTL_SECONDS
+        self._wait_time_seconds = max(0, as_int(options, "wait_time_seconds", 0))
+        self._max_messages = max(1, min(10, as_int(options, "max_messages", 10)))
+        self._list_page_size = positive_int(options, "list_page_size", DEFAULT_LIST_PAGE_SIZE)
+        self._sqs_lag_cache_ttl_seconds = positive_float(
+            options, "sqs_lag_cache_ttl_seconds", DEFAULT_SQS_LAG_CACHE_TTL_SECONDS
         )
-        self._sqs_client_timeout_seconds = _positive_float(
-            options, "sqs_client_timeout_seconds", _DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS
+        self._sqs_client_timeout_seconds = positive_float(
+            options, "sqs_client_timeout_seconds", DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS
         )
         self._s3 = None
         self._sqs = None
@@ -66,8 +66,8 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._last_event_at: datetime | None = None
         self._pending: deque[NormalizedEvent] = deque()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
-        self._event_batch: dict[str, _Batch] = {}
-        self._batches: OrderedDict[str, _Batch] = OrderedDict()
+        self._event_batch: dict[str, Batch] = {}
+        self._batches: OrderedDict[str, Batch] = OrderedDict()
         self._batch_seq = 0
         self._sqs_visible_lag: int | None = None
         self._sqs_visible_lag_at: float = 0.0
@@ -87,7 +87,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                         read_timeout=self._sqs_client_timeout_seconds,
                     ),
                 }
-                region_name = _optional_aws_region(self._options)
+                region_name = optional_aws_region(self._options)
                 if region_name is not None:
                     sqs_kwargs["region_name"] = region_name
                 self._sqs = boto3.client("sqs", **sqs_kwargs)
@@ -142,7 +142,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             receipts,
             sqs=sqs,
             queue_url=queue_url,
-            timeout_seconds=_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+            timeout_seconds=SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
         )
         return tuple(event for event in events if id(event) not in kept)
 
@@ -164,11 +164,11 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             receipts,
             sqs=sqs,
             queue_url=queue_url,
-            timeout_seconds=_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+            timeout_seconds=SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
         )
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        completed: list[_Batch] = []
+        completed: list[Batch] = []
         confirmed: list[str] = []
         with self._lock:
             for event_id in event_ids:
@@ -259,7 +259,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         limit = DEFAULT_MAX_STORAGE_READ_BYTES if max_bytes is None else max_bytes
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
-        return _events_from_body(
+        return events_from_body(
             read_s3_body(obj, max_bytes=limit),
             bucket=bucket,
             key=key,
@@ -278,14 +278,14 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         # _batches stays ordered: marker/SQS delete only for a leading batch
         # whose remaining is empty (empty skip batches complete immediately).
         event_ids = {event.event_id for event in events}
-        batch = _Batch(
+        batch = Batch(
             remaining=set(event_ids),
             receipt_handle=receipt_handle,
             object_key=object_key,
             object_etag=object_etag,
             event_ids=set(event_ids),
         )
-        completed: list[_Batch] = []
+        completed: list[Batch] = []
         with self._lock:
             self._batch_seq += 1
             batch_key = f"{self._batch_seq}:{object_key or receipt_handle or self._batch_seq}"
@@ -300,8 +300,8 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             queue_url = self._queue_url
         self._finish_completed(completed, sqs=sqs, queue_url=queue_url)
 
-    def _pop_completed_batches_unlocked(self) -> list[_Batch]:
-        completed: list[_Batch] = []
+    def _pop_completed_batches_unlocked(self) -> list[Batch]:
+        completed: list[Batch] = []
         while self._batches:
             _key, batch = next(iter(self._batches.items()))
             if batch.remaining:
@@ -316,7 +316,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
 
     def _finish_completed(
         self,
-        completed: list[_Batch],
+        completed: list[Batch],
         *,
         sqs: Any,
         queue_url: str | None,

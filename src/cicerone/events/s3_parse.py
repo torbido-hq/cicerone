@@ -16,16 +16,16 @@ from cicerone.events.normalize import EventNormalizeError, normalize_event
 logger = logging.getLogger("cicerone.events.s3")
 
 _MODES = frozenset({"sqs", "list"})
-_DEFAULT_LIST_PAGE_SIZE = 100
-_DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
-_DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
+DEFAULT_LIST_PAGE_SIZE = 100
+DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
+DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
 # Cover lock-busy nack retries so the message is not stolen mid-lease wait.
-_SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
+SQS_NACK_VISIBILITY_TIMEOUT_SECONDS = 60
 # In-flight apply (online fit_partial) can outlast the receive visibility window.
-_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
+SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS = 300
 # A malformed nested notification is released for another attempt. At the limit
 # its well-formed records are applied and the malformed ones dropped.
-_SQS_MALFORMED_RECEIVE_LIMIT = 3
+SQS_MALFORMED_RECEIVE_LIMIT = 3
 
 
 def validate_s3_event_options(options: dict[str, Any]) -> str:
@@ -51,7 +51,7 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
     return resolved
 
 
-def _as_int(options: dict[str, Any], key: str, default: int) -> int:
+def as_int(options: dict[str, Any], key: str, default: int) -> int:
     raw = options.get(key, default)
     try:
         return int(raw)
@@ -59,14 +59,14 @@ def _as_int(options: dict[str, Any], key: str, default: int) -> int:
         raise ConfigError(f"events.options.{key} must be an integer, got {raw!r}") from exc
 
 
-def _positive_int(options: dict[str, Any], key: str, default: int) -> int:
-    value = _as_int(options, key, default)
+def positive_int(options: dict[str, Any], key: str, default: int) -> int:
+    value = as_int(options, key, default)
     if value < 1:
         raise ConfigError(f"events.options.{key} must be an integer >= 1, got {value}")
     return value
 
 
-def _positive_float(options: dict[str, Any], key: str, default: float) -> float:
+def positive_float(options: dict[str, Any], key: str, default: float) -> float:
     raw = options.get(key, default)
     try:
         value = float(raw)
@@ -80,7 +80,7 @@ def _positive_float(options: dict[str, Any], key: str, default: float) -> float:
 # One SQS message / S3 object → _Batch. Events go pending → (on poll) in_flight;
 # ack clears remaining; marker/SQS delete only for leading fully-acked batches.
 @dataclass
-class _Batch:
+class Batch:
     remaining: set[str]
     receipt_handle: str | None = None
     object_key: str | None = None
@@ -88,13 +88,13 @@ class _Batch:
     event_ids: set[str] = field(default_factory=set)
 
 
-def _optional_aws_region(options: dict[str, Any]) -> str | None:
+def optional_aws_region(options: dict[str, Any]) -> str | None:
     if options.get("region_name"):
         return str(options["region_name"])
     return None
 
 
-def _normalize_prefix(raw: Any) -> str:
+def normalize_prefix(raw: Any) -> str:
     prefix = str(raw or "").strip("/")
     return f"{prefix}/" if prefix else ""
 
@@ -106,7 +106,7 @@ def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: st
     return f"{bucket}/{key}|{etag}|{index}"
 
 
-def _events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:
+def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:
     text = body.decode("utf-8").strip()
     if not text:
         return []
@@ -164,7 +164,7 @@ def _notification_document(body: str) -> tuple[Any, bool]:
         raise MalformedS3Notification("SNS notification Message is not JSON") from exc
 
 
-def _s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
+def s3_records_from_sqs_body(body: str) -> list[tuple[str, str]]:
     data, nested = _notification_document(body)
     if not isinstance(data, dict):
         if nested:
