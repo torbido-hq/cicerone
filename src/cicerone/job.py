@@ -577,6 +577,7 @@ def _write_job_outputs(
                 if items is not None and not items.empty:
                     ensure_publication_fence(sink, fence_check)
                     sink.write_items_snapshot(items)
+                    outputs_written = True
 
                 ensure_publication_fence(sink, fence_check)
                 sink.write_recommendations(recommendations)

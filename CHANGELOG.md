@@ -25,8 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an optional failure. It now propagates; Arrow type/schema mismatches
   are still skipped and logged. An incremental sidecar `TypeError` after a
   successful write is still logged, so the applied flush is not nacked.
-- A job that fails with any error after writing outputs marks the failed
-  manifest `partial_outputs`.
+- A job that fails after writing the items snapshot, artifact or
+  recommendations but before its success manifest marks the failed
+  manifest `partial_outputs`, including on a `TypeError`.
 
 ### Deprecated
 
