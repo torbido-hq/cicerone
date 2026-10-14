@@ -39,6 +39,8 @@ from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_genera
 
 logger = logging.getLogger(__name__)
 
+# After the incremental write, raising would nack the applied flush and re-apply it on redelivery.
+_SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
 _ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
     *OPTIONAL_IO_ERRORS,
     *PUBLISH_ERRORS,
@@ -261,7 +263,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 log_sidecar_generation_skip(current, incremental=True)
         except (LockLostError, WriterLockBusyError):
             raise
-        except PUBLISH_ERRORS as exc:
+        except _SIDECAR_PUBLISH_ERRORS as exc:
             log_caught("Incremental publish failed after successful write", exc, log=logger)
 
     def _merge_affected(

@@ -2354,6 +2354,35 @@ def test_job_marks_partial_outputs_when_interrupted_after_write(tmp_path, monkey
     assert manifest["partial_outputs"] is True
 
 
+def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_write = job.write_job_manifest
+
+    def interrupt_success_write(sink, manifest, **kwargs):
+        if manifest.get("status") == "success":
+            raise KeyboardInterrupt
+        return real_write(sink, manifest, **kwargs)
+
+    monkeypatch.setattr(job, "write_job_manifest", interrupt_success_write)
+
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["error"] == "KeyboardInterrupt"
+    assert manifest["partial_outputs"] is True
+
+
 def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

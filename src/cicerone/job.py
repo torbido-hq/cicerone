@@ -767,8 +767,8 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
             retrain_lock.release()
 
 
-def _record_run_failure(run: JobRun, exc: Exception) -> None:
-    run.manifest["error"] = truncate_job_error(exc)
+def _record_run_failure(run: JobRun, exc: BaseException) -> None:
+    run.manifest["error"] = truncate_job_error(exc) or type(exc).__name__
     if run.manifest.get("status") == "success":
         run.manifest["status"] = "failed"
         run.written.manifest_written = False
@@ -873,7 +873,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         run.manifest_written = run.written.manifest_written
         run.success_generated_at = run.written.success_generated_at
         _publish_job_sidecar(run)
-    except Exception as exc:
+    except BaseException as exc:
         error = exc
         try:
             _record_run_failure(run, exc)
@@ -881,9 +881,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             # Finalize must see the exception that actually propagates.
             error = record_exc
             raise
-        raise
-    except BaseException as exc:
-        error = exc
         raise
     finally:
         _finalize_job(run, error)
