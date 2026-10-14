@@ -8,12 +8,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.exc import OperationalError
+from support.settings import make_settings
 
 from cicerone import locks as locks_mod
 from cicerone.config import (
     ConfigError,
     IOSettings,
-    make_settings,
     resolve_postgres_lock_url,
 )
 from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
