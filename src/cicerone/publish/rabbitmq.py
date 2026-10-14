@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -23,6 +24,11 @@ from cicerone.publish.payload import user_recommendation_messages
 logger = logging.getLogger(__name__)
 
 _PREFIX = "publish.options"
+
+
+@dataclass
+class _Progress:
+    sent: int = 0
 
 
 def _rabbitmq_publish_errors() -> tuple[type[BaseException], ...]:
@@ -103,58 +109,58 @@ class RabbitMQPublisher:
         messages = user_recommendation_messages(df, user_ids=user_ids)
         if not messages:
             return
-        sent = [0]
+        progress = _Progress()
         if self._channel is None:
             if self._connected_once:
                 self.connect()
             else:
-                self._publish_from(messages, sent)
+                self._publish_from(messages, progress)
                 return
         try:
-            self._publish_from(messages, sent)
+            self._publish_from(messages, progress)
         except Exception as exc:
-            if not isinstance(exc, _rabbitmq_publish_errors()) and not sent[0]:
+            if not isinstance(exc, _rabbitmq_publish_errors()) and not progress.sent:
                 raise
             logger.exception("RabbitMQ publish failed; recovering publisher")
-            self._retry_unsent(messages, sent)
+            self._retry_unsent(messages, progress)
 
-    def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
+    def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         try:
             self._recover()
         except ConfigError as exc:
-            self._fail_unless_sent(sent, exc)
+            self._fail_unless_sent(progress, exc)
             return
         except Exception:
-            if not sent[0]:
+            if not progress.sent:
                 raise
             # Accepted records must not be raised back to a caller that would republish them.
             logger.exception("RabbitMQ publisher recover failed after confirm")
             return
         try:
-            self._publish_from(messages, sent)
+            self._publish_from(messages, progress)
         except Exception as exc:
-            if isinstance(exc, _rabbitmq_publish_errors()) or sent[0]:
-                self._fail_unless_sent(sent, exc)
+            if isinstance(exc, _rabbitmq_publish_errors()) or progress.sent:
+                self._fail_unless_sent(progress, exc)
                 return
             raise
 
-    def _fail_unless_sent(self, sent: list[int], exc: BaseException) -> None:
-        if sent[0]:
+    def _fail_unless_sent(self, progress: _Progress, exc: BaseException) -> None:
+        if progress.sent:
             logger.exception("RabbitMQ publish stopped after confirm; accepted records are not retried")
             return
         raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
-    def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], sent: list[int]) -> None:
+    def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         channel = self._require()
-        while sent[0] < len(messages):
-            _user_id, body, message_id = messages[sent[0]]
+        while progress.sent < len(messages):
+            _user_id, body, message_id = messages[progress.sent]
             channel.basic_publish(
                 exchange=self._exchange,
                 routing_key=self._routing_key,
                 body=body,
                 properties=self._properties(message_id),
             )
-            sent[0] += 1
+            progress.sent += 1
 
     def _properties(self, message_id: str) -> Any:
         try:
