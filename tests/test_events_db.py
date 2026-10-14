@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, text
 from cicerone.events.db import (
     DbEventSource,
     _identity_bind_sort_key,
+)
+from cicerone.events.db_identity import (
     _identity_sort_key,
     _is_numeric_identity,
     _row_identity,
@@ -480,7 +482,7 @@ def test_identity_bind_sort_key_matches_identity_sort_order():
 
 
 def test_sqlite_identity_sql_matches_bind_key_for_prefixed_non_numeric_ids(tmp_path):
-    from cicerone.events.db import _SQLITE_IDENTITY_SORT
+    from cicerone.events.db_identity import _SQLITE_IDENTITY_SORT
 
     ids = [
         "e1",

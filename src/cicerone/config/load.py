@@ -14,6 +14,7 @@ from typing import Any, cast
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     ARTIFACT_HMAC_KEY_MIN_BYTES,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     DEFAULT_CRON_SCHEDULE,
     DEFAULT_FEATURE_CONFIG_PATH,
@@ -417,11 +418,7 @@ def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
 
 
 def load_settings(config_path: str | None = None) -> Settings:
-    # Read DEFAULT_CONFIG_PATH via the package so tests can monkeypatch
-    # ``cicerone.config.DEFAULT_CONFIG_PATH``.
-    import cicerone.config as config_pkg
-
-    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or config_pkg.DEFAULT_CONFIG_PATH)
+    path = Path(config_path or os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH)
     if not path.exists():
         raise RuntimeError(f"Config file not found: {path}")
 

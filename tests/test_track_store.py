@@ -404,7 +404,8 @@ def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
 
 
 def test_history_part_name_sanitizes_timestamp() -> None:
-    from cicerone.track.store import _history_part_name, _history_stem_before, _unslug_history_stem
+    from cicerone.track.store import _history_part_name
+    from cicerone.track.store_common import _history_stem_before, _unslug_history_stem
 
     assert _history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
     assert _history_part_name("   ") == "snapshot.parquet"

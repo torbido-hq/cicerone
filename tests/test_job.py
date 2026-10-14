@@ -756,7 +756,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
     from cicerone.config import IOSettings, make_settings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
-    from cicerone.job import _replay_assignments
+    from cicerone.job_eval import replay_assignments
 
     recs = pd.DataFrame(
         [
@@ -767,10 +767,10 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
             {"user_id": COLD_START_USER_ID, "item_id": "i1", "variant": "control"},
         ]
     )
-    assert _replay_assignments(make_settings(), pd.DataFrame(), []) is None
-    assert _replay_assignments(make_settings(), recs.drop(columns=["variant"]), []) is None
+    assert replay_assignments(make_settings(), pd.DataFrame(), []) is None
+    assert replay_assignments(make_settings(), recs.drop(columns=["variant"]), []) is None
     single = recs[recs["variant"] == "control"]
-    assert _replay_assignments(make_settings(), single, []) is None
+    assert replay_assignments(make_settings(), single, []) is None
 
     settings = make_settings(
         experiment=ExperimentSettings(
@@ -783,7 +783,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
         ),
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    assigned = _replay_assignments(
+    assigned = replay_assignments(
         settings,
         recs,
         [
@@ -834,12 +834,12 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         track=TrackSettings(enabled=True),
     )
-    hashed = _replay_assignments(thompson, recs[recs["user_id"] != COLD_START_USER_ID], [])
+    hashed = replay_assignments(thompson, recs[recs["user_id"] != COLD_START_USER_ID], [])
     assert hashed is not None
     assert set(hashed.values()) <= {"control", "treatment"}
     assert "blend" not in hashed.values()
 
-    fallback = _replay_assignments(
+    fallback = replay_assignments(
         make_settings(),
         recs[recs["user_id"] != COLD_START_USER_ID],
         [],

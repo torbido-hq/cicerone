@@ -20,7 +20,6 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig, load_feature_config
@@ -208,9 +207,6 @@ def _assignment_overlay(
     if store is None or not settings.experiment.enabled:
         return None, None
     return store.assignment_overlay(settings.experiment.id)
-
-
-_snapshot_variant_names = snapshot_variant_names
 
 
 def create_app(
