@@ -2344,6 +2344,36 @@ def test_job_marks_partial_outputs_when_recommendation_write_fails(tmp_path, mon
     del original_write
 
 
+def test_job_marks_partial_outputs_when_only_items_snapshot_was_written(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    pd.DataFrame(
+        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
+    ).to_parquet(input_dir / "items.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    def boom(self, df):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        job.run()
+
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest.get("artifact_written") is not True
+    assert manifest["partial_outputs"] is True
+
+
 def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

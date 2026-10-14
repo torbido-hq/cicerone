@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
+from pyarrow.lib import ArrowTypeError
 
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
@@ -634,6 +635,31 @@ def test_local_backend_get_user_returns_row_or_none(tmp_path):
     ).to_parquet(tmp_path / "users.parquet", index=False)
     assert source.get_user("u1")["region_slug"] == "lazio"
     assert source.get_user("ghost") is None
+
+
+@pytest.mark.parametrize(
+    "exc", [TypeError("bad user_id filter arg"), ArrowTypeError("user_id: type mismatch")]
+)
+def test_local_backend_get_events_for_user_only_falls_back_on_arrow_errors(tmp_path, monkeypatch, exc):
+    import cicerone.io.dataset_store as dataset_store
+
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"}]
+    ).to_parquet(tmp_path / "events.parquet", index=False)
+    real_read = dataset_store.read_parquet
+
+    def read(options, filename, **kwargs):
+        if kwargs.get("filters"):
+            raise exc
+        return real_read(options, filename, **kwargs)
+
+    monkeypatch.setattr(dataset_store, "read_parquet", read)
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    if isinstance(exc, ArrowTypeError):
+        assert list(source.get_events_for_user("u1", limit=5)["item_id"]) == ["i1"]
+    else:
+        with pytest.raises(TypeError, match="bad user_id filter arg"):
+            source.get_events_for_user("u1", limit=5)
 
 
 def test_local_backend_get_events_for_user_missing_file_raises(tmp_path):

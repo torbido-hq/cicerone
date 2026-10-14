@@ -94,7 +94,7 @@ class DatasetInputSource:
             if is_s3_not_found(exc):
                 raise
             raise
-        except (OSError, ValueError, TypeError, ArrowException) as exc:
+        except (OSError, ValueError, ArrowException) as exc:
             message = str(exc).lower()
             if "user_id" in message or "fieldref" in message or "filter" in message:
                 logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
