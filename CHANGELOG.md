@@ -13,11 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality live metrics load recommendations for users in the lookback window.
 - Config loading logs a warning for each unknown key in `cicerone.toml`
   (e.g. a typo like `top_K`) instead of silently ignoring it.
-- Underscore helpers shared across modules are now public. In
-  `cicerone.evaluation`: `_annotate_source` → `annotate_impression_source`,
-  `_merge_asof_events` → `merge_asof_events`, `_recs_from_history` →
-  `recs_from_history`. `cicerone.locks` no longer re-exports the
-  `_`-prefixed hold helpers; they live in `cicerone.locks.hold`.
+- Underscore helpers shared across modules are now public (e.g.
+  `cicerone.evaluation.merge_asof_events`, `cicerone.locks.hold.lock_owned`).
+  `_annotate_source` is now `annotate_impression_source`.
 
 ### Deprecated
 
@@ -25,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `dashboard_enabled`, …) and flat `make_settings` overrides
   (`make_settings(serve_port=…)`) warn and will be removed in 0.9.0. Use
   the nested `settings.serve.host` / `make_settings(serve=ServeSettings(…))`.
+- The old `_`-prefixed names exported by `cicerone.evaluation`,
+  `cicerone.io.recommendation_reader`, `cicerone.track.store` and
+  `cicerone.locks` warn and will be removed in 0.9.0. Use the public names.
 
 ### Fixed
 
