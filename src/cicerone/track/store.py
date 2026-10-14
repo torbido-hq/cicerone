@@ -14,6 +14,7 @@ import pandas as pd
 from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings
+from cicerone.deprecation import renamed_attribute
 from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
@@ -229,3 +230,15 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if not frames:
             return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         return filter_history(pd.concat(frames, ignore_index=True), generated_ats=wanted, since=since)
+
+
+_RENAMED = {
+    "_history_frame": "cicerone.track.store.history_frame",
+    "_history_part_name": "cicerone.track.store.history_part_name",
+    "_jsonish": "cicerone.track.store.jsonish",
+}
+__all__ += list(_RENAMED)
+
+
+def __getattr__(name: str) -> Any:
+    return renamed_attribute(__name__, _RENAMED, name)
