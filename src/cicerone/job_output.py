@@ -30,6 +30,7 @@ class JobManifest:
     rrf_k: float | None = None
     artifact_written: bool = False
     artifact_schema_version: int | None = None
+    # Some output may be on storage, but the run failed before its success manifest.
     partial_outputs: bool = False
     automl_enabled: bool = False
     automl_metrics: str = ""

@@ -602,14 +602,16 @@ def _write_job_outputs(
             try:
                 if artifact_bytes is not None:
                     ensure_publication_fence(sink, fence_check)
+                    # Set before each write: a store can commit and still raise (e.g. a response timeout).
+                    outputs_written = True
                     sink.write_model_artifact(artifact_bytes)
                     manifest["artifact_written"] = True
                     manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                 if items is not None and not items.empty:
                     ensure_publication_fence(sink, fence_check)
-                    sink.write_items_snapshot(items)
                     outputs_written = True
+                    sink.write_items_snapshot(items)
 
                 if callable(write_item_scores):
                     ensure_publication_fence(sink, fence_check)
@@ -624,8 +626,8 @@ def _write_job_outputs(
                         neighbors=surface_frames[2],
                     )
                 ensure_publication_fence(sink, fence_check)
-                sink.write_recommendations(recommendations)
                 outputs_written = True
+                sink.write_recommendations(recommendations)
                 if run.pending_thompson is not None:
                     ensure_publication_fence(sink, fence_check)
                     store = ExperimentStore(
