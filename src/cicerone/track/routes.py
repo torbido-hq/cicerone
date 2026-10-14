@@ -27,7 +27,7 @@ from cicerone.serve_schemas import (
     ValidationErrorDetail,
 )
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def mount_track_routes(
     track_store = (
         store
         if store is not None
-        else TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        else open_track_store(settings, writer_lock=build_dataset_writer_lock(settings))
     )
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)

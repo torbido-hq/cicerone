@@ -23,7 +23,7 @@ from cicerone.io.base import ManifestReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
 from cicerone.locks import LockLostError
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ _TRACK_REC_COLUMNS = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN, "
 
 
 def quality_context(settings: Settings, reader: ManifestReader | None = None) -> dict[str, Any]:
-    store = TrackStore(settings.output)
+    store = open_track_store(settings)
     report: dict[str, Any] | None = None
     error: str | None = None
     try:

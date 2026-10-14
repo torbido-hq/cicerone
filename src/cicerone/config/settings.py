@@ -177,6 +177,7 @@ class TrackSettings:
     attribution_window_hours: float = DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS
     conversion_event_types: tuple[str, ...] = ()
     min_impressions: int = DEFAULT_TRACK_MIN_IMPRESSIONS
+    redis_url: str | None = None
 
 
 @dataclass(frozen=True)

@@ -216,10 +216,15 @@ def _cmd_forget_user(argv: list[str]) -> int:
         settings = load_settings()
         lock = build_output_writer_lock(settings)
         if lock is None:
-            result = forget_user(settings.output, args.user_id)
+            result = forget_user(settings.output, args.user_id, redis_url=settings.track.redis_url)
         else:
             with held_writer_lock(lock):
-                result = forget_user(settings.output, args.user_id, writer_lock=lock)
+                result = forget_user(
+                    settings.output,
+                    args.user_id,
+                    writer_lock=lock,
+                    redis_url=settings.track.redis_url,
+                )
     except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

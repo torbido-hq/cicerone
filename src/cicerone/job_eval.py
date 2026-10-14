@@ -35,7 +35,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockBackend, LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import PublishError
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
 logger = logging.getLogger(__name__)
@@ -242,7 +242,7 @@ def score_previous_run(
     if last_manifest:
         previous_generated_at = last_manifest.get("generated_at")
         previous_generated_at = str(previous_generated_at) if previous_generated_at else None
-    store = TrackStore(settings.output)
+    store = open_track_store(settings)
 
     def _load_recs() -> pd.DataFrame | None:
         recs = load_recommendations_frame(settings.output)
