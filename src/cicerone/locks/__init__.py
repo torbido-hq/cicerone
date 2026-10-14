@@ -15,6 +15,7 @@ from cicerone.deprecation import renamed_attribute
 from cicerone.locks.hold import (
     LockBackend,
     LockLostError,
+    WriteFence,
     WriterLockBusyError,
     acquire_blocking,
     ensure_writer_owned,
@@ -36,6 +37,7 @@ from cicerone.locks.redis import RedisLock
 __all__ = [
     "LockBackend",
     "LockLostError",
+    "WriteFence",
     "WriterLockBusyError",
     "PG_ADVISORY_KEY1",
     "PG_ADVISORY_KEY2",

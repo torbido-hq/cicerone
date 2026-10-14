@@ -1128,7 +1128,7 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
-    monkeypatch.setattr("cicerone.job_eval.held_writer_lock", _busy)
+    monkeypatch.setattr("cicerone.locks.hold.held_writer_lock", _busy)
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         job._persist_track_outputs(
             TrackStore(
@@ -1140,6 +1140,26 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
             recommendations=None,
             generated_at="t",
         )
+
+
+def test_persist_track_outputs_accepts_store_without_fence():
+    written: list[str] = []
+
+    class _Store:
+        def write_eval(self, report) -> None:
+            written.append("eval")
+
+        def append_history(self, recommendations, *, generated_at) -> None:
+            written.append("history")
+
+    job._persist_track_outputs(
+        _Store(),
+        kind="db",
+        eval_report={"generated_at": "t"},
+        recommendations=pd.DataFrame([{"user_id": "u1"}]),
+        generated_at="t",
+    )
+    assert written == ["eval", "history"]
 
 
 def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):

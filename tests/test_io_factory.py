@@ -26,7 +26,7 @@ def test_build_output_sink_dataset(tmp_path):
     settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     sink = build_output_sink(settings)
     assert isinstance(sink, DatasetOutputSink)
-    assert sink._writer_lock is None
+    assert sink._fence.lock is None
 
     class _Lock:
         def acquire(self) -> bool:
@@ -50,10 +50,10 @@ def test_build_output_sink_dataset(tmp_path):
         fence_kind="retrain",
     )
     assert isinstance(locked, DatasetOutputSink)
-    assert locked._writer_lock is lock
-    assert locked._fence_check is not None
-    assert locked._fence_check() is True
-    assert locked._fence_kind == "retrain"
+    assert locked._fence.lock is lock
+    assert locked._fence.check is not None
+    assert locked._fence.check() is True
+    assert locked._fence.kind == "retrain"
 
 
 def test_build_input_source_db():
@@ -72,12 +72,12 @@ def test_build_output_sink_db():
         fence_kind="apply",
     )
     assert isinstance(fenced, DatabaseOutputSink)
-    assert fenced._fence_check is not None
-    assert fenced._fence_check() is True
-    assert fenced._fence_kind == "apply"
+    assert fenced._fence.check is not None
+    assert fenced._fence.check() is True
+    assert fenced._fence.kind == "apply"
     locked = object()
     with_lock = build_output_sink(settings, writer_lock=locked)
-    assert with_lock._writer_lock is locked
+    assert with_lock._fence.lock is locked
     assert callable(with_lock.recommendations_write)
 
 
