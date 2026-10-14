@@ -2359,15 +2359,29 @@ def test_job_marks_partial_outputs_when_only_items_snapshot_was_written(tmp_path
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
     from cicerone.io.dataset_store import DatasetOutputSink
+    from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 
-    def boom(self, df):
-        raise RuntimeError("disk full")
+    real_snapshot = DatasetOutputSink.write_items_snapshot
+    real_fence = job.ensure_publication_fence
+    snapshot_written: list[bool] = []
 
-    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
+    def write_snapshot(self, df):
+        real_snapshot(self, df)
+        snapshot_written.append(True)
 
-    with pytest.raises(RuntimeError, match="disk full"):
+    def fence_lost_after_snapshot(sink, fence_check):
+        if snapshot_written:
+            raise RuntimeError("fence lost after snapshot")
+        real_fence(sink, fence_check)
+
+    monkeypatch.setattr(DatasetOutputSink, "write_items_snapshot", write_snapshot)
+    monkeypatch.setattr(job, "ensure_publication_fence", fence_lost_after_snapshot)
+
+    with pytest.raises(RuntimeError, match="fence lost after snapshot"):
         job.run()
 
+    assert (output_dir / ITEMS_SNAPSHOT_FILENAME).exists()
+    assert not (output_dir / "recommendations.parquet").exists()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert manifest.get("artifact_written") is not True
