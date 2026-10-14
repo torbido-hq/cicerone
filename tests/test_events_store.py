@@ -542,6 +542,7 @@ def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
 
 def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
     from cicerone.events import store as events_store
+    from cicerone.io import engines as io_engines
 
     events_store.dispose_recommendation_engines()
     engines = []
@@ -549,7 +550,7 @@ def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
         path = tmp_path / f"e{i}.db"
         sqlite3.connect(path).close()
         engines.append(events_store._engine_for(f"sqlite+pysqlite:///{path}"))
-    assert len(events_store._engines) == 10
+    assert len(io_engines._engines) == 10
     assert events_store._engine_for(f"sqlite+pysqlite:///{tmp_path / 'e0.db'}") is engines[0]
     events_store.dispose_recommendation_engines()
 

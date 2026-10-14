@@ -32,6 +32,27 @@ logger = logging.getLogger(__name__)
 _ONLINE_PERSIST_ATTEMPTS = 3
 _APPLIED_EVENT_ID_CAP = 10_000
 
+
+class _BoundedSeen:
+    """Insertion-ordered set that forgets its oldest tokens past ``cap``."""
+
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+        self._seen: set[str] = set()
+        self._order: deque[str] = deque()
+
+    def __contains__(self, token: object) -> bool:
+        return token in self._seen
+
+    def add(self, token: str) -> None:
+        if token in self._seen:
+            return
+        self._seen.add(token)
+        self._order.append(token)
+        while len(self._order) > self._cap:
+            self._seen.discard(self._order.popleft())
+
+
 __all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
 
 
@@ -67,10 +88,8 @@ class EventWorker:
         self._held: list[NormalizedEvent] = []
         self._deferred_acks: list[NormalizedEvent] = []
         self._retry_acks: list[NormalizedEvent] = []
-        self._applied_event_ids: set[str] = set()
-        self._applied_event_id_order: deque[str] = deque()
-        self._applied_fingerprints: set[str] = set()
-        self._applied_fingerprint_order: deque[str] = deque()
+        self._applied_event_ids = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
+        self._applied_fingerprints = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
         self._ephemeral_event_ids = bool(getattr(source, "ephemeral_event_ids", False))
         self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
 
@@ -113,8 +132,6 @@ class EventWorker:
                 if not self._start_aborted(epoch):
                     self._thread = threading.Thread(target=self._loop, name="cicerone-events", daemon=True)
                     self._thread.start()
-                    if self._start_aborted(epoch):
-                        return
                     return
             self._drain_stopped_start()
         except Exception:
@@ -242,24 +259,14 @@ class EventWorker:
             and not (self._fingerprint_dedupe(event) and event_fingerprint(event) in live_fps)
         ]
 
-    def _remember_token(self, token: str, seen: set[str], order: deque[str]) -> None:
-        if token in seen:
-            return
-        seen.add(token)
-        order.append(token)
-        while len(order) > _APPLIED_EVENT_ID_CAP:
-            seen.discard(order.popleft())
-
     def _fingerprint_dedupe(self, event: NormalizedEvent) -> bool:
         return self._ephemeral_event_ids and event.generated_event_id
 
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
-            self._remember_token(event.event_id, self._applied_event_ids, self._applied_event_id_order)
+            self._applied_event_ids.add(event.event_id)
             if self._fingerprint_dedupe(event):
-                self._remember_token(
-                    event_fingerprint(event), self._applied_fingerprints, self._applied_fingerprint_order
-                )
+                self._applied_fingerprints.add(event_fingerprint(event))
 
     def _is_applied(self, event: NormalizedEvent) -> bool:
         if event.event_id in self._applied_event_ids:
