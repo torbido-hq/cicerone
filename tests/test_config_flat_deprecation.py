@@ -30,3 +30,12 @@ def test_flat_make_settings_kwarg_still_applies_with_warning():
     ):
         settings = make_settings(serve_port=9000)
     assert settings.serve.port == 9000
+
+
+def test_deprecation_warnings_point_at_the_caller():
+    settings = make_settings()
+    with pytest.warns(FutureWarning) as property_warning:
+        _ = settings.serve_host
+    with pytest.warns(FutureWarning) as kwarg_warning:
+        make_settings(serve_port=9000)
+    assert [w.filename for w in (*property_warning, *kwarg_warning)] == [__file__, __file__]
