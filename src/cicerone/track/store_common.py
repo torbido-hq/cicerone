@@ -63,11 +63,11 @@ def require_appendable_track_log(output: IOSettings) -> None:
     raise ConfigError(TRACK_LOG_BACKEND_ERROR)
 
 
-def _row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
+def row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
     return assign_missing_event_id(row)
 
 
-def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:
+def history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:
     frame = recommendations.copy()
     frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
     frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
@@ -83,7 +83,7 @@ def _history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataF
     return frame.loc[:, list(HISTORY_COLUMNS)]
 
 
-def _jsonish(value: Any) -> Any:
+def jsonish(value: Any) -> Any:
     if hasattr(value, "item"):
         try:
             return value.item()
@@ -94,7 +94,7 @@ def _jsonish(value: Any) -> Any:
     return value
 
 
-def _iso_utc(value: str | None) -> str | None:
+def iso_utc(value: str | None) -> str | None:
     if not value:
         return None
     stamp = pd.to_datetime(value, utc=True, errors="coerce")
@@ -151,11 +151,11 @@ def _unslug_history_stem(stem: str) -> str:
     return f"{restored}{tz or ''}"
 
 
-def _history_stem_before(stem: str, since: str) -> bool:
+def history_stem_before(stem: str, since: str) -> bool:
     return _stamp_before(_unslug_history_stem(stem), since)
 
 
-def _row_matches(
+def row_matches(
     row: Mapping[str, Any],
     *,
     kind: str | None,
@@ -174,7 +174,7 @@ def _row_matches(
     return not (start is None or stamp is None or bool(pd.isna(stamp)) or stamp < start)
 
 
-def _track_row_sql_filter(
+def track_row_sql_filter(
     *,
     kind: str | None,
     experiment_id: str | None,
@@ -207,7 +207,7 @@ def _history_sql_literals(generated_ats: set[str]) -> list[str]:
         text = str(item).strip()
         if text:
             keys.add(text)
-        stamp = _utc_stamp(item)
+        stamp = utc_stamp(item)
         if stamp is None:
             continue
         iso = stamp.isoformat()
@@ -221,7 +221,7 @@ def _history_sql_literals(generated_ats: set[str]) -> list[str]:
     return sorted(keys)
 
 
-def _history_sql_filter(
+def history_sql_filter(
     *,
     generated_ats: set[str] | None,
 ) -> tuple[str, dict[str, Any]]:
@@ -235,7 +235,7 @@ def _history_sql_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
-def _utc_stamp(value: object) -> pd.Timestamp | None:
+def utc_stamp(value: object) -> pd.Timestamp | None:
     stamp = pd.to_datetime(value, utc=True, errors="coerce")
     if pd.isna(stamp):
         return None
@@ -243,17 +243,17 @@ def _utc_stamp(value: object) -> pd.Timestamp | None:
 
 
 def _stamps_equal(left: object, right: object) -> bool:
-    first = _utc_stamp(left)
-    second = _utc_stamp(right)
+    first = utc_stamp(left)
+    second = utc_stamp(right)
     return first is not None and second is not None and first == second
 
 
-def _history_part_matches(stem: str, generated_ats: set[str]) -> bool:
+def history_part_matches(stem: str, generated_ats: set[str]) -> bool:
     restored = _unslug_history_stem(stem)
     return any(_stamps_equal(restored, stamp) for stamp in generated_ats)
 
 
-def _filter_history(
+def filter_history(
     frame: pd.DataFrame,
     *,
     generated_ats: set[str] | None,
@@ -267,7 +267,7 @@ def _filter_history(
         return frame
     keep = pd.Series(True, index=frame.index)
     if generated_ats is not None:
-        wanted = {stamp.value for stamp in (_utc_stamp(item) for item in generated_ats) if stamp is not None}
+        wanted = {stamp.value for stamp in (utc_stamp(item) for item in generated_ats) if stamp is not None}
         stamps = pd.to_datetime(frame["generated_at"], utc=True, errors="coerce")
         keep &= stamps.map(lambda value: False if pd.isna(value) else value.value in wanted)
     if since:

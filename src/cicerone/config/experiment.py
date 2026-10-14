@@ -39,7 +39,7 @@ _T = TypeVar("_T")
 _POLICY_MISSING = object()
 
 
-def _coerce_experiment(value: Any) -> ExperimentSettings:
+def coerce_experiment(value: Any) -> ExperimentSettings:
     if value is None:
         return ExperimentSettings()
     if isinstance(value, ExperimentSettings):

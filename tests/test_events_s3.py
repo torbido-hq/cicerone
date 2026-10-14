@@ -11,15 +11,15 @@ from support.events import event_payload
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
-    _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
-    _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
+    SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     S3EventSource,
-    _events_from_body,
+    events_from_body,
 )
 from cicerone.events.s3_parse import (
-    _SQS_MALFORMED_RECEIVE_LIMIT,
+    SQS_MALFORMED_RECEIVE_LIMIT,
     MalformedS3Notification,
-    _s3_records_from_sqs_body,
+    s3_records_from_sqs_body,
 )
 
 
@@ -244,7 +244,7 @@ def test_s3_sqs_receive_sets_apply_visibility(monkeypatch):
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["sqs-vis"]
     assert calls
-    assert calls[0] == _SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS
+    assert calls[0] == SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS
     source.ack([events[0].event_id])
 
 
@@ -288,7 +288,7 @@ def test_s3_sqs_nack_extends_visibility(monkeypatch):
 
     def counting(**kwargs):  # type: ignore[no-untyped-def]
         calls["n"] += 1
-        assert kwargs["VisibilityTimeout"] == _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS
+        assert kwargs["VisibilityTimeout"] == SQS_NACK_VISIBILITY_TIMEOUT_SECONDS
         return real(**kwargs)
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", counting)
@@ -320,9 +320,9 @@ def test_s3_sqs_heartbeat_extends_apply_visibility(monkeypatch):
     monkeypatch.setattr(source._sqs, "change_message_visibility", counting)
     first = list(source.poll(10))
     source.heartbeat(first)
-    assert calls == [_SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS]
+    assert calls == [SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS]
     source.nack(first)
-    assert calls[-1] == _SQS_NACK_VISIBILITY_TIMEOUT_SECONDS
+    assert calls[-1] == SQS_NACK_VISIBILITY_TIMEOUT_SECONDS
 
 
 @mock_aws
@@ -476,13 +476,13 @@ def test_s3_rejects_sqs_with_endpoint_url():
 
 
 def test_events_from_body_validation():
-    assert _events_from_body(b"  ", bucket="b", key="k", etag="e") == []
+    assert events_from_body(b"  ", bucket="b", key="k", etag="e") == []
     with pytest.raises(ValueError, match="invalid JSON"):
-        _events_from_body(b"{", bucket="b", key="k", etag="e")
+        events_from_body(b"{", bucket="b", key="k", etag="e")
     with pytest.raises(ValueError, match="object or array"):
-        _events_from_body(b"1", bucket="b", key="k", etag="e")
+        events_from_body(b"1", bucket="b", key="k", etag="e")
     # Non-dict / invalid elements are skipped; valid siblings are kept.
-    kept = _events_from_body(
+    kept = events_from_body(
         json.dumps(
             [
                 1,
@@ -503,19 +503,19 @@ def test_events_from_body_validation():
     )
     assert [event.event_id for event in kept] == ["ok"]
     with pytest.raises(ValueError, match="JSON object"):
-        _s3_records_from_sqs_body("[]")
+        s3_records_from_sqs_body("[]")
     with pytest.raises(json.JSONDecodeError):
-        _s3_records_from_sqs_body("not-json")
+        s3_records_from_sqs_body("not-json")
     with pytest.raises(ValueError, match="Records"):
-        _s3_records_from_sqs_body("{}")
+        s3_records_from_sqs_body("{}")
     with pytest.raises(MalformedS3Notification, match="not an object"):
-        _s3_records_from_sqs_body(json.dumps({"Records": ["skip"]}))
+        s3_records_from_sqs_body(json.dumps({"Records": ["skip"]}))
     sns = {"Type": "Notification", "TopicArn": "arn:aws:sns:us-east-1:123:topic"}
     for message in ("{", "[]", "{}", 1, None):
         with pytest.raises(MalformedS3Notification):
-            _s3_records_from_sqs_body(json.dumps({**sns, "Message": message}))
+            s3_records_from_sqs_body(json.dumps({**sns, "Message": message}))
     with pytest.raises(MalformedS3Notification):
-        _s3_records_from_sqs_body(
+        s3_records_from_sqs_body(
             json.dumps(
                 {
                     "Records": [
@@ -556,7 +556,7 @@ def test_events_from_body_validation():
         },
     ):
         with pytest.raises(MalformedS3Notification):
-            _s3_records_from_sqs_body(json.dumps(body))
+            s3_records_from_sqs_body(json.dumps(body))
 
 
 @mock_aws
@@ -706,7 +706,7 @@ def test_s3_sqs_malformed_notification_is_visible_until_receive_limit():
     source.connect()
     assert list(source.poll(10)) == []
     assert _sqs_counts(sqs, queue_url) == (1, 0)
-    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+    for _ in range(SQS_MALFORMED_RECEIVE_LIMIT - 1):
         assert list(source.poll(10)) == []
     assert _sqs_held(sqs, queue_url) == 0
 
@@ -802,7 +802,7 @@ def test_s3_malformed_notification_carries_valid_sibling_records():
         ]
     }
     with pytest.raises(MalformedS3Notification, match="object descriptor") as caught:
-        _s3_records_from_sqs_body(json.dumps(body))
+        s3_records_from_sqs_body(json.dumps(body))
     assert caught.value.valid_pairs == (("b", "a/b.json"),)
 
 
@@ -829,7 +829,7 @@ def test_s3_sqs_malformed_notification_applies_valid_siblings_at_receive_limit()
     )
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
-    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+    for _ in range(SQS_MALFORMED_RECEIVE_LIMIT - 1):
         assert list(source.poll(10)) == []
         assert _sqs_counts(sqs, queue_url) == (1, 0)
     events = list(source.poll(10))
@@ -871,7 +871,7 @@ def test_s3_sqs_malformed_siblings_without_receive_count_are_retried_locally(mon
         return response
 
     monkeypatch.setattr(source._sqs, "receive_message", strip)
-    for _ in range(_SQS_MALFORMED_RECEIVE_LIMIT - 1):
+    for _ in range(SQS_MALFORMED_RECEIVE_LIMIT - 1):
         assert list(source.poll(10)) == []
         assert _sqs_counts(sqs, queue_url) == (1, 0)
     events = list(source.poll(10))

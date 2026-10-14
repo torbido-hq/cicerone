@@ -22,8 +22,8 @@ ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # Cold-start without __cold_start__: popular/latest only (never warm "blended"),
 # prefer popular → latest → min user_id. Missing-table: ProgrammingError / OperationalError.
-_FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
-_FALLBACK_SOURCE_PRIORITY = {POPULAR_SOURCE: 0, LATEST_SOURCE: 1}
+FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE})
+FALLBACK_SOURCE_PRIORITY = {POPULAR_SOURCE: 0, LATEST_SOURCE: 1}
 
 
 def item_snapshot_columns(
@@ -79,25 +79,25 @@ def normalize_items_snapshot(
     return out
 
 
-def _best_fallback_user_id(priorities: dict[str, int]) -> str | None:
+def best_fallback_user_id(priorities: dict[str, int]) -> str | None:
     """Lowest source priority wins; ties break on lexicographically smallest user id."""
     if not priorities:
         return None
     return min(priorities, key=lambda user_id: (priorities[user_id], user_id))
 
 
-def _pick_fallback_user(candidates: pd.DataFrame) -> str | None:
+def pick_fallback_user(candidates: pd.DataFrame) -> str | None:
     """Stable fallback user: prefer popular_fallback, then latest, then min user_id."""
     if candidates.empty or USER_COLUMN not in candidates.columns:
         return None
     frame = candidates[[USER_COLUMN]].copy()
     frame["_user"] = frame[USER_COLUMN].astype(str)
     if SOURCE_COLUMN in candidates.columns:
-        frame["_src_pri"] = candidates[SOURCE_COLUMN].map(_FALLBACK_SOURCE_PRIORITY).fillna(99)
+        frame["_src_pri"] = candidates[SOURCE_COLUMN].map(FALLBACK_SOURCE_PRIORITY).fillna(99)
     else:
         frame["_src_pri"] = 99
     priorities = frame.groupby("_user", sort=False)["_src_pri"].min().astype(int).to_dict()
-    return _best_fallback_user_id(priorities)
+    return best_fallback_user_id(priorities)
 
 
 def select_cold_start_fallback(
@@ -136,10 +136,10 @@ def select_cold_start_fallback(
 
     if recommendations.empty or SOURCE_COLUMN not in recommendations.columns:
         return empty
-    candidates = recommendations[recommendations[SOURCE_COLUMN].isin(_FALLBACK_SOURCES)]
+    candidates = recommendations[recommendations[SOURCE_COLUMN].isin(FALLBACK_SOURCES)]
     if candidates.empty:
         return empty
-    sample_user = _pick_fallback_user(candidates)
+    sample_user = pick_fallback_user(candidates)
     if sample_user is None:
         return empty
     rows = candidates[candidates[USER_COLUMN].astype(str) == sample_user].sort_values(
@@ -148,7 +148,7 @@ def select_cold_start_fallback(
     return rows.head(k).reset_index(drop=True)
 
 
-def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Normalize user ids once and build an O(1) lookup for serve requests."""
     if frame.empty or USER_COLUMN not in frame.columns:
         return {}
@@ -161,20 +161,20 @@ def _index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFram
     }
 
 
-def _resolve_fallback_user_id(by_user: dict[str, pd.DataFrame]) -> str | None:
+def resolve_fallback_user_id(by_user: dict[str, pd.DataFrame]) -> str | None:
     """Pick popular/latest fallback user from the per-user index (no full-frame scan)."""
     priorities: dict[str, int] = {}
     for user_id, rows in by_user.items():
         if user_id == COLD_START_USER_ID or rows.empty or SOURCE_COLUMN not in rows.columns:
             continue
         sources = set(rows[SOURCE_COLUMN].astype(str))
-        if not sources & _FALLBACK_SOURCES:
+        if not sources & FALLBACK_SOURCES:
             continue
-        priorities[user_id] = min(_FALLBACK_SOURCE_PRIORITY.get(src, 99) for src in sources)
-    return _best_fallback_user_id(priorities)
+        priorities[user_id] = min(FALLBACK_SOURCE_PRIORITY.get(src, 99) for src in sources)
+    return best_fallback_user_id(priorities)
 
 
-class _ItemFilterMixin:
+class ItemFilterMixin:
     """Shared items-snapshot filter configuration for recommendation readers.
 
     Call ``_init_item_filter_state()`` from subclass ``__init__`` before

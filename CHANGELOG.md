@@ -13,6 +13,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality live metrics load recommendations for users in the lookback window.
 - Config loading logs a warning for each unknown key in `cicerone.toml`
   (e.g. a typo like `top_K`) instead of silently ignoring it.
+- Underscore helpers shared across modules are now public. In
+  `cicerone.evaluation`: `_annotate_source` → `annotate_impression_source`,
+  `_merge_asof_events` → `merge_asof_events`, `_recs_from_history` →
+  `recs_from_history`. `cicerone.locks` no longer re-exports the
+  `_`-prefixed hold helpers; they live in `cicerone.locks.hold`.
 
 ### Deprecated
 

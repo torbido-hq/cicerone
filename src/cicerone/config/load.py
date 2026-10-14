@@ -34,7 +34,7 @@ from cicerone.config.constants import (
     Mode,
 )
 from cicerone.config.events import coerce_events_settings, load_events_settings
-from cicerone.config.experiment import _coerce_experiment, load_experiment_settings
+from cicerone.config.experiment import coerce_experiment, load_experiment_settings
 from cicerone.config.publish import coerce_publish_settings, load_publish_settings
 from cicerone.config.settings import (
     AutomlSettings,
@@ -194,7 +194,7 @@ def make_settings(**overrides: Any) -> Settings:
     automl = _coerce_nested(AutomlSettings, overrides.pop("automl", None), _AUTOML_FLAT_KEYS, overrides)
     events = coerce_events_settings(overrides.pop("events", None))
     publish = coerce_publish_settings(overrides.pop("publish", None))
-    experiment = _coerce_experiment(overrides.pop("experiment", None))
+    experiment = coerce_experiment(overrides.pop("experiment", None))
     track_raw = overrides.pop("track", None)
     eval_raw = overrides.pop("eval", None)
     track = (

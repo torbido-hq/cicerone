@@ -19,9 +19,9 @@ from cicerone.track.store_common import (
     DEFAULT_HISTORY_TABLE,
     DEFAULT_TRACK_TABLE,
     HISTORY_COLUMNS,
-    _history_sql_filter,
-    _jsonish,
-    _track_row_sql_filter,
+    history_sql_filter,
+    jsonish,
+    track_row_sql_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ class TrackDbBackend:
             option="track_table",
         )
         engine = self._db_engine()
-        clause, params = _track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
+        clause, params = track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
             frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
         except SQL_READ_ERRORS as exc:
@@ -129,7 +129,7 @@ class TrackDbBackend:
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")
-        return [{str(key): _jsonish(value) for key, value in row.items()} for row in records]
+        return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
 
     def _write_eval_db(self, payload: dict[str, Any]) -> None:
         table = sql_identifier(
@@ -194,7 +194,7 @@ class TrackDbBackend:
             option="history_table",
         )
         engine = self._db_engine()
-        clause, params = _history_sql_filter(generated_ats=generated_ats)
+        clause, params = history_sql_filter(generated_ats=generated_ats)
         try:
             if params:
                 stmt = text(f'SELECT * FROM "{table}"{clause}')

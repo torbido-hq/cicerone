@@ -23,7 +23,7 @@ from rectools.metrics import (
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config.constants import TRACK_KIND_IMPRESSION
-from cicerone.evaluation.metrics import OCCURRED_AT, _frame, _ratio
+from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -106,7 +106,7 @@ def _hit_rate(reco: pd.DataFrame, relevant: pd.DataFrame, *, k: int) -> float:
         scored += 1
         if set(group[ITEM_COLUMN].astype(str)) & set(items):
             hits += 1
-    return _ratio(hits, scored)
+    return safe_ratio(hits, scored)
 
 
 def _ranking_metric_defs(k: int) -> dict[str, object]:
@@ -316,7 +316,7 @@ def evaluate_served(
         if recs.empty:
             return None
         used_impressions = True
-    all_events = _frame(events)
+    all_events = normalized_frame(events)
     if all_events.empty:
         return ServedEvalReport(
             n_users=int(recs[USER_COLUMN].nunique()),
@@ -344,7 +344,7 @@ def evaluate_served(
             combined = pd.concat([history, live], ignore_index=True)
         else:
             combined = history
-        hist_recs = _recs_from_history(combined, window_events)
+        hist_recs = recs_from_history(combined, window_events)
         if not hist_recs.empty:
             hist_recs = hist_recs[hist_recs[USER_COLUMN] != COLD_START_USER_ID]
             hist_recs = filter_recs_to_assigned(hist_recs, assigned)
@@ -422,7 +422,7 @@ def evaluate_served(
     )
 
 
-def _recs_from_history(history: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def recs_from_history(history: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Use each user's newest snapshot with generated_at <= that user's first event."""
     hist = history.copy()
     hist[USER_COLUMN] = hist[USER_COLUMN].astype(str)

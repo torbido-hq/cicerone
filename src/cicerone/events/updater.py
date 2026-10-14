@@ -20,7 +20,7 @@ from cicerone.events.updater_cache import UpdaterUserCache
 from cicerone.events.updater_merge import (
     INCREMENTAL_SOURCE,  # noqa: F401
     UpdaterMerge,
-    _is_preserved_source,
+    is_preserved_source,
 )
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
@@ -410,7 +410,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return {}
         keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
         if SOURCE_COLUMN in keyed.columns:
-            mask = keyed[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
+            mask = keyed[SOURCE_COLUMN].astype(str).map(is_preserved_source)
             keyed = keyed.loc[mask]
         if keyed.empty:
             return {}

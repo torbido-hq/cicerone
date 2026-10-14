@@ -12,14 +12,14 @@ import pandas as pd
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import (
     SliceMetrics,
-    _clicked_impressions_by_user,
-    _coalesce_column,
-    _fill_blank_ids,
-    _frame,
-    _merge_asof_events,
-    _metrics_by_impression_dimensions,
-    _metrics_for_impression_slice,
-    _with_join_keys,
+    clicked_impressions_by_user,
+    coalesce_column,
+    fill_blank_ids,
+    merge_asof_events,
+    metrics_by_impression_dimensions,
+    metrics_for_impression_slice,
+    normalized_frame,
+    with_join_keys,
 )
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -79,7 +79,9 @@ def _variant_blank(values: pd.Series) -> pd.Series:
     return values.isna() | values.astype(str).str.strip().eq("")
 
 
-def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | None) -> pd.DataFrame:
+def annotate_impression_source(
+    impressions: pd.DataFrame, recommendations: pd.DataFrame | None
+) -> pd.DataFrame:
     if impressions.empty:
         return impressions
     frame = impressions.copy()
@@ -97,8 +99,12 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
         if bool(blank.any()):
             parts: list[pd.DataFrame] = []
             if bool((~blank).any()):
-                parts.append(_annotate_source(frame.loc[~blank].copy(), recs.loc[~rec_blank].copy()))
-            parts.append(_annotate_source(frame.loc[blank].copy(), recs.drop(columns=[VARIANT_COLUMN])))
+                parts.append(
+                    annotate_impression_source(frame.loc[~blank].copy(), recs.loc[~rec_blank].copy())
+                )
+            parts.append(
+                annotate_impression_source(frame.loc[blank].copy(), recs.drop(columns=[VARIANT_COLUMN]))
+            )
             return pd.concat(parts, ignore_index=True)
         recs = recs.loc[~rec_blank].copy()
         if recs.empty:
@@ -124,14 +130,14 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
             subset=[*join_keys, "generated_at"], keep="last"
         )
         merged = frame.merge(snap, on=[*join_keys, "generated_at"], how="left", suffixes=("", "_rec"))
-        _coalesce_column(merged, SOURCE_COLUMN)
-        _coalesce_column(merged, VARIANT_COLUMN)
+        coalesce_column(merged, SOURCE_COLUMN)
+        coalesce_column(merged, VARIANT_COLUMN)
         missing = merged["generated_at"].isna()
         if bool(missing.any()):
             filled = merged.loc[missing, join_keys].merge(
                 latest_source, on=join_keys, how="left", suffixes=("", "_latest")
             )
-            _coalesce_column(filled, SOURCE_COLUMN)
+            coalesce_column(filled, SOURCE_COLUMN)
             if SOURCE_COLUMN not in merged.columns:
                 merged[SOURCE_COLUMN] = None
             if SOURCE_COLUMN in filled.columns:
@@ -141,11 +147,11 @@ def _annotate_source(impressions: pd.DataFrame, recommendations: pd.DataFrame | 
         return merged
     if "generated_at" not in recs.columns:
         merged = frame.merge(latest, on=join_keys, how="left", suffixes=("", "_rec"))
-        _coalesce_column(merged, SOURCE_COLUMN)
-        _coalesce_column(merged, VARIANT_COLUMN)
+        coalesce_column(merged, SOURCE_COLUMN)
+        coalesce_column(merged, VARIANT_COLUMN)
         return merged
     merged = frame.merge(latest_source, on=join_keys, how="left", suffixes=("", "_rec"))
-    _coalesce_column(merged, SOURCE_COLUMN)
+    coalesce_column(merged, SOURCE_COLUMN)
     return merged
 
 
@@ -164,23 +170,23 @@ def _prepare_click_frames(
     recommendations: pd.DataFrame | None = None,
     annotate_source: bool = False,
 ) -> _ClickFrames | None:
-    rows = _frame(track_rows)
+    rows = normalized_frame(track_rows)
     window = timedelta(hours=float(window_hours))
     if rows.empty or "kind" not in rows.columns:
         return None
     impressions = rows[rows["kind"].astype(str) == TRACK_KIND_IMPRESSION].copy()
     clicks = rows[rows["kind"].astype(str) == TRACK_KIND_CLICK].copy()
-    impressions = _with_join_keys(impressions)
+    impressions = with_join_keys(impressions)
     if impressions.empty:
         return None
-    clicks = _with_join_keys(clicks)
+    clicks = with_join_keys(clicks)
     if annotate_source:
-        impressions = _annotate_source(impressions, recommendations)
+        impressions = annotate_impression_source(impressions, recommendations)
         impressions = impressions.copy()
-    impressions = _fill_blank_ids(impressions, "imp")
+    impressions = fill_blank_ids(impressions, "imp")
     if not clicks.empty:
-        clicks = _fill_blank_ids(clicks, "clk")
-    matched_clicks = _merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
+        clicks = fill_blank_ids(clicks, "clk")
+    matched_clicks = merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     return _ClickFrames(impressions, clicks, matched_clicks, window)
 
 
@@ -203,15 +209,15 @@ def evaluate_tracking(
     impressions = prepared.impressions
     matched_clicks = prepared.matched_clicks
     window = prepared.window
-    conv = _frame(conversions)
-    conv = _with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
-    view_conv = _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
+    conv = normalized_frame(conversions)
+    conv = with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
+    view_conv = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
     if not conv.empty and not matched_clicks.empty:
-        click_conv = _merge_asof_events(conv, matched_clicks, window=window)
+        click_conv = merge_asof_events(conv, matched_clicks, window=window)
     else:
         click_conv = conv.iloc[0:0]
-    overall = _metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
-    sliced = _metrics_by_impression_dimensions(
+    overall = metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
+    sliced = metrics_by_impression_dimensions(
         impressions,
         matched_clicks,
         view_conv,
@@ -242,19 +248,17 @@ def user_track_outcomes(
     impressions = prepared.impressions
     matched_clicks = prepared.matched_clicks
     window = prepared.window
-    conv = _with_join_keys(_frame(conversions))
+    conv = with_join_keys(normalized_frame(conversions))
     if attribution == "click":
         attributed = (
-            _merge_asof_events(conv, matched_clicks, window=window)
+            merge_asof_events(conv, matched_clicks, window=window)
             if not conv.empty and not matched_clicks.empty
             else conv.iloc[0:0]
         )
     else:
-        attributed = (
-            _merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
-        )
+        attributed = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
     impression_counts = impressions.groupby(USER_COLUMN).size()
-    click_counts = _clicked_impressions_by_user(matched_clicks)
+    click_counts = clicked_impressions_by_user(matched_clicks)
     conversion_counts = (
         attributed.groupby(USER_COLUMN).size() if not attributed.empty else pd.Series(dtype=int)
     )

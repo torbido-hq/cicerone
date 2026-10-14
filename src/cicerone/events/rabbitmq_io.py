@@ -38,7 +38,7 @@ class _IoJob:
         self.permit = True
 
 
-class _PikaIo:
+class PikaIo:
     """Run BlockingConnection calls on one thread (pika is not thread-safe)."""
 
     def __init__(self, timeout_seconds: float) -> None:
@@ -211,7 +211,7 @@ class _PikaIo:
         self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
-        _close_handles(channel, connection)
+        close_handles(channel, connection)
         if leftover_channel is not None and leftover_channel is not channel:
             _close_quietly(leftover_channel, "channel")
         if leftover_connection is not None and leftover_connection is not connection:
@@ -305,18 +305,18 @@ class _PikaIo:
         self._cleanup_abandoned()
 
 
-def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
+def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
     if io.failed or not io._try_begin_shutdown():
         io.abandon(channel, connection)
         if not io._thread.is_alive():
-            _close_handles(channel, connection)
+            close_handles(channel, connection)
         return
     closed = False
     try:
 
         def _shutdown() -> None:
             io._connection = None
-            _close_handles(channel, connection)
+            close_handles(channel, connection)
 
         io.submit(_shutdown, allow_closing=True)
         closed = True
@@ -329,7 +329,7 @@ def _release_io(io: _PikaIo, channel: Any, connection: Any) -> None:
         io.stop()
 
 
-def _close_handles(channel: Any, connection: Any) -> None:
+def close_handles(channel: Any, connection: Any) -> None:
     _close_quietly(channel, "channel")
     _close_quietly(connection, "connection")
 

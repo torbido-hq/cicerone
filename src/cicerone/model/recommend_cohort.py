@@ -34,7 +34,7 @@ def boost_overfetch_k(
 
 
 @dataclass(frozen=True)
-class _CohortPlan:
+class CohortPlan:
     cohorts: list[tuple[object, list[str]]]
     allowed_by_cohort: dict[object, list]
     eligibility: list
@@ -48,13 +48,13 @@ class _CohortPlan:
     recommend_k: int
 
 
-def _resolve_cohort_plan(
+def resolve_cohort_plan(
     built: BuiltDataset,
     config: FeatureConfig,
     target_users: list[str],
     recommend_models: list[str],
     top_k: int,
-) -> _CohortPlan:
+) -> CohortPlan:
     dataset = built.dataset
     all_item_ids = dataset.item_id_map.external_ids
     eligibility = resolve_eligibility(config)
@@ -106,7 +106,7 @@ def _resolve_cohort_plan(
         }
         cohorts = [(None, unique_target_users)]
 
-    return _CohortPlan(
+    return CohortPlan(
         cohorts=cohorts,
         allowed_by_cohort=allowed_by_cohort,
         eligibility=eligibility,

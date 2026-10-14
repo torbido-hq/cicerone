@@ -38,7 +38,7 @@ class SliceMetrics:
         }
 
 
-def _frame(rows: Sequence[Mapping[str, Any]] | pd.DataFrame) -> pd.DataFrame:
+def normalized_frame(rows: Sequence[Mapping[str, Any]] | pd.DataFrame) -> pd.DataFrame:
     frame = rows.copy() if isinstance(rows, pd.DataFrame) else pd.DataFrame(list(rows))
     if frame.empty:
         return pd.DataFrame()
@@ -54,19 +54,19 @@ def _frame(rows: Sequence[Mapping[str, Any]] | pd.DataFrame) -> pd.DataFrame:
 _JOIN_KEYS = (OCCURRED_AT, USER_COLUMN, ITEM_COLUMN)
 
 
-def _with_join_keys(frame: pd.DataFrame) -> pd.DataFrame:
+def with_join_keys(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or any(column not in frame.columns for column in _JOIN_KEYS):
         return frame.iloc[0:0]
     return frame.dropna(subset=list(_JOIN_KEYS))
 
 
-def _ratio(numerator: int, denominator: int) -> float:
+def safe_ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return float(numerator) / float(denominator)
 
 
-def _fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+def fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
     frame = frame.reset_index(drop=True).copy()
     generated = [f"{prefix}-{i}" for i in range(len(frame))]
     if "event_id" not in frame.columns:
@@ -90,7 +90,7 @@ def _clicked_impression_count(matched_clicks: pd.DataFrame) -> int:
     return int(len(matched_clicks))
 
 
-def _clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
+def clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
     if matched_clicks.empty or USER_COLUMN not in matched_clicks.columns:
         return pd.Series(dtype=int)
     if "prior_event_id" in matched_clicks.columns:
@@ -119,14 +119,14 @@ def _slice_metrics(
         n_clicks=n_clicks,
         n_conversions_click=n_click,
         n_conversions_view=n_view,
-        ctr=_ratio(n_clicks, n_impressions),
-        cvr_click=_ratio(n_click, n_impressions),
-        cvr_view=_ratio(n_view, n_impressions),
+        ctr=safe_ratio(n_clicks, n_impressions),
+        cvr_click=safe_ratio(n_click, n_impressions),
+        cvr_view=safe_ratio(n_view, n_impressions),
         n_users=len(users),
     )
 
 
-def _merge_asof_events(
+def merge_asof_events(
     later: pd.DataFrame,
     earlier: pd.DataFrame,
     *,
@@ -139,7 +139,7 @@ def _merge_asof_events(
     if "event_id" in earlier.columns:
         keep.append("event_id")
     right = earlier.loc[:, [column for column in keep if column in earlier.columns]].copy()
-    right = _fill_blank_ids(right, "prior")
+    right = fill_blank_ids(right, "prior")
     right = right.rename(columns={OCCURRED_AT: "prior_at", "event_id": "prior_event_id"})
     left = left.sort_values(OCCURRED_AT)
     right = right.sort_values("prior_at")
@@ -160,7 +160,7 @@ def _merge_asof_events(
     return merged.loc[matched]
 
 
-def _coalesce_column(frame: pd.DataFrame, name: str) -> None:
+def coalesce_column(frame: pd.DataFrame, name: str) -> None:
     extras = (f"{name}_rec", f"{name}_latest")
     if name not in frame.columns:
         for extra in extras:
@@ -191,7 +191,7 @@ def _slice_later_events(frame: pd.DataFrame, keys: pd.DataFrame, prior_ids: set[
     return frame.merge(pair, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
 
 
-def _metrics_for_impression_slice(
+def metrics_for_impression_slice(
     impressions: pd.DataFrame,
     matched_clicks: pd.DataFrame,
     view_conv: pd.DataFrame,
@@ -244,7 +244,7 @@ def _dimension_value_key(dimension: str, value: Any) -> str:
     return str(value)
 
 
-def _metrics_by_impression_dimensions(
+def metrics_by_impression_dimensions(
     impressions: pd.DataFrame,
     matched_clicks: pd.DataFrame,
     view_conv: pd.DataFrame,
@@ -319,9 +319,9 @@ def _metrics_by_impression_dimensions(
             n_clicks=n_clicks,
             n_conversions_click=n_click,
             n_conversions_view=n_view,
-            ctr=_ratio(n_clicks, n_impressions),
-            cvr_click=_ratio(n_click, n_impressions),
-            cvr_view=_ratio(n_view, n_impressions),
+            ctr=safe_ratio(n_clicks, n_impressions),
+            cvr_click=safe_ratio(n_click, n_impressions),
+            cvr_view=safe_ratio(n_view, n_impressions),
             n_users=int(user_counts.get(index, 0)),
         )
     return result

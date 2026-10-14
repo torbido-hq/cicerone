@@ -7,20 +7,20 @@ from cicerone.evaluation.context import (
     generated_ats_from_track,
     load_metric_events,
 )
-from cicerone.evaluation.metrics import OCCURRED_AT, SliceMetrics, _merge_asof_events
+from cicerone.evaluation.metrics import OCCURRED_AT, SliceMetrics, merge_asof_events
 from cicerone.evaluation.served import (
     ServedEvalReport,
-    _recs_from_history,
     evaluate_served,
     filter_events_to_recommended,
     filter_recs_to_assigned,
+    recs_from_history,
     recs_from_impressions,
     replay_ks,
 )
 from cicerone.evaluation.tracking import (
     DEFAULT_CONVERSION_TYPE,
     TrackEvalReport,
-    _annotate_source,
+    annotate_impression_source,
     conversion_event_types,
     conversion_events,
     evaluate_tracking,
@@ -34,9 +34,7 @@ __all__ = [
     "ServedEvalReport",
     "SliceMetrics",
     "TrackEvalReport",
-    "_annotate_source",
-    "_merge_asof_events",
-    "_recs_from_history",
+    "annotate_impression_source",
     "conversion_event_types",
     "conversion_events",
     "conversion_events_for_settings",
@@ -47,6 +45,8 @@ __all__ = [
     "filter_recs_to_assigned",
     "generated_ats_from_track",
     "load_metric_events",
+    "merge_asof_events",
+    "recs_from_history",
     "recs_from_impressions",
     "replay_ks",
     "user_track_outcomes",

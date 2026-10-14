@@ -28,9 +28,9 @@ from cicerone.track.store_common import (
     HISTORY_DIR,
     HISTORY_FILENAME,
     TRACK_FILENAME,
-    _history_part_matches,
-    _history_stem_before,
-    _row_matches,
+    history_part_matches,
+    history_stem_before,
+    row_matches,
 )
 
 _HISTORY_READ_WORKERS = 8
@@ -84,7 +84,7 @@ class TrackDatasetBackend:
             else:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
-                    paths = [path for path in paths if not _history_stem_before(path.stem, since)]
+                    paths = [path for path in paths if not history_stem_before(path.stem, since)]
             return _collect_frames([_bind_local_frame(path) for path in paths])
         bucket = require_option(self._options, "bucket", "s3")
         prefix = object_key(self._options, f"{HISTORY_DIR}/")
@@ -98,7 +98,7 @@ class TrackDatasetBackend:
                 return []
             raise
         if since:
-            keys = [key for key in keys if not _history_stem_before(Path(key).stem, since)]
+            keys = [key for key in keys if not history_stem_before(Path(key).stem, since)]
         return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
 
     def _iter_track_lines(self) -> Iterator[bytes]:
@@ -132,7 +132,7 @@ class TrackDatasetBackend:
                 event_id = str(parsed.get("event_id") or "")
                 if event_id:
                     known.add(event_id)
-            if since and not _row_matches(parsed, kind=None, experiment_id=None, since=since):
+            if since and not row_matches(parsed, kind=None, experiment_id=None, since=since):
                 continue
             rows.append(parsed)
         if known is not None:
@@ -171,21 +171,21 @@ class TrackDatasetBackend:
         append_storage_bytes(self._options, filename, payload)
 
 
-def _history_part_name(generated_at: str) -> str:
+def history_part_name(generated_at: str) -> str:
     slug = "".join(ch if ch.isalnum() or ch in "-+." else "-" for ch in generated_at.strip())
     slug = slug.strip("-.") or "snapshot"
     return f"{slug}.parquet"
 
 
 def _local_history_paths(root: Path, generated_ats: set[str]) -> list[Path]:
-    exact = [root / _history_part_name(stamp) for stamp in generated_ats]
+    exact = [root / history_part_name(stamp) for stamp in generated_ats]
     if exact and all(path.is_file() for path in exact):
         return sorted(exact)
-    wanted_names = {_history_part_name(stamp) for stamp in generated_ats}
+    wanted_names = {history_part_name(stamp) for stamp in generated_ats}
     return [
         path
         for path in sorted(root.glob("*.parquet"))
-        if path.name in wanted_names or _history_part_matches(path.stem, generated_ats)
+        if path.name in wanted_names or history_part_matches(path.stem, generated_ats)
     ]
 
 
@@ -229,7 +229,7 @@ def _s3_history_frames(
     loaded: set[str] = set()
     missing: set[str] = set()
     exact = [
-        (stamp, object_key(options, f"{HISTORY_DIR}/{_history_part_name(stamp)}")) for stamp in generated_ats
+        (stamp, object_key(options, f"{HISTORY_DIR}/{history_part_name(stamp)}")) for stamp in generated_ats
     ]
 
     def _one(item: tuple[str, str]) -> tuple[str, str, pd.DataFrame | None]:
@@ -255,12 +255,12 @@ def _s3_history_frames(
         if is_s3_not_found(exc):
             return frames
         raise
-    missing_names = {_history_part_name(stamp) for stamp in missing}
+    missing_names = {history_part_name(stamp) for stamp in missing}
     extra = [
         key
         for key in keys
         if key not in loaded
-        and (Path(key).name in missing_names or _history_part_matches(Path(key).stem, missing))
+        and (Path(key).name in missing_names or history_part_matches(Path(key).stem, missing))
     ]
     frames.extend(_collect_frames([_bind_s3_frame(client, bucket, key) for key in extra]))
     return frames
