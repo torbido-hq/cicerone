@@ -13,7 +13,7 @@ from cicerone.config import EventsSettings
 from cicerone.config.constants import DEFAULT_EVENTS_MAX_BODY_BYTES
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app
-from cicerone.serve.events_routes import _max_body_bytes, _read_limited_json
+from cicerone.serve.events_routes import max_body_bytes, read_limited_json
 from cicerone.serve_schemas import ValidationErrorDetail
 
 
@@ -401,37 +401,37 @@ def _asgi_request(body: bytes, extra_headers: list[tuple[bytes, bytes]] | None =
 
 
 def test_max_body_bytes_falls_back_when_invalid_or_nonpositive():
-    assert _max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": "nope"}))) == (
+    assert max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": "nope"}))) == (
         DEFAULT_EVENTS_MAX_BODY_BYTES
     )
-    assert _max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": 0}))) == (
+    assert max_body_bytes(_settings(events=EventsSettings(options={"max_body_bytes": 0}))) == (
         DEFAULT_EVENTS_MAX_BODY_BYTES
     )
 
 
 def test_read_limited_json_parses_and_rejects_oversize_without_content_length():
-    parsed = asyncio.run(_read_limited_json(_asgi_request(b'{"ok":true}'), 64))
+    parsed = asyncio.run(read_limited_json(_asgi_request(b'{"ok":true}'), 64))
     assert parsed == {"ok": True}
     with pytest.raises(HTTPException) as oversize:
-        asyncio.run(_read_limited_json(_asgi_request(b'{"user_id":"' + b"u" * 200 + b'"}'), 64))
+        asyncio.run(read_limited_json(_asgi_request(b'{"user_id":"' + b"u" * 200 + b'"}'), 64))
     assert oversize.value.status_code == 413
     with pytest.raises(HTTPException) as invalid_length:
         asyncio.run(
-            _read_limited_json(
+            read_limited_json(
                 _asgi_request(b"{}", extra_headers=[(b"content-length", b"abc")]),
                 64,
             )
         )
     assert invalid_length.value.status_code == 400
     with pytest.raises(HTTPException) as bad_utf8:
-        asyncio.run(_read_limited_json(_asgi_request(b"\xff\xfe"), 64))
+        asyncio.run(read_limited_json(_asgi_request(b"\xff\xfe"), 64))
     assert bad_utf8.value.status_code == 400
 
 
 def test_read_limited_json_rejects_deeply_nested_json():
     nested = b"[" * 3000 + b"0" + b"]" * 3000
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(_read_limited_json(_asgi_request(nested), len(nested) + 1))
+        asyncio.run(read_limited_json(_asgi_request(nested), len(nested) + 1))
     assert exc.value.status_code == 400
     assert exc.value.detail == "Request body must be JSON"
 
@@ -447,4 +447,4 @@ def test_read_limited_json_does_not_map_unexpected_errors_to_400(monkeypatch):
     monkeypatch.setattr(events_routes.json, "loads", _boom)
     monkeypatch.setattr(json_mod, "loads", _boom)
     with pytest.raises(RuntimeError, match="internal"):
-        asyncio.run(_read_limited_json(_asgi_request(b'{"ok":true}'), 64))
+        asyncio.run(read_limited_json(_asgi_request(b'{"ok":true}'), 64))

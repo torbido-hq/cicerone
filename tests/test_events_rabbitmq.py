@@ -61,7 +61,7 @@ def test_amqp_timeouts_applied_on_connect(monkeypatch):
 
 
 def test_pika_io_skips_job_queued_during_timed_out_pump():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     entered = threading.Event()
     released = threading.Event()
@@ -73,7 +73,7 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
             entered.set()
             released.wait(timeout=2)
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io._connection = _Conn()
     io.start()
     try:
@@ -93,14 +93,14 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
 
 
 def test_pika_io_marks_failed_when_pump_raises():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     class _Conn:
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             raise ConnectionError("socket closed")
 
-    io = _PikaIo(timeout_seconds=1)
+    io = PikaIo(timeout_seconds=1)
     io._connection = _Conn()
     io.start()
     try:
@@ -116,7 +116,7 @@ def test_pika_io_marks_failed_when_pump_raises():
 
 
 def test_abandoned_io_does_not_return_late_ok():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     started = threading.Event()
     release = threading.Event()
@@ -126,7 +126,7 @@ def test_abandoned_io_does_not_return_late_ok():
         release.wait(timeout=2)
         return "late-delivery"
 
-    io = _PikaIo(timeout_seconds=2)
+    io = PikaIo(timeout_seconds=2)
     io.start()
     result: dict[str, Any] = {"value": None, "err": None}
 
@@ -152,9 +152,9 @@ def test_abandoned_io_does_not_return_late_ok():
 
 
 def test_pika_io_timeout_does_not_run_unclaimed_job():
-    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_get = io._jobs.get
     dequeued = threading.Event()
     release = threading.Event()
@@ -198,9 +198,9 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
 
 
 def test_pika_io_timeout_does_not_run_claimed_job():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _JOB_CLAIMED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _JOB_CLAIMED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_take = io._take_job
     claimed = threading.Event()
     release = threading.Event()
@@ -245,9 +245,9 @@ def test_pika_io_timeout_does_not_run_claimed_job():
 
 
 def test_pika_io_timeout_does_not_run_after_started_when_failed():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_should_run = io._should_run
     entered = threading.Event()
     release = threading.Event()
@@ -291,9 +291,9 @@ def test_pika_io_timeout_does_not_run_after_started_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_after_running_when_failed():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_should_run = io._should_run
     entered = threading.Event()
     release = threading.Event()
@@ -335,9 +335,9 @@ def test_pika_io_timeout_does_not_run_after_running_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
-    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_ABANDONED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_put = io._jobs.put
     invoking = threading.Event()
     release = threading.Event()
@@ -392,9 +392,9 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
 
 
 def test_pika_io_timeout_does_not_run_dispatched_job():
-    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_DISPATCHED, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, _JOB_DISPATCHED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     inner = io._state_lock
     original_put = io._jobs.put
     held: list[Any] = []
@@ -456,9 +456,9 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     from types import SimpleNamespace
 
     from cicerone.events.rabbitmq import RabbitMQEventSource
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     acks: list[int] = []
     io._channel = SimpleNamespace(basic_ack=lambda delivery_tag: acks.append(delivery_tag))
     entered = threading.Event()
@@ -503,13 +503,13 @@ def test_broker_ops_raise_when_channel_is_detached():
     from types import SimpleNamespace
 
     from cicerone.events.rabbitmq import RabbitMQEventSource
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     acks: list[int] = []
     gets: list[str] = []
     pumps: list[float] = []
     declares: list[str] = []
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io._channel = SimpleNamespace(
         basic_ack=lambda delivery_tag: acks.append(delivery_tag),
         basic_get=lambda queue, auto_ack=False: gets.append(queue) or (None, None, None),
@@ -536,9 +536,9 @@ def test_broker_ops_raise_when_channel_is_detached():
 
 
 def test_bind_handles_does_not_reborn_abandoned_io():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io._mark_failed()
     with pytest.raises(RuntimeError, match="abandoned"):
         io._bind_handles(connection=object(), channel=object())
@@ -547,7 +547,7 @@ def test_bind_handles_does_not_reborn_abandoned_io():
 
 
 def test_close_handles_closes_connection_when_channel_close_fails():
-    from cicerone.events.rabbitmq_io import _close_handles
+    from cicerone.events.rabbitmq_io import close_handles
 
     class _Handle:
         def __init__(self, error: BaseException | None = None) -> None:
@@ -561,13 +561,13 @@ def test_close_handles_closes_connection_when_channel_close_fails():
 
     channel = _Handle(RuntimeError("channel"))
     connection = _Handle()
-    _close_handles(channel, connection)
+    close_handles(channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 
     channel = _Handle(RuntimeError("channel"))
     connection = _Handle(RuntimeError("connection"))
-    _close_handles(channel, connection)
+    close_handles(channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 
@@ -575,7 +575,7 @@ def test_close_handles_closes_connection_when_channel_close_fails():
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
     from types import SimpleNamespace
 
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     def _handle() -> SimpleNamespace:
         state = SimpleNamespace(closed=False)
@@ -590,7 +590,7 @@ def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
     abandon_connection = _handle()
     live_channel = _handle()
     live_connection = _handle()
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io._abandon_channel = abandon_channel
     io._abandon_connection = abandon_connection
     io._channel = live_channel
@@ -609,7 +609,7 @@ def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
 def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
     from types import SimpleNamespace
 
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     def _handle(error: BaseException | None = None) -> SimpleNamespace:
         state = SimpleNamespace(closed=False, error=error)
@@ -624,7 +624,7 @@ def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
 
     channel = _handle(RuntimeError("channel"))
     connection = _handle()
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io._abandon_channel = channel
     io._abandon_connection = connection
     io._cleanup_abandoned()
@@ -633,9 +633,9 @@ def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
 
 
 def test_pika_io_timeout_does_not_run_after_enter_when_failed():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _PikaIo
+    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     original_enter = io._enter_job
     entered = threading.Event()
     release = threading.Event()
@@ -679,9 +679,9 @@ def test_pika_io_timeout_does_not_run_after_enter_when_failed():
 
 
 def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
-    from cicerone.events.rabbitmq_io import _IO_STOP, _PikaIo
+    from cicerone.events.rabbitmq_io import _IO_STOP, PikaIo
 
-    io = _PikaIo(timeout_seconds=5)
+    io = PikaIo(timeout_seconds=5)
     original_get = io._jobs.get
 
     def _fail_after_dequeue(*args: Any, **kwargs: Any) -> object:
@@ -702,7 +702,7 @@ def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
 
 
 def test_pika_io_cleans_up_when_idle_pump_raises_unexpected():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     class _Conn:
         def __init__(self) -> None:
@@ -716,7 +716,7 @@ def test_pika_io_cleans_up_when_idle_pump_raises_unexpected():
             self.closed = True
 
     connection = _Conn()
-    io = _PikaIo(timeout_seconds=1)
+    io = PikaIo(timeout_seconds=1)
     io._connection = connection
     io.start()
     try:
@@ -737,7 +737,7 @@ def test_pika_io_cleans_up_when_idle_pump_raises_unexpected():
 
 
 def test_pika_io_wakes_queued_submit_when_pump_fails():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     entered = threading.Event()
 
@@ -748,7 +748,7 @@ def test_pika_io_wakes_queued_submit_when_pump_fails():
             time.sleep(0.05)
             raise ConnectionError("socket closed")
 
-    io = _PikaIo(timeout_seconds=5)
+    io = PikaIo(timeout_seconds=5)
     io._connection = _Conn()
     io.start()
     try:
@@ -762,9 +762,9 @@ def test_pika_io_wakes_queued_submit_when_pump_fails():
 
 
 def test_pika_io_submit_rejected_after_shutdown_reserved():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
-    io = _PikaIo(timeout_seconds=1)
+    io = PikaIo(timeout_seconds=1)
     io.start()
     try:
         assert io._try_begin_shutdown() is True
@@ -776,9 +776,9 @@ def test_pika_io_submit_rejected_after_shutdown_reserved():
 
 
 def test_pika_io_submit_times_out():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io.start()
     try:
         with pytest.raises(TimeoutError, match="timed out"):
@@ -821,7 +821,7 @@ def test_close_abandons_hung_idle_pump(monkeypatch):
 
 
 def test_pika_io_busy_survives_overlapping_pump():
-    from cicerone.events.rabbitmq_io import _PikaIo
+    from cicerone.events.rabbitmq_io import PikaIo
 
     entered = threading.Event()
     released = threading.Event()
@@ -834,7 +834,7 @@ def test_pika_io_busy_survives_overlapping_pump():
             entered.set()
             released.wait(timeout=2)
 
-    io = _PikaIo(timeout_seconds=2)
+    io = PikaIo(timeout_seconds=2)
     io._connection = _Conn()
     io.start()
     try:
@@ -1777,7 +1777,7 @@ def test_reconnect_does_not_ack_late_delivery_on_new_channel(monkeypatch):
 
 
 def test_release_io_closes_handles_if_thread_already_exited(monkeypatch):
-    from cicerone.events.rabbitmq_io import _PikaIo, _release_io
+    from cicerone.events.rabbitmq_io import PikaIo, release_io
 
     class _Handle:
         def __init__(self) -> None:
@@ -1786,14 +1786,14 @@ def test_release_io_closes_handles_if_thread_already_exited(monkeypatch):
         def close(self) -> None:
             self.closed = True
 
-    io = _PikaIo(timeout_seconds=0.05)
+    io = PikaIo(timeout_seconds=0.05)
     io.start()
     io._failed = True
     io.stop()
     assert io._thread.is_alive() is False
     channel = _Handle()
     connection = _Handle()
-    _release_io(io, channel, connection)
+    release_io(io, channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 

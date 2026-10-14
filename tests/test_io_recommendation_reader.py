@@ -349,10 +349,10 @@ def test_dataset_reader_item_scores_missing_and_refresh(tmp_path):
 def test_item_scores_snapshot_does_not_mix_generations():
     import threading
 
-    from cicerone.io.recommendation_reader_common import _ItemFilterMixin
+    from cicerone.io.recommendation_reader_common import ItemFilterMixin
     from cicerone.item_scores import normalize_item_scores
 
-    class _Reader(_ItemFilterMixin):
+    class _Reader(ItemFilterMixin):
         pass
 
     first = normalize_item_scores(
@@ -430,7 +430,7 @@ def test_dataset_reader_refresh_propagates_index_errors(tmp_path, monkeypatch):
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
     monkeypatch.setattr(
-        "cicerone.io.dataset_recommendation_reader._index_recommendations_by_user",
+        "cicerone.io.dataset_recommendation_reader.index_recommendations_by_user",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad index")),
     )
     with pytest.raises(ValueError, match="bad index"):

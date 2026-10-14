@@ -29,7 +29,7 @@ from cicerone.io.recommendation_reader_common import (
     SOURCE_COLUMN,
     USER_COLUMN,
     VARIANT_COLUMN,
-    _ItemFilterMixin,
+    ItemFilterMixin,
     item_snapshot_columns,
     normalize_items_snapshot,
 )
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 _RN_COLUMN = "_cicerone_rn"
 
 
-class DbRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
+class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._table = sql_identifier(

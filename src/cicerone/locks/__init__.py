@@ -18,13 +18,6 @@ from cicerone.locks.hold import (
     held_writer_lock,
     writer_lock_held_here,
 )
-from cicerone.locks.hold import _acquire_once as _acquire_once
-from cicerone.locks.hold import _acquire_until as _acquire_until
-from cicerone.locks.hold import _bind_writer_generation as _bind_writer_generation
-from cicerone.locks.hold import _bound_writer_generation as _bound_writer_generation
-from cicerone.locks.hold import _lock_owned as _lock_owned
-from cicerone.locks.hold import _unbind_writer_generation as _unbind_writer_generation
-from cicerone.locks.hold import _writer_hold as _writer_hold
 from cicerone.locks.keys import (
     PG_ADVISORY_KEY1,
     PG_ADVISORY_KEY2,

@@ -1077,10 +1077,10 @@ def test_jsonish_numpy_scalar_and_na() -> None:
     import numpy as np
     import pandas as pd
 
-    from cicerone.experiment.store import _jsonish
+    from cicerone.experiment.store import jsonish
 
-    assert _jsonish(np.int64(3)) == 3
-    assert _jsonish(pd.NA) is None
+    assert jsonish(np.int64(3)) == 3
+    assert jsonish(pd.NA) is None
 
 
 def test_experiment_state_extra_keys_roundtrip_dataset(tmp_path) -> None:

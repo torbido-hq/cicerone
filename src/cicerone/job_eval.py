@@ -36,7 +36,7 @@ from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
 from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
-from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, _utc_stamp, lookback_since
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def replay_assignments(
         variant = str(row.get("variant") or "")
         if not user_id or variant not in names:
             continue
-        stamp = _utc_stamp(row.get("occurred_at"))
+        stamp = utc_stamp(row.get("occurred_at"))
         if stamp is None:
             continue
         timed.append(((int(stamp.value), str(row.get("event_id") or "")), user_id, variant))

@@ -14,7 +14,7 @@ _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _IDENTITY_SORT_SEP = "\x1f"
 _SQLITE_OCCURRED_AT = "strftime('%Y-%m-%d %H:%M:%f', occurred_at)"
 _SQLITE_WATERMARK_AT = "strftime('%Y-%m-%d %H:%M:%f', :watermark_at)"
-# SQLite/Postgres expression matching `_identity_bind_sort_key`.
+# SQLite/Postgres expression matching `identity_bind_sort_key`.
 _SQLITE_CTID_INNER = "replace(replace(replace(event_id, ' ', ''), 'ctid:(', ''), ')', '')"
 _SQLITE_IDENTITY_SORT = (
     "CASE"
@@ -60,7 +60,7 @@ _POSTGRES_IDENTITY_SORT = (
 )
 
 
-def _db_occurred_at(value: Any) -> datetime:
+def db_occurred_at(value: Any) -> datetime:
     # SQLAlchemy/SQLite often yield naive datetimes that are UTC in practice.
     if isinstance(value, datetime) and value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -113,12 +113,12 @@ def _is_numeric_identity(event_id: str) -> bool:
     return False
 
 
-def _identity_bind_sort_key(event_id: str) -> str:
+def identity_bind_sort_key(event_id: str) -> str:
     prefix, parts = _identity_sort_key(event_id)
     return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)
 
 
-def _identity_sql_sort_expr(dialect: str) -> str | None:
+def identity_sql_sort_expr(dialect: str) -> str | None:
     if dialect == "sqlite":
         return _SQLITE_IDENTITY_SORT
     if dialect == "postgresql":
@@ -126,7 +126,7 @@ def _identity_sql_sort_expr(dialect: str) -> str | None:
     return None
 
 
-def _occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
+def occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
     """SQL fragments: later-than watermark, same watermark, order-by occurred_at."""
     if dialect == "sqlite":
         return (
@@ -137,7 +137,7 @@ def _occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
     return ("occurred_at > :watermark_at", "occurred_at = :watermark_at", "occurred_at ASC")
 
 
-def _cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     return (occurred_at, _identity_sort_key(event_id))
 
 
@@ -160,18 +160,18 @@ def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     )
 
 
-def _cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
-    return _cursor_tuple(event.occurred_at, event.event_id)
+def cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return cursor_tuple(event.occurred_at, event.event_id)
 
 
-def _cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     """Lag path: parse occurred_at + stable id without full normalize_event."""
-    occurred_at = _db_occurred_at(payload.get("occurred_at"))
-    return _cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))
+    occurred_at = db_occurred_at(payload.get("occurred_at"))
+    return cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))
 
 
-def _row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
-    occurred_at = _db_occurred_at(payload.get("occurred_at"))
+def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
+    occurred_at = db_occurred_at(payload.get("occurred_at"))
     return normalize_event(
         {
             **payload,

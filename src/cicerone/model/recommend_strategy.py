@@ -16,18 +16,18 @@ from cicerone.dataset import BuiltDataset
 from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
 from cicerone.model.recommend_cache import (
     RecommendCache,
-    _dataset_fingerprint,
-    _items_fingerprint,
-    _recommend_cache_key,
+    dataset_fingerprint,
+    items_fingerprint,
+    recommend_cache_key,
 )
-from cicerone.model.recommend_cohort import _CohortPlan
+from cicerone.model.recommend_cohort import CohortPlan
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _StrategyFrames:
+class StrategyFrames:
     frames: list[pd.DataFrame]
     personalized_frames: list[pd.DataFrame]
     popular_frames: list[pd.DataFrame]
@@ -47,18 +47,18 @@ class _StrategyRecommendJob:
     cache_key: tuple[Hashable, ...]
 
 
-def _recommend_per_strategy(
+def recommend_per_strategy(
     models: dict[str, RecommenderModel],
     built: BuiltDataset,
     recommend_models: list[str],
-    cohort_plan: _CohortPlan,
+    cohort_plan: CohortPlan,
     *,
     blending_enabled: bool,
     blending_latest_date_columns: tuple[str, ...],
     top_k: int,
     recommend_cache: RecommendCache | None = None,
     max_workers: int = 1,
-) -> _StrategyFrames:
+) -> StrategyFrames:
     frames: list[pd.DataFrame] = []
     personalized_frames: list[pd.DataFrame] = []
     popular_frames: list[pd.DataFrame] = []
@@ -101,15 +101,15 @@ def _recommend_per_strategy(
             else:
                 recommend_users = cohort_users
 
-            cache_key = _recommend_cache_key(
+            cache_key = recommend_cache_key(
                 "strategy",
                 name,
                 cohort_key_value,
                 cohort_plan.recommend_k,
-                _items_fingerprint(allowed_items),
-                _items_fingerprint(recommend_users),
+                items_fingerprint(allowed_items),
+                items_fingerprint(recommend_users),
                 bool(strategy.personalized),
-                _dataset_fingerprint(dataset),
+                dataset_fingerprint(dataset),
             )
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
@@ -176,13 +176,13 @@ def _recommend_per_strategy(
             allowed_items = cohort_plan.allowed_by_cohort[cohort_key]
             if not allowed_items:
                 continue
-            latest_key = _recommend_cache_key(
+            latest_key = recommend_cache_key(
                 "latest",
                 date_column,
                 cohort_key,
                 latest_k,
-                _items_fingerprint(allowed_items),
-                _dataset_fingerprint(dataset),
+                items_fingerprint(allowed_items),
+                dataset_fingerprint(dataset),
             )
             cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
             if cached_latest is not None:
@@ -193,7 +193,7 @@ def _recommend_per_strategy(
                 if recommend_cache is not None:
                     recommend_cache[latest_key] = list(ranked)
 
-    return _StrategyFrames(
+    return StrategyFrames(
         frames=frames,
         personalized_frames=personalized_frames,
         popular_frames=popular_frames,

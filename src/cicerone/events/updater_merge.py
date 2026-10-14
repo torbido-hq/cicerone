@@ -50,7 +50,7 @@ def _source_parts(source: str) -> set[str]:
     return {part for part in source.split("+") if part}
 
 
-def _is_preserved_source(source: str) -> bool:
+def is_preserved_source(source: str) -> bool:
     return bool(_source_parts(source) & _PRESERVE_LABELS)
 
 
@@ -197,7 +197,7 @@ class UpdaterMerge:
         if user_batch.empty:
             return _kept_list(_restrict_items(prior, allowed), user_id, self._top_k)
         if not prior.empty and SOURCE_COLUMN in prior.columns:
-            mask = prior[SOURCE_COLUMN].astype(str).map(_is_preserved_source)
+            mask = prior[SOURCE_COLUMN].astype(str).map(is_preserved_source)
             preserved = prior.loc[mask].copy()
         else:
             preserved = prior.iloc[0:0] if not prior.empty else prior
@@ -268,7 +268,7 @@ class UpdaterMerge:
             return empty, preserved
         online = online_rows.copy()
         if SOURCE_COLUMN in online.columns:
-            online = online.loc[online[SOURCE_COLUMN].astype(str).map(_is_preserved_source)]
+            online = online.loc[online[SOURCE_COLUMN].astype(str).map(is_preserved_source)]
         if online.empty:
             return empty, preserved
         online_parts: set[str] = set()

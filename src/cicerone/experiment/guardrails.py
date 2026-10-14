@@ -13,7 +13,7 @@ DEFAULT_MAX_FALLBACK_RATE = 0.5
 DEFAULT_MAX_TOP_ITEM_SHARE = 0.4
 DEFAULT_MIN_COVERAGE = 5
 
-_FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE, "incremental"})
+FALLBACK_SOURCES = frozenset({POPULAR_SOURCE, LATEST_SOURCE, "incremental"})
 
 
 @dataclass(frozen=True)
@@ -27,9 +27,9 @@ class GuardrailReport:
 
 
 def _is_fallback_source(source: str) -> bool:
-    if source in _FALLBACK_SOURCES:
+    if source in FALLBACK_SOURCES:
         return True
-    return all(part in _FALLBACK_SOURCES for part in source.split("+") if part)
+    return all(part in FALLBACK_SOURCES for part in source.split("+") if part)
 
 
 def evaluate_guardrails(

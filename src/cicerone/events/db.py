@@ -17,14 +17,14 @@ from sqlalchemy import Engine, text
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
-    _cursor_key,
-    _cursor_key_from_payload,
-    _cursor_tuple,
-    _db_occurred_at,
-    _identity_bind_sort_key,
-    _identity_sql_sort_expr,
-    _occurred_at_predicates,
-    _row_to_event,
+    cursor_key,
+    cursor_key_from_payload,
+    cursor_tuple,
+    db_occurred_at,
+    identity_bind_sort_key,
+    identity_sql_sort_expr,
+    occurred_at_predicates,
+    row_to_event,
 )
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
@@ -37,7 +37,7 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
-# Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
+# Columns consumed by row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
     "item_id",
@@ -75,7 +75,7 @@ class DbEventSource(EventSource):
             self._events_query = _validate_events_query(self._events_query)
         self._watermark_path = Path(options["watermark_path"]) if options.get("watermark_path") else None
         initial = options.get("initial_watermark")
-        self._watermark_at = _db_occurred_at(initial) if initial not in (None, "") else _EPOCH
+        self._watermark_at = db_occurred_at(initial) if initial not in (None, "") else _EPOCH
         self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
         self._engine: Engine | None = None
         self._lock = threading.Lock()
@@ -131,15 +131,15 @@ class DbEventSource(EventSource):
             watermark_event_id,
             limit=max_events + in_flight_count + 8,
         )
-        candidates = sorted((_row_to_event(payload) for payload in rows), key=_cursor_key)
+        candidates = sorted((row_to_event(payload) for payload in rows), key=cursor_key)
 
         out: list[NormalizedEvent] = []
         with self._lock:
-            cursor = _cursor_tuple(self._watermark_at, self._watermark_event_id)
+            cursor = cursor_tuple(self._watermark_at, self._watermark_event_id)
             for event in candidates:
                 if len(out) >= max_events:
                     break
-                if _cursor_key(event) <= cursor:
+                if cursor_key(event) <= cursor:
                     continue
                 if event.event_id in self._in_flight:
                     continue
@@ -164,8 +164,8 @@ class DbEventSource(EventSource):
                 if event is None:
                     continue
                 confirmed.append(eid)
-                key = _cursor_key(event)
-                if key > _cursor_tuple(self._watermark_at, self._watermark_event_id):
+                key = cursor_key(event)
+                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
                     self._watermark_at = event.occurred_at
                     self._watermark_event_id = event.event_id
                     advanced = True
@@ -245,9 +245,9 @@ class DbEventSource(EventSource):
     ) -> list[dict[str, Any]]:
         select_clause, has_event_id = self._ensure_source_schema(engine)
         dialect = engine.dialect.name
-        identity_sort = _identity_sql_sort_expr(dialect) if has_event_id else None
+        identity_sort = identity_sql_sort_expr(dialect) if has_event_id else None
         if identity_sort is not None:
-            later, same, occurred_order = _occurred_at_predicates(dialect)
+            later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
                 f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
                 f"{later} OR "
@@ -257,7 +257,7 @@ class DbEventSource(EventSource):
             )
             params: dict[str, Any] = {
                 "watermark_at": watermark_at,
-                "watermark_sort": _identity_bind_sort_key(watermark_event_id),
+                "watermark_sort": identity_bind_sort_key(watermark_event_id),
                 "limit": max(limit, 1),
             }
         elif has_event_id:
@@ -299,9 +299,9 @@ class DbEventSource(EventSource):
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
-        identity_sort = _identity_sql_sort_expr(engine.dialect.name)
+        identity_sort = identity_sql_sort_expr(engine.dialect.name)
         if identity_sort is not None:
-            later, same, _occurred_order = _occurred_at_predicates(engine.dialect.name)
+            later, same, _occurred_order = occurred_at_predicates(engine.dialect.name)
             sql = text(
                 f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
                 f"{later} OR "
@@ -309,7 +309,7 @@ class DbEventSource(EventSource):
             )
             params: dict[str, Any] = {
                 "watermark_at": watermark_at,
-                "watermark_sort": _identity_bind_sort_key(watermark_event_id),
+                "watermark_sort": identity_bind_sort_key(watermark_event_id),
             }
         else:
             sql = text(
@@ -325,9 +325,9 @@ class DbEventSource(EventSource):
         self, engine: Engine, watermark_at: datetime, watermark_event_id: str
     ) -> int | None:
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
-        cursor = _cursor_tuple(watermark_at, watermark_event_id)
+        cursor = cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
-        count = sum(1 for payload in rows if _cursor_key_from_payload(payload) > cursor)
+        count = sum(1 for payload in rows if cursor_key_from_payload(payload) > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None
         return count
@@ -342,7 +342,7 @@ class DbEventSource(EventSource):
             watermark_at = self._watermark_at
             occurred_at = raw.get("occurred_at")
             if occurred_at:
-                watermark_at = _db_occurred_at(occurred_at)
+                watermark_at = db_occurred_at(occurred_at)
             watermark_event_id = str(raw.get("event_id") or "")
         except (OSError, ValueError):
             logger.exception(

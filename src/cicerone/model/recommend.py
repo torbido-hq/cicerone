@@ -21,11 +21,11 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.model.fit import ModelRunPlan, fit_strategies, plan_model_run
 from cicerone.model.recommend_cache import RecommendCache
 from cicerone.model.recommend_cohort import (
-    _resolve_cohort_plan,
     boost_overfetch_k,  # noqa: F401
+    resolve_cohort_plan,
 )
-from cicerone.model.recommend_combine import _combine_strategy_frames
-from cicerone.model.recommend_strategy import _recommend_per_strategy
+from cicerone.model.recommend_combine import combine_strategy_frames
+from cicerone.model.recommend_strategy import recommend_per_strategy
 from cicerone.model.strategies import RecommenderModel
 from cicerone.policy import apply_boosts
 
@@ -87,8 +87,8 @@ def recommend_with_models(
         validate_model_weights(weights)
     validate_rrf_k(rrf_k)
 
-    cohort_plan = _resolve_cohort_plan(built, config, target_users, recommend_models, top_k)
-    strategy_frames = _recommend_per_strategy(
+    cohort_plan = resolve_cohort_plan(built, config, target_users, recommend_models, top_k)
+    strategy_frames = recommend_per_strategy(
         models,
         built,
         recommend_models,
@@ -99,7 +99,7 @@ def recommend_with_models(
         recommend_cache=recommend_cache,
         max_workers=max_workers,
     )
-    combined = _combine_strategy_frames(
+    combined = combine_strategy_frames(
         models,
         built,
         config,

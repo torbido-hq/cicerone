@@ -21,7 +21,7 @@ from cicerone.config.constants import (
     PRIMARY_METRIC_WEIGHTED,
 )
 from cicerone.config.settings import ExperimentSettings
-from cicerone.experiment.assignment import _active_pair_traffic, assign_variant
+from cicerone.experiment.assignment import active_pair_traffic, assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
@@ -115,7 +115,7 @@ def evaluate_experiment(
         and active_pair[1] in names
         and promoted_variant is None
     ):
-        variants = _active_pair_traffic(
+        variants = active_pair_traffic(
             active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
         )
         names = [name for name, _traffic in variants]

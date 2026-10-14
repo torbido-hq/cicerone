@@ -16,9 +16,9 @@ from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.catalog import CatalogStore, jsonable_row, normalize_event_row
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.serve.events_routes import (
-    _max_body_bytes,
-    _put_pydantic_schema,
-    _read_limited_json,
+    max_body_bytes,
+    put_pydantic_schema,
+    read_limited_json,
 )
 from cicerone.serve_schemas import (
     CatalogEventsResponse,
@@ -93,8 +93,8 @@ def attach_catalog_events_openapi(schema: dict[str, Any]) -> None:
     if not isinstance(post, dict):
         return
     components = schema.setdefault("components", {}).setdefault("schemas", {})
-    _put_pydantic_schema(components, InteractionEvent)
-    _put_pydantic_schema(components, CatalogEventsBody)
+    put_pydantic_schema(components, InteractionEvent)
+    put_pydantic_schema(components, CatalogEventsBody)
     post["requestBody"] = {
         "required": True,
         "content": {
@@ -231,7 +231,7 @@ def mount_catalog_routes(
     )
     async def post_catalog_events(request: Request) -> CatalogWriteResponse:
         store = _require()
-        raw = await _read_limited_json(request, _max_body_bytes(settings))
+        raw = await read_limited_json(request, max_body_bytes(settings))
         try:
             body = CatalogEventsBody.model_validate(raw)
             rows = [normalize_event_row(event.model_dump()) for event in body.events]

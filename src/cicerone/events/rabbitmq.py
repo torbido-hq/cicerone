@@ -20,9 +20,9 @@ from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
     RABBITMQ_IO_ERRORS,
-    _close_handles,
-    _PikaIo,
-    _release_io,
+    PikaIo,
+    close_handles,
+    release_io,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,12 +57,12 @@ class RabbitMQEventSource(QueuedEventSource):
         self._prefetch = prefetch_count(options, prefix=_EVENTS_PREFIX)
         self._timeout_seconds = amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
 
-        self._io: _PikaIo | None = None
+        self._io: PikaIo | None = None
         self._connection: Any | None = None
         self._channel: Any | None = None
         self._delivery_tags: dict[str, int] = {}
         self._held_tags: set[int] = set()
-        self._event_io: dict[int, tuple[_PikaIo, str]] = {}
+        self._event_io: dict[int, tuple[PikaIo, str]] = {}
 
     def connect(self) -> None:
         try:
@@ -70,7 +70,7 @@ class RabbitMQEventSource(QueuedEventSource):
         except ImportError as exc:
             raise _missing_extra() from exc
 
-        io = _PikaIo(self._timeout_seconds)
+        io = PikaIo(self._timeout_seconds)
         io.start()
         opened = False
         try:
@@ -99,7 +99,7 @@ class RabbitMQEventSource(QueuedEventSource):
                 self._pending.append(event)
                 self._pending_ids.add(event.event_id)
         if previous_io is not None:
-            _release_io(previous_io, previous_channel, previous_connection)
+            release_io(previous_io, previous_channel, previous_connection)
 
     def close(self) -> None:
         with self._lock:
@@ -116,7 +116,7 @@ class RabbitMQEventSource(QueuedEventSource):
             self._event_io.clear()
         if io is None:
             return
-        _release_io(io, channel, connection)
+        release_io(io, channel, connection)
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
@@ -302,7 +302,7 @@ class RabbitMQEventSource(QueuedEventSource):
         )
 
     def _basic_get_many(
-        self, io: _PikaIo, count: int
+        self, io: PikaIo, count: int
     ) -> tuple[list[tuple[Any, Any, Any]], BaseException | None]:
         fetched: list[tuple[Any, Any, Any]] = []
         for _ in range(count):
@@ -316,19 +316,19 @@ class RabbitMQEventSource(QueuedEventSource):
                 break
         return fetched, None
 
-    def _basic_get(self, io: _PikaIo) -> Any:
+    def _basic_get(self, io: PikaIo) -> Any:
         return io.broker_channel().basic_get(self._queue, auto_ack=False)
 
-    def _basic_ack(self, io: _PikaIo, tag: int) -> None:
+    def _basic_ack(self, io: PikaIo, tag: int) -> None:
         io.broker_channel().basic_ack(delivery_tag=tag)
 
-    def _basic_nack(self, io: _PikaIo, tag: int) -> None:
+    def _basic_nack(self, io: PikaIo, tag: int) -> None:
         io.broker_channel().basic_nack(delivery_tag=tag, requeue=True)
 
-    def _passive_declare(self, io: _PikaIo) -> Any:
+    def _passive_declare(self, io: PikaIo) -> Any:
         return io.broker_channel().queue_declare(queue=self._queue, durable=True, passive=True)
 
-    def _open(self, pika: Any, io: _PikaIo) -> tuple[Any, Any]:
+    def _open(self, pika: Any, io: PikaIo) -> tuple[Any, Any]:
         if io.failed:
             raise EventSourceError("RabbitMQ I/O worker abandoned")
         connection = pika.BlockingConnection(
@@ -347,10 +347,10 @@ class RabbitMQEventSource(QueuedEventSource):
             if not opened:
                 io._channel = None
                 io._connection = None
-                _close_handles(channel, connection)
+                close_handles(channel, connection)
         return connection, channel
 
-    def _pump_connection(self, io: _PikaIo) -> None:
+    def _pump_connection(self, io: PikaIo) -> None:
         connection = io.broker_connection()
         try:
             connection.process_data_events(time_limit=0)
@@ -361,14 +361,14 @@ class RabbitMQEventSource(QueuedEventSource):
     def _backend(self) -> Any:
         return self._io
 
-    def _require_io(self) -> _PikaIo:
+    def _require_io(self) -> PikaIo:
         return self._require_ready()
 
-    def _owns_io(self, io: _PikaIo) -> bool:
+    def _owns_io(self, io: PikaIo) -> bool:
         with self._lock:
             return self._io is io and not io.failed
 
-    def _delivery_to_event(self, io: _PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
+    def _delivery_to_event(self, io: PikaIo, method: Any, body: Any) -> NormalizedEvent | None:
         tag = int(method.delivery_tag)
         with self._lock:
             if self._io is not io or tag in self._held_tags:
@@ -405,7 +405,7 @@ class RabbitMQEventSource(QueuedEventSource):
             return None
         return event
 
-    def _ack_discard(self, io: _PikaIo, tag: int) -> None:
+    def _ack_discard(self, io: PikaIo, tag: int) -> None:
         try:
             io.submit(partial(self._basic_ack, io, tag))
         except RABBITMQ_IO_ERRORS:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from cicerone.io.base import BaseRecommendationReader, recommendations_for_users
-from cicerone.io.recommendation_reader import _ItemFilterMixin
+from cicerone.io.recommendation_reader import ItemFilterMixin
 
 
 def test_base_recommendation_reader_defaults():
@@ -41,7 +41,7 @@ def test_recommendations_for_users_falls_back_to_single_reads():
 
 
 def test_item_filter_mixin_lazy_inits_if_subclass_skips_init():
-    class Bare(_ItemFilterMixin):
+    class Bare(ItemFilterMixin):
         pass
 
     bare = Bare()

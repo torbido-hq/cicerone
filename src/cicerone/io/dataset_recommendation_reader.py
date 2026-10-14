@@ -28,12 +28,12 @@ from cicerone.io.recommendation_reader_common import (
     SOURCE_COLUMN,
     USER_COLUMN,
     VARIANT_COLUMN,
-    _index_recommendations_by_user,
-    _ItemFilterMixin,
-    _resolve_fallback_user_id,
+    ItemFilterMixin,
+    index_recommendations_by_user,
     item_snapshot_columns,
     narrow_items_frame,
     normalize_items_snapshot,
+    resolve_fallback_user_id,
     select_cold_start_fallback,
 )
 from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
@@ -48,7 +48,7 @@ _CACHE_IO_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 
-class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
+class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
         self._backend = validate_storage_options(options)
@@ -159,10 +159,10 @@ class DatasetRecommendationReader(_ItemFilterMixin, BaseRecommendationReader):
         recommendations_ok = False
         try:
             cache = self._read_recommendations()
-            by_user = _index_recommendations_by_user(cache)
+            by_user = index_recommendations_by_user(cache)
             fallback_user_id = None
             if COLD_START_USER_ID not in by_user:
-                fallback_user_id = _resolve_fallback_user_id(by_user)
+                fallback_user_id = resolve_fallback_user_id(by_user)
             variant_names: tuple[str, ...] = ()
             if VARIANT_COLUMN in cache.columns and not cache.empty:
                 variant_names = tuple(

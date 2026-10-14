@@ -10,7 +10,7 @@ from cicerone.config import ConfigError
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
-from cicerone.model.recommend_cache import _dataset_fingerprint, _items_fingerprint, _recommend_cache_key
+from cicerone.model.recommend_cache import dataset_fingerprint, items_fingerprint, recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 from cicerone.reasons import parse_reasons
 
@@ -1040,28 +1040,28 @@ def test_content_fallback_respects_availability_filters(feature_config):
 
 
 def test_recommend_cache_key_normalizes_unhashable_parts():
-    dict_key = _recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)
-    list_key = _recommend_cache_key("latest", "published_at", [{"a": 1}], 5)
+    dict_key = recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)
+    list_key = recommend_cache_key("latest", "published_at", [{"a": 1}], 5)
     cache: dict[tuple, object] = {}
     cache[dict_key] = "hit"
     cache[list_key] = "latest"
-    assert cache[_recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)] == "hit"
-    assert cache[_recommend_cache_key("latest", "published_at", [{"a": 1}], 5)] == "latest"
-    hash(_recommend_cache_key("strategy", "als", None, 10))
-    hash(_recommend_cache_key("strategy", "als", {"b": 1, "a": 2}, 10))
-    hash(_recommend_cache_key("strategy", "als", {1, 2}, 10))
+    assert cache[recommend_cache_key("strategy", "popular", {"region": "IT"}, 10)] == "hit"
+    assert cache[recommend_cache_key("latest", "published_at", [{"a": 1}], 5)] == "latest"
+    hash(recommend_cache_key("strategy", "als", None, 10))
+    hash(recommend_cache_key("strategy", "als", {"b": 1, "a": 2}, 10))
+    hash(recommend_cache_key("strategy", "als", {1, 2}, 10))
     mixed = {1: "a", "b": 2}
-    assert _recommend_cache_key("strategy", "als", mixed, 10) == _recommend_cache_key(
+    assert recommend_cache_key("strategy", "als", mixed, 10) == recommend_cache_key(
         "strategy", "als", {"b": 2, 1: "a"}, 10
     )
 
 
 def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
     allow = ["i2", "i1"]
-    items = _items_fingerprint(allow)
-    assert items == _items_fingerprint(["i1", "i2"])
-    assert items != _items_fingerprint(["i1"])
-    assert _items_fingerprint([]) is None
+    items = items_fingerprint(allow)
+    assert items == items_fingerprint(["i1", "i2"])
+    assert items != items_fingerprint(["i1"])
+    assert items_fingerprint([]) is None
 
     class _Dataset:
         def __init__(self, fingerprint: object | None = None, version: object | None = None) -> None:
@@ -1070,44 +1070,44 @@ def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
 
     left = _Dataset()
     right = _Dataset()
-    assert _dataset_fingerprint(left) != _dataset_fingerprint(right)
+    assert dataset_fingerprint(left) != dataset_fingerprint(right)
 
     class _Fingerprinted:
         def fingerprint(self) -> str:
             return "snap"
 
-    assert _dataset_fingerprint(_Fingerprinted()) == "snap"
-    assert _dataset_fingerprint(_Dataset(fingerprint="snap-a")) == _dataset_fingerprint(
+    assert dataset_fingerprint(_Fingerprinted()) == "snap"
+    assert dataset_fingerprint(_Dataset(fingerprint="snap-a")) == dataset_fingerprint(
         _Dataset(fingerprint="snap-a")
     )
-    assert _dataset_fingerprint(_Dataset(version=3)) == _dataset_fingerprint(_Dataset(version=3))
+    assert dataset_fingerprint(_Dataset(version=3)) == dataset_fingerprint(_Dataset(version=3))
 
     ds = object()
-    same = _recommend_cache_key("strategy", "als", None, 10, items, True, _dataset_fingerprint(ds))
-    assert same == _recommend_cache_key(
-        "strategy", "als", None, 10, _items_fingerprint(["i1", "i2"]), True, _dataset_fingerprint(ds)
+    same = recommend_cache_key("strategy", "als", None, 10, items, True, dataset_fingerprint(ds))
+    assert same == recommend_cache_key(
+        "strategy", "als", None, 10, items_fingerprint(["i1", "i2"]), True, dataset_fingerprint(ds)
     )
-    assert same != _recommend_cache_key(
-        "strategy", "als", None, 10, _items_fingerprint(["i1"]), True, _dataset_fingerprint(ds)
+    assert same != recommend_cache_key(
+        "strategy", "als", None, 10, items_fingerprint(["i1"]), True, dataset_fingerprint(ds)
     )
-    assert same != _recommend_cache_key("strategy", "als", None, 10, items, False, _dataset_fingerprint(ds))
+    assert same != recommend_cache_key("strategy", "als", None, 10, items, False, dataset_fingerprint(ds))
     other_ds = object()
-    assert same != _recommend_cache_key(
-        "strategy", "als", None, 10, items, True, _dataset_fingerprint(other_ds)
+    assert same != recommend_cache_key(
+        "strategy", "als", None, 10, items, True, dataset_fingerprint(other_ds)
     )
 
 
 def test_recommend_cache_key_includes_user_set():
-    items = _items_fingerprint(["i1"])
-    users_ab = _items_fingerprint(["u1", "u2"])
-    users_a = _items_fingerprint(["u1"])
+    items = items_fingerprint(["i1"])
+    users_ab = items_fingerprint(["u1", "u2"])
+    users_a = items_fingerprint(["u1"])
     ds = object()
-    fingerprint = _dataset_fingerprint(ds)
-    same = _recommend_cache_key("strategy", "als", None, 10, items, users_ab, True, fingerprint)
-    assert same == _recommend_cache_key(
-        "strategy", "als", None, 10, items, _items_fingerprint(["u2", "u1"]), True, fingerprint
+    fingerprint = dataset_fingerprint(ds)
+    same = recommend_cache_key("strategy", "als", None, 10, items, users_ab, True, fingerprint)
+    assert same == recommend_cache_key(
+        "strategy", "als", None, 10, items, items_fingerprint(["u2", "u1"]), True, fingerprint
     )
-    assert same != _recommend_cache_key("strategy", "als", None, 10, items, users_a, True, fingerprint)
+    assert same != recommend_cache_key("strategy", "als", None, 10, items, users_a, True, fingerprint)
 
 
 def test_recommend_with_models_thread_pool_matches_serial(sample_items, feature_config):

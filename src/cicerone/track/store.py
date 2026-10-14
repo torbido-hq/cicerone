@@ -27,15 +27,15 @@ from cicerone.track.store_common import (
     TRACK_FILENAME,
     TRACK_LOG_BACKEND_ERROR,  # noqa: F401
     TRACK_LOG_HA_ERROR,
-    _filter_history,
-    _history_frame,
-    _iso_utc,
-    _jsonish,
-    _row_matches,
-    _row_with_event_id,
+    filter_history,
+    history_frame,
+    iso_utc,
+    jsonish,
     require_appendable_track_log,
+    row_matches,
+    row_with_event_id,
 )
-from cicerone.track.store_dataset import TrackDatasetBackend, _history_part_name
+from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
 from cicerone.track.store_db import TrackDbBackend
 
 logger = logging.getLogger(__name__)
@@ -53,9 +53,9 @@ __all__ = [
     "TRACK_LOG_BACKEND_ERROR",
     "TRACK_LOG_HA_ERROR",
     "TrackStore",
-    "_history_frame",
-    "_history_part_name",
-    "_jsonish",
+    "history_frame",
+    "history_part_name",
+    "jsonish",
     "require_appendable_track_log",
 ]
 
@@ -110,7 +110,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
-        payload = [_row_with_event_id(row) for row in rows]
+        payload = [row_with_event_id(row) for row in rows]
         if self._kind == "db":
             with self._append_lock, self._writer_lease():
                 return self._append_rows_db(payload)
@@ -145,7 +145,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         experiment_id: str | None = None,
         since: str | None = None,
     ) -> list[dict[str, Any]]:
-        since = _iso_utc(since)
+        since = iso_utc(since)
         if self._kind == "db":
             rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
@@ -159,7 +159,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 continue
             if event_id:
                 seen.add(event_id)
-            if not _row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
+            if not row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
                 continue
             unique.append(row)
         return unique
@@ -191,13 +191,13 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     def append_history(self, recommendations: pd.DataFrame, *, generated_at: str) -> None:
         if recommendations.empty:
             return
-        frame = _history_frame(recommendations, generated_at)
+        frame = history_frame(recommendations, generated_at)
         part = None
         payload = None
         if self._kind != "db":
             buf = BytesIO()
             frame.to_parquet(buf, index=False)
-            part = f"{HISTORY_DIR}/{_history_part_name(generated_at)}"
+            part = f"{HISTORY_DIR}/{history_part_name(generated_at)}"
             payload = buf.getvalue()
 
         with self._writer_lease():
@@ -218,14 +218,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             wanted.discard("")
             if not wanted:
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
-        since = _iso_utc(since)
+        since = iso_utc(since)
         if self._kind == "db":
             frame = self._read_history_db(generated_ats=wanted)
-            return _filter_history(frame, generated_ats=wanted, since=since)
+            return filter_history(frame, generated_ats=wanted, since=since)
         frames = []
         if wanted is None and since is None:
             frames.extend(self._read_legacy_history())
         frames.extend(self._read_history_parts(generated_ats=wanted, since=since))
         if not frames:
             return pd.DataFrame(columns=list(HISTORY_COLUMNS))
-        return _filter_history(pd.concat(frames, ignore_index=True), generated_ats=wanted, since=since)
+        return filter_history(pd.concat(frames, ignore_index=True), generated_ats=wanted, since=since)

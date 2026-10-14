@@ -29,15 +29,15 @@ def validate_redis_stream_options(options: dict[str, Any]) -> None:
         raise ConfigError("events.options.consumer_name must be non-empty when set")
     if "group_start_id" in options and str(options["group_start_id"]).strip() == "":
         raise ConfigError("events.options.group_start_id must be non-empty when set")
-    block_ms = _as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
+    block_ms = as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
     if block_ms < 0:
         raise ConfigError(f"events.options.block_ms must be >= 0, got {block_ms}")
-    claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
+    claim_idle_ms = as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
     if claim_idle_ms < 1:
         raise ConfigError(f"events.options.claim_idle_ms must be >= 1, got {claim_idle_ms}")
 
 
-def _as_int(options: dict[str, Any], key: str, default: int) -> int:
+def as_int(options: dict[str, Any], key: str, default: int) -> int:
     raw = options.get(key, default)
     try:
         return int(raw)
@@ -67,8 +67,8 @@ class RedisStreamsEventSource(QueuedEventSource):
         )
         start = options.get("group_start_id", _DEFAULT_GROUP_START_ID)
         self._group_start_id = str(start).strip() or _DEFAULT_GROUP_START_ID
-        self._block_ms = _as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
-        self._claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
+        self._block_ms = as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
+        self._claim_idle_ms = as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
 
         self._client: Any | None = None
         self._entry_ids: dict[str, str] = {}  # event_id → stream entry id (until XACK)

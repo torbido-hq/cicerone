@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
-from cicerone.events.s3_parse import _Batch
+from cicerone.events.s3_parse import Batch
 from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
@@ -28,7 +28,7 @@ class S3ListPoll:
     _list_page_size: int
     _in_flight: OrderedDict[str, NormalizedEvent]
     _pending: deque[NormalizedEvent]
-    _batches: OrderedDict[str, _Batch]
+    _batches: OrderedDict[str, Batch]
     _load_object_events: Callable[..., list[NormalizedEvent]]
     _register_batch: Callable[..., None]
 

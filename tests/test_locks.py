@@ -33,6 +33,7 @@ from cicerone.locks import (
     has_distributed_lock,
     held_writer_lock,
 )
+from cicerone.locks import hold as lock_hold
 from cicerone.locks.redis import RedisError
 from cicerone.trigger import RunGuard
 
@@ -993,7 +994,7 @@ def test_held_writer_lock_binds_try_acquire_generation():
 
     lock = Lock()
     with held_writer_lock(lock):
-        assert locks_mod._bound_writer_generation(lock) == 3
+        assert lock_hold.bound_writer_generation(lock) == 3
         locks_mod.ensure_writer_owned(lock)
     assert released == [3]
 
@@ -1114,8 +1115,8 @@ def test_lock_owned_falls_back_when_owned_rejects_generation():
         def owned(self) -> bool:
             return True
 
-    assert locks_mod._lock_owned(Lock(), 3) is True
-    assert locks_mod._lock_owned(Lock(), 2) is False
+    assert lock_hold.lock_owned(Lock(), 3) is True
+    assert lock_hold.lock_owned(Lock(), 2) is False
 
 
 def test_bound_writer_generation_ignores_other_lock():
@@ -1124,11 +1125,11 @@ def test_bound_writer_generation_ignores_other_lock():
 
     held = _Lock()
     other = _Lock()
-    locks_mod._bind_writer_generation(held, 4)
+    lock_hold.bind_writer_generation(held, 4)
     try:
-        assert locks_mod._bound_writer_generation(other) is None
+        assert lock_hold.bound_writer_generation(other) is None
     finally:
-        locks_mod._unbind_writer_generation()
+        lock_hold.unbind_writer_generation()
 
 
 def test_held_writer_lock_raises_when_lease_lost():

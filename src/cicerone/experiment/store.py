@@ -343,7 +343,7 @@ class ExperimentStore:
         if frame.empty:
             return None
         return _hydrate_state_row(
-            {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
+            {str(key): jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
         )
 
     def _write_state_db(self, state: dict[str, Any]) -> None:
@@ -478,7 +478,7 @@ class ExperimentStore:
         if frame.empty:
             return []
         records = frame.to_dict(orient="records")
-        return [{str(key): _jsonish(value) for key, value in row.items()} for row in records]
+        return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
 
     def _read_exposures_dataset(self) -> list[dict[str, Any]]:
         raw = self._read_bytes(EXPOSURES_FILENAME)
@@ -507,7 +507,7 @@ class ExperimentStore:
         append_storage_bytes(self._options, filename, payload)
 
 
-def _jsonish(value: Any) -> Any:
+def jsonish(value: Any) -> Any:
     if hasattr(value, "item"):
         try:
             return value.item()
