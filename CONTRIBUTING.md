@@ -315,6 +315,12 @@ different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`,
 `requirements-kafka.txt` / `requirements-rabbitmq.txt` /
 `requirements-sequential.txt` / `requirements-bandits.txt`.
 
+`pyproject.toml` declares compatible ranges (`>=pin,<next breaking`) for
+the package metadata; `requirements*.txt` hold the exact pins the image
+and CI install. A tighter cap (e.g. `<1.18`) is fine; a range must not span
+a breaking release. When a bump leaves its range, move the range in the same
+PR (`tests/test_packaging.py` checks every pin is inside its range).
+
 One-time PyPI setup (before the first upload): create a GitHub Environment
 named `pypi`, then a [pending trusted publisher](https://docs.pypi.org/trusted-publishers/)
 for `cicerone-recommender` — owner `torbido-hq`, repo `cicerone`, workflow

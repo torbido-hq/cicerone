@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Underscore helpers shared across modules are now public (e.g.
   `cicerone.evaluation.merge_asof_events`, `cicerone.locks.hold.lock_owned`).
   `_annotate_source` is now `annotate_impression_source`.
+- The PyPI package declares compatible version ranges (e.g.
+  `pandas>=2.3.3,<3`) instead of exact pins, for its dependencies and
+  extras. The Docker image still installs the exact pins.
 
 ### Deprecated
 
