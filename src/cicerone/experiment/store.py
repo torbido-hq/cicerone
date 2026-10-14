@@ -30,7 +30,7 @@ from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, w
 
 logger = logging.getLogger(__name__)
 
-_OVERLAY_READ_ERRORS = (OSError, ValueError, TypeError, BotoCoreError, *SQL_READ_ERRORS)
+_OVERLAY_READ_ERRORS = (OSError, ValueError, BotoCoreError, *SQL_READ_ERRORS)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"

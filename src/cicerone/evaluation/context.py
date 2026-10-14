@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowInvalid, ArrowIOError, ArrowNotImplementedError
+from pyarrow.lib import ArrowInvalid, ArrowIOError, ArrowNotImplementedError, ArrowTypeError
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -32,11 +32,11 @@ from cicerone.track.store_common import since_date_floor
 _METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ValueError,
-    TypeError,
     SQLAlchemyError,
     ArrowIOError,
     ArrowInvalid,
     ArrowNotImplementedError,
+    ArrowTypeError,
     BotoCoreError,
     RecommendationSchemaError,
 )

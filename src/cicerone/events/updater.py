@@ -39,6 +39,7 @@ from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_genera
 
 logger = logging.getLogger(__name__)
 
+# TypeError stays optional here: raising after a successful write would nack the applied flush.
 _SIDECAR_PUBLISH_ERRORS: tuple[type[BaseException], ...] = (*PUBLISH_ERRORS, TypeError)
 _ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
     *OPTIONAL_IO_ERRORS,

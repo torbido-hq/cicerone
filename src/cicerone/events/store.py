@@ -6,7 +6,7 @@ import logging
 from collections.abc import Collection, Sequence
 
 import pandas as pd
-from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError
+from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError, ArrowTypeError
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.config import IOSettings
@@ -32,7 +32,7 @@ from cicerone.io.recommendation_schema import (
 logger = logging.getLogger(__name__)
 
 _CATALOG_SOFT_ERRORS = (ArrowInvalid,)
-_PARQUET_PROJECTION_ERRORS = (ValueError, TypeError, ArrowInvalid, ArrowNotImplementedError)
+_PARQUET_PROJECTION_ERRORS = (ValueError, ArrowTypeError, ArrowInvalid, ArrowNotImplementedError)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
