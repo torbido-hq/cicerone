@@ -2408,6 +2408,36 @@ def test_job_marks_partial_outputs_when_write_commits_then_raises(tmp_path, monk
     assert manifest["partial_outputs"] is True
 
 
+def test_job_marks_partial_outputs_when_interrupted_after_write(tmp_path, monkeypatch):
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    real_write = DatasetOutputSink.write_recommendations
+
+    def commit_then_interrupt(self, df):
+        real_write(self, df)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", commit_then_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    assert (output_dir / "recommendations.parquet").exists()
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["partial_outputs"] is True
+
+
 def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"

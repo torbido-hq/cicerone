@@ -135,8 +135,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   events, experiment state, dashboard reads), the Thompson allocation and
   the eval steps, including RecTools metrics, no longer treat a `TypeError`
   as an optional failure. It now propagates; Arrow type/schema mismatches
-  are still skipped and logged. An incremental sidecar `TypeError` after a
-  successful write is still logged, so the applied flush is not nacked.
+  are still skipped and logged. A publisher `TypeError` during incremental
+  sidecar publish is still a logged publish failure, so the applied flush is
+  not nacked; a `TypeError` before publishing propagates.
 - A job that fails after writing the items snapshot, artifact or
   recommendations but before its success manifest marks the failed
   manifest `partial_outputs`, including on a `TypeError`.
