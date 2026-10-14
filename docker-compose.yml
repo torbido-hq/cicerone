@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Local Compose. Config: config/cicerone.toml. Secrets: .env (.env.example).
 #
 # Services (same app image for the three app containers):

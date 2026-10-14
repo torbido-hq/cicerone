@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0.0", "wheel==0.48.0"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,7 +20,34 @@ classifiers = [
     "Environment :: Console",
     "Operating System :: OS Independent",
 ]
-dynamic = ["version", "dependencies", "optional-dependencies"]
+dynamic = ["version"]
+# Compatible ranges; requirements*.txt pin the exact versions the image and CI install.
+dependencies = [
+    "rectools[lightfm]>=0.19.0,<0.20",
+    "pm-implicit>=0.7.3,<0.8",
+    "pandas>=2.3.3,<3",
+    "numpy>=1.26.4,<2",
+    "scipy>=1.17.1,<2",
+    "scikit-learn>=1.9.1,<2",
+    "boto3>=1.43.111,<2",
+    "pyarrow>=25.0.1,<26",
+    "SQLAlchemy>=2.1.4,<3",
+    "psycopg[binary]>=3.3.6,<4",
+    "croniter>=6.2.4,<7",
+    "fastapi>=0.143.0,<0.144",
+    "python-multipart>=0.0.32,<0.0.33",
+    "uvicorn[standard]>=0.54.0,<0.55",
+    "prometheus-client>=0.26.0,<0.27",
+    "jinja2>=3.1.6,<4",
+    "bcrypt>=5.0.0,<6",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=8.1.0,<9"]
+sequential = ["rectools[torch]>=0.19.0,<0.20"]
+kafka = ["confluent-kafka>=2.16.0,<3"]
+rabbitmq = ["pika>=1.4.4,<2"]
+bandits = ["mabwiser>=2.7.4,<3"]
 
 [project.urls]
 Homepage = "https://cicerone.dev"
@@ -43,14 +70,6 @@ cicerone = ["static/**/*", "templates/**/*", "serve/python_detect.sh"]
 
 [tool.setuptools.dynamic]
 version = { attr = "cicerone.__version__" }
-dependencies = { file = ["requirements.txt"] }
-
-[tool.setuptools.dynamic.optional-dependencies]
-redis = { file = ["requirements-redis.txt"] }
-sequential = { file = ["requirements-sequential.txt"] }
-kafka = { file = ["requirements-kafka.txt"] }
-rabbitmq = { file = ["requirements-rabbitmq.txt"] }
-bandits = { file = ["requirements-bandits.txt"] }
 
 [tool.ruff]
 line-length = 110

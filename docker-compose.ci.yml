@@ -1,5 +1,3 @@
-version: "3.9"
-
 # CI-only stack: runs the pytest suite (>=95% coverage enforced by
 # pyproject.toml) against a real, throwaway Postgres instance for the
 # database-backend tests. The Robot Framework system/E2E suites
