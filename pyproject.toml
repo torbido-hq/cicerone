@@ -68,8 +68,8 @@ check_untyped_defs = true
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 filterwarnings = [
-    "error:Settings\\.\\w+ is deprecated:DeprecationWarning",
-    "error:make_settings\\(\\w+=\\.\\.\\.\\) is deprecated:DeprecationWarning",
+    "error:Settings\\.\\w+ is deprecated:FutureWarning",
+    "error:make_settings\\(\\w+=\\.\\.\\.\\) is deprecated:FutureWarning",
 ]
 
 [tool.coverage.run]

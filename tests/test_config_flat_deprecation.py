@@ -17,16 +17,14 @@ def test_every_flat_property_is_covered():
 def test_flat_property_still_returns_nested_value_with_warning(name):
     settings = make_settings()
     section, _, field = name.partition("_")
-    with pytest.warns(
-        DeprecationWarning, match=rf"Settings\.{name} is deprecated.*Settings\.{section}\.{field}"
-    ):
+    with pytest.warns(FutureWarning, match=rf"Settings\.{name} is deprecated.*Settings\.{section}\.{field}"):
         value = getattr(settings, name)
     assert value == getattr(getattr(settings, section), field)
 
 
 def test_flat_make_settings_kwarg_still_applies_with_warning():
     with pytest.warns(
-        DeprecationWarning,
+        FutureWarning,
         match=re.escape("make_settings(serve_port=...) is deprecated")
         + ".*serve=ServeSettings\\(port=...\\)",
     ):

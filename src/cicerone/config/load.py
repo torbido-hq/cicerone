@@ -170,7 +170,7 @@ def _coerce_nested(
             warnings.warn(
                 f"make_settings({flat_key}=...) is deprecated and will be removed in 0.9.0; "
                 f"use {section}={cls.__name__}({field_name}=...)",
-                DeprecationWarning,
+                FutureWarning,
                 stacklevel=3,
             )
             updates[field_name] = overrides.pop(flat_key)
