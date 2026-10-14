@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from typing import Protocol
 
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
@@ -172,3 +173,53 @@ def held_writer_lock(
             release_generation(generation)
         else:
             lock.release()
+
+
+@dataclass(frozen=True)
+class WriteFence:
+    """Writer lock plus fence check guarding one store's writes."""
+
+    lock: LockBackend | None = None
+    check: Callable[[], bool] | None = None
+    lost: str = "lock lost before write"
+    kind: str = "lock"
+
+    @classmethod
+    def resolve(
+        cls,
+        fence: WriteFence | None,
+        *,
+        writer_lock: LockBackend | None = None,
+        fence_check: Callable[[], bool] | None = None,
+        fence_lost: str = "lock lost before write",
+        fence_kind: str = "lock",
+    ) -> WriteFence:
+        if fence is None:
+            return cls(writer_lock, fence_check, fence_lost, fence_kind)
+        # Identity, not equality: a lock or check may define its own __eq__.
+        if (
+            writer_lock is not None
+            or fence_check is not None
+            or (fence_lost, fence_kind) != (cls.lost, cls.kind)
+        ):
+            raise ValueError("pass either fence= or writer_lock/fence_* keywords, not both")
+        return fence
+
+    def held_here(self) -> bool:
+        return writer_lock_held_here(self.lock)
+
+    def ensure(self) -> None:
+        ensure_writer_owned(self.lock, fence_check=self.check, fence_lost=self.lost, fence_kind=self.kind)
+
+    def hold(self) -> AbstractContextManager[None]:
+        return held_writer_lock(self.lock, fence_check=self.check, fence_lost=self.lost, fence_kind=self.kind)
+
+    @contextmanager
+    def lease(self) -> Iterator[None]:
+        """Re-entrant hold: re-check the fence if this thread already holds the lock."""
+        if self.held_here():
+            self.ensure()
+            yield
+            return
+        with self.hold():
+            yield

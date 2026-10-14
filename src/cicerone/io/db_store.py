@@ -44,6 +44,7 @@ from cicerone.io.recommendation_schema import (
 )
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, filter_rows_for_user, newest_events
+from cicerone.locks.hold import WriteFence
 
 logger = logging.getLogger(__name__)
 
@@ -266,42 +267,28 @@ class DatabaseOutputSink:
         fence_check: Callable[[], bool] | None = None,
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
+        fence: WriteFence | None = None,
     ):
         self._options = options
         self._engine = engine_for(require_option(options, "database_url", "db"))
-        self._writer_lock = writer_lock
-        self._fence_check = fence_check
-        self._fence_lost = fence_lost
-        self._fence_kind = fence_kind
+        self._fence = WriteFence.resolve(
+            fence,
+            writer_lock=writer_lock,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
-        from cicerone.locks import held_writer_lock, writer_lock_held_here
-
-        if writer_lock_held_here(self._writer_lock):
-            self._ensure_fence()
-            yield
-            return
-        with held_writer_lock(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        ):
+        with self._fence.lease():
             yield
 
     def ensure_writer_held(self) -> None:
         self._ensure_fence()
 
     def _ensure_fence(self) -> None:
-        from cicerone.locks import ensure_writer_owned
-
-        ensure_writer_owned(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        )
+        self._fence.ensure()
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
         with self.recommendations_write():

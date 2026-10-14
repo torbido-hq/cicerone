@@ -32,7 +32,7 @@ from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
 from cicerone.io.replace_users import RecommendationSchemaError
-from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
+from cicerone.locks import LockBackend, LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
@@ -146,6 +146,10 @@ def replay_assignments(
     return assigned or None
 
 
+def retrain_fence(lock: LockBackend | None, fence_check: Callable[[], bool] | None) -> WriteFence:
+    return WriteFence(lock, fence_check, "retrain lock lost before write", "retrain")
+
+
 def persist_track_outputs(
     store: TrackStore,
     *,
@@ -165,7 +169,8 @@ def persist_track_outputs(
                 lambda: store.append_history(recommendations, generated_at=generated_at),
             )
         )
-    lock = getattr(store, "_writer_lock", None)
+    fence = getattr(store, "fence", None)
+    lock = fence.lock if fence is not None else None
 
     def _run_serial() -> None:
         for label, fn in tasks:
@@ -173,12 +178,7 @@ def persist_track_outputs(
 
     try:
         if lock is not None:
-            with held_writer_lock(
-                lock,
-                fence_check=fence_check,
-                fence_lost="retrain lock lost before write",
-                fence_kind="retrain",
-            ):
+            with retrain_fence(lock, fence_check).hold():
                 _run_serial()
             return
         if kind == "db":

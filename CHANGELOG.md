@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.8.5] - 2026-09-28
 
+### Added
+
+- `cicerone.locks.WriteFence` bundles a writer lock with its fence check.
+  `build_output_sink`, the output sinks, `TrackStore` and `ExperimentStore`
+  accept `fence=`; the `writer_lock` / `fence_*` keywords still work.
+
 ### Changed
 
 - Item snapshot refresh reads the item id and the configured filter columns.

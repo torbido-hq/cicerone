@@ -15,7 +15,7 @@ from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings
 from cicerone.deprecation import renamed_attribute
-from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
+from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
     DEFAULT_HISTORY_TABLE,  # noqa: F401
@@ -72,6 +72,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         fence_check: Callable[[], bool] | None = None,
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
+        fence: WriteFence | None = None,
     ):
         self._output = output
         self._kind = output.kind
@@ -81,31 +82,24 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         self._known_ids: set[str] | None = None
         self._track_size: int | None = None
         self._append_lock = threading.Lock()
-        self._writer_lock = writer_lock
-        self._fence_check = fence_check
-        self._fence_lost = fence_lost
-        self._fence_kind = fence_kind
+        self._fence = WriteFence.resolve(
+            fence,
+            writer_lock=writer_lock,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
+
+    @property
+    def fence(self) -> WriteFence:
+        return self._fence
 
     def _ensure_fence(self) -> None:
-        ensure_writer_owned(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        )
+        self._fence.ensure()
 
     @contextmanager
     def _writer_lease(self) -> Iterator[None]:
-        if writer_lock_held_here(self._writer_lock):
-            self._ensure_fence()
-            yield
-            return
-        with held_writer_lock(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        ):
+        with self._fence.lease():
             yield
 
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

@@ -26,7 +26,7 @@ from cicerone.io.options import (
     sql_identifier,
     storage_backend,
 )
-from cicerone.locks import LockBackend, ensure_writer_owned, held_writer_lock, writer_lock_held_here
+from cicerone.locks import LockBackend, WriteFence
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,7 @@ class ExperimentStore:
         fence_check: Callable[[], bool] | None = None,
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
+        fence: WriteFence | None = None,
     ):
         self._output = output
         self._kind = output.kind
@@ -158,10 +159,13 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
-        self._writer_lock = writer_lock
-        self._fence_check = fence_check
-        self._fence_lost = fence_lost
-        self._fence_kind = fence_kind
+        self._fence = WriteFence.resolve(
+            fence,
+            writer_lock=writer_lock,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
@@ -221,27 +225,17 @@ class ExperimentStore:
         encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
 
         def _persist() -> None:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._fence.ensure()
             if self._kind == "db":
                 self._write_state_db(payload)
                 return
             assert encoded is not None
             self._write_bytes(STATE_FILENAME, encoded, "application/json")
 
-        if writer_lock_held_here(self._writer_lock):
+        if self._fence.held_here():
             _persist()
         else:
-            with held_writer_lock(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            ):
+            with self._fence.hold():
                 _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
@@ -263,34 +257,19 @@ class ExperimentStore:
             path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
 
         def _persist() -> None:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._fence.ensure()
             if self._kind == "db":
                 self._append_exposures_db(rows)
                 return
             assert encoded is not None and path is not None
             with exclusive_file_lock(path):
-                ensure_writer_owned(
-                    self._writer_lock,
-                    fence_check=self._fence_check,
-                    fence_lost=self._fence_lost,
-                    fence_kind=self._fence_kind,
-                )
+                self._fence.ensure()
                 self._append_bytes(EXPOSURES_FILENAME, encoded)
 
-        if writer_lock_held_here(self._writer_lock):
+        if self._fence.held_here():
             _persist()
             return
-        with held_writer_lock(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        ):
+        with self._fence.hold():
             _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
@@ -379,12 +358,7 @@ class ExperimentStore:
         )
 
         def _fence() -> None:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._fence.ensure()
 
         def _replace_row(conn: Any) -> None:
             _fence()
@@ -413,19 +387,9 @@ class ExperimentStore:
         )
         engine = self._db_engine()
         with engine.begin() as conn:
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._fence.ensure()
             pd.DataFrame(list(rows)).to_sql(table, conn, if_exists="append", index=False)
-            ensure_writer_owned(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            )
+            self._fence.ensure()
 
     def _stored_exposure_columns(self, engine: Engine, table: str) -> list[str] | None:
         try:
