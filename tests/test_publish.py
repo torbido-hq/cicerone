@@ -494,7 +494,7 @@ def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config:
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
-def test_updater_propagates_sidecar_type_error_before_publish(tmp_path, feature_config: FeatureConfig):
+def test_updater_does_not_nack_after_sidecar_connect_type_error(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -524,9 +524,10 @@ def test_updater_propagates_sidecar_type_error_before_publish(tmp_path, feature_
         publisher=_Pub(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(TypeError, match="connect bug"):
-        updater.apply(events)
+    assert updater.apply(events) == 1
     assert calls == []
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
 def test_kafka_publisher_not_connected():
