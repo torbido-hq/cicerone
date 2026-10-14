@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -199,6 +200,14 @@ class IOSettings:
     artifact_hmac_key: str | None = None
 
 
+def _warn_flat_property(name: str, nested: str) -> None:
+    warnings.warn(
+        f"Settings.{name} is deprecated and will be removed in 0.9.0; use Settings.{nested}",
+        FutureWarning,
+        stacklevel=3,
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     input: IOSettings
@@ -232,144 +241,180 @@ class Settings:
 
     @property
     def serve_host(self) -> str:
+        _warn_flat_property("serve_host", "serve.host")
         return self.serve.host
 
     @property
     def serve_port(self) -> int:
+        _warn_flat_property("serve_port", "serve.port")
         return self.serve.port
 
     @property
     def serve_auth_token(self) -> str | None:
+        _warn_flat_property("serve_auth_token", "serve.auth_token")
         return self.serve.auth_token
 
     @property
     def serve_default_k(self) -> int:
+        _warn_flat_property("serve_default_k", "serve.default_k")
         return self.serve.default_k
 
     @property
     def serve_refresh_interval_seconds(self) -> float:
+        _warn_flat_property("serve_refresh_interval_seconds", "serve.refresh_interval_seconds")
         return self.serve.refresh_interval_seconds
 
     @property
     def serve_category_column(self) -> str:
+        _warn_flat_property("serve_category_column", "serve.category_column")
         return self.serve.category_column
 
     @property
     def serve_metrics_enabled(self) -> bool:
+        _warn_flat_property("serve_metrics_enabled", "serve.metrics_enabled")
         return self.serve.metrics_enabled
 
     @property
     def serve_metrics_token(self) -> str | None:
+        _warn_flat_property("serve_metrics_token", "serve.metrics_token")
         return self.serve.metrics_token
 
     @property
     def trigger_enabled(self) -> bool:
+        _warn_flat_property("trigger_enabled", "trigger.enabled")
         return self.trigger.enabled
 
     @property
     def trigger_host(self) -> str:
+        _warn_flat_property("trigger_host", "trigger.host")
         return self.trigger.host
 
     @property
     def trigger_port(self) -> int:
+        _warn_flat_property("trigger_port", "trigger.port")
         return self.trigger.port
 
     @property
     def trigger_auth_token(self) -> str | None:
+        _warn_flat_property("trigger_auth_token", "trigger.auth_token")
         return self.trigger.auth_token
 
     @property
     def trigger_debounce_seconds(self) -> float:
+        _warn_flat_property("trigger_debounce_seconds", "trigger.debounce_seconds")
         return self.trigger.debounce_seconds
 
     @property
     def trigger_poll_input_bucket(self) -> bool:
+        _warn_flat_property("trigger_poll_input_bucket", "trigger.poll_input_bucket")
         return self.trigger.poll_input_bucket
 
     @property
     def trigger_poll_interval_seconds(self) -> float:
+        _warn_flat_property("trigger_poll_interval_seconds", "trigger.poll_interval_seconds")
         return self.trigger.poll_interval_seconds
 
     @property
     def trigger_lock_backend(self) -> str:
+        _warn_flat_property("trigger_lock_backend", "trigger.lock_backend")
         return self.trigger.lock_backend
 
     @property
     def trigger_postgres_url(self) -> str | None:
+        _warn_flat_property("trigger_postgres_url", "trigger.postgres_url")
         return self.trigger.postgres_url
 
     @property
     def trigger_redis_url(self) -> str | None:
+        _warn_flat_property("trigger_redis_url", "trigger.redis_url")
         return self.trigger.redis_url
 
     @property
     def trigger_lock_key(self) -> str:
+        _warn_flat_property("trigger_lock_key", "trigger.lock_key")
         return self.trigger.lock_key
 
     @property
     def trigger_lock_ttl_seconds(self) -> float:
+        _warn_flat_property("trigger_lock_ttl_seconds", "trigger.lock_ttl_seconds")
         return self.trigger.lock_ttl_seconds
 
     @property
     def dashboard_enabled(self) -> bool:
+        _warn_flat_property("dashboard_enabled", "dashboard.enabled")
         return self.dashboard.enabled
 
     @property
     def dashboard_host(self) -> str:
+        _warn_flat_property("dashboard_host", "dashboard.host")
         return self.dashboard.host
 
     @property
     def dashboard_port(self) -> int:
+        _warn_flat_property("dashboard_port", "dashboard.port")
         return self.dashboard.port
 
     @property
     def dashboard_users_path(self) -> str:
+        _warn_flat_property("dashboard_users_path", "dashboard.users_path")
         return self.dashboard.users_path
 
     @property
     def dashboard_refresh_interval_seconds(self) -> float:
+        _warn_flat_property("dashboard_refresh_interval_seconds", "dashboard.refresh_interval_seconds")
         return self.dashboard.refresh_interval_seconds
 
     @property
     def dashboard_history_limit(self) -> int:
+        _warn_flat_property("dashboard_history_limit", "dashboard.history_limit")
         return self.dashboard.history_limit
 
     @property
     def dashboard_lookup_k(self) -> int:
+        _warn_flat_property("dashboard_lookup_k", "dashboard.lookup_k")
         return self.dashboard.lookup_k
 
     @property
     def dashboard_lookup_events(self) -> int:
+        _warn_flat_property("dashboard_lookup_events", "dashboard.lookup_events")
         return self.dashboard.lookup_events
 
     @property
     def automl_enabled(self) -> bool:
+        _warn_flat_property("automl_enabled", "automl.enabled")
         return self.automl.enabled
 
     @property
     def automl_n_splits(self) -> int:
+        _warn_flat_property("automl_n_splits", "automl.n_splits")
         return self.automl.n_splits
 
     @property
     def automl_test_days(self) -> int:
+        _warn_flat_property("automl_test_days", "automl.test_days")
         return self.automl.test_days
 
     @property
     def automl_primary_metric(self) -> str:
+        _warn_flat_property("automl_primary_metric", "automl.primary_metric")
         return self.automl.primary_metric
 
     @property
     def automl_candidates(self) -> list[dict[str, Any]] | None:
+        _warn_flat_property("automl_candidates", "automl.candidates")
         return self.automl.candidates
 
     @property
     def automl_debias(self) -> bool:
+        _warn_flat_property("automl_debias", "automl.debias")
         return self.automl.debias
 
     @property
     def events_enabled(self) -> bool:
+        _warn_flat_property("events_enabled", "events.enabled")
         return self.events.enabled
 
     @property
     def events_kind(self) -> str:
+        _warn_flat_property("events_kind", "events.kind")
         return self.events.kind

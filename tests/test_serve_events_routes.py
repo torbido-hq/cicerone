@@ -6,9 +6,10 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from support.settings import make_settings
 from test_serve import _FakeReader, _recs_df
 
-from cicerone.config import EventsSettings, make_settings
+from cicerone.config import EventsSettings
 from cicerone.config.constants import DEFAULT_EVENTS_MAX_BODY_BYTES
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app

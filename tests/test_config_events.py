@@ -19,8 +19,8 @@ def test_make_settings_events_defaults():
     assert settings.events.online.fit_partial_epochs == 1
     assert settings.events.online.fit_min_events == 100
     assert settings.events.online.max_extra_interactions == 50_000
-    assert settings.events_enabled is False
-    assert settings.events_kind == "webhook"
+    assert settings.events.enabled is False
+    assert settings.events.kind == "webhook"
 
 
 def test_coerce_events_settings_errors():

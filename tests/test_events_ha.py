@@ -9,9 +9,10 @@ import pandas as pd
 import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
+from support.settings import make_settings
 from support.toml_config import write_toml
 
-from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings, make_settings
+from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings
 from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock

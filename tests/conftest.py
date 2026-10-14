@@ -6,9 +6,9 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from support.settings import make_settings
 from support.system_spec import SKIP_NO_TEST_DB
 
-from cicerone.config import make_settings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
 from cicerone.io.engines import dispose_engines

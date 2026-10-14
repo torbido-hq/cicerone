@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import tomllib
+import warnings
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -162,6 +163,13 @@ def _coerce_nested(
     updates: dict[str, Any] = {}
     for flat_key, field_name in flat_keys:
         if flat_key in overrides:
+            section = flat_key.removesuffix(f"_{field_name}")
+            warnings.warn(
+                f"make_settings({flat_key}=...) is deprecated and will be removed in 0.9.0; "
+                f"use {section}={cls.__name__}({field_name}=...)",
+                FutureWarning,
+                stacklevel=3,
+            )
             updates[field_name] = overrides.pop(flat_key)
     return replace(base, **updates) if updates else base
 

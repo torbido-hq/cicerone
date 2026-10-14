@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from support.settings import make_settings
 from test_serve import _FakeReader, _recs_df
 
-from cicerone.config import EventsSettings, IOSettings, make_settings
+from cicerone.config import EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.serve import create_app
 from cicerone.serve_schemas import ValidationErrorDetail

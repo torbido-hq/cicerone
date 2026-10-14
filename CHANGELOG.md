@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Config loading logs a warning for each unknown key in `cicerone.toml`
   (e.g. a typo like `top_K`) instead of silently ignoring it.
 
+### Deprecated
+
+- Flat `Settings` aliases (`serve_host`, `trigger_lock_backend`,
+  `dashboard_enabled`, …) and flat `make_settings` overrides
+  (`make_settings(serve_port=…)`) warn and will be removed in 0.9.0. Use
+  the nested `settings.serve.host` / `make_settings(serve=ServeSettings(…))`.
+
 ### Fixed
 
 - Redis Streams polling, health, heartbeat, and close paths only recover
