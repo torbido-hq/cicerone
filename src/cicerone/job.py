@@ -645,7 +645,7 @@ def _write_job_outputs(
                             log=logger,
                         )
                 raise
-    except Exception:
+    except BaseException:
         if outputs_written or manifest.get("artifact_written"):
             manifest["partial_outputs"] = True
         raise
