@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from collections.abc import Callable
 
 from cicerone import __version__
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
@@ -68,26 +69,32 @@ def _parser() -> argparse.ArgumentParser:
     _add_global_flags(parser)
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
-    _add_global_flags(
+    _add_command(
         sub.add_parser("start", aliases=["run"], help="Serve, or one job then the scheduler, from job.mode"),
-        suppress=True,
+        lambda _rest: _cmd_start(),
     )
-    _add_global_flags(sub.add_parser("job", help="Run one training job"), suppress=True)
-    _add_global_flags(sub.add_parser("serve", help="Read API (requires job.mode = serve)"), suppress=True)
-    _add_global_flags(sub.add_parser("dashboard", help="Basic-Auth status page"), suppress=True)
-    _add_global_flags(
+    _add_command(sub.add_parser("job", help="Run one training job"), lambda _rest: _run_job())
+    _add_command(
+        sub.add_parser("serve", help="Read API (requires job.mode = serve)"), lambda _rest: _cmd_serve()
+    )
+    _add_command(sub.add_parser("dashboard", help="Basic-Auth status page"), lambda _rest: _cmd_dashboard())
+    _add_command(
         sub.add_parser("scheduler", help="Cron loop (and optional retrain trigger)"),
-        suppress=True,
+        lambda _rest: _cmd_scheduler(),
     )
-    _add_global_flags(
-        sub.add_parser("users", add_help=False, help="Manage dashboard Basic Auth users"),
-        suppress=True,
+    _add_command(
+        sub.add_parser("users", add_help=False, help="Manage dashboard Basic Auth users"), _cmd_users
     )
-    _add_global_flags(
+    _add_command(
         sub.add_parser("export-openapi", add_help=False, help="Write the serve OpenAPI document"),
-        suppress=True,
+        _cmd_export_openapi,
     )
     return parser
+
+
+def _add_command(command: argparse.ArgumentParser, handler: Callable[[list[str]], int]) -> None:
+    _add_global_flags(command, suppress=True)
+    command.set_defaults(handler=handler)
 
 
 def _run_job() -> int:
@@ -195,20 +202,8 @@ def main(argv: list[str] | None = None) -> int:
     _apply_config(args.config)
     _configure_logging(args.log_level, args.log_format)
 
-    command = args.command
-    if command in {"start", "run"}:
-        return _cmd_start()
-    if command == "job":
-        return _run_job()
-    if command == "serve":
-        return _cmd_serve()
-    if command == "dashboard":
-        return _cmd_dashboard()
-    if command == "scheduler":
-        return _cmd_scheduler()
-    if command == "users":
-        return _cmd_users(rest)
-    return _cmd_export_openapi(rest)
+    handler: Callable[[list[str]], int] = args.handler
+    return handler(rest)
 
 
 if __name__ == "__main__":
