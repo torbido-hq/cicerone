@@ -131,6 +131,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The PyPI package declares compatible version ranges (e.g.
   `pandas>=2.3.3,<3`) instead of exact pins, for its dependencies and
   extras. The Docker image still installs the exact pins.
+- Optional loads (previous recommendations, track and eval data, dashboard
+  reads, publish sidecars) and the Thompson allocation and eval steps no
+  longer treat a `TypeError` as an optional failure. It now propagates;
+  Arrow type/schema mismatches are still skipped and logged.
 
 ### Deprecated
 

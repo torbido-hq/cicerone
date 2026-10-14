@@ -9,7 +9,7 @@ from typing import Any, TypeVar
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowInvalid
+from pyarrow.lib import ArrowInvalid, ArrowTypeError
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.blending import COLD_START_USER_ID
@@ -47,16 +47,17 @@ E = TypeVar("E")
 
 _JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
 
+# No bare TypeError: those are bugs and must fail the job. ArrowTypeError is a data/schema mismatch.
 OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ValueError,
-    TypeError,
     SQLAlchemyError,
     ArrowInvalid,
+    ArrowTypeError,
     BotoCoreError,
     RecommendationSchemaError,
 )
-OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError, LookupError)
+OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
 

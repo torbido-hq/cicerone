@@ -1159,6 +1159,34 @@ def test_try_load_does_not_swallow_unexpected_errors():
         )
 
 
+@pytest.mark.parametrize("errors", ["io", "eval"])
+def test_try_load_does_not_swallow_type_errors(errors):
+    from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, try_load
+
+    with pytest.raises(TypeError, match="bug"):
+        try_load(
+            "compute track eval",
+            lambda: (_ for _ in ()).throw(TypeError("bug")),
+            None,
+            errors=OPTIONAL_IO_ERRORS if errors == "io" else OPTIONAL_EVAL_ERRORS,
+        )
+
+
+def test_try_load_treats_arrow_type_errors_as_optional():
+    from pyarrow.lib import ArrowTypeError
+
+    from cicerone.job_eval import try_load
+
+    assert (
+        try_load(
+            "load previous recommendations for eval",
+            lambda: (_ for _ in ()).throw(ArrowTypeError("schema mismatch")),
+            None,
+        )
+        is None
+    )
+
+
 def test_try_load_reraises_lock_errors():
     from cicerone.job_eval import try_load
     from cicerone.locks import LockLostError, WriterLockBusyError
