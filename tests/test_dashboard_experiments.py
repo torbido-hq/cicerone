@@ -1566,7 +1566,7 @@ def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
     original = ExperimentStore.read_state
 
     def _read(self):
-        seen["held"] = writer_lock_held_here(self._writer_lock)
+        seen["held"] = writer_lock_held_here(self._fence.lock)
         return original(self)
 
     monkeypatch.setattr(
