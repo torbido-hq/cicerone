@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 from cicerone import __version__
 
@@ -41,6 +42,15 @@ def _pins(filename: str) -> dict[str, Requirement]:
     return _by_name(reqs, filename)
 
 
+def _next_breaking(version: Version) -> Version:
+    major, minor, micro = (*version.release, 0, 0)[:3]
+    if major:
+        return Version(f"{major + 1}")
+    if minor:
+        return Version(f"0.{minor + 1}")
+    return Version(f"0.0.{micro + 1}")
+
+
 def _by_name(reqs: list[Requirement], source: str) -> dict[str, Requirement]:
     named = {canonicalize_name(req.name): req for req in reqs}
     assert len(named) == len(reqs), f"{source}: duplicate requirement"
@@ -68,8 +78,14 @@ def test_metadata_ranges_admit_image_pins(extra, filename):
         (spec,) = pin.specifier
         assert spec.operator == "==", f"{filename}: {name} must be an exact pin"
         assert ranges[name].extras == pin.extras
-        assert ranges[name].specifier.contains(spec.version), f"{name}=={spec.version} outside {ranges[name]}"
-        assert not ranges[name].specifier.contains("0"), f"{name} range needs a lower bound"
+        bounds = {item.operator: Version(item.version) for item in ranges[name].specifier}
+        assert len(bounds) == len(ranges[name].specifier) and bounds.keys() == {">=", "<"}, (
+            f"{name}: range must be >=lower,<upper, got {ranges[name].specifier}"
+        )
+        assert bounds[">="] <= Version(spec.version) < bounds["<"], (
+            f"{name}=={spec.version} outside {ranges[name]}"
+        )
+        assert bounds["<"] <= _next_breaking(bounds[">="]), f"{name}: range spans a breaking release"
 
 
 def test_console_script_entry_point():
