@@ -36,7 +36,7 @@ def make_settings(**overrides: Any) -> Settings:
             continue
         nested = overrides.get(section)
         if nested is None or isinstance(nested, cls):
-            overrides[section] = replace(nested or cls(), **flat)
+            overrides[section] = replace(cls() if nested is None else nested, **flat)
         elif isinstance(nested, dict):
             # Keep dict sections on the production path (e.g. load_track_settings validation).
             overrides[section] = {**nested, **flat}
