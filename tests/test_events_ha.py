@@ -415,10 +415,10 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
-    assert runtime.worker._updater._sink._writer_lock is writer_fake
-    assert runtime.worker._updater._sink._fence_kind == "apply"
-    assert runtime.worker._updater._sink._fence_check is not None
-    assert runtime.worker._updater._sink._fence_check() is apply_fake.owned()
+    assert runtime.worker._updater._sink._fence.lock is writer_fake
+    assert runtime.worker._updater._sink._fence.kind == "apply"
+    assert runtime.worker._updater._sink._fence.check is not None
+    assert runtime.worker._updater._sink._fence.check() is apply_fake.owned()
     assert seen_ttl["apply"] == 60.0
     assert seen_ttl["retrain"] is None
     runtime.stop()
@@ -468,10 +468,10 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
     assert runtime.worker._apply_lock is apply_fake
-    assert runtime.worker._updater._sink._writer_lock is writer_fake
-    assert runtime.worker._updater._sink._fence_kind == "apply"
-    assert runtime.worker._updater._sink._fence_check is not None
-    assert runtime.worker._updater._sink._fence_check() is apply_fake.owned()
+    assert runtime.worker._updater._sink._fence.lock is writer_fake
+    assert runtime.worker._updater._sink._fence.kind == "apply"
+    assert runtime.worker._updater._sink._fence.check is not None
+    assert runtime.worker._updater._sink._fence.check() is apply_fake.owned()
     messages = [record.getMessage() for record in caplog.records]
     started = [message for message in messages if "Event worker started" in message]
     assert started

@@ -34,6 +34,7 @@ from cicerone.io.options import (
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import filter_rows_for_user, newest_events, newest_events_by_user
+from cicerone.locks.hold import WriteFence
 
 logger = logging.getLogger(__name__)
 
@@ -157,13 +158,17 @@ class DatasetOutputSink:
         fence_check: Callable[[], bool] | None = None,
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
+        fence: WriteFence | None = None,
     ):
         self._options = options
         self._backend = validate_storage_options(options)
-        self._writer_lock = writer_lock
-        self._fence_check = fence_check
-        self._fence_lost = fence_lost
-        self._fence_kind = fence_kind
+        self._fence = WriteFence.resolve(
+            fence,
+            writer_lock=writer_lock,
+            fence_check=fence_check,
+            fence_lost=fence_lost,
+            fence_kind=fence_kind,
+        )
         self._recs_write_held = threading.local()
 
     @contextmanager
@@ -177,21 +182,14 @@ class DatasetOutputSink:
 
     @contextmanager
     def _recommendations_lock(self) -> Iterator[None]:
-        from cicerone.locks import held_writer_lock, writer_lock_held_here
-
-        if writer_lock_held_here(self._writer_lock):
+        if self._fence.held_here():
             with self._local_file_lock(".recommendations.lock"):
                 self._ensure_writer_still_held()
                 yield
             return
         with (
             self._local_file_lock(".recommendations.lock"),
-            held_writer_lock(
-                self._writer_lock,
-                fence_check=self._fence_check,
-                fence_lost=self._fence_lost,
-                fence_kind=self._fence_kind,
-            ),
+            self._fence.hold(),
         ):
             yield
 
@@ -233,14 +231,7 @@ class DatasetOutputSink:
         self._ensure_writer_still_held()
 
     def _ensure_writer_still_held(self) -> None:
-        from cicerone.locks import ensure_writer_owned
-
-        ensure_writer_owned(
-            self._writer_lock,
-            fence_check=self._fence_check,
-            fence_lost=self._fence_lost,
-            fence_kind=self._fence_kind,
-        )
+        self._fence.ensure()
 
     def _write_recommendations_unlocked(self, df: pd.DataFrame) -> None:
         self._ensure_writer_still_held()

@@ -49,6 +49,7 @@ from cicerone.job_eval import job_track_since as _job_track_since
 from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
+from cicerone.job_eval import retrain_fence
 from cicerone.job_eval import score_previous_run as _score_previous_run
 from cicerone.job_eval import try_load as _try_load
 from cicerone.job_eval import try_load_pair as _try_load_pair
@@ -631,11 +632,7 @@ def _write_job_outputs(
                 if run.pending_thompson is not None:
                     ensure_publication_fence(sink, fence_check)
                     store = ExperimentStore(
-                        settings.output,
-                        writer_lock=run.publication_lock,
-                        fence_check=fence_check,
-                        fence_lost="retrain lock lost before write",
-                        fence_kind="retrain",
+                        settings.output, fence=retrain_fence(run.publication_lock, fence_check)
                     )
                     store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
                 ensure_publication_fence(sink, fence_check)
@@ -736,13 +733,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
             _persist_track_outputs(
-                TrackStore(
-                    settings.output,
-                    writer_lock=run.writer_lock,
-                    fence_check=fence_check,
-                    fence_lost="retrain lock lost before write",
-                    fence_kind="retrain",
-                ),
+                TrackStore(settings.output, fence=retrain_fence(run.writer_lock, fence_check)),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": run.eval_generated_at,
@@ -830,13 +821,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     feature_config = load_feature_config(settings.feature_config_path)
     publication_lock = build_output_writer_lock(settings)
     writer_lock = build_dataset_writer_lock(settings)
-    sink = build_output_sink(
-        settings.output,
-        writer_lock=publication_lock,
-        fence_check=fence_check,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
-    )
+    sink = build_output_sink(settings.output, fence=retrain_fence(publication_lock, fence_check))
     run = JobRun(
         settings=settings,
         sink=sink,

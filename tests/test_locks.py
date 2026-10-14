@@ -22,6 +22,7 @@ from cicerone.locks import (
     LockLostError,
     PostgresAdvisoryLock,
     RedisLock,
+    WriteFence,
     acquire_blocking,
     advisory_keys_from_lock_key,
     build_dataset_writer_lock,
@@ -1294,3 +1295,59 @@ def test_postgres_is_locked_held_conn_raises_unexpected(monkeypatch):
         lock.is_locked()
     held_conn.execute.side_effect = None
     lock.release()
+
+
+class _CountingLock:
+    def __init__(self) -> None:
+        self.acquires = 0
+
+    def acquire(self) -> bool:
+        self.acquires += 1
+        return True
+
+    def release(self) -> None:
+        return None
+
+    def owned(self) -> bool:
+        return True
+
+    def is_locked(self) -> bool:
+        return True
+
+
+def test_write_fence_resolve_rejects_mixed_arguments():
+    fence = WriteFence(kind="apply")
+    assert WriteFence.resolve(None, fence_kind="apply") == fence
+    assert WriteFence.resolve(fence) is fence
+    with pytest.raises(ValueError, match="either fence= or"):
+        WriteFence.resolve(fence, fence_kind="retrain")
+
+    class _EqualsEverything:
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        __hash__ = object.__hash__
+
+    with pytest.raises(ValueError, match="either fence= or"):
+        WriteFence.resolve(fence, writer_lock=_EqualsEverything())  # type: ignore[arg-type]
+
+
+def test_write_fence_lease_is_reentrant_and_rechecks_fence():
+    lock = _CountingLock()
+    checks: list[bool] = []
+    fence = WriteFence(lock, lambda: checks.append(True) or True, "lost", "retrain")
+    with fence.lease():
+        assert fence.held_here()
+        before = len(checks)
+        with fence.lease():
+            assert len(checks) == before + 1
+    assert lock.acquires == 1
+    assert not fence.held_here()
+
+
+def test_write_fence_ensure_raises_when_fence_lost():
+    fence = WriteFence(None, lambda: False, "retrain lock lost before write", "retrain")
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
+        fence.ensure()
+    with pytest.raises(LockLostError, match="retrain lock lost"), fence.lease():
+        pass

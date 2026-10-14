@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
-from cicerone.locks import LockBackend
+from cicerone.locks import LockBackend, WriteFence
 
 if TYPE_CHECKING:
     from cicerone.io.catalog import CatalogStore
@@ -112,27 +112,23 @@ def build_output_sink(
     fence_check: Callable[[], bool] | None = None,
     fence_lost: str = "lock lost before write",
     fence_kind: str = "lock",
+    fence: WriteFence | None = None,
 ) -> OutputSink:
+    fence = WriteFence.resolve(
+        fence,
+        writer_lock=writer_lock,
+        fence_check=fence_check,
+        fence_lost=fence_lost,
+        fence_kind=fence_kind,
+    )
     if settings.kind == "dataset":
         from cicerone.io.dataset_store import DatasetOutputSink
 
-        return DatasetOutputSink(
-            settings.options,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        return DatasetOutputSink(settings.options, fence=fence)
     if settings.kind == "db":
         from cicerone.io.db_store import DatabaseOutputSink
 
-        return DatabaseOutputSink(
-            settings.options,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        return DatabaseOutputSink(settings.options, fence=fence)
     return _build_from_registry(settings, _OUTPUT_SINKS, role="output")
 
 
