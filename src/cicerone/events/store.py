@@ -10,7 +10,6 @@ from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.config import IOSettings
-from cicerone.io import engines as _io_engines
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import (
@@ -30,8 +29,6 @@ from cicerone.io.recommendation_schema import (
     recommendation_output_columns,
     recommendations_sql_names,
 )
-
-_engines = _io_engines._engines
 
 logger = logging.getLogger(__name__)
 

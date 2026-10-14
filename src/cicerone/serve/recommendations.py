@@ -76,7 +76,7 @@ class RecommendationService:
             )
             or consumed_ids
         )
-        fetch_k = max(top_k * 5, top_k) if can_filter else top_k
+        fetch_k = top_k * 5 if can_filter else top_k
         experiment_id, variant = assignment if assignment is not None else self._assign(user_id)
         recs, variant = self._fetch_with_variant_fallback(
             lambda v: self._reader.get_recommendations(user_id, fetch_k, variant=v), variant, first=recs

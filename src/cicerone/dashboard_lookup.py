@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections import Counter
 from collections.abc import Sequence
@@ -382,7 +383,7 @@ def _coerce_float(value: object) -> float | None:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    if number != number:
+    if math.isnan(number):
         return None
     return number
 
