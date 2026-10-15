@@ -16,6 +16,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
+from cicerone.events.errors import RedisError
 from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore, require_appendable_exposure_log
 from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, create_db_engine
@@ -87,7 +88,11 @@ def forget_user(
         return result
     # After the output erase: a Redis delete cannot join that transaction or swap.
     redis_store = TrackStore(output, writer_lock=writer_lock, redis_url=redis_url)
-    redis_removed = redis_store.delete_redis_rows(user_id)
+    try:
+        redis_removed = redis_store.delete_redis_rows(user_id)
+    except RedisError as exc:
+        exc.add_note("output rows were erased; run forget-user again to finish the Redis track log")
+        raise
     return replace(result, track=result.track + redis_removed)
 
 

@@ -203,6 +203,7 @@ def _cmd_forget_user(argv: list[str]) -> int:
 
     from cicerone.config import load_settings
     from cicerone.config.constants import ConfigError
+    from cicerone.events.errors import RedisError
     from cicerone.forget import forget_user
     from cicerone.locks import LockLostError, WriterLockBusyError, build_output_writer_lock, held_writer_lock
 
@@ -228,7 +229,7 @@ def _cmd_forget_user(argv: list[str]) -> int:
     except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except (OSError, ArrowException, SQLAlchemyError) as exc:
+    except (OSError, ArrowException, SQLAlchemyError, RedisError) as exc:
         print(f"forget-user failed: {exc}", file=sys.stderr)
         for note in getattr(exc, "__notes__", ()):
             print(note, file=sys.stderr)
