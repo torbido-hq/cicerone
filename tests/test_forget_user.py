@@ -303,6 +303,20 @@ def test_local_backup_cleanup_failure_still_reports_the_erase(tmp_path, monkeypa
     assert any("could not remove backup" in record.getMessage() for record in caplog.records)
 
 
+def test_local_rewrite_keeps_file_modes(tmp_path) -> None:
+    import stat
+
+    output = _local(tmp_path)
+    _seed(output)
+    modes = {"recommendations.parquet": 0o644, "track.jsonl": 0o640}
+    for name, mode in modes.items():
+        (tmp_path / name).chmod(mode)
+    forget_user(output, "u1")
+    for name, mode in modes.items():
+        assert stat.S_IMODE((tmp_path / name).stat().st_mode) == mode
+    assert _remaining_users(output) == {"u2"}
+
+
 def test_local_staging_ignores_a_planted_symlink(tmp_path) -> None:
     output = _local(tmp_path / "out")
     (tmp_path / "out").mkdir()

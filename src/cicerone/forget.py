@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -216,9 +217,15 @@ def _plan_jsonl(path: Path, user_id: str, swaps: list[_Swap]) -> int:
 
 
 def _new_temp_path(dest: Path, suffix: str) -> Path:
-    """A fresh hidden file next to ``dest``; mkstemp creates it exclusively, so no symlink is followed."""
+    """A fresh hidden file next to ``dest``; mkstemp creates it exclusively, so no symlink is followed.
+
+    It gets ``dest``'s permission bits, since mkstemp's 0600 would hide a shared file once swapped in.
+    """
     fd, name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=suffix, dir=dest.parent)
-    os.close(fd)
+    try:
+        os.fchmod(fd, stat.S_IMODE(dest.stat().st_mode))
+    finally:
+        os.close(fd)
     return Path(name)
 
 

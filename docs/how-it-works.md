@@ -354,7 +354,10 @@ in together; if a swap fails, the files already swapped are put back. A
 crash during the swap can leave the originals as `.<file>.*.bak` next to
 them. A history or recommendations file that has rows but no `user_id`, and
 a track or exposure line that is not a user row, are refused before anything
-is removed. Stored ids are matched after trimming whitespace.
+is removed. Stored ids are matched after trimming whitespace, so on a
+large database output each table is scanned once; erase during a quiet window.
+Rewritten local files keep their permission bits but are owned by the user
+running the command.
 
 When a distributed writer lock is configured, the command holds it for the
 erase. Without one, run it while no job or incremental flush is writing:

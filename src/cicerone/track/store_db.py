@@ -252,15 +252,12 @@ def delete_rows_for_user(
     user_column = sql_identifier(user_column, option="user_column")
     # The column stays unquoted: SQLite treats an unknown quoted name as a string.
     match = f"TRIM(CAST({user_column} AS VARCHAR)) = :user_id"
-    count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE {match}')
     delete_sql = text(f'DELETE FROM "{table}" WHERE {match}')
     try:
         with conn.begin_nested():
             fence()
-            removed = int(conn.execute(count_sql, {"user_id": user_id}).scalar() or 0)
-            if removed:
-                conn.execute(delete_sql, {"user_id": user_id})
-                fence()
+            removed = max(int(conn.execute(delete_sql, {"user_id": user_id}).rowcount or 0), 0)
+            fence()
             return removed
     except MISSING_TABLE_ERRORS as exc:
         if is_missing_column_error(exc):
