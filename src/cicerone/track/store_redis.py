@@ -10,7 +10,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN
 
 try:
     from redis.exceptions import WatchError
-except ImportError:  # pragma: no cover - the redis extra is installed with track.redis_url
+except ImportError:
 
     class WatchError(Exception):  # type: ignore[no-redef]
         pass

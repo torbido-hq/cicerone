@@ -103,7 +103,7 @@ class _FakePipeline:
             hook()
         watched, self._watched = self._watched, {}
         if any(self._client.versions.get(key, 0) != version for key, version in watched.items()):
-            from redis.exceptions import WatchError
+            from cicerone.track.store_redis import WatchError
 
             raise WatchError("Watched variable changed.")
         return [getattr(self._client, name)(*args) for name, args in queued]
@@ -254,7 +254,7 @@ def test_redis_delete_retries_when_an_append_races_the_rewrite():
 
 
 def test_redis_delete_gives_up_after_bounded_retries():
-    from redis.exceptions import WatchError
+    from cicerone.track.store_redis import WatchError
 
     client = _FakeRedis()
     store = _store(client)
@@ -270,7 +270,7 @@ def test_redis_delete_gives_up_after_bounded_retries():
 
 
 def test_redis_append_does_not_strand_an_id_when_the_push_fails():
-    from redis.exceptions import ConnectionError as RedisConnectionError
+    from cicerone.events.errors import RedisError as RedisConnectionError
 
     client = _FakeRedis()
     store = _store(client)
@@ -287,8 +287,7 @@ def test_redis_append_does_not_strand_an_id_when_the_push_fails():
 
 
 def test_forget_user_notes_a_redis_failure_after_the_output_erase(tmp_path, monkeypatch):
-    from redis.exceptions import ConnectionError as RedisConnectionError
-
+    from cicerone.events.errors import RedisError as RedisConnectionError
     from cicerone.forget import forget_user
     from cicerone.io.dataset_store import DatasetOutputSink
 
