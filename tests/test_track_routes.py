@@ -246,6 +246,23 @@ def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
     assert response.json()["detail"] == "Writer lock is busy"
 
 
+def test_post_track_returns_503_when_redis_is_unavailable(tmp_path, monkeypatch):
+    from cicerone.events.errors import RedisError
+
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.append_accepted_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RedisError("Timeout reading from socket")),
+    )
+    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=_impression(),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Redis track log is unavailable"
+
+
 def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
     import asyncio
     import time

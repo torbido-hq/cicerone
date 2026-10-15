@@ -25,6 +25,7 @@ from cicerone.evaluation import (
     replay_ks,
 )
 from cicerone.evaluation.context import concat_history, stamp_recommendations
+from cicerone.events.errors import RedisError
 from cicerone.events.store import load_recommendations_frame
 from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.store import ExperimentStore
@@ -56,6 +57,7 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     ArrowTypeError,
     BotoCoreError,
     RecommendationSchemaError,
+    RedisError,
 )
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
