@@ -72,7 +72,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         top_k: int,
         busy_check: Callable[[], bool] | None = None,
         write_busy_check: Callable[[], bool] | None = None,
-        on_success: Callable[[], None] | None = None,
+        on_success: Callable[[], object] | None = None,
         fence_check: Callable[[], bool] | None = None,
         user_cache_max_size: int = DEFAULT_USER_CACHE_MAX_SIZE,
         online: OnlineRefresher | None = None,

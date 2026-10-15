@@ -114,6 +114,15 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
+def _refresh_step(step: RecommendationReader | _GeneratedAtCache | _AssignmentOverlayCache) -> bool:
+    # Readers are pluggable; one failed step must not end the loop.
+    try:
+        return step.refresh() is not False
+    except Exception:
+        logger.exception("Background refresh of %s failed; retrying next tick", type(step).__name__)
+        return False
+
+
 def _start_refresh_loop(
     reader: RecommendationReader,
     interval_seconds: float,
@@ -121,19 +130,15 @@ def _start_refresh_loop(
     generated_at_cache: _GeneratedAtCache | None = None,
     overlay_cache: _AssignmentOverlayCache | None = None,
 ) -> None:
-    steps = [step for step in (reader, generated_at_cache, overlay_cache) if step is not None]
-
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
-            for step in steps:
-                # Readers are pluggable; one failed tick must not end the loop.
-                try:
-                    step.refresh()
-                except Exception:
-                    logger.exception(
-                        "Background refresh of %s failed; retrying next tick", type(step).__name__
-                    )
+            reader_ok = _refresh_step(reader)
+            # A stamp from a newer manifest must not label recommendations the reader kept.
+            if generated_at_cache is not None and reader_ok:
+                _refresh_step(generated_at_cache)
+            if overlay_cache is not None:
+                _refresh_step(overlay_cache)
 
     threading.Thread(target=_loop, daemon=True).start()
 

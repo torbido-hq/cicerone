@@ -60,8 +60,8 @@ class OutputSink(Protocol):
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
-    def refresh(self) -> None:
-        """Reload caches. No-op for live backends."""
+    def refresh(self) -> bool | None:
+        """Reload caches. No-op for live backends. False means the previous recommendations were kept."""
         ...
 
     def get_items(self) -> pd.DataFrame | None:
@@ -94,8 +94,8 @@ class BaseRecommendationReader(ABC):
     method from scratch.
     """
 
-    def refresh(self) -> None:
-        return
+    def refresh(self) -> bool | None:
+        return None
 
     def get_items(self) -> pd.DataFrame | None:
         return None
