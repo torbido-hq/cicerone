@@ -518,7 +518,7 @@ def _write_job_outputs(
     served_eval_payload: dict[str, Any] | None,
     pending_thompson: dict[str, Any] | None,
     feature_config: FeatureConfig,
-    weighting_now: datetime,
+    weighting_now: datetime | None = None,
     written: JobWriteResult | None = None,
 ) -> JobWriteResult:
     run_models = list(run_plan.recommend_models)
