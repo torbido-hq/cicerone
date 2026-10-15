@@ -236,7 +236,7 @@ everything lands on `main` — no cherry-picks or merge-backs):
 ### Current trains
 
 Concrete mapping (this line only):
-no split; main is **0.8.5**.
+patch **0.8.5** on main; minor **0.9.0** on release/0.9.0.
 
 Update this line in the same PR that changes the split.
 
