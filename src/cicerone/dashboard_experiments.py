@@ -22,6 +22,7 @@ from cicerone.config.constants import (
     TRACK_KIND_IMPRESSION,
     ConfigError,
 )
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -40,7 +41,7 @@ from cicerone.experiment.store import ExperimentStore, active_pair_from_state, m
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts, select_active_recipes
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught, try_load
+from cicerone.job_eval import try_load
 from cicerone.locks import (
     LockLostError,
     WriterLockBusyError,

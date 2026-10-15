@@ -13,6 +13,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.config import Settings
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.experiment.assignment import (
     assignment_needs_snapshot,
     resolve_assignment,
@@ -29,7 +30,6 @@ from cicerone.io.recommendation_schema import (
     has_variant_column,
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.locks import LockLostError
 from cicerone.reasons import parse_reasons
 from cicerone.values import as_list, is_missing, is_sequence_attr

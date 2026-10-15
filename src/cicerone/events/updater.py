@@ -12,6 +12,7 @@ import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
+from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
@@ -28,7 +29,6 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import OutputSink
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,

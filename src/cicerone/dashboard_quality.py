@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 import pandas as pd
 
 from cicerone.config import Settings
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -19,7 +20,6 @@ from cicerone.evaluation import (
 from cicerone.evaluation.context import prefer_history
 from cicerone.events.store import load_recommendations_for_users
 from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
-from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
 from cicerone.locks import LockLostError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
