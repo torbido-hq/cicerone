@@ -12,13 +12,13 @@ from pydantic import ValidationError
 from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
+from cicerone.metrics import record_track_ingest
 from cicerone.serve.events_routes import (
     max_body_bytes,
     payloads_from_body,
     put_pydantic_schema,
     read_limited_json,
 )
-from cicerone.serve.metrics import record_track_ingest
 from cicerone.serve_schemas import (
     ErrorDetail,
     TrackEvent,

@@ -37,7 +37,7 @@ from cicerone.io.recommendation_reader_common import (
     resolve_fallback_user_id,
     select_cold_start_fallback,
 )
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 
