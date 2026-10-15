@@ -32,6 +32,7 @@ from cicerone.locks.hold import (
 from cicerone.track.store import TrackStore, require_appendable_track_log
 from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
 from cicerone.track.store_db import delete_rows_for_user
+from cicerone.track.store_redis import DEFAULT_REDIS_KEY_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ def forget_user(
     *,
     writer_lock: LockBackend | None = None,
     redis_url: str | None = None,
+    redis_key_prefix: str = DEFAULT_REDIS_KEY_PREFIX,
 ) -> ForgetResult:
     """Drop one user's output rows. Catalog users and events are left in place.
 
@@ -87,7 +89,9 @@ def forget_user(
     if not redis_url:
         return result
     # After the output erase: a Redis delete cannot join that transaction or swap.
-    redis_store = TrackStore(output, writer_lock=writer_lock, redis_url=redis_url)
+    redis_store = TrackStore(
+        output, writer_lock=writer_lock, redis_url=redis_url, redis_key_prefix=redis_key_prefix
+    )
     try:
         redis_removed = redis_store.delete_redis_rows(user_id)
     except RedisError as exc:

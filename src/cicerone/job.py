@@ -85,7 +85,7 @@ from cicerone.model.recommend import RecommendCache
 from cicerone.publish import build_publisher
 from cicerone.publish.base import RecommendationPublisher
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
-from cicerone.track.store import TrackStore
+from cicerone.track.store import open_track_store
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ def _load_shared_eval_inputs(
     experiment_id = None if settings.track.enabled else settings.experiment.id
     raw_track, recs = _try_load_pair(
         "read track rows",
-        lambda: TrackStore(settings.output, redis_url=settings.track.redis_url).read_rows(
+        lambda: open_track_store(settings).read_rows(
             experiment_id=experiment_id,
             since=_job_track_since(settings),
         ),
@@ -209,7 +209,7 @@ def _select_thompson_recipes(
     if preloaded_track is None:
         raw_track = _try_load(
             "read track rows",
-            lambda: TrackStore(settings.output, redis_url=settings.track.redis_url).read_rows(
+            lambda: open_track_store(settings).read_rows(
                 experiment_id=experiment.id,
                 since=_job_track_since(settings),
             ),
@@ -733,11 +733,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
             _persist_track_outputs(
-                TrackStore(
-                    settings.output,
-                    redis_url=settings.track.redis_url,
-                    fence=retrain_fence(run.writer_lock, fence_check),
-                ),
+                open_track_store(settings, fence=retrain_fence(run.writer_lock, fence_check)),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": run.eval_generated_at,

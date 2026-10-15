@@ -31,6 +31,7 @@ from cicerone.config.constants import (
     DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
     DEFAULT_TRACK_MIN_IMPRESSIONS,
+    DEFAULT_TRACK_REDIS_KEY_PREFIX,
     PRIMARY_METRIC_WEIGHTED,
     Mode,
 )
@@ -183,6 +184,7 @@ class TrackSettings:
     conversion_event_types: tuple[str, ...] = ()
     min_impressions: int = DEFAULT_TRACK_MIN_IMPRESSIONS
     redis_url: str | None = None
+    redis_key_prefix: str = DEFAULT_TRACK_REDIS_KEY_PREFIX
 
 
 @dataclass(frozen=True)
