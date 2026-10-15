@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 
 import pandas as pd
 
+from cicerone import errors
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
@@ -17,7 +18,6 @@ from cicerone.errors import (  # noqa: F401  re-exported for 0.8 callers
     OPTIONAL_IO_ERRORS,
     PUBLISH_ERRORS,
     SINK_WRITE_ERRORS,
-    log_caught,
 )
 from cicerone.evaluation import (
     conversion_event_types,
@@ -40,6 +40,12 @@ from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
 logger = logging.getLogger(__name__)
+
+
+def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
+    """0.8 entry point: without ``log=`` it still logs on ``cicerone.job_eval``."""
+    errors.log_caught(message, exc, log=log or logger)
+
 
 T = TypeVar("T")
 U = TypeVar("U")

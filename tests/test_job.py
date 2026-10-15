@@ -1091,9 +1091,18 @@ def test_job_eval_reexports_error_groups():
         "OPTIONAL_EVAL_ERRORS",
         "PUBLISH_ERRORS",
         "SINK_WRITE_ERRORS",
-        "log_caught",
     ):
         assert getattr(job_eval, name) is getattr(errors, name)
+
+
+def test_job_eval_log_caught_keeps_its_default_logger(caplog):
+    from cicerone.job_eval import log_caught
+
+    with caplog.at_level("ERROR"):
+        log_caught("Failed to read", ValueError("bad"))
+    assert [(record.name, record.getMessage()) for record in caplog.records] == [
+        ("cicerone.job_eval", "Failed to read (ValueError: bad)")
+    ]
 
 
 def test_try_load_does_not_swallow_unexpected_errors():
