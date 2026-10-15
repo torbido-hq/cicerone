@@ -344,3 +344,15 @@ def test_forget_user_notes_a_redis_failure_after_the_output_erase(tmp_path, monk
     ]
     assert pd.read_parquet(tmp_path / "recommendations.parquet").empty
     assert forget_user(output, "alice", redis_url="redis://localhost:6379/0").track == 1
+
+
+def test_job_treats_a_redis_track_read_failure_as_optional(caplog):
+    from cicerone.events.errors import RedisError
+    from cicerone.job_eval import try_load
+
+    def boom() -> list[dict[str, object]]:
+        raise RedisError("Timeout reading from socket")
+
+    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
+        assert try_load("read track rows", boom, None) is None
+    assert any("Failed to read track rows (RedisError" in record.getMessage() for record in caplog.records)
