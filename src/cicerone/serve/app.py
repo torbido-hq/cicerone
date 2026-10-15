@@ -146,11 +146,7 @@ def _start_refresh_loop(
 def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
-    try:
-        latest = manifest_reader.read_latest()
-    except Exception:
-        logger.exception("Failed to read latest manifest for generated_at; omitting header")
-        return None
+    latest = manifest_reader.read_latest()
     if not latest:
         return None
     value = latest.get("generated_at")
@@ -167,7 +163,12 @@ class _GeneratedAtCache:
         self.refresh()
 
     def refresh(self) -> None:
-        value = _read_generated_at(self._manifest_reader)
+        try:
+            value = _read_generated_at(self._manifest_reader)
+        except Exception:
+            # A transient read error keeps the last stamp; a manifest without one clears it.
+            logger.exception("Failed to read latest manifest for generated_at; keeping previous")
+            return
         with self._lock:
             self._value = value
 

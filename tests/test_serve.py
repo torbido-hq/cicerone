@@ -579,6 +579,29 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
     assert cache.get() is None
 
 
+def test_generated_at_cache_keeps_the_last_stamp_on_a_read_error(caplog):
+    class FlakyManifest:
+        def __init__(self) -> None:
+            self.fail = False
+
+        def read_latest(self):
+            if self.fail:
+                raise OSError("manifest store unreachable")
+            return {"generated_at": "2026-08-01T00:00:00+00:00"}
+
+        def read_recent(self, limit: int):
+            del limit
+            return []
+
+    manifest = FlakyManifest()
+    cache = _GeneratedAtCache(manifest)
+    manifest.fail = True
+    with caplog.at_level("ERROR", logger="cicerone.serve.app"):
+        cache.refresh()
+    assert cache.get() == "2026-08-01T00:00:00+00:00"
+    assert any("keeping previous" in record.getMessage() for record in caplog.records)
+
+
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     reader = _FakeReader(_recs_df())
     calls = {"sleep": 0}
