@@ -12,8 +12,7 @@ import pandas as pd
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.db_store import MISSING_TABLE_ERRORS
-from cicerone.io.engines import engine_for
+from cicerone.io.db_store import MISSING_TABLE_ERRORS, create_db_engine
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import (
@@ -43,7 +42,9 @@ class TrackDbBackend:
             return engine
         with self._engine_lock:
             if self._engine is None:
-                self._engine = engine_for(require_option(self._options, "database_url", "db"))
+                # Options-keyed like DatabaseOutputSink, so in-memory SQLite is one database.
+                url = require_option(self._options, "database_url", "db")
+                self._engine = create_db_engine(url, options=self._options)
             return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:

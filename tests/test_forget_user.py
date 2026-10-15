@@ -326,15 +326,21 @@ def test_forget_user_matches_padded_ids(tmp_path) -> None:
     assert list(pd.read_parquet(tmp_path / "local" / "recommendations.parquet")["user_id"]) == ["u2"]
 
 
-def test_forget_user_uses_the_shared_in_memory_engine() -> None:
+def test_forget_user_erases_every_store_on_in_memory_sqlite() -> None:
     from cicerone.io.db_store import create_db_engine
 
     output = IOSettings(kind="db", options={"database_url": "sqlite://"})
-    DatabaseOutputSink(output.options).write_recommendations(_recs("u1", "u2"))
-    assert forget_user(output, "u1").recommendations == 1
+    _seed(output)
+    result = forget_user(output, "u1")
+    assert (result.recommendations, result.track, result.exposures, result.history) == (1, 1, 1, 1)
     engine = create_db_engine("sqlite://", options=output.options)
-    frame = pd.read_sql('SELECT user_id FROM "recommendations"', engine)
-    assert list(frame["user_id"]) == ["u2"]
+    for table in (
+        "recommendations",
+        "recommendation_track",
+        "recommendation_exposures",
+        "recommendation_history",
+    ):
+        assert set(pd.read_sql(f'SELECT user_id FROM "{table}"', engine)["user_id"]) == {"u2"}
 
 
 def test_delete_rows_reraises_database_errors_that_are_not_missing_tables() -> None:

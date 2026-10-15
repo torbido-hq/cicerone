@@ -19,7 +19,7 @@ from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import engine_for
+from cicerone.io.db_store import create_db_engine
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
@@ -170,7 +170,8 @@ class ExperimentStore:
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
-            self._engine = engine_for(require_option(self._options, "database_url", "db"))
+            url = require_option(self._options, "database_url", "db")
+            self._engine = create_db_engine(url, options=self._options)
         return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
