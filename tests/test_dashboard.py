@@ -1470,6 +1470,7 @@ def test_retrain_posts_the_trigger_webhook(monkeypatch):
         "/dashboard/retrain",
         data={"csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -1493,6 +1494,7 @@ def test_retrain_reports_a_busy_trigger(monkeypatch):
         "/dashboard/retrain",
         data={"csrf_token": token},
         auth=("alice", "s3cret"),
+        headers=_same_origin(),
         follow_redirects=False,
     )
     assert response.status_code == 303
