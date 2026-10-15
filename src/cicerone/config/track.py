@@ -7,7 +7,6 @@ from typing import Any
 from cicerone.config.constants import (
     DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS,
     DEFAULT_TRACK_MIN_IMPRESSIONS,
-    DEFAULT_TRACK_REDIS_KEY_PREFIX,
     ConfigError,
 )
 from cicerone.config.settings import EvalSettings, TrackSettings
@@ -67,9 +66,9 @@ def _load_redis_url(raw: object) -> str | None:
     return raw.strip()
 
 
-def _load_redis_key_prefix(raw: object) -> str:
+def _load_redis_key_prefix(raw: object) -> str | None:
     if raw is None:
-        return DEFAULT_TRACK_REDIS_KEY_PREFIX
+        return None
     if not isinstance(raw, str) or not raw.strip():
         raise ConfigError("track.redis_key_prefix must be a non-empty string")
     return raw.strip()

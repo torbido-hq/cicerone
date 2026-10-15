@@ -38,7 +38,7 @@ from cicerone.track.store_common import (
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
 from cicerone.track.store_db import TrackDbBackend
-from cicerone.track.store_redis import DEFAULT_REDIS_KEY_PREFIX, RedisTrackLog
+from cicerone.track.store_redis import RedisTrackLog, default_redis_key_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         fence: WriteFence | None = None,
         redis_url: str | None = None,
         redis_client: Any = None,
-        redis_key_prefix: str = DEFAULT_REDIS_KEY_PREFIX,
+        redis_key_prefix: str | None = None,
     ):
         self._output = output
         self._kind = output.kind
@@ -95,7 +95,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         )
         self._redis_url = redis_url or None
         self._redis_client = redis_client
-        self._redis_key_prefix = redis_key_prefix
+        self._redis_key_prefix = redis_key_prefix or default_redis_key_prefix(output)
         self._redis_log: RedisTrackLog | None = None
 
     @property
