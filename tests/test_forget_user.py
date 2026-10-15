@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -262,6 +261,7 @@ def test_local_restore_failure_keeps_the_original_and_names_it(tmp_path, monkeyp
     output = _local(tmp_path)
     _seed(output)
     original_recs = (tmp_path / "recommendations.parquet").read_bytes()
+    original_track = (tmp_path / "track.jsonl").read_bytes()
     original = forget_mod.os.replace
     swapped_in: list[str] = []
 
@@ -269,20 +269,20 @@ def test_local_restore_failure_keeps_the_original_and_names_it(tmp_path, monkeyp
         name = Path(src).name
         if name.endswith(".tmp"):
             swapped_in.append(Path(dst).name)
-            if len(swapped_in) == 2:
+            if len(swapped_in) == 3:
                 raise OSError("rename failed")
-        if name.startswith(".recommendations.parquet.") and name.endswith(".bak"):
+        if name.startswith(".track.jsonl.") and name.endswith(".bak"):
             raise OSError("restore failed")
         return original(src, dst)
 
     monkeypatch.setattr(forget_mod.os, "replace", flaky)
     with pytest.raises(OSError, match="rename failed") as raised:
         forget_user(output, "u1")
-    (backup,) = tmp_path.glob(".recommendations.parquet.*.bak")
-    assert backup.read_bytes() == original_recs
+    (backup,) = tmp_path.glob(".track.jsonl.*.bak")
+    assert backup.read_bytes() == original_track
     assert raised.value.__notes__ == [f"originals not restored: {backup}"]
-    track_lines = (tmp_path / "track.jsonl").read_text(encoding="utf-8").splitlines()
-    assert {json.loads(line)["user_id"] for line in track_lines} == {"u1", "u2"}
+    # The restore after the failed one still ran.
+    assert (tmp_path / "recommendations.parquet").read_bytes() == original_recs
 
 
 def test_local_backup_cleanup_failure_still_reports_the_erase(tmp_path, monkeypatch, caplog) -> None:
