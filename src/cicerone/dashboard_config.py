@@ -10,8 +10,8 @@ from typing import Any
 
 from cicerone import __version__
 from cicerone.config import Settings
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.feature_config import load_feature_config
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught
 
 logger = logging.getLogger(__name__)
 

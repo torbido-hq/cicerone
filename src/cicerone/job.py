@@ -19,6 +19,10 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
 from cicerone.dataset import BuiltDataset, build_dataset
+from cicerone.errors import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
+from cicerone.errors import PUBLISH_ERRORS as _PUBLISH_ERRORS
+from cicerone.errors import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
+from cicerone.errors import log_caught as _log_caught
 from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
@@ -40,11 +44,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import OutputSink
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
-from cicerone.job_eval import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
-from cicerone.job_eval import PUBLISH_ERRORS as _PUBLISH_ERRORS
-from cicerone.job_eval import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
 from cicerone.job_eval import job_track_since as _job_track_since
-from cicerone.job_eval import log_caught as _log_caught
 from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
 from cicerone.job_eval import retrain_fence

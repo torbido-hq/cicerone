@@ -15,6 +15,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
     DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
 )
+from cicerone.errors import PUBLISH_ERRORS
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
@@ -28,7 +29,6 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.job_eval import PUBLISH_ERRORS
 from cicerone.locks import (
     LockBackend,
     build_lock_backend,

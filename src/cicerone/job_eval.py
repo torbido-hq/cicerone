@@ -8,13 +8,17 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TypeVar
 
 import pandas as pd
-from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowInvalid, ArrowTypeError
-from sqlalchemy.exc import SQLAlchemyError
 
+from cicerone import errors
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
+from cicerone.errors import (  # noqa: F401  re-exported for 0.8 callers
+    OPTIONAL_EVAL_ERRORS,
+    OPTIONAL_IO_ERRORS,
+    PUBLISH_ERRORS,
+    SINK_WRITE_ERRORS,
+)
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -31,13 +35,17 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
-from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockBackend, LockLostError, WriteFence, WriterLockBusyError
-from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
 logger = logging.getLogger(__name__)
+
+
+def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
+    """0.8 entry point: without ``log=`` it still logs on ``cicerone.job_eval``."""
+    errors.log_caught(message, exc, log=log or logger)
+
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -45,24 +53,6 @@ D = TypeVar("D")
 E = TypeVar("E")
 
 _JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
-
-# No bare TypeError: those are bugs and must fail the job. ArrowTypeError is a data/schema mismatch.
-OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,
-    ValueError,
-    SQLAlchemyError,
-    ArrowInvalid,
-    ArrowTypeError,
-    BotoCoreError,
-    RecommendationSchemaError,
-)
-OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
-PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
-SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
-
-
-def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
-    (log or logger).exception("%s (%s: %s)", message, type(exc).__name__, exc)
 
 
 def try_load(
@@ -77,7 +67,7 @@ def try_load(
     except _JOB_CONTROL_ERRORS:
         raise
     except errors as exc:
-        log_caught(f"Failed to {label}", exc)
+        log_caught(f"Failed to {label}", exc, log=logger)
         return default
 
 
