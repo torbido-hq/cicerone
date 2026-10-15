@@ -29,9 +29,15 @@ def parse_occurred_at(value: Any) -> datetime:
     # stdlib only — keep webhook ingest off the pandas path
     if isinstance(value, datetime):
         dt = value
+    elif isinstance(value, bool):
+        raise EventNormalizeError("occurred_at is invalid")
     elif isinstance(value, (int, float)):
         # Unix epoch seconds are always interpreted as UTC.
-        return datetime.fromtimestamp(float(value), tz=UTC)
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError) as exc:
+            # NaN, infinity, or a timestamp outside the platform's datetime range.
+            raise EventNormalizeError("occurred_at is out of range") from exc
     elif isinstance(value, str):
         text = value.strip()
         if text.endswith(("Z", "z")):

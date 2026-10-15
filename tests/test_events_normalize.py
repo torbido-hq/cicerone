@@ -36,6 +36,12 @@ def test_normalize_event_and_errors():
         normalize_event(event_payload(quantity=0))
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), 1e20, True])
+def test_normalize_rejects_unusable_numeric_occurred_at(value):
+    with pytest.raises(EventNormalizeError, match="occurred_at"):
+        normalize_event(event_payload(occurred_at=value))
+
+
 def test_normalize_occurred_at_epoch_and_z():
     from datetime import UTC, datetime
 
