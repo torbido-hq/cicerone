@@ -23,6 +23,7 @@ Track Ingest Feeds The Next Run And Quality Page
     ${n_events}=    Catalog Event Count    1
     Postgres Event Count Should Be    ${n_events}
     Mixed Output Files Should Match Contract
+    Manifest Should Record Successful Run    system-spec
     Run System Job Again    system-spec-eval
     Postgres Should Hold Only Input Tables
     Track Store Should Hold Exactly    ${tracked}[event_ids]

@@ -489,6 +489,7 @@ class CiceroneSystemLibrary:
         assert "No incremental flushes recorded in recent manifests yet." not in response.text
         assert "Events applied" in response.text
         assert f"<dd>{int(applied)}</dd>" in response.text
+        assert "success" in response.text
 
     def dataset_recommendations_should_contain_incremental_row(self, user_id: str, item_id: str) -> None:
         on_disk = pd.read_parquet(self.output_path / "recommendations.parquet")
