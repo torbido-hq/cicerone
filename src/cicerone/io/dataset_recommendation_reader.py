@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,16 @@ from cicerone.io.recommendation_reader_common import (
 from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _StagedItems:
+    items: pd.DataFrame | None
+    category: str | None
+    availability: tuple[str, ...]
+    version: int
+
+
 _CACHE_IO_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ArrowInvalid,
@@ -55,6 +66,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         self._by_user: dict[str, pd.DataFrame] = {}
         self._fallback_user_id: str | None = None
         self._variant_names: tuple[str, ...] = ()
+        self._recommendations_loaded = False
         self._init_item_filter_state()
         self.refresh()
 
@@ -126,6 +138,11 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             raise
 
     def _replace_items_snapshot(self) -> None:
+        staged = self._load_items_snapshot()
+        with self._lock:
+            self._publish_items_locked(staged)
+
+    def _load_items_snapshot(self) -> _StagedItems:
         with self._lock:
             category = self._category_column
             availability = tuple(self._availability_filters)
@@ -135,46 +152,49 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             category_column=category,
             availability_filters=availability,
         )
-        with self._lock:
-            if (
-                self._items_version != version
-                or self._category_column != category
-                or tuple(self._availability_filters) != availability
-            ):
-                return
-            self._items = items
-            self._items_version += 1
+        return _StagedItems(items, category, availability, version)
 
-    def refresh(self) -> None:
+    def _publish_items_locked(self, staged: _StagedItems) -> None:
+        if (
+            self._items_version != staged.version
+            or self._category_column != staged.category
+            or tuple(self._availability_filters) != staged.availability
+        ):
+            return
+        self._items = staged.items
+        self._items_version += 1
+
+    def refresh(self) -> bool:
+        """Swap recommendations and the items snapshot together; False keeps the previous pair."""
         started = time.perf_counter()
-        recommendations_ok = False
         try:
             cache = self._read_recommendations()
             by_user = index_recommendations_by_user(cache)
-            fallback_user_id = None
-            if COLD_START_USER_ID not in by_user:
-                fallback_user_id = resolve_fallback_user_id(by_user)
-            variant_names: tuple[str, ...] = ()
-            if VARIANT_COLUMN in cache.columns and not cache.empty:
-                variant_names = tuple(
-                    sorted(
-                        {
-                            str(name)
-                            for name in cache[VARIANT_COLUMN].tolist()
-                            if not pd.isna(name) and str(name)
-                        }
-                    )
-                )
-            with self._lock:
-                self._cache = cache
-                self._by_user = by_user
-                self._fallback_user_id = fallback_user_id
-                self._variant_names = variant_names
-            recommendations_ok = True
         except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
-        self._replace_items_snapshot()
-        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
+            if not self._recommendations_loaded:
+                # No recommendations yet, so there is no generation to mix with.
+                self._replace_items_snapshot()
+            observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=False)
+            return False
+        fallback_user_id = None
+        if COLD_START_USER_ID not in by_user:
+            fallback_user_id = resolve_fallback_user_id(by_user)
+        variant_names: tuple[str, ...] = ()
+        if VARIANT_COLUMN in cache.columns and not cache.empty:
+            names = {str(name) for name in cache[VARIANT_COLUMN].tolist() if not pd.isna(name) and str(name)}
+            variant_names = tuple(sorted(names))
+        # A hard items error raises here, before either cache changes.
+        items = self._load_items_snapshot()
+        with self._lock:
+            self._cache = cache
+            self._by_user = by_user
+            self._fallback_user_id = fallback_user_id
+            self._variant_names = variant_names
+            self._publish_items_locked(items)
+            self._recommendations_loaded = True
+        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=True)
+        return True
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         with self._lock:

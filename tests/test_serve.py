@@ -612,6 +612,62 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     assert cache_refreshes["overlay"] >= 2
 
 
+def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
+    calls = {"sleep": 0, "generated": 0, "overlay": 0}
+
+    class FakeCache:
+        def __init__(self, key: str) -> None:
+            self._key = key
+
+        def refresh(self) -> None:
+            calls[self._key] += 1
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] > ticks:
+            raise SystemExit("stop")
+
+    monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
+    monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
+    with pytest.raises(SystemExit):
+        _start_refresh_loop(
+            reader,
+            interval_seconds=0.01,
+            generated_at_cache=FakeCache("generated"),
+            overlay_cache=FakeCache("overlay"),
+        )
+    return calls
+
+
+def test_start_refresh_loop_survives_a_failing_step(monkeypatch, caplog):
+    failures = {"reader": 0}
+
+    class FailingReader(_FakeReader):
+        def refresh(self) -> None:
+            failures["reader"] += 1
+            raise TypeError("custom reader bug")
+
+    with caplog.at_level("ERROR", logger="cicerone.serve.app"):
+        calls = _run_refresh_ticks(monkeypatch, FailingReader(_recs_df()), ticks=3)
+    assert failures["reader"] == 3
+    assert calls["overlay"] == 3
+    # The reader kept its old rows, so the stamp must not move to a newer manifest.
+    assert calls["generated"] == 0
+    assert sum("Background refresh of FailingReader failed" in r.getMessage() for r in caplog.records) == 3
+
+
+def test_start_refresh_loop_holds_the_stamp_when_the_reader_keeps_old_rows(monkeypatch):
+    outcomes = iter([False, True, None])
+
+    class KeepingReader(_FakeReader):
+        def refresh(self) -> bool | None:
+            return next(outcomes)
+
+    calls = _run_refresh_ticks(monkeypatch, KeepingReader(_recs_df()), ticks=3)
+    assert calls["generated"] == 2
+    assert calls["overlay"] == 3
+
+
 def test_assignment_overlay_cache_keeps_last_on_refresh_error():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
