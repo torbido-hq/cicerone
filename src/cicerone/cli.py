@@ -225,6 +225,8 @@ def _cmd_forget_user(argv: list[str]) -> int:
         return 2
     except (OSError, ArrowException, SQLAlchemyError) as exc:
         print(f"forget-user failed: {exc}", file=sys.stderr)
+        for note in getattr(exc, "__notes__", ()):
+            print(note, file=sys.stderr)
         return 1
     print(
         f"forgot {args.user_id}: recommendations={result.recommendations} "

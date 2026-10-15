@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -122,6 +123,7 @@ def test_corrupt_track_log_leaves_recommendations(tmp_path) -> None:
         forget_user(output, "u1")
     frame = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert list(frame["user_id"]) == ["u1"]
+    assert list(tmp_path.rglob(".*.tmp")) == []
 
 
 class _WriterLock:
@@ -228,6 +230,77 @@ def test_local_commit_failure_restores_every_file(tmp_path, monkeypatch) -> None
     assert _local_bytes(tmp_path) == before
     assert list(tmp_path.rglob(".*.tmp")) == []
     assert list(tmp_path.rglob(".*.bak")) == []
+
+
+def test_local_backup_rename_failure_leaves_no_backup(tmp_path, monkeypatch) -> None:
+    import cicerone.forget as forget_mod
+
+    output = _local(tmp_path)
+    _seed(output)
+    before = _local_bytes(tmp_path)
+    original = forget_mod.os.replace
+    set_aside: list[str] = []
+
+    def flaky(src, dst):
+        if Path(dst).name.endswith(".bak"):
+            set_aside.append(Path(src).name)
+            if len(set_aside) == 2:
+                raise OSError("rename failed")
+        return original(src, dst)
+
+    monkeypatch.setattr(forget_mod.os, "replace", flaky)
+    with pytest.raises(OSError, match="rename failed"):
+        forget_user(output, "u1")
+    assert _local_bytes(tmp_path) == before
+    assert list(tmp_path.rglob(".*.tmp")) == []
+    assert list(tmp_path.rglob(".*.bak")) == []
+
+
+def test_local_restore_failure_keeps_the_original_and_names_it(tmp_path, monkeypatch) -> None:
+    import cicerone.forget as forget_mod
+
+    output = _local(tmp_path)
+    _seed(output)
+    original_recs = (tmp_path / "recommendations.parquet").read_bytes()
+    original = forget_mod.os.replace
+    swapped_in: list[str] = []
+
+    def flaky(src, dst):
+        name = Path(src).name
+        if name.endswith(".tmp"):
+            swapped_in.append(Path(dst).name)
+            if len(swapped_in) == 2:
+                raise OSError("rename failed")
+        if name.startswith(".recommendations.parquet.") and name.endswith(".bak"):
+            raise OSError("restore failed")
+        return original(src, dst)
+
+    monkeypatch.setattr(forget_mod.os, "replace", flaky)
+    with pytest.raises(OSError, match="rename failed") as raised:
+        forget_user(output, "u1")
+    (backup,) = tmp_path.glob(".recommendations.parquet.*.bak")
+    assert backup.read_bytes() == original_recs
+    assert raised.value.__notes__ == [f"originals not restored: {backup}"]
+    track_lines = (tmp_path / "track.jsonl").read_text(encoding="utf-8").splitlines()
+    assert {json.loads(line)["user_id"] for line in track_lines} == {"u1", "u2"}
+
+
+def test_local_backup_cleanup_failure_still_reports_the_erase(tmp_path, monkeypatch, caplog) -> None:
+    output = _local(tmp_path)
+    _seed(output)
+    original = Path.unlink
+
+    def stubborn(self: Path, missing_ok: bool = False) -> None:
+        if self.name.endswith(".bak"):
+            raise PermissionError("busy")
+        original(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", stubborn)
+    with caplog.at_level("WARNING", logger="cicerone.forget"):
+        result = forget_user(output, "u1")
+    assert result.recommendations == 1
+    assert _remaining_users(output) == {"u2"}
+    assert any("could not remove backup" in record.getMessage() for record in caplog.records)
 
 
 def test_local_staging_ignores_a_planted_symlink(tmp_path) -> None:

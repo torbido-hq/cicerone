@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from collections.abc import Iterator
@@ -29,6 +30,8 @@ from cicerone.locks.hold import (
 from cicerone.track.store import TrackStore, require_appendable_track_log
 from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
 from cicerone.track.store_db import delete_rows_for_user
+
+logger = logging.getLogger(__name__)
 
 FORGET_OUTPUT_ERROR = 'forget-user requires output kind = "db" or a local dataset path'
 
@@ -224,20 +227,38 @@ def _commit_swaps(swaps: list[_Swap]) -> None:
 
     A crash mid-commit leaves the originals as ``.<name>.*.bak`` next to them.
     """
-    backups: list[tuple[Path, Path]] = []
+    moved: list[tuple[Path, Path]] = []
     try:
         for swap in swaps:
             backup = _new_temp_path(swap.dest, ".bak")
-            os.replace(swap.dest, backup)
-            backups.append((backup, swap.dest))
+            try:
+                os.replace(swap.dest, backup)
+            except BaseException:
+                backup.unlink(missing_ok=True)
+                raise
+            moved.append((backup, swap.dest))
             if swap.staged is not None:
                 os.replace(swap.staged, swap.dest)
-    except BaseException:
-        for backup, dest in reversed(backups):
-            os.replace(backup, dest)
+    except BaseException as exc:
+        stranded = _restore(moved)
+        if stranded:
+            exc.add_note("originals not restored: " + ", ".join(str(path) for path in stranded))
         raise
-    for backup, _dest in backups:
-        backup.unlink(missing_ok=True)
+    for backup, _dest in moved:
+        try:
+            backup.unlink()
+        except OSError:
+            logger.warning("Erase committed; could not remove backup %s", backup)
+
+
+def _restore(moved: list[tuple[Path, Path]]) -> list[Path]:
+    stranded: list[Path] = []
+    for backup, dest in reversed(moved):
+        try:
+            os.replace(backup, dest)
+        except OSError:
+            stranded.append(backup)
+    return stranded
 
 
 def _discard_staged(swaps: list[_Swap]) -> None:
