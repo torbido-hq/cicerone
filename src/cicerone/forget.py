@@ -223,7 +223,7 @@ def _new_temp_path(dest: Path, suffix: str) -> Path:
     """
     fd, name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=suffix, dir=dest.parent)
     try:
-        os.fchmod(fd, stat.S_IMODE(dest.stat().st_mode))
+        os.fchmod(fd, stat.S_IMODE(dest.stat().st_mode) & 0o777)
     finally:
         os.close(fd)
     return Path(name)
