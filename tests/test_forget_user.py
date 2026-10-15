@@ -186,21 +186,112 @@ def test_local_stage_failure_leaves_every_file(tmp_path, monkeypatch) -> None:
     track = TrackStore(output)
     track.append_history(_recs("u1", "u2"), generated_at="2026-09-29T13:00:00+00:00")
     before = _local_bytes(tmp_path)
-    original = Path.write_bytes
+    original = pd.DataFrame.to_parquet
     seen: list[str] = []
 
-    def boom(self: Path, payload: bytes) -> int:
-        if self.name.startswith(".") and self.parent.name == "recommendation_history":
-            seen.append(self.name)
+    def boom(self: pd.DataFrame, path, *args, **kwargs):
+        target = Path(path)
+        if target.name.startswith(".") and target.parent.name == "recommendation_history":
+            seen.append(target.name)
             if len(seen) > 1:
                 raise OSError("disk full")
-        return original(self, payload)
+        return original(self, path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_bytes", boom)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", boom)
     with pytest.raises(OSError, match="disk full"):
         forget_user(output, "u1")
+    assert len(seen) == 2
     assert _local_bytes(tmp_path) == before
     assert list(tmp_path.rglob(".*.tmp")) == []
+
+
+def test_local_commit_failure_restores_every_file(tmp_path, monkeypatch) -> None:
+    import cicerone.forget as forget_mod
+
+    output = _local(tmp_path)
+    _seed(output)
+    before = _local_bytes(tmp_path)
+    original = forget_mod.os.replace
+    swapped_in: list[str] = []
+
+    def flaky(src, dst):
+        if Path(src).name.endswith(".tmp"):
+            swapped_in.append(Path(dst).name)
+            if len(swapped_in) == 2:
+                raise OSError("rename failed")
+        return original(src, dst)
+
+    monkeypatch.setattr(forget_mod.os, "replace", flaky)
+    with pytest.raises(OSError, match="rename failed"):
+        forget_user(output, "u1")
+    assert swapped_in == ["recommendations.parquet", "track.jsonl"]
+    assert _local_bytes(tmp_path) == before
+    assert list(tmp_path.rglob(".*.tmp")) == []
+    assert list(tmp_path.rglob(".*.bak")) == []
+
+
+def test_local_staging_ignores_a_planted_symlink(tmp_path) -> None:
+    output = _local(tmp_path / "out")
+    (tmp_path / "out").mkdir()
+    _seed(output)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    for name in ("recommendations.parquet", "track.jsonl", ".exposures.jsonl"):
+        (tmp_path / "out" / f".{name}.tmp").symlink_to(victim)
+    forget_user(output, "u1")
+    assert victim.read_text(encoding="utf-8") == "keep me"
+    assert _remaining_users(output) == {"u2"}
+
+
+def test_forget_user_matches_padded_ids(tmp_path) -> None:
+    local = _local(tmp_path / "local")
+    DatasetOutputSink(local.options).write_recommendations(_recs(" u1 ", "u2"))
+    db = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    DatabaseOutputSink(db.options).write_recommendations(_recs(" u1 ", "u2"))
+    assert forget_user(local, "u1").recommendations == 1
+    assert forget_user(db, " u1").recommendations == 1
+    assert list(pd.read_parquet(tmp_path / "local" / "recommendations.parquet")["user_id"]) == ["u2"]
+
+
+def test_forget_user_uses_the_shared_in_memory_engine() -> None:
+    from cicerone.io.db_store import create_db_engine
+
+    output = IOSettings(kind="db", options={"database_url": "sqlite://"})
+    DatabaseOutputSink(output.options).write_recommendations(_recs("u1", "u2"))
+    assert forget_user(output, "u1").recommendations == 1
+    engine = create_db_engine("sqlite://", options=output.options)
+    frame = pd.read_sql('SELECT user_id FROM "recommendations"', engine)
+    assert list(frame["user_id"]) == ["u2"]
+
+
+def test_delete_rows_reraises_database_errors_that_are_not_missing_tables() -> None:
+    from contextlib import nullcontext
+
+    from sqlalchemy.exc import OperationalError
+
+    from cicerone.track.store_db import delete_rows_for_user
+
+    class _Conn:
+        def begin_nested(self):
+            return nullcontext()
+
+        def execute(self, *_args, **_kwargs):
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+
+    with pytest.raises(OperationalError, match="database is locked"):
+        delete_rows_for_user(_Conn(), "recommendations", "u1", fence=lambda: None)
+
+
+def test_cli_forget_user_reports_storage_errors(tmp_path, monkeypatch, capsys) -> None:
+    import cicerone.forget as forget_mod
+
+    def boom(*_args, **_kwargs):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(forget_mod, "forget_user", boom)
+    config = _cli_config(tmp_path)
+    assert main(["--config", str(config), "forget-user", "u1"]) == 1
+    assert "forget-user failed: read-only file system" in capsys.readouterr().err
 
 
 def _local_bytes(root) -> dict[str, bytes]:
@@ -234,9 +325,11 @@ def test_sqlite_schema_error_rolls_back_earlier_deletes(tmp_path) -> None:
         forget_user(output, "u1")
     recommendations = pd.read_sql('SELECT user_id FROM "recommendations"', engine)
     track = pd.read_sql('SELECT user_id FROM "recommendation_track"', engine)
+    exposures = pd.read_sql('SELECT user_id FROM "recommendation_exposures"', engine)
     engine.dispose()
     assert set(recommendations["user_id"]) == {"u1", "u2"}
     assert set(track["user_id"]) == {"u1", "u2"}
+    assert set(exposures["user_id"]) == {"u1", "u2"}
 
 
 def test_forget_user_missing_sqlite_tables_are_zero(tmp_path) -> None:
@@ -248,9 +341,9 @@ def test_forget_user_missing_sqlite_tables_are_zero(tmp_path) -> None:
     assert result.history == 0
 
 
-def test_cli_forget_user_prints_counts(tmp_path, capsys) -> None:
+def _cli_config(tmp_path) -> Path:
     output = tmp_path / "out"
-    output.mkdir()
+    output.mkdir(exist_ok=True)
     config = tmp_path / "cicerone.toml"
     config.write_text(
         f"""
@@ -272,6 +365,12 @@ def test_cli_forget_user_prints_counts(tmp_path, capsys) -> None:
         """,
         encoding="utf-8",
     )
+    return config
+
+
+def test_cli_forget_user_prints_counts(tmp_path, capsys) -> None:
+    config = _cli_config(tmp_path)
+    output = tmp_path / "out"
     _seed(_local(output))
     assert main(["--config", str(config), "forget-user", "u1"]) == 0
     captured = capsys.readouterr()

@@ -198,6 +198,9 @@ def _cmd_users(argv: list[str]) -> int:
 
 
 def _cmd_forget_user(argv: list[str]) -> int:
+    from pyarrow.lib import ArrowException
+    from sqlalchemy.exc import SQLAlchemyError
+
     from cicerone.config import load_settings
     from cicerone.config.constants import ConfigError
     from cicerone.forget import forget_user
@@ -220,6 +223,9 @@ def _cmd_forget_user(argv: list[str]) -> int:
     except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except (OSError, ArrowException, SQLAlchemyError) as exc:
+        print(f"forget-user failed: {exc}", file=sys.stderr)
+        return 1
     print(
         f"forgot {args.user_id}: recommendations={result.recommendations} "
         f"track={result.track} exposures={result.exposures} history={result.history}"

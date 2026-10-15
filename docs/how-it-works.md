@@ -349,10 +349,15 @@ snapshots, including a legacy `recommendation_history.parquet`. It does not
 delete the catalog user or their training events (`DELETE /users/{id}` does
 that). The output must be `kind = "db"` or a local dataset path. Object-store
 output is refused because a JSONL rewrite there is not atomic. Database
-deletes commit in one transaction. Local files are replaced only after every
-rewrite is staged, so a failure while preparing the erase leaves them
-unchanged. A history or recommendations file that has rows but no `user_id`,
-and a track or exposure line that is not a user row, are refused before
-anything is removed. The recommendation count is taken under the same write
-lock as the replace. When a distributed writer lock is configured, the
-command holds it for the erase.
+deletes commit in one transaction. Local files are staged first and swapped
+in together; if a swap fails, the files already swapped are put back. A
+crash during the swap can leave the originals as `.<file>.*.bak` next to
+them. A history or recommendations file that has rows but no `user_id`, and
+a track or exposure line that is not a user row, are refused before anything
+is removed. Stored ids are matched after trimming whitespace.
+
+When a distributed writer lock is configured, the command holds it for the
+erase. Without one, run it while no job or incremental flush is writing:
+such a write can put the user's recommendations back. The next job run also
+rebuilds recommendations for a user still in the catalog. Serve keeps rows it
+already cached until its next refresh (`serve.refresh_interval_seconds`).

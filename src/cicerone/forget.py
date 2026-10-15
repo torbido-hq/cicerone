@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import io
+import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore, require_appendable_exposure_log
 from cicerone.io.dataset_store import DatasetOutputSink
-from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
-from cicerone.io.jsonl_user import drop_user_lines
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, create_db_engine
+from cicerone.io.jsonl_user import filter_user_lines
 from cicerone.io.options import exclusive_file_lock, require_option, storage_backend
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendations_sql_names
 from cicerone.locks.hold import (
@@ -41,6 +43,14 @@ class ForgetResult:
     history: int
 
 
+@dataclass(frozen=True)
+class _Swap:
+    """Replace ``dest`` with ``staged``, or remove it when ``staged`` is None."""
+
+    dest: Path
+    staged: Path | None
+
+
 def require_forget_output(output: IOSettings) -> None:
     """Reject object-store output. JSONL rewrite there is not atomic."""
     if output.kind == "db":
@@ -56,39 +66,17 @@ def forget_user(
     *,
     writer_lock: LockBackend | None = None,
 ) -> ForgetResult:
-    """Drop one user's output rows. Catalog users and events are left in place."""
+    """Drop one user's output rows. Catalog users and events are left in place.
+
+    Stored ids are compared after trimming, like event and track ingest.
+    """
     user_id = str(user_id).strip()
     if not user_id:
         raise ValueError("user_id is required")
     require_forget_output(output)
     if output.kind == "db":
         return _forget_db(output, user_id, writer_lock=writer_lock)
-    _preflight_local(output)
     return _forget_local(output, user_id, writer_lock=writer_lock)
-
-
-def _preflight_local(output: IOSettings) -> None:
-    root = Path(require_option(output.options, "path", "local"))
-    recommendations = root / "recommendations.parquet"
-    if recommendations.is_file():
-        _require_user_column(recommendations, pd.read_parquet(recommendations))
-    for name in (TRACK_FILENAME, EXPOSURES_FILENAME):
-        path = root / name
-        if path.is_file():
-            drop_user_lines(path.read_bytes(), user_id="")
-    legacy = root / HISTORY_FILENAME
-    if legacy.is_file():
-        _require_user_column(legacy, pd.read_parquet(legacy))
-    history = root / HISTORY_DIR
-    if not history.is_dir():
-        return
-    for path in sorted(history.glob("*.parquet")):
-        _require_user_column(path, pd.read_parquet(path))
-
-
-def _require_user_column(path: Path, frame: pd.DataFrame) -> None:
-    if not frame.empty and USER_COLUMN not in frame.columns:
-        raise ValueError(f"{path.name} is missing {USER_COLUMN}")
 
 
 def _forget_db(
@@ -102,21 +90,18 @@ def _forget_db(
     )
     track_store = TrackStore(output, writer_lock=writer_lock)
     exposures = ExperimentStore(output, writer_lock=writer_lock)
-    engine = _output_engine(require_option(output.options, "database_url", "db"))
-    try:
-        with engine.begin() as conn:
-            recommendations = delete_rows_for_user(
-                conn,
-                table,
-                user_id,
-                fence=track_store._ensure_fence,
-                user_column=user_col,
-            )
-            track = track_store.delete_user_rows(user_id, conn=conn)
-            exposure_rows = exposures.delete_exposures_for_user(user_id, conn=conn)
-            history = track_store.delete_history_for_user(user_id, conn=conn)
-    finally:
-        engine.dispose()
+    engine = create_db_engine(require_option(output.options, "database_url", "db"), options=output.options)
+    with _transaction(engine) as conn:
+        recommendations = delete_rows_for_user(
+            conn,
+            table,
+            user_id,
+            fence=track_store.fence.ensure,
+            user_column=user_col,
+        )
+        track = track_store.delete_user_rows(user_id, conn=conn)
+        exposure_rows = exposures.delete_exposures_for_user(user_id, conn=conn)
+        history = track_store.delete_history_for_user(user_id, conn=conn)
     return ForgetResult(
         recommendations=recommendations,
         track=track,
@@ -125,21 +110,25 @@ def _forget_db(
     )
 
 
-def _output_engine(url: str) -> Engine:
-    engine = create_engine(url, pool_pre_ping=True)
-    if engine.dialect.name != "sqlite":
-        return engine
-
-    # pysqlite commits a RELEASE SAVEPOINT unless BEGIN was sent explicitly.
-    @event.listens_for(engine, "connect")
-    def _connect(dbapi_connection, _record) -> None:
-        dbapi_connection.isolation_level = None
-
-    @event.listens_for(engine, "begin")
-    def _begin(conn) -> None:
-        conn.exec_driver_sql("BEGIN")
-
-    return engine
+@contextmanager
+def _transaction(engine: Engine) -> Iterator[Connection]:
+    with engine.connect() as conn:
+        if engine.dialect.name != "sqlite":
+            with conn.begin():
+                yield conn
+            return
+        # pysqlite commits a RELEASE SAVEPOINT unless BEGIN was sent explicitly.
+        # Set per connection: the engine is shared with the output writers.
+        dbapi = conn.connection.dbapi_connection
+        assert dbapi is not None
+        previous = dbapi.isolation_level
+        dbapi.isolation_level = None
+        try:
+            with conn.begin():
+                conn.exec_driver_sql("BEGIN")
+                yield conn
+        finally:
+            dbapi.isolation_level = previous
 
 
 def _forget_local(
@@ -154,15 +143,20 @@ def _forget_local(
     sink = DatasetOutputSink(output.options, writer_lock=writer_lock)
 
     def _run() -> ForgetResult:
+        # Writer lease first, then file locks: the same order as a job run.
         with (
             sink.recommendations_write(),
             exclusive_file_lock(root / ".track.jsonl.lock"),
             exclusive_file_lock(root / ".exposures.jsonl.lock"),
         ):
             ensure_writer_owned(writer_lock)
-            rewrites, unlinks, counts = _plan_local_erase(root, user_id)
-            ensure_writer_owned(writer_lock)
-            _commit_local_rewrites(rewrites, unlinks)
+            swaps: list[_Swap] = []
+            try:
+                counts = _plan_local_erase(root, user_id, swaps)
+                ensure_writer_owned(writer_lock)
+                _commit_swaps(swaps)
+            finally:
+                _discard_staged(swaps)
             return counts
 
     if writer_lock_held_here(writer_lock):
@@ -171,100 +165,82 @@ def _forget_local(
         return _run()
 
 
-def _plan_local_erase(root: Path, user_id: str) -> tuple[list[tuple[Path, bytes]], list[Path], ForgetResult]:
-    rewrites: list[tuple[Path, bytes]] = []
-    unlinks: list[Path] = []
-    recommendations = _plan_recommendations(root, user_id, rewrites)
-    track = _plan_jsonl(root / TRACK_FILENAME, user_id, rewrites)
-    exposures = _plan_jsonl(root / EXPOSURES_FILENAME, user_id, rewrites)
-    history = _plan_history(root, user_id, rewrites, unlinks)
-    return rewrites, unlinks, ForgetResult(recommendations, track, exposures, history)
+def _plan_local_erase(root: Path, user_id: str, swaps: list[_Swap]) -> ForgetResult:
+    recommendations = _plan_parquet(root / "recommendations.parquet", user_id, swaps, drop_empty=False)
+    track = _plan_jsonl(root / TRACK_FILENAME, user_id, swaps)
+    exposures = _plan_jsonl(root / EXPOSURES_FILENAME, user_id, swaps)
+    history_paths = [root / HISTORY_FILENAME]
+    history_dir = root / HISTORY_DIR
+    if history_dir.is_dir():
+        history_paths.extend(sorted(history_dir.glob("*.parquet")))
+    history = sum(_plan_parquet(path, user_id, swaps, drop_empty=True) for path in history_paths)
+    return ForgetResult(recommendations, track, exposures, history)
 
 
-def _plan_recommendations(root: Path, user_id: str, rewrites: list[tuple[Path, bytes]]) -> int:
-    path = root / "recommendations.parquet"
+def _plan_parquet(path: Path, user_id: str, swaps: list[_Swap], *, drop_empty: bool) -> int:
     if not path.is_file():
         return 0
     frame = pd.read_parquet(path)
-    _require_user_column(path, frame)
     if frame.empty:
         return 0
-    mask = frame[USER_COLUMN].astype(str) == user_id
+    if USER_COLUMN not in frame.columns:
+        raise ValueError(f"{path.name} is missing {USER_COLUMN}")
+    mask = frame[USER_COLUMN].astype(str).str.strip() == user_id
     removed = int(mask.sum())
-    if removed:
-        kept = frame.loc[~mask].reset_index(drop=True)
-        rewrites.append((path, _parquet_bytes(kept)))
+    if not removed:
+        return 0
+    kept = frame.loc[~mask].reset_index(drop=True)
+    if kept.empty and drop_empty:
+        swaps.append(_Swap(path, None))
+        return removed
+    staged = _new_temp_path(path, ".tmp")
+    swaps.append(_Swap(path, staged))
+    kept.to_parquet(staged, index=False)
     return removed
 
 
-def _plan_jsonl(path: Path, user_id: str, rewrites: list[tuple[Path, bytes]]) -> int:
+def _plan_jsonl(path: Path, user_id: str, swaps: list[_Swap]) -> int:
     if not path.is_file():
         return 0
-    payload, removed = drop_user_lines(path.read_bytes(), user_id)
-    if removed:
-        rewrites.append((path, payload))
+    staged = _new_temp_path(path, ".tmp")
+    swaps.append(_Swap(path, staged))
+    with path.open("rb") as source, staged.open("wb") as sink:
+        removed = filter_user_lines(source, sink, user_id)
+    if not removed:
+        swaps.pop()
+        staged.unlink(missing_ok=True)
     return removed
 
 
-def _plan_history(
-    root: Path,
-    user_id: str,
-    rewrites: list[tuple[Path, bytes]],
-    unlinks: list[Path],
-) -> int:
-    paths = [root / HISTORY_FILENAME]
-    history = root / HISTORY_DIR
-    if history.is_dir():
-        paths.extend(sorted(history.glob("*.parquet")))
-    total = 0
-    for path in paths:
-        if not path.is_file():
-            continue
-        frame = pd.read_parquet(path)
-        _require_user_column(path, frame)
-        if frame.empty:
-            continue
-        mask = frame[USER_COLUMN].astype(str) == user_id
-        removed = int(mask.sum())
-        if not removed:
-            continue
-        total += removed
-        kept = frame.loc[~mask].reset_index(drop=True)
-        if kept.empty:
-            unlinks.append(path)
-        else:
-            rewrites.append((path, _parquet_bytes(kept)))
-    return total
+def _new_temp_path(dest: Path, suffix: str) -> Path:
+    """A fresh hidden file next to ``dest``; mkstemp creates it exclusively, so no symlink is followed."""
+    fd, name = tempfile.mkstemp(prefix=f".{dest.name}.", suffix=suffix, dir=dest.parent)
+    os.close(fd)
+    return Path(name)
 
 
-def _parquet_bytes(frame: pd.DataFrame) -> bytes:
-    buffer = io.BytesIO()
-    frame.to_parquet(buffer, index=False)
-    return buffer.getvalue()
+def _commit_swaps(swaps: list[_Swap]) -> None:
+    """Swap every file in, keeping the originals until all swaps succeed.
 
-
-def _commit_local_rewrites(rewrites: list[tuple[Path, bytes]], unlinks: list[Path]) -> None:
-    staged: list[tuple[Path, Path]] = []
+    A crash mid-commit leaves the originals as ``.<name>.*.bak`` next to them.
+    """
+    backups: list[tuple[Path, Path]] = []
     try:
-        for dest, payload in rewrites:
-            tmp = dest.with_name(f".{dest.name}.tmp")
-            tmp.write_bytes(payload)
-            staged.append((tmp, dest))
-    except OSError:
-        _unlink_temps(staged)
+        for swap in swaps:
+            backup = _new_temp_path(swap.dest, ".bak")
+            os.replace(swap.dest, backup)
+            backups.append((backup, swap.dest))
+            if swap.staged is not None:
+                os.replace(swap.staged, swap.dest)
+    except BaseException:
+        for backup, dest in reversed(backups):
+            os.replace(backup, dest)
         raise
-    replaced = 0
-    try:
-        for tmp, dest in staged:
-            tmp.replace(dest)
-            replaced += 1
-        for path in unlinks:
-            path.unlink()
-    except OSError:
-        _unlink_temps(staged[replaced:])
-        raise
+    for backup, _dest in backups:
+        backup.unlink(missing_ok=True)
 
 
-def _unlink_temps(staged: list[tuple[Path, Path]]) -> None:
-    for tmp, _dest in staged:
-        tmp.unlink(missing_ok=True)
+def _discard_staged(swaps: list[_Swap]) -> None:
+    for swap in swaps:
+        if swap.staged is not None:
+            swap.staged.unlink(missing_ok=True)

@@ -108,23 +108,19 @@ class TrackDbBackend:
             self._ensure_fence()
             return fresh
 
-    def _delete_user_rows_db(self, user_id: str, *, conn: Any = None) -> int:
+    def _delete_user_rows_db(self, user_id: str, *, conn: Any) -> int:
         table = sql_identifier(
             self._options.get("track_table", DEFAULT_TRACK_TABLE),
             option="track_table",
         )
-        if conn is not None:
-            return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
-        return _delete_on_engine(self._db_engine(), table, user_id, fence=self._ensure_fence)
+        return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
 
-    def _delete_history_db(self, user_id: str, *, conn: Any = None) -> int:
+    def _delete_history_db(self, user_id: str, *, conn: Any) -> int:
         table = sql_identifier(
             self._options.get("history_table", DEFAULT_HISTORY_TABLE),
             option="history_table",
         )
-        if conn is not None:
-            return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
-        return _delete_on_engine(self._db_engine(), table, user_id, fence=self._ensure_fence)
+        return delete_rows_for_user(conn, table, user_id, fence=self._ensure_fence)
 
     def _read_rows_db(
         self,
@@ -247,12 +243,16 @@ def delete_rows_for_user(
     fence: Callable[[], None],
     user_column: str = USER_COLUMN,
 ) -> int:
-    """Delete one user's rows on an open transaction. A missing table counts as zero."""
+    """Delete one user's rows on an open transaction. A missing table counts as zero.
+
+    Stored ids are trimmed and compared as text, so padded or integer ids still match.
+    """
     table = sql_identifier(table, option="table")
     user_column = sql_identifier(user_column, option="user_column")
     # The column stays unquoted: SQLite treats an unknown quoted name as a string.
-    count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE {user_column} = :user_id')
-    delete_sql = text(f'DELETE FROM "{table}" WHERE {user_column} = :user_id')
+    match = f"TRIM(CAST({user_column} AS VARCHAR)) = :user_id"
+    count_sql = text(f'SELECT COUNT(*) FROM "{table}" WHERE {match}')
+    delete_sql = text(f'DELETE FROM "{table}" WHERE {match}')
     try:
         with conn.begin_nested():
             fence()
@@ -264,9 +264,6 @@ def delete_rows_for_user(
     except MISSING_TABLE_ERRORS as exc:
         if is_missing_column_error(exc):
             raise ValueError(f"{table} is missing {user_column}") from exc
-        return 0
-
-
-def _delete_on_engine(engine: Engine, table: str, user_id: str, *, fence: Callable[[], None]) -> int:
-    with engine.begin() as conn:
-        return delete_rows_for_user(conn, table, user_id, fence=fence)
+        if is_missing_table_error(exc):
+            return 0
+        raise
