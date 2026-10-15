@@ -360,6 +360,17 @@ def test_dataset_reader_refresh_reports_kept_recommendations(tmp_path):
     assert list(reader.get_items()["item_id"]) == ["i1"]
 
 
+def test_dataset_reader_loads_items_before_any_recommendations_exist(tmp_path):
+    pd.DataFrame([{"item_id": "i1", "category": "beer"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    items = reader.get_items()
+    assert items is not None
+    assert list(items["item_id"]) == ["i1"]
+    assert reader.get_recommendations("u1", k=1).empty
+
+
 def test_dataset_reader_refresh_propagates_index_errors(tmp_path, monkeypatch):
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})

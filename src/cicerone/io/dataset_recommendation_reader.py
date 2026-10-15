@@ -66,6 +66,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         self._by_user: dict[str, pd.DataFrame] = {}
         self._fallback_user_id: str | None = None
         self._variant_names: tuple[str, ...] = ()
+        self._recommendations_loaded = False
         self._init_item_filter_state()
         self.refresh()
 
@@ -171,6 +172,9 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             by_user = index_recommendations_by_user(cache)
         except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
+            if not self._recommendations_loaded:
+                # No recommendations yet, so there is no generation to mix with.
+                self._replace_items_snapshot()
             observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=False)
             return False
         fallback_user_id = None
@@ -188,6 +192,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             self._fallback_user_id = fallback_user_id
             self._variant_names = variant_names
             self._publish_items_locked(items)
+            self._recommendations_loaded = True
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=True)
         return True
 
