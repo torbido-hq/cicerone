@@ -24,27 +24,35 @@ class _FakeRedis:
         self.rows: list[str] = []
         self.ids: set[str] = set()
         self.on_execute: list[object] = []
+        self.versions: dict[str, int] = {}
 
-    def sadd(self, _key: str, member: str) -> int:
+    def _touch(self, key: str) -> None:
+        self.versions[key] = self.versions.get(key, 0) + 1
+
+    def sadd(self, key: str, member: str) -> int:
         if member in self.ids:
             return 0
         self.ids.add(member)
+        self._touch(key)
         return 1
 
-    def rpush(self, _key: str, *values: str) -> int:
+    def rpush(self, key: str, *values: str) -> int:
         self.rows.extend(values)
+        self._touch(key)
         return len(self.rows)
 
     def lrange(self, _key: str, _start: int, _end: int) -> list[str]:
         return list(self.rows)
 
-    def delete(self, _key: str) -> int:
+    def delete(self, key: str) -> int:
         self.rows.clear()
+        self._touch(key)
         return 1
 
-    def srem(self, _key: str, *members: str) -> int:
+    def srem(self, key: str, *members: str) -> int:
         for member in members:
             self.ids.discard(member)
+        self._touch(key)
         return len(members)
 
     def sismember(self, _key: str, member: str) -> bool:
@@ -55,12 +63,13 @@ class _FakeRedis:
 
 
 class _FakePipeline:
-    """WATCH/MULTI/EXEC over _FakeRedis; ``on_execute`` can race or fail the next EXEC."""
+    """WATCH/MULTI/EXEC over _FakeRedis; ``on_execute`` runs just before the next EXEC."""
 
     def __init__(self, client: _FakeRedis) -> None:
         self._client = client
         self._queued: list[tuple[str, tuple[object, ...]]] = []
         self._buffering = False
+        self._watched: dict[str, int] = {}
 
     def __enter__(self) -> _FakePipeline:
         return self
@@ -68,8 +77,9 @@ class _FakePipeline:
     def __exit__(self, *_exc: object) -> None:
         self._queued.clear()
 
-    def watch(self, *_keys: str) -> None:
+    def watch(self, *keys: str) -> None:
         self._buffering = False
+        self._watched = {key: self._client.versions.get(key, 0) for key in keys}
 
     def multi(self) -> None:
         self._buffering = True
@@ -91,6 +101,11 @@ class _FakePipeline:
         self._buffering = False
         if hook is not None:
             hook()
+        watched, self._watched = self._watched, {}
+        if any(self._client.versions.get(key, 0) != version for key, version in watched.items()):
+            from redis.exceptions import WatchError
+
+            raise WatchError("Watched variable changed.")
         return [getattr(self._client, name)(*args) for name, args in queued]
 
 
@@ -225,19 +240,33 @@ def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monke
 
 
 def test_redis_delete_retries_when_an_append_races_the_rewrite():
-    from redis.exceptions import WatchError
-
     client = _FakeRedis()
     store = _store(client)
     store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
 
     def racing_append() -> None:
         client.rpush("cicerone:track", json.dumps(_row(user_id="carol", item_id="ipa-003", event_id="imp-3")))
-        raise WatchError("list changed")
 
     client.on_execute.append(racing_append)
     assert store.delete_redis_rows("alice") == 1
+    assert client.on_execute == []
     assert [json.loads(row)["user_id"] for row in client.rows] == ["bob", "carol"]
+
+
+def test_redis_delete_gives_up_after_bounded_retries():
+    from redis.exceptions import WatchError
+
+    client = _FakeRedis()
+    store = _store(client)
+    store.append_rows([_row()])
+
+    def racing_append() -> None:
+        client.rpush("cicerone:track", json.dumps(_row(user_id="carol", item_id="ipa-003", event_id="")))
+
+    client.on_execute.extend([racing_append] * 32)
+    with pytest.raises(WatchError, match="gave up after 32 attempts"):
+        store.delete_redis_rows("alice")
+    assert any(json.loads(row)["user_id"] == "alice" for row in client.rows)
 
 
 def test_redis_append_does_not_strand_an_id_when_the_push_fails():

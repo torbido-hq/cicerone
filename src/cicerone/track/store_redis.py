@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover - the redis extra is installed with trac
 
 TRACK_LOG_KEY = "cicerone:track"
 TRACK_IDS_KEY = "cicerone:track:ids"
+_WATCH_RETRIES = 32
 _REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
 
 
@@ -50,7 +51,7 @@ class RedisTrackLog:
             return True
         # The id claim and the push commit together, so a failed push cannot strand the id.
         with self._client.pipeline() as pipe:
-            while True:
+            for _attempt in range(_WATCH_RETRIES):
                 try:
                     pipe.watch(TRACK_IDS_KEY)
                     if pipe.sismember(TRACK_IDS_KEY, event_id):
@@ -62,6 +63,7 @@ class RedisTrackLog:
                     return True
                 except WatchError:
                     continue
+        raise WatchError(f"track log kept changing; gave up after {_WATCH_RETRIES} attempts")
 
     def read(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -74,7 +76,7 @@ class RedisTrackLog:
     def delete_user(self, user_id: str) -> int:
         # WATCH the list so an append between the read and the rewrite retries instead of being lost.
         with self._client.pipeline() as pipe:
-            while True:
+            for _attempt in range(_WATCH_RETRIES):
                 try:
                     pipe.watch(TRACK_LOG_KEY)
                     kept: list[str] = []
@@ -102,6 +104,7 @@ class RedisTrackLog:
                     return removed
                 except WatchError:
                     continue
+        raise WatchError(f"track log kept changing; gave up after {_WATCH_RETRIES} attempts")
 
 
 def _connect(redis_url: str) -> Any:
