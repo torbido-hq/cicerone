@@ -50,7 +50,11 @@ def parse_occurred_at(value: Any) -> datetime:
         raise EventNormalizeError("occurred_at is invalid")
     if dt.tzinfo is None:
         raise EventNormalizeError("occurred_at timezone is required; use an explicit offset or 'Z'")
-    return dt.astimezone(UTC)
+    try:
+        return dt.astimezone(UTC)
+    except (OverflowError, OSError) as exc:
+        # e.g. 9999-12-31T23:59-01:00 lands past datetime.max in UTC.
+        raise EventNormalizeError("occurred_at is out of range") from exc
 
 
 def _parse_quantity(value: Any) -> int:
