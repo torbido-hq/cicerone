@@ -37,11 +37,3 @@ Dashboard HTTP Matches Dataset Output
     Dashboard Should Show Latest Run Summary    system-spec
     Dashboard Should Show Recommendations For User    u1
 
-*** Keywords ***
-Set Up Mixed System
-    ${available}=    Postgres Test Database Available
-    IF    not ${available}
-        Skip    TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- run via docker-compose.ci.yml (see CONTRIBUTING.md)
-    END
-    Reset Postgres Schema
-    Seed And Train Mixed System
