@@ -60,6 +60,10 @@ class _FakeRedis:
         self._done("hsetnx")
         return stored
 
+    def pipeline(self, *, transaction: bool = True) -> _FakePipeline:
+        assert transaction
+        return _FakePipeline(self)
+
     def hvals(self, key: str) -> list[str]:
         self._call("hvals")
         return list(self.hashes.get(key, {}).values())
@@ -76,6 +80,31 @@ class _FakeRedis:
         removed = sum(1 for field in fields if current.pop(field, None) is not None)
         self._done("hdel")
         return removed
+
+
+class _FakePipeline:
+    """MULTI/EXEC: queued commands apply together at ``execute``."""
+
+    def __init__(self, client: _FakeRedis) -> None:
+        self._client = client
+        self._queued: list[tuple[str, tuple[object, ...]]] = []
+
+    def __enter__(self) -> _FakePipeline:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._queued.clear()
+
+    def hsetnx(self, *args: object) -> _FakePipeline:
+        self._queued.append(("hsetnx", args))
+        return self
+
+    def execute(self) -> list[object]:
+        self._client._call("execute")
+        results = [getattr(self._client, name)(*args) for name, args in self._queued]
+        self._queued.clear()
+        self._client._done("execute")
+        return results
 
 
 def _row(**overrides: object) -> dict[str, object]:
@@ -120,7 +149,7 @@ def test_redis_append_is_idempotent_when_the_reply_is_lost():
 
     client = _FakeRedis()
     store = _store(client)
-    client.lose_reply["hsetnx"] = RedisError("Timeout reading from socket")
+    client.lose_reply["execute"] = RedisError("Timeout reading from socket")
     with pytest.raises(RedisError):
         store.append_rows([_row()])
     # The row was stored before the reply was lost; the retry neither duplicates nor drops it.
@@ -133,11 +162,25 @@ def test_redis_append_failure_before_the_write_lets_a_retry_store_the_row():
 
     client = _FakeRedis()
     store = _store(client)
-    client.fail_next["hsetnx"] = RedisError("connection reset")
+    client.fail_next["execute"] = RedisError("connection reset")
     with pytest.raises(RedisError):
         store.append_rows([_row()])
     assert client.rows == []
     assert store.append_rows([_row()]) == 1
+
+
+def test_redis_append_stores_a_batch_whole_or_not_at_all():
+    from cicerone.events.errors import RedisError
+
+    client = _FakeRedis()
+    store = _store(client)
+    batch = [_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")]
+    client.fail_next["execute"] = RedisError("connection reset")
+    with pytest.raises(RedisError):
+        store.append_rows(batch)
+    assert client.rows == []
+    assert store.append_rows(batch) == 2
+    assert store.append_rows([*batch, _row(user_id="carol", item_id="ipa-003", event_id="imp-3")]) == 1
 
 
 def test_load_settings_allows_ha_track_when_redis_url_is_set(tmp_path):
