@@ -6,7 +6,14 @@ import pandas as pd
 import pytest
 from support.toml_config import write_toml
 
-from cicerone.config import ConfigError, IOSettings, load_settings, load_track_settings, make_settings
+from cicerone.config import (
+    ConfigError,
+    IOSettings,
+    TrackSettings,
+    load_settings,
+    load_track_settings,
+    make_settings,
+)
 from cicerone.track.normalize import normalize_track
 from cicerone.track.store import TrackStore
 
@@ -110,9 +117,8 @@ def test_load_settings_allows_ha_track_when_redis_url_is_set(tmp_path):
         )
     )
     assert settings.track.redis_url == "redis://localhost:6379/1"
-    assert make_settings(track_enabled=True, track_redis_url="redis://localhost:6379/0").track.redis_url == (
-        "redis://localhost:6379/0"
-    )
+    nested = make_settings(track=TrackSettings(enabled=True, redis_url="redis://localhost:6379/0"))
+    assert nested.track.redis_url == "redis://localhost:6379/0"
 
 
 def test_load_track_rejects_a_blank_redis_url():
