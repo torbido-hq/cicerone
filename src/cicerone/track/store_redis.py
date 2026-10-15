@@ -60,13 +60,16 @@ class RedisTrackLog:
         self._log_key = f"{key_prefix}:track"
 
     def append(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        fresh: list[dict[str, Any]] = []
-        for row in rows:
-            line = json.dumps(row, separators=(",", ":"))
-            # HSETNX is atomic and idempotent: a retry after a lost reply finds the row stored.
-            if self._client.hsetnx(self._log_key, _event_key(row, line), line):
-                fresh.append(row)
-        return fresh
+        if not rows:
+            return []
+        lines = [json.dumps(row, separators=(",", ":")) for row in rows]
+        # One MULTI/EXEC for the batch: a failure before EXEC stores none of it, and HSETNX keeps
+        # a retry after a lost reply idempotent.
+        with self._client.pipeline(transaction=True) as pipe:
+            for row, line in zip(rows, lines, strict=True):
+                pipe.hsetnx(self._log_key, _event_key(row, line), line)
+            stored = pipe.execute()
+        return [row for row, fresh in zip(rows, stored, strict=True) if fresh]
 
     def read(self) -> list[dict[str, Any]]:
         rows = [parsed for raw in self._client.hvals(self._log_key) if (parsed := _parse_line(str(raw)))]
