@@ -1065,6 +1065,37 @@ def test_try_load_logs_exception_type_and_message(caplog):
     )
 
 
+def test_try_load_logs_on_job_eval_logger(caplog):
+    from cicerone.job_eval import try_load
+
+    with caplog.at_level("ERROR"):
+        try_load("read manifest", lambda: (_ for _ in ()).throw(OSError("gone")), None)
+    assert [record.name for record in caplog.records] == ["cicerone.job_eval"]
+
+
+def test_log_caught_defaults_to_errors_logger(caplog):
+    from cicerone.errors import log_caught
+
+    with caplog.at_level("ERROR"):
+        log_caught("Failed to read", ValueError("bad"))
+    assert [(record.name, record.getMessage()) for record in caplog.records] == [
+        ("cicerone.errors", "Failed to read (ValueError: bad)")
+    ]
+
+
+def test_job_eval_reexports_error_groups():
+    from cicerone import errors, job_eval
+
+    for name in (
+        "OPTIONAL_IO_ERRORS",
+        "OPTIONAL_EVAL_ERRORS",
+        "PUBLISH_ERRORS",
+        "SINK_WRITE_ERRORS",
+        "log_caught",
+    ):
+        assert getattr(job_eval, name) is getattr(errors, name)
+
+
 def test_try_load_does_not_swallow_unexpected_errors():
     from cicerone.job_eval import try_load
 

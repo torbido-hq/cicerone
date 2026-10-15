@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 from cicerone.config.settings import IOSettings
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.io.factory import build_manifest_reader
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.locks import LockLostError, WriterLockBusyError
 
 logger = logging.getLogger(__name__)
