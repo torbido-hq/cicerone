@@ -16,6 +16,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi.testclient import TestClient
+from robot.api import SkipExecution
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
@@ -129,8 +130,17 @@ class CiceroneSystemLibrary:
         )
         self.run_system_job_again(triggered_by)
 
+    def set_up_mixed_system(self) -> None:
+        """Fresh schema + Postgres catalog in, local parquet out; skips without a test DB."""
+        if not self.postgres_test_database_available():
+            raise SkipExecution(
+                "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- run via docker-compose.ci.yml"
+                " (see CONTRIBUTING.md)"
+            )
+        self.reset_postgres_schema()
+        self.seed_and_train_mixed_system()
+
     def seed_and_train_mixed_system(self, triggered_by: str = "system-spec") -> None:
-        """Postgres catalog in, local parquet out."""
         self.events, self.users, self.items = sample_system_catalog()
         seed_catalog(self.engine, self.events, self.users, self.items)
         root = Path(tempfile.mkdtemp(prefix="cicerone-robot-mixed-"))
