@@ -364,3 +364,7 @@ erase. Without one, run it while no job or incremental flush is writing:
 such a write can put the user's recommendations back. The next job run also
 rebuilds recommendations for a user still in the catalog. Serve keeps rows it
 already cached until its next refresh (`serve.refresh_interval_seconds`).
+
+With `track.redis_url`, the Redis track log is erased after the output store.
+If that step fails, the output rows are already gone; run the command again to
+finish.

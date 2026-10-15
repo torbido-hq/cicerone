@@ -160,7 +160,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused), unless `redis_url` is set |
-| `redis_url` | unset | Impression/click log in Redis (`cicerone-recommender[redis]`). History and eval stay on `[output]`. Allows `events.ha` without db output |
+| `redis_url` | unset | Impression/click log in Redis (`cicerone-recommender[redis]`). History and eval stay on `[output]`. Allows `events.ha` without db output. Turning it on moves the active log; rows already on `[output]` are not migrated |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
 | `min_impressions` | `100` | Gates Promote / Thompson volume. Does **not** change the CTR formula |

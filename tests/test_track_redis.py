@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 
 import pandas as pd
@@ -22,6 +23,7 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.rows: list[str] = []
         self.ids: set[str] = set()
+        self.on_execute: list[object] = []
 
     def sadd(self, _key: str, member: str) -> int:
         if member in self.ids:
@@ -45,11 +47,51 @@ class _FakeRedis:
             self.ids.discard(member)
         return len(members)
 
-    def pipeline(self) -> _FakeRedis:
+    def sismember(self, _key: str, member: str) -> bool:
+        return member in self.ids
+
+    def pipeline(self) -> _FakePipeline:
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """WATCH/MULTI/EXEC over _FakeRedis; ``on_execute`` can race or fail the next EXEC."""
+
+    def __init__(self, client: _FakeRedis) -> None:
+        self._client = client
+        self._queued: list[tuple[str, tuple[object, ...]]] = []
+        self._buffering = False
+
+    def __enter__(self) -> _FakePipeline:
         return self
 
+    def __exit__(self, *_exc: object) -> None:
+        self._queued.clear()
+
+    def watch(self, *_keys: str) -> None:
+        self._buffering = False
+
+    def multi(self) -> None:
+        self._buffering = True
+
+    def __getattr__(self, name: str):
+        target = getattr(self._client, name)
+
+        def call(*args: object):
+            if not self._buffering:
+                return target(*args)
+            self._queued.append((name, args))
+            return self
+
+        return call
+
     def execute(self) -> list[object]:
-        return []
+        hook = self._client.on_execute.pop(0) if self._client.on_execute else None
+        queued, self._queued = self._queued, []
+        self._buffering = False
+        if hook is not None:
+            hook()
+        return [getattr(self._client, name)(*args) for name, args in queued]
 
 
 def _row(**overrides: object) -> dict[str, object]:
@@ -157,8 +199,6 @@ def test_redis_track_reports_an_unreachable_url(monkeypatch):
 
 
 def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monkeypatch):
-    import json
-
     from cicerone.forget import forget_user
     from cicerone.io.dataset_store import DatasetOutputSink
 
@@ -182,3 +222,65 @@ def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monke
     assert result.track == 2
     assert [json.loads(row)["user_id"] for row in client.rows] == ["bob"]
     assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["bob"]
+
+
+def test_redis_delete_retries_when_an_append_races_the_rewrite():
+    from redis.exceptions import WatchError
+
+    client = _FakeRedis()
+    store = _store(client)
+    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+
+    def racing_append() -> None:
+        client.rpush("cicerone:track", json.dumps(_row(user_id="carol", item_id="ipa-003", event_id="imp-3")))
+        raise WatchError("list changed")
+
+    client.on_execute.append(racing_append)
+    assert store.delete_redis_rows("alice") == 1
+    assert [json.loads(row)["user_id"] for row in client.rows] == ["bob", "carol"]
+
+
+def test_redis_append_does_not_strand_an_id_when_the_push_fails():
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    client = _FakeRedis()
+    store = _store(client)
+
+    def drop_connection() -> None:
+        raise RedisConnectionError("connection reset")
+
+    client.on_execute.append(drop_connection)
+    with pytest.raises(RedisConnectionError):
+        store.append_rows([_row()])
+    assert client.ids == set()
+    assert store.append_rows([_row()]) == 1
+    assert [json.loads(row)["event_id"] for row in client.rows] == ["imp-1"]
+
+
+def test_forget_user_notes_a_redis_failure_after_the_output_erase(tmp_path, monkeypatch):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from cicerone.forget import forget_user
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    client = _FakeRedis()
+    monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    DatasetOutputSink(output.options).write_recommendations(
+        pd.DataFrame(
+            [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
+        )
+    )
+    _store(client).append_rows([_row()])
+
+    def drop_connection() -> None:
+        raise RedisConnectionError("connection reset")
+
+    client.on_execute.append(drop_connection)
+    with pytest.raises(RedisConnectionError) as raised:
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+    assert raised.value.__notes__ == [
+        "output rows were erased; run forget-user again to finish the Redis track log"
+    ]
+    assert pd.read_parquet(tmp_path / "recommendations.parquet").empty
+    assert forget_user(output, "alice", redis_url="redis://localhost:6379/0").track == 1
