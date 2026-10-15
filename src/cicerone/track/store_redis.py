@@ -8,17 +8,8 @@ from typing import Any
 from cicerone.config.constants import DEFAULT_TRACK_REDIS_KEY_PREFIX, ConfigError
 from cicerone.io.recommendation_schema import USER_COLUMN
 
-try:
-    from redis.exceptions import WatchError
-except ImportError:
-
-    class WatchError(Exception):  # type: ignore[no-redef]
-        pass
-
-
 DEFAULT_REDIS_KEY_PREFIX = DEFAULT_TRACK_REDIS_KEY_PREFIX
 _REDIS_TIMEOUT_SECONDS = 5.0
-_WATCH_RETRIES = 32
 _REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
 
 
@@ -54,21 +45,19 @@ class RedisTrackLog:
         if not event_id:
             self._client.rpush(self._log_key, line)
             return True
-        # The id claim and the push commit together, so a failed push cannot strand the id.
-        with self._client.pipeline() as pipe:
-            for _attempt in range(_WATCH_RETRIES):
-                try:
-                    pipe.watch(self._ids_key)
-                    if pipe.sismember(self._ids_key, event_id):
-                        return False
-                    pipe.multi()
-                    pipe.sadd(self._ids_key, event_id)
-                    pipe.rpush(self._log_key, line)
-                    pipe.execute()
-                    return True
-                except WatchError:
-                    continue
-        raise WatchError(f"track log kept changing; gave up after {_WATCH_RETRIES} attempts")
+        # SADD is the atomic claim, so distinct ids never contend. A failed push releases
+        # the claim so a retry can store the row; only a crash in between strands an id.
+        if not self._client.sadd(self._ids_key, event_id):
+            return False
+        try:
+            self._client.rpush(self._log_key, line)
+        except BaseException as exc:
+            try:
+                self._client.srem(self._ids_key, event_id)
+            except Exception:
+                exc.add_note(f"event id {event_id!r} stays claimed; a retry will skip it")
+            raise
+        return True
 
     def read(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -79,37 +68,23 @@ class RedisTrackLog:
         return rows
 
     def delete_user(self, user_id: str) -> int:
-        # WATCH the list so an append between the read and the rewrite retries instead of being lost.
-        with self._client.pipeline() as pipe:
-            for _attempt in range(_WATCH_RETRIES):
-                try:
-                    pipe.watch(self._log_key)
-                    kept: list[str] = []
-                    removed_ids: list[str] = []
-                    removed = 0
-                    for raw in pipe.lrange(self._log_key, 0, -1):
-                        line = str(raw)
-                        parsed = _parse_line(line)
-                        if parsed is not None and str(parsed.get(USER_COLUMN) or "").strip() == user_id:
-                            removed += 1
-                            event_id = str(parsed.get("event_id") or "")
-                            if event_id:
-                                removed_ids.append(event_id)
-                            continue
-                        kept.append(line)
-                    if not removed:
-                        return 0
-                    pipe.multi()
-                    pipe.delete(self._log_key)
-                    if kept:
-                        pipe.rpush(self._log_key, *kept)
-                    if removed_ids:
-                        pipe.srem(self._ids_key, *removed_ids)
-                    pipe.execute()
-                    return removed
-                except WatchError:
-                    continue
-        raise WatchError(f"track log kept changing; gave up after {_WATCH_RETRIES} attempts")
+        # LREM removes the user's exact lines in place: other rows and concurrent appends
+        # are never rewritten, so a failed command cannot drop them.
+        matched: dict[str, str] = {}
+        for raw in self._client.lrange(self._log_key, 0, -1):
+            line = str(raw)
+            parsed = _parse_line(line)
+            if parsed is not None and str(parsed.get(USER_COLUMN) or "").strip() == user_id:
+                matched[line] = str(parsed.get("event_id") or "")
+        # Release the ids first: a failure part-way then leaves rows for a rerun, never a
+        # claim that would make a later append of the same event skip its row.
+        event_ids = [event_id for event_id in matched.values() if event_id]
+        if event_ids:
+            self._client.srem(self._ids_key, *event_ids)
+        removed = 0
+        for line in matched:
+            removed += int(self._client.lrem(self._log_key, 0, line) or 0)
+        return removed
 
 
 def _connect(redis_url: str) -> Any:
