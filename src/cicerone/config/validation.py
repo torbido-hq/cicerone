@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -63,15 +64,26 @@ def resolve_epoch_metrics(
     )
 
 
+def require_finite(value: float, *, name: str) -> float:
+    """Reject NaN and infinity, which TOML accepts and every range comparison lets through."""
+    if not math.isfinite(value):
+        raise ConfigError(f"{name} must be a finite number, got {value}")
+    return value
+
+
 def validate_model_weights(weights: dict[str, float] | None, *, context: str = "model_weights") -> None:
     if weights is None:
         return
+    for name, weight in weights.items():
+        require_finite(weight, name=f"{context}.{name}")
     negative_weights = {name: weight for name, weight in weights.items() if weight < 0}
     if negative_weights:
         raise ConfigError(f"{context} value(s) must be non-negative, got {negative_weights}")
 
 
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
+    if rrf_k is not None:
+        require_finite(rrf_k, name=context)
     if rrf_k is not None and rrf_k <= 0:
         raise ConfigError(f"{context} must be positive, got {rrf_k}")
 
@@ -89,6 +101,7 @@ def require_non_negative_int(value: int, *, name: str) -> int:
 
 
 def require_positive_float(value: float, *, name: str) -> float:
+    require_finite(value, name=name)
     if value <= 0:
         raise ConfigError(f"{name} must be > 0, got {value}")
     return value
@@ -96,6 +109,7 @@ def require_positive_float(value: float, *, name: str) -> float:
 
 def require_open_unit_interval(value: float, *, name: str) -> float:
     """Require a relative fraction in ``(0, 1)``."""
+    require_finite(value, name=name)
     if value <= 0 or value >= 1:
         raise ConfigError(f"{name} must be in (0, 1), got {value}")
     return value
@@ -103,6 +117,7 @@ def require_open_unit_interval(value: float, *, name: str) -> float:
 
 def require_unit_interval(value: float, *, name: str) -> float:
     """Require a relative fraction in (0, 1]."""
+    require_finite(value, name=name)
     if value <= 0 or value > 1:
         raise ConfigError(f"{name} must be in (0, 1], got {value}")
     return value
