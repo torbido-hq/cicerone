@@ -612,6 +612,34 @@ def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
     assert cache_refreshes["overlay"] >= 2
 
 
+def test_start_refresh_loop_survives_a_failing_step(monkeypatch, caplog):
+    calls = {"sleep": 0, "reader": 0, "generated": 0}
+
+    class FailingReader(_FakeReader):
+        def refresh(self) -> None:
+            calls["reader"] += 1
+            raise TypeError("custom reader bug")
+
+    class FakeCache:
+        def refresh(self) -> None:
+            calls["generated"] += 1
+
+    def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] >= 4:
+            raise SystemExit("stop after three ticks")
+
+    monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
+    monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
+
+    with caplog.at_level("ERROR", logger="cicerone.serve.app"), pytest.raises(SystemExit):
+        _start_refresh_loop(FailingReader(_recs_df()), interval_seconds=0.01, generated_at_cache=FakeCache())
+
+    assert calls["reader"] == 3
+    assert calls["generated"] == 3
+    assert sum("Background refresh of FailingReader failed" in r.getMessage() for r in caplog.records) == 3
+
+
 def test_assignment_overlay_cache_keeps_last_on_refresh_error():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 

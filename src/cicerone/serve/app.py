@@ -121,14 +121,19 @@ def _start_refresh_loop(
     generated_at_cache: _GeneratedAtCache | None = None,
     overlay_cache: _AssignmentOverlayCache | None = None,
 ) -> None:
+    steps = [step for step in (reader, generated_at_cache, overlay_cache) if step is not None]
+
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
-            reader.refresh()
-            if generated_at_cache is not None:
-                generated_at_cache.refresh()
-            if overlay_cache is not None:
-                overlay_cache.refresh()
+            for step in steps:
+                # Readers are pluggable; one failed tick must not end the loop.
+                try:
+                    step.refresh()
+                except Exception:
+                    logger.exception(
+                        "Background refresh of %s failed; retrying next tick", type(step).__name__
+                    )
 
     threading.Thread(target=_loop, daemon=True).start()
 
