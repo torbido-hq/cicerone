@@ -324,6 +324,9 @@ def test_dataset_reader_items_failure_keeps_the_previous_recommendations(tmp_pat
     import cicerone.io.dataset_recommendation_reader as reader_mod
 
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    pd.DataFrame([{"item_id": "i1", "category": "beer"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i2", "rank": 1, "score": 0.9}])
     original = reader_mod.read_parquet
