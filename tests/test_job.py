@@ -756,8 +756,8 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
         calls.append(generated_ats)
         return history
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda self: [])
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_history", _read_history)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", lambda self: [])
     events = pd.DataFrame(
         [
             {
@@ -798,12 +798,12 @@ def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monk
         calls.append(generated_ats)
         return history
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_history", _read_history)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_history", _read_history)
 
     def _boom(*_args, **_kwargs):
         raise AssertionError("read_rows should not run when track is disabled")
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", _boom)
     events = pd.DataFrame(
         [
             {
@@ -3367,12 +3367,12 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "cicerone.job.TrackStore.read_rows",
+        "cicerone.track.store.TrackStore.read_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("track")),
     )
     assert _select_thompson_recipes(settings, recipes, pd.DataFrame()).recipes == recipes
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         "cicerone.job.allocate_thompson",
         lambda **kwargs: (_ for _ in ()).throw(ValueError("mab")),
@@ -3420,7 +3420,7 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
         lambda self: (_ for _ in ()).throw(OSError("state")),
     )
     monkeypatch.setattr(
-        "cicerone.job.TrackStore.read_rows",
+        "cicerone.track.store.TrackStore.read_rows",
         lambda *args, **kwargs: [
             {
                 "user_id": "u-1",
@@ -3490,7 +3490,7 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
             rotated=False,
         )
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr("cicerone.job.allocate_thompson", _allocate)
     monkeypatch.setattr(
         "cicerone.job.load_recommendations_frame",
@@ -3556,7 +3556,7 @@ def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, mon
             pair_impressions=20,
         )
     )
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         "cicerone.job.load_recommendations_frame",
         lambda output: pd.DataFrame(),
@@ -3610,7 +3610,7 @@ def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeyp
         )
     )
     monkeypatch.setattr("cicerone.job.ExperimentStore", lambda _output: seeded)
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", lambda *args, **kwargs: [])
 
     def _allocate(**kwargs):
         names = list(kwargs["names"])
@@ -3720,7 +3720,7 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     monkeypatch.setattr(
-        "cicerone.job.TrackStore.read_rows",
+        "cicerone.track.store.TrackStore.read_rows",
         lambda *args, **kwargs: [
             {
                 "user_id": "u-1",
@@ -3776,7 +3776,7 @@ def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_pa
         },
     )
     monkeypatch.setattr(
-        "cicerone.job.TrackStore.read_rows",
+        "cicerone.track.store.TrackStore.read_rows",
         lambda *args, **kwargs: [
             {
                 "user_id": "u-1",
@@ -3837,7 +3837,7 @@ def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
         calls["n"] += 1
         raise AssertionError("read_rows should not run when preloaded")
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", _boom)
     selected = _select_thompson_recipes(
         settings,
         recipes,
@@ -3874,7 +3874,7 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise OSError("track down")
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _boom)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", _boom)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     track, loaded = _load_shared_eval_inputs(settings)
     assert track is None
@@ -3905,7 +3905,9 @@ def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatc
     def _boom(*_args, **_kwargs):
         raise OSError("recs down")
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}]
+    )
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", _boom)
     track, loaded = _load_shared_eval_inputs(settings)
     assert track == [{"event_id": "a"}]
@@ -3933,7 +3935,9 @@ def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     empty = pd.DataFrame()
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
+    monkeypatch.setattr(
+        "cicerone.track.store.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}]
+    )
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: empty)
     track, recs = _load_shared_eval_inputs(settings)
     assert track == [{"event_id": "a"}]
@@ -4042,7 +4046,7 @@ def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
         seen.update(kwargs)
         return [{"event_id": "old"}]
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", _read)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     track, loaded = _load_shared_eval_inputs(settings)
     since = seen.get("since")
@@ -4089,7 +4093,7 @@ def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monke
         seen.update(kwargs)
         return [{"event_id": "a", "experiment_id": "ranking-cvr"}]
 
-    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", _read)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.read_rows", _read)
     monkeypatch.setattr("cicerone.job.load_recommendations_frame", lambda _output: recs)
     track, loaded = _load_shared_eval_inputs(settings)
     assert seen.get("experiment_id") == "ranking-cvr"
