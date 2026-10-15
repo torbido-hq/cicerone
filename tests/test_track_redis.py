@@ -21,42 +21,53 @@ from cicerone.track.store import TrackStore
 
 class _FakeRedis:
     def __init__(self) -> None:
-        self.rows: list[str] = []
-        self.ids: set[str] = set()
+        self.lists: dict[str, list[str]] = {}
+        self.sets: dict[str, set[str]] = {}
         self.on_execute: list[object] = []
         self.versions: dict[str, int] = {}
+
+    @property
+    def rows(self) -> list[str]:
+        return self.lists.setdefault("cicerone:track", [])
+
+    @property
+    def ids(self) -> set[str]:
+        return self.sets.setdefault("cicerone:track:ids", set())
 
     def _touch(self, key: str) -> None:
         self.versions[key] = self.versions.get(key, 0) + 1
 
     def sadd(self, key: str, member: str) -> int:
-        if member in self.ids:
+        members = self.sets.setdefault(key, set())
+        if member in members:
             return 0
-        self.ids.add(member)
+        members.add(member)
         self._touch(key)
         return 1
 
     def rpush(self, key: str, *values: str) -> int:
-        self.rows.extend(values)
+        rows = self.lists.setdefault(key, [])
+        rows.extend(values)
         self._touch(key)
-        return len(self.rows)
+        return len(rows)
 
-    def lrange(self, _key: str, _start: int, _end: int) -> list[str]:
-        return list(self.rows)
+    def lrange(self, key: str, _start: int, _end: int) -> list[str]:
+        return list(self.lists.get(key, []))
 
     def delete(self, key: str) -> int:
-        self.rows.clear()
+        self.lists.pop(key, None)
         self._touch(key)
         return 1
 
     def srem(self, key: str, *members: str) -> int:
+        current = self.sets.setdefault(key, set())
         for member in members:
-            self.ids.discard(member)
+            current.discard(member)
         self._touch(key)
         return len(members)
 
-    def sismember(self, _key: str, member: str) -> bool:
-        return member in self.ids
+    def sismember(self, key: str, member: str) -> bool:
+        return member in self.sets.get(key, set())
 
     def pipeline(self) -> _FakePipeline:
         return _FakePipeline(self)
@@ -173,6 +184,8 @@ def test_load_settings_allows_ha_track_when_redis_url_is_set(tmp_path):
             """,
         )
     )
+    assert settings.track.enabled is True
+    assert settings.events.ha is True
     assert settings.track.redis_url == "redis://localhost:6379/1"
     nested = make_settings(track=TrackSettings(enabled=True, redis_url="redis://localhost:6379/0"))
     assert nested.track.redis_url == "redis://localhost:6379/0"
@@ -181,6 +194,25 @@ def test_load_settings_allows_ha_track_when_redis_url_is_set(tmp_path):
 def test_load_track_rejects_a_blank_redis_url():
     with pytest.raises(ConfigError, match="track.redis_url"):
         load_track_settings({"enabled": True, "redis_url": "  "})
+
+
+def test_load_track_redis_key_prefix_defaults_and_rejects_blank():
+    assert load_track_settings({"enabled": True}).redis_key_prefix == "cicerone"
+    assert load_track_settings({"redis_key_prefix": " shop-eu "}).redis_key_prefix == "shop-eu"
+    with pytest.raises(ConfigError, match="track.redis_key_prefix"):
+        load_track_settings({"redis_key_prefix": " "})
+
+
+def test_redis_key_prefix_keeps_deployments_apart():
+    client = _FakeRedis()
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"})
+    eu = TrackStore(output, redis_url="redis://x", redis_client=client, redis_key_prefix="eu")
+    us = TrackStore(output, redis_url="redis://x", redis_client=client, redis_key_prefix="us")
+    assert eu.append_rows([_row()]) == 1
+    assert us.append_rows([_row()]) == 1
+    assert us.delete_redis_rows("alice") == 1
+    assert [row["user_id"] for row in eu.read_rows()] == ["alice"]
+    assert us.read_rows() == []
 
 
 def test_redis_track_requires_the_extra(monkeypatch):

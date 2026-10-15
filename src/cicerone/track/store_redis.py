@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import DEFAULT_TRACK_REDIS_KEY_PREFIX, ConfigError
 from cicerone.io.recommendation_schema import USER_COLUMN
 
 try:
@@ -16,8 +16,8 @@ except ImportError:
         pass
 
 
-TRACK_LOG_KEY = "cicerone:track"
-TRACK_IDS_KEY = "cicerone:track:ids"
+DEFAULT_REDIS_KEY_PREFIX = DEFAULT_TRACK_REDIS_KEY_PREFIX
+_REDIS_TIMEOUT_SECONDS = 5.0
 _WATCH_RETRIES = 32
 _REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
 
@@ -33,8 +33,13 @@ def _parse_line(raw: str) -> dict[str, Any] | None:
 class RedisTrackLog:
     """Append-only JSON list plus an event-id set."""
 
-    def __init__(self, redis_url: str, *, client: Any | None = None):
+    def __init__(
+        self, redis_url: str, *, client: Any | None = None, key_prefix: str = DEFAULT_REDIS_KEY_PREFIX
+    ):
         self._client = client if client is not None else _connect(redis_url)
+        # A prefix per deployment keeps logs apart when they share one Redis database.
+        self._log_key = f"{key_prefix}:track"
+        self._ids_key = f"{key_prefix}:track:ids"
 
     def append(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fresh: list[dict[str, Any]] = []
@@ -47,18 +52,18 @@ class RedisTrackLog:
         line = json.dumps(row, separators=(",", ":"))
         event_id = str(row.get("event_id") or "")
         if not event_id:
-            self._client.rpush(TRACK_LOG_KEY, line)
+            self._client.rpush(self._log_key, line)
             return True
         # The id claim and the push commit together, so a failed push cannot strand the id.
         with self._client.pipeline() as pipe:
             for _attempt in range(_WATCH_RETRIES):
                 try:
-                    pipe.watch(TRACK_IDS_KEY)
-                    if pipe.sismember(TRACK_IDS_KEY, event_id):
+                    pipe.watch(self._ids_key)
+                    if pipe.sismember(self._ids_key, event_id):
                         return False
                     pipe.multi()
-                    pipe.sadd(TRACK_IDS_KEY, event_id)
-                    pipe.rpush(TRACK_LOG_KEY, line)
+                    pipe.sadd(self._ids_key, event_id)
+                    pipe.rpush(self._log_key, line)
                     pipe.execute()
                     return True
                 except WatchError:
@@ -67,7 +72,7 @@ class RedisTrackLog:
 
     def read(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for raw in self._client.lrange(TRACK_LOG_KEY, 0, -1):
+        for raw in self._client.lrange(self._log_key, 0, -1):
             parsed = _parse_line(str(raw))
             if parsed is not None:
                 rows.append(parsed)
@@ -78,11 +83,11 @@ class RedisTrackLog:
         with self._client.pipeline() as pipe:
             for _attempt in range(_WATCH_RETRIES):
                 try:
-                    pipe.watch(TRACK_LOG_KEY)
+                    pipe.watch(self._log_key)
                     kept: list[str] = []
                     removed_ids: list[str] = []
                     removed = 0
-                    for raw in pipe.lrange(TRACK_LOG_KEY, 0, -1):
+                    for raw in pipe.lrange(self._log_key, 0, -1):
                         line = str(raw)
                         parsed = _parse_line(line)
                         if parsed is not None and str(parsed.get(USER_COLUMN) or "").strip() == user_id:
@@ -95,11 +100,11 @@ class RedisTrackLog:
                     if not removed:
                         return 0
                     pipe.multi()
-                    pipe.delete(TRACK_LOG_KEY)
+                    pipe.delete(self._log_key)
                     if kept:
-                        pipe.rpush(TRACK_LOG_KEY, *kept)
+                        pipe.rpush(self._log_key, *kept)
                     if removed_ids:
-                        pipe.srem(TRACK_IDS_KEY, *removed_ids)
+                        pipe.srem(self._ids_key, *removed_ids)
                     pipe.execute()
                     return removed
                 except WatchError:
@@ -112,7 +117,12 @@ def _connect(redis_url: str) -> Any:
         import redis
     except ImportError as exc:
         raise ConfigError(f"track.redis_url requires the redis package; {_REDIS_EXTRA}") from exc
-    client = redis.Redis.from_url(redis_url, decode_responses=True)
+    client = redis.Redis.from_url(
+        redis_url,
+        decode_responses=True,
+        socket_timeout=_REDIS_TIMEOUT_SECONDS,
+        socket_connect_timeout=_REDIS_TIMEOUT_SECONDS,
+    )
     try:
         client.ping()
     except redis.RedisError as exc:

@@ -38,7 +38,7 @@ from cicerone.track.store_common import (
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
 from cicerone.track.store_db import TrackDbBackend
-from cicerone.track.store_redis import RedisTrackLog
+from cicerone.track.store_redis import DEFAULT_REDIS_KEY_PREFIX, RedisTrackLog
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         fence: WriteFence | None = None,
         redis_url: str | None = None,
         redis_client: Any = None,
+        redis_key_prefix: str = DEFAULT_REDIS_KEY_PREFIX,
     ):
         self._output = output
         self._kind = output.kind
@@ -94,6 +95,7 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         )
         self._redis_url = redis_url or None
         self._redis_client = redis_client
+        self._redis_key_prefix = redis_key_prefix
         self._redis_log: RedisTrackLog | None = None
 
     @property
@@ -112,7 +114,11 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         if self._redis_url is None and self._redis_client is None:
             return None
         if self._redis_log is None:
-            self._redis_log = RedisTrackLog(self._redis_url or "", client=self._redis_client)
+            self._redis_log = RedisTrackLog(
+                self._redis_url or "",
+                client=self._redis_client,
+                key_prefix=self._redis_key_prefix,
+            )
         return self._redis_log
 
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -276,4 +282,9 @@ def __getattr__(name: str) -> Any:
 
 def open_track_store(settings: Settings, **kwargs: Any) -> TrackStore:
     """Track log on Redis when ``track.redis_url`` is set; history and eval stay on output."""
-    return TrackStore(settings.output, redis_url=settings.track.redis_url, **kwargs)
+    return TrackStore(
+        settings.output,
+        redis_url=settings.track.redis_url,
+        redis_key_prefix=settings.track.redis_key_prefix,
+        **kwargs,
+    )
