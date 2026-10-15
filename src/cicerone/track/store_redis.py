@@ -2,15 +2,41 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
-from cicerone.config.constants import DEFAULT_TRACK_REDIS_KEY_PREFIX, ConfigError
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+from cicerone.config.constants import ConfigError
+from cicerone.config.settings import IOSettings
 from cicerone.io.recommendation_schema import USER_COLUMN
 
-DEFAULT_REDIS_KEY_PREFIX = DEFAULT_TRACK_REDIS_KEY_PREFIX
 _REDIS_TIMEOUT_SECONDS = 5.0
 _REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
+_HDEL_BATCH = 1000
+_CREDENTIAL_WORDS = ("password", "secret", "token", "access_key", "credential")
+
+
+def default_redis_key_prefix(output: IOSettings) -> str:
+    """Prefix from the ``[output]`` location, so deployments with different outputs never share keys."""
+    location = [output.kind]
+    for key in sorted(output.options):
+        if any(word in key for word in _CREDENTIAL_WORDS):
+            continue
+        value = output.options[key]
+        # Credentials are not part of the location; rotating them must not move the log.
+        location.append(f"{key}={_without_credentials(str(value)) if key.endswith('_url') else value}")
+    digest = hashlib.sha256("\0".join(location).encode()).hexdigest()[:16]
+    return f"cicerone:{digest}"
+
+
+def _without_credentials(url: str) -> str:
+    try:
+        return make_url(url).set(username=None, password=None, query={}).render_as_string()
+    except ArgumentError:
+        return url.rsplit("@", 1)[-1].split("?", 1)[0]
 
 
 def _parse_line(raw: str) -> dict[str, Any] | None:
@@ -21,69 +47,43 @@ def _parse_line(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-class RedisTrackLog:
-    """Append-only JSON list plus an event-id set."""
+def _event_key(row: dict[str, Any], line: str) -> str:
+    event_id = str(row.get("event_id") or "")
+    return event_id or "sha256:" + hashlib.sha256(line.encode()).hexdigest()
 
-    def __init__(
-        self, redis_url: str, *, client: Any | None = None, key_prefix: str = DEFAULT_REDIS_KEY_PREFIX
-    ):
+
+class RedisTrackLog:
+    """Hash of event id to JSON row: one HSETNX per append, HDEL per erase."""
+
+    def __init__(self, redis_url: str, *, key_prefix: str, client: Any | None = None):
         self._client = client if client is not None else _connect(redis_url)
-        # A prefix per deployment keeps logs apart when they share one Redis database.
         self._log_key = f"{key_prefix}:track"
-        self._ids_key = f"{key_prefix}:track:ids"
 
     def append(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fresh: list[dict[str, Any]] = []
         for row in rows:
-            if self._append_one(row):
+            line = json.dumps(row, separators=(",", ":"))
+            # HSETNX is atomic and idempotent: a retry after a lost reply finds the row stored.
+            if self._client.hsetnx(self._log_key, _event_key(row, line), line):
                 fresh.append(row)
         return fresh
 
-    def _append_one(self, row: dict[str, Any]) -> bool:
-        line = json.dumps(row, separators=(",", ":"))
-        event_id = str(row.get("event_id") or "")
-        if not event_id:
-            self._client.rpush(self._log_key, line)
-            return True
-        # SADD is the atomic claim, so distinct ids never contend. A failed push releases
-        # the claim so a retry can store the row; only a crash in between strands an id.
-        if not self._client.sadd(self._ids_key, event_id):
-            return False
-        try:
-            self._client.rpush(self._log_key, line)
-        except BaseException as exc:
-            try:
-                self._client.srem(self._ids_key, event_id)
-            except Exception:
-                exc.add_note(f"event id {event_id!r} stays claimed; a retry will skip it")
-            raise
-        return True
-
     def read(self) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        for raw in self._client.lrange(self._log_key, 0, -1):
-            parsed = _parse_line(str(raw))
-            if parsed is not None:
-                rows.append(parsed)
+        rows = [parsed for raw in self._client.hvals(self._log_key) if (parsed := _parse_line(str(raw)))]
+        rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
         return rows
 
     def delete_user(self, user_id: str) -> int:
-        # LREM removes the user's exact lines in place: other rows and concurrent appends
-        # are never rewritten, so a failed command cannot drop them.
-        matched: dict[str, str] = {}
-        for raw in self._client.lrange(self._log_key, 0, -1):
-            line = str(raw)
-            parsed = _parse_line(line)
-            if parsed is not None and str(parsed.get(USER_COLUMN) or "").strip() == user_id:
-                matched[line] = str(parsed.get("event_id") or "")
-        # Release the ids first: a failure part-way then leaves rows for a rerun, never a
-        # claim that would make a later append of the same event skip its row.
-        event_ids = [event_id for event_id in matched.values() if event_id]
-        if event_ids:
-            self._client.srem(self._ids_key, *event_ids)
+        # HDEL touches only this user's fields, so concurrent appends and other rows are never rewritten.
+        fields = [
+            str(field)
+            for field, raw in self._client.hgetall(self._log_key).items()
+            if (parsed := _parse_line(str(raw))) is not None
+            and str(parsed.get(USER_COLUMN) or "").strip() == user_id
+        ]
         removed = 0
-        for line in matched:
-            removed += int(self._client.lrem(self._log_key, 0, line) or 0)
+        for start in range(0, len(fields), _HDEL_BATCH):
+            removed += int(self._client.hdel(self._log_key, *fields[start : start + _HDEL_BATCH]) or 0)
         return removed
 
 
@@ -92,14 +92,10 @@ def _connect(redis_url: str) -> Any:
         import redis
     except ImportError as exc:
         raise ConfigError(f"track.redis_url requires the redis package; {_REDIS_EXTRA}") from exc
-    client = redis.Redis.from_url(
+    # No eager ping: a down Redis surfaces as a RedisError on first use, which callers handle.
+    return redis.Redis.from_url(
         redis_url,
         decode_responses=True,
         socket_timeout=_REDIS_TIMEOUT_SECONDS,
         socket_connect_timeout=_REDIS_TIMEOUT_SECONDS,
     )
-    try:
-        client.ping()
-    except redis.RedisError as exc:
-        raise ConfigError(f"track.redis_url is unreachable: {exc}") from exc
-    return client
