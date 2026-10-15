@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -122,6 +123,14 @@ def parse_eligibility_rules(raw_rules: Sequence[Mapping[str, Any]]) -> list[Elig
     return rules
 
 
+def _finite(raw: object, name: str) -> float:
+    value = float(raw)  # type: ignore[arg-type]
+    # TOML accepts nan and inf, and range checks let NaN through.
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number, got {value}")
+    return value
+
+
 def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule]:
     boosts: list[BoostRule] = []
     for raw in raw_boosts:
@@ -135,7 +144,10 @@ def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule
         value_factors_raw = raw.get("value_factors") or {}
         if not isinstance(value_factors_raw, dict):
             raise ValueError(f"Boost rule {name!r} value_factors must be a table/dict")
-        value_factors = {str(k): float(v) for k, v in value_factors_raw.items()}
+        value_factors = {
+            str(k): _finite(v, f"Boost rule {name!r} value_factors[{k}]")
+            for k, v in value_factors_raw.items()
+        }
         if kind == "value_map" and not value_factors:
             raise ValueError(f"Boost rule {name!r} with kind 'value_map' requires value_factors")
         if kind == "boolean" and "factor" not in raw:
@@ -147,9 +159,9 @@ def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule
                 name=name,
                 kind=cast(BoostKind, kind),
                 item_column=item_column,
-                factor=float(raw.get("factor", 1.0)),
+                factor=_finite(raw.get("factor", 1.0), f"Boost rule {name!r} factor"),
                 value_factors=value_factors,
-                weight=float(raw.get("weight", 0.0)),
+                weight=_finite(raw.get("weight", 0.0), f"Boost rule {name!r} weight"),
             )
         )
     return boosts
@@ -161,16 +173,18 @@ def _parse_blending(raw: dict[str, Any] | None) -> BlendingConfig:
     curve = str(raw.get("curve", "sigmoid"))
     if curve not in BLENDING_CURVES:
         raise ValueError(f"Unknown blending curve {curve!r}; available: {sorted(BLENDING_CURVES)}")
-    popular_share = float(raw.get("popular_share", DEFAULT_BLENDING_POPULAR_SHARE))
+    popular_share = _finite(
+        raw.get("popular_share", DEFAULT_BLENDING_POPULAR_SHARE), "blending.popular_share"
+    )
     if popular_share < 0 or popular_share > 1:
         raise ValueError(f"blending.popular_share must be in [0, 1], got {popular_share}")
-    steepness = float(raw.get("steepness", DEFAULT_BLENDING_STEEPNESS))
+    steepness = _finite(raw.get("steepness", DEFAULT_BLENDING_STEEPNESS), "blending.steepness")
     if steepness <= 0:
         raise ValueError(f"blending.steepness must be > 0, got {steepness}")
-    saturate_at = float(raw.get("saturate_at", DEFAULT_BLENDING_SATURATE_AT))
+    saturate_at = _finite(raw.get("saturate_at", DEFAULT_BLENDING_SATURATE_AT), "blending.saturate_at")
     if saturate_at <= 0:
         raise ValueError(f"blending.saturate_at must be > 0, got {saturate_at}")
-    rrf_k = float(raw.get("rrf_k", DEFAULT_BLENDING_RRF_K))
+    rrf_k = _finite(raw.get("rrf_k", DEFAULT_BLENDING_RRF_K), "blending.rrf_k")
     if rrf_k <= 0:
         raise ValueError(f"blending.rrf_k must be > 0, got {rrf_k}")
     date_columns_raw = raw.get("latest_date_columns", list(DEFAULT_LATEST_DATE_COLUMNS))
@@ -181,7 +195,7 @@ def _parse_blending(raw: dict[str, Any] | None) -> BlendingConfig:
     return BlendingConfig(
         enabled=bool(raw.get("enabled", False)),
         curve=cast(BlendingCurve, curve),
-        midpoint=float(raw.get("midpoint", DEFAULT_BLENDING_MIDPOINT)),
+        midpoint=_finite(raw.get("midpoint", DEFAULT_BLENDING_MIDPOINT), "blending.midpoint"),
         steepness=steepness,
         saturate_at=saturate_at,
         popular_share=popular_share,
@@ -209,7 +223,7 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         return columns
 
     return FeatureConfig(
-        event_weights={k: float(v) for k, v in raw.get("event_weights", {}).items()},
+        event_weights={k: _finite(v, f"event_weights.{k}") for k, v in raw.get("event_weights", {}).items()},
         quantity_scaled_events=set(raw.get("quantity_scaled_events", [])),
         event_caps={k: int(v) for k, v in raw.get("event_caps", {}).items()},
         user_features=_columns("user_features"),
