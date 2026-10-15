@@ -1593,7 +1593,7 @@ def test_incremental_updater_skips_consumed_when_publish_fails(tmp_path, feature
         def connect(self) -> None:
             return None
 
-        def publish(self, _df: pd.DataFrame) -> None:
+        def publish(self, _df: pd.DataFrame, *, user_ids=None) -> None:
             raise RuntimeError("broker down")
 
         def close(self) -> None:
@@ -1700,7 +1700,7 @@ def test_incremental_updater_skips_catalog_when_publish_fails(tmp_path, feature_
         def connect(self) -> None:
             return None
 
-        def publish(self, _df: pd.DataFrame) -> None:
+        def publish(self, _df: pd.DataFrame, *, user_ids=None) -> None:
             raise RuntimeError("broker down")
 
         def close(self) -> None:

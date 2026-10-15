@@ -616,8 +616,8 @@ def _write_job_outputs(
 
                 if callable(write_item_scores):
                     ensure_publication_fence(sink, fence_check)
-                    write_item_scores(item_scores)
                     outputs_written = True
+                    write_item_scores(item_scores)
                 if callable(write_surfaces) and surface_frames is not None:
                     ensure_publication_fence(sink, fence_check)
                     outputs_written = True

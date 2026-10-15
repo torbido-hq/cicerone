@@ -2918,7 +2918,7 @@ def test_job_keeps_prior_recommendations_when_item_scores_write_fails(tmp_path, 
     assert manifest["partial_outputs"] is True
 
 
-def test_job_recs_fail_without_published_outputs_is_not_partial(tmp_path, monkeypatch):
+def test_job_recs_fail_without_earlier_outputs_is_still_partial(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -2947,7 +2947,8 @@ def test_job_recs_fail_without_published_outputs_is_not_partial(tmp_path, monkey
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
-    assert manifest["partial_outputs"] is False
+    # The store may have committed before raising.
+    assert manifest["partial_outputs"] is True
 
 
 def test_job_preserves_success_when_manifest_write_fails(tmp_path, monkeypatch):

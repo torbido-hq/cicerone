@@ -430,7 +430,7 @@ def test_stale_client_read_failure_keeps_new_connection(monkeypatch):
     assert source._client is stale
 
     def boom(*_a, **_k):
-        raise RuntimeError("stale socket")
+        raise RedisError("stale socket")
 
     stale.xreadgroup = boom  # type: ignore[method-assign]
     stale.xautoclaim = boom  # type: ignore[method-assign]

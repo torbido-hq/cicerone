@@ -68,7 +68,13 @@ class FakeChannel:
         held = self._unacked.pop(delivery_tag, None)
         if requeue and held is not None:
             queue = next(iter(self.broker.queues), "default")
-            self.broker.queues.setdefault(queue, []).insert(0, held)
+            messages = self.broker.queues.setdefault(queue, [])
+            # Like RabbitMQ, a requeued message goes back to its original position.
+            index = next(
+                (i for i, queued in enumerate(messages) if queued.delivery_tag > held.delivery_tag),
+                len(messages),
+            )
+            messages.insert(index, held)
 
     def basic_publish(
         self,
