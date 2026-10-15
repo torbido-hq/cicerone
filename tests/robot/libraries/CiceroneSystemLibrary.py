@@ -9,25 +9,29 @@ the former ``tests/test_system_*.py`` pytest modules.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
-from support.system_db import reset_schema, seed_catalog
+from support.system_db import OUTPUT_DB_TABLES, reset_schema, seed_catalog
 from support.system_spec import (
+    DATASET_OUTPUT_FILES,
     SYSTEM_DASHBOARD_PASSWORD,
     SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
     append_dataset_events,
+    available_ids_from_files,
     available_recommendation_ids,
     dashboard_users,
     mount_dashboard_app,
     mount_serve_app,
+    parse_track_eval,
     run_system_job,
     sample_system_catalog,
     seed_dataset_catalog,
@@ -35,11 +39,17 @@ from support.system_spec import (
     write_system_config,
 )
 
-from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact, recommend_from_artifact
+from cicerone.artifact import (
+    ARTIFACT_FILENAME,
+    ARTIFACT_SCHEMA_VERSION,
+    loads_artifact,
+    recommend_from_artifact,
+)
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
 from cicerone.events.updater_merge import INCREMENTAL_SOURCE
 from cicerone.feature_config import load_feature_config
+from cicerone.io.db_store import DEFAULT_EVENTS_TABLE, DEFAULT_ITEMS_TABLE, DEFAULT_USERS_TABLE
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import EVAL_FILENAME, HISTORY_DIR, TRACK_FILENAME
@@ -101,7 +111,9 @@ class CiceroneSystemLibrary:
         )
         self.run_system_job_again(triggered_by)
 
-    def seed_and_train_dataset_system(self, triggered_by: str = "system-spec") -> None:
+    def seed_and_train_dataset_system(
+        self, triggered_by: str = "system-spec", events_webhook: bool = False
+    ) -> None:
         root = Path(tempfile.mkdtemp(prefix="cicerone-robot-dataset-"))
         self.input_path = root / "in"
         self.output_path = root / "out"
@@ -112,6 +124,23 @@ class CiceroneSystemLibrary:
             root / "cicerone.toml",
             kind="dataset",
             input_path=self.input_path,
+            output_path=self.output_path,
+            events_webhook=events_webhook,
+        )
+        self.run_system_job_again(triggered_by)
+
+    def seed_and_train_mixed_system(self, triggered_by: str = "system-spec") -> None:
+        """Postgres catalog in, local parquet out."""
+        self.events, self.users, self.items = sample_system_catalog()
+        seed_catalog(self.engine, self.events, self.users, self.items)
+        root = Path(tempfile.mkdtemp(prefix="cicerone-robot-mixed-"))
+        self.output_path = root / "out"
+        self.output_path.mkdir(parents=True)
+        self.config_path = write_system_config(
+            root / "cicerone.toml",
+            input_kind="db",
+            output_kind="dataset",
+            database_url=self.database_url,
             output_path=self.output_path,
         )
         self.run_system_job_again(triggered_by)
@@ -450,3 +479,86 @@ class CiceroneSystemLibrary:
         assert "No incremental flushes recorded in recent manifests yet." not in response.text
         assert "Events applied" in response.text
         assert f"<dd>{int(applied)}</dd>" in response.text
+
+    def dataset_recommendations_should_contain_incremental_row(self, user_id: str, item_id: str) -> None:
+        on_disk = pd.read_parquet(self.output_path / "recommendations.parquet")
+        live = on_disk.loc[on_disk["user_id"].astype(str) == user_id]
+        assert item_id in set(live["item_id"].astype(str))
+        assert INCREMENTAL_SOURCE in set(live["source"].astype(str))
+
+    # -- mixed I/O (db in, dataset out) ---------------------------------------
+    def settings_should_read_db_and_write_dataset(self) -> None:
+        assert self.settings.input.kind == "db"
+        assert self.settings.output.kind == "dataset"
+        assert self.settings.input.options["database_url"] == self.database_url
+        assert Path(self.settings.output.options["path"]) == self.output_path
+
+    def postgres_should_hold_only_input_tables(self) -> None:
+        tables = set(inspect(self.engine).get_table_names())
+        assert {DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE} <= tables
+        assert tables.isdisjoint(OUTPUT_DB_TABLES)
+
+    def catalog_event_count(self, extra: int = 0) -> int:
+        return len(self.events) + int(extra)
+
+    def postgres_event_count_should_be(self, expected: int) -> None:
+        sql = text(f'SELECT COUNT(*) AS n FROM "{DEFAULT_EVENTS_TABLE}"')
+        assert int(pd.read_sql(sql, self.engine).iloc[0]["n"]) == int(expected)
+
+    def mixed_output_files_should_match_contract(self) -> None:
+        for name in DATASET_OUTPUT_FILES:
+            assert (self.output_path / name).is_file()
+        assert not (self.output_path / "events.parquet").exists()
+
+    def recommendations_file_should_cover_known_users_and_match_reader(self) -> None:
+        recs = pd.read_parquet(self.output_path / "recommendations.parquet")
+        expected_users = set(self.events["user_id"]) | set(self.users["user_id"])
+        assert set(recs["user_id"].astype(str)) - {COLD_START_USER_ID} == expected_users
+        u1_file = recs.loc[recs["user_id"].astype(str) == "u1"].sort_values("rank")
+        served = self._rec_reader().get_recommendations("u1", k=2)
+        assert list(served["item_id"].astype(str)) == list(u1_file["item_id"].astype(str).head(2))
+
+    def items_snapshot_should_carry_availability_flags(self) -> None:
+        snapshot = pd.read_parquet(self.output_path / "items_snapshot.parquet")
+        assert bool(snapshot.loc[snapshot["item_id"].astype(str) == "i3", "in_stock"].iloc[0]) is False
+        assert bool(snapshot.loc[snapshot["item_id"].astype(str) == "i4", "published"].iloc[0]) is False
+
+    def artifact_on_disk_should_match_sink(self) -> None:
+        payload = build_output_sink(self.settings.output).read_model_artifact()
+        assert payload is not None
+        assert (self.output_path / ARTIFACT_FILENAME).read_bytes() == payload
+        assert not recommend_from_artifact(loads_artifact(payload), ["u1"], top_k=3).empty
+
+    def serve_should_match_output_files_for_user(self, user_id: str) -> None:
+        expected = available_ids_from_files(self.output_path, user_id, settings=self.settings)
+        generated_at = json.loads((self.output_path / "manifest.json").read_text())["generated_at"]
+        response = self._serve_client().get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["fallback"] is False
+        assert [row["item_id"] for row in body["items"]] == expected
+        assert body["generated_at"] == generated_at
+        assert response.headers.get("X-Generated-At") == generated_at
+
+    def dataset_track_file_should_hold_exactly(self, event_ids: list[str]) -> None:
+        track_path = self.output_path / TRACK_FILENAME
+        assert track_path.is_file()
+        rows = [json.loads(line) for line in track_path.read_text().splitlines() if line.strip()]
+        assert {row["event_id"] for row in rows} == set(event_ids)
+
+    def track_store_should_hold_exactly(self, event_ids: list[str]) -> None:
+        assert {row["event_id"] for row in TrackStore(self.settings.output).read_rows()} == set(event_ids)
+
+    def manifest_track_eval_should_record_ctr(self, impression_count: int) -> None:
+        latest = self._manifest_reader().read_latest()
+        assert latest is not None
+        overall = parse_track_eval(latest.get("track_eval"))["overall"]
+        assert int(overall["n_impressions"]) == int(impression_count)
+        assert int(overall["n_clicks"]) == 1
+        assert abs(float(overall["ctr"]) - 1 / int(impression_count)) < 1e-9
+
+    def dashboard_quality_page_should_show_ctr(self, impression_count: int) -> None:
+        response = self._dashboard_client().get("/dashboard/quality", auth=_DASHBOARD_AUTH)
+        assert response.status_code == 200
+        expected = f"{(1 / int(impression_count)) * 100:.2f}%"
+        assert re.search(rf"CTR</dt>\s*<dd[^>]*>{re.escape(expected)}", response.text)

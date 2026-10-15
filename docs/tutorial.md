@@ -923,5 +923,8 @@ docker compose up --build
   code — see [CONTRIBUTING.md](../CONTRIBUTING.md). A separate `robot`
   compose service runs the Robot Framework system-style end-to-end suites
   for Postgres (`tests/robot/system_db.robot`,
-  `tests/robot/system_db_quality.robot`) and local parquet
-  (`tests/robot/system_dataset.robot`, `tests/robot/system_dataset_quality.robot`).
+  `tests/robot/system_db_quality.robot`), local parquet
+  (`tests/robot/system_dataset.robot`, `tests/robot/system_dataset_quality.robot`),
+  mixed db-input / dataset-output (`tests/robot/system_mixed.robot`,
+  `tests/robot/system_mixed_quality.robot`), and webhook incremental ingest
+  (`tests/robot/system_events_db.robot`, `tests/robot/system_events_dataset.robot`).

@@ -766,7 +766,10 @@ backend tests) inside Docker — nothing to install on the host. The
 Robot Framework system/E2E suites run in the separate `robot` compose
 service: Postgres journeys are `tests/robot/system_db.robot` /
 `tests/robot/system_db_quality.robot`; the local-parquet journeys are
-`tests/robot/system_dataset.robot` / `tests/robot/system_dataset_quality.robot`.
+`tests/robot/system_dataset.robot` / `tests/robot/system_dataset_quality.robot`;
+mixed db→dataset is `tests/robot/system_mixed.robot` /
+`tests/robot/system_mixed_quality.robot`; webhook incremental ingest is
+`tests/robot/system_events_db.robot` / `tests/robot/system_events_dataset.robot`.
 Locally you can also point pytest at the compose `postgres` service's
 pytest database via `POSTGRES_TEST_HOST=localhost` (see
 [CONTRIBUTING.md](CONTRIBUTING.md#local-postgres-defaults)). Use host
