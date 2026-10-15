@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,8 +73,8 @@ def positive_float(options: dict[str, Any], key: str, default: float) -> float:
         value = float(raw)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"events.options.{key} must be a float > 0, got {raw!r}") from exc
-    if value <= 0:
-        raise ConfigError(f"events.options.{key} must be > 0, got {value}")
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigError(f"events.options.{key} must be a finite number > 0, got {value}")
     return value
 
 
