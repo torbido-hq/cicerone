@@ -1630,6 +1630,45 @@ def test_recommend_job_without_recipes_trains_once(tmp_path, monkeypatch):
     assert scored.fitted == {}
 
 
+def test_recommend_job_passes_the_fit_settings_as_fit_options(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from cicerone.config import load_settings
+    from cicerone.feature_config import load_feature_config
+    from cicerone.job import _recommend_job
+    from cicerone.model import FitOptions, ModelRunPlan
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
+    plan = ModelRunPlan(enabled_models=("popular",), recommend_models=("popular",))
+    seen: list[object] = []
+
+    def spy(*_args: object, **kwargs: object) -> pd.DataFrame:
+        seen.append(kwargs["fit"])
+        return pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
+
+    monkeypatch.setattr("cicerone.job.plan_model_run", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr("cicerone.job.train_and_recommend", spy)
+    settings = replace(load_settings(), max_workers=3, item_based_k_neighbors=9)
+    _recommend_job(
+        settings,
+        load_feature_config(settings.feature_config_path),
+        SimpleNamespace(),
+        ["u1"],
+        (),
+        ["popular"],
+        None,
+        None,
+    )
+    assert seen == [FitOptions.from_settings(settings)]
+    assert seen[0].max_workers == 3
+    assert seen[0].item_based_k_neighbors == 9
+
+
 def test_recommend_job_with_recipes_tags_variants(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

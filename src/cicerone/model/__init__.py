@@ -12,6 +12,7 @@ from cicerone.model.constants import (
     WEIGHT_COLUMN,
 )
 from cicerone.model.fit import (
+    FitOptions,
     ModelRunPlan,
     content_fallback_enabled_from_models,
     fit_strategies,
@@ -30,6 +31,7 @@ from cicerone.model.strategies import (
 __all__ = [
     "COLLABORATIVE_EPOCHS",
     "DEFAULT_MODELS",
+    "FitOptions",
     "LATEST_WINDOW_DAYS",
     "ModelRunPlan",
     "RANDOM_STATE",
