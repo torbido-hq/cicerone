@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import Settings
 from cicerone.experiment.recipes import automl_challenger_pair
+from cicerone.io.base import VariantSnapshotReader
 
 _DIGEST_BYTES = 8
 _DIGEST_SPAN = float(1 << (8 * _DIGEST_BYTES))
@@ -116,10 +117,9 @@ def assignment_needs_snapshot(
 
 
 def snapshot_variant_names(reader: object) -> tuple[str, ...] | None:
-    present = getattr(reader, "present_variant_names", None)
-    if not callable(present):
+    if not isinstance(reader, VariantSnapshotReader):
         return None
-    names = present()
+    names = reader.present_variant_names()
     if names is None:
         return None
     return tuple(str(name) for name in names if name)

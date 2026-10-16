@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Protocol
 
+from cicerone.io.base import ensure_sink_writer_held
 from cicerone.locks import LockLostError
 
 logger = logging.getLogger(__name__)
@@ -105,9 +106,7 @@ def ensure_fence(fence_check: Callable[[], bool] | None) -> None:
 
 def ensure_publication_fence(sink: object, fence_check: Callable[[], bool] | None) -> None:
     ensure_fence(fence_check)
-    ensure = getattr(sink, "ensure_writer_held", None)
-    if callable(ensure):
-        ensure()
+    ensure_sink_writer_held(sink)
 
 
 class ManifestWriter(Protocol):

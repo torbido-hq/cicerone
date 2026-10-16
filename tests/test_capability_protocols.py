@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import pytest
+
+from cicerone.events.base import ClosableSource, EphemeralIdSource, HeartbeatSource
+from cicerone.events.db import DbEventSource
+from cicerone.events.kafka import KafkaEventSource
+from cicerone.events.online import OnlineTrainer
+from cicerone.events.rabbitmq import RabbitMQEventSource
+from cicerone.events.redis_streams import RedisStreamsEventSource
+from cicerone.events.s3 import S3EventSource
+from cicerone.events.updater import AbortingOnlineRefresher, CommittingOnlineRefresher
+from cicerone.events.webhook import WebhookEventSource
+from cicerone.experiment.assignment import snapshot_variant_names
+from cicerone.io.base import (
+    ArtifactFingerprintSink,
+    ConditionalArtifactSink,
+    GuardedRecommendationsSink,
+    VariantSnapshotReader,
+    WriterHeldSink,
+    ensure_sink_writer_held,
+    recommendations_write_guard,
+)
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
+from cicerone.io.dataset_store import DatasetOutputSink
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
+from cicerone.io.db_store import DatabaseOutputSink
+from cicerone.locks.hold import GenerationReleaseLock, TryAcquireLock
+from cicerone.locks.redis import RedisLock
+
+_SINK_CAPABILITIES = (
+    GuardedRecommendationsSink,
+    WriterHeldSink,
+    ArtifactFingerprintSink,
+    ConditionalArtifactSink,
+)
+_POLLING_SOURCES = [S3EventSource, KafkaEventSource, RedisStreamsEventSource, RabbitMQEventSource]
+
+
+@pytest.mark.parametrize("sink", [DatasetOutputSink, DatabaseOutputSink])
+@pytest.mark.parametrize("capability", _SINK_CAPABILITIES)
+def test_builtin_sinks_declare_every_capability(sink, capability):
+    assert issubclass(sink, capability)
+
+
+@pytest.mark.parametrize("reader", [DatasetRecommendationReader, DbRecommendationReader])
+def test_builtin_readers_report_snapshot_variants(reader):
+    assert issubclass(reader, VariantSnapshotReader)
+
+
+@pytest.mark.parametrize("source", _POLLING_SOURCES)
+def test_polling_sources_heartbeat(source):
+    assert issubclass(source, HeartbeatSource)
+
+
+@pytest.mark.parametrize("source", [*_POLLING_SOURCES, DbEventSource, WebhookEventSource])
+def test_sources_close(source):
+    assert issubclass(source, ClosableSource)
+
+
+def test_rabbitmq_source_regenerates_event_ids():
+    assert isinstance(object.__new__(RabbitMQEventSource), EphemeralIdSource)
+    assert RabbitMQEventSource.ephemeral_event_ids is True
+
+
+def test_online_trainer_stages_commits():
+    assert issubclass(OnlineTrainer, CommittingOnlineRefresher)
+    assert issubclass(OnlineTrainer, AbortingOnlineRefresher)
+
+
+def test_redis_lock_fences_by_generation():
+    assert issubclass(RedisLock, TryAcquireLock)
+    assert issubclass(RedisLock, GenerationReleaseLock)
+
+
+def test_plain_objects_fall_back_to_no_capability():
+    plain = object()
+    for capability in (*_SINK_CAPABILITIES, VariantSnapshotReader, HeartbeatSource, ClosableSource):
+        assert not isinstance(plain, capability)
+    with recommendations_write_guard(plain):
+        pass
+    ensure_sink_writer_held(plain)
+    assert snapshot_variant_names(plain) is None
+
+
+def test_capability_set_to_none_is_not_offered():
+    class Disabled:
+        recommendations_write = None
+        ensure_writer_held = None
+
+    with recommendations_write_guard(Disabled()):
+        pass
+    ensure_sink_writer_held(Disabled())

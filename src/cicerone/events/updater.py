@@ -6,7 +6,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -26,7 +26,7 @@ from cicerone.events.updater_merge import (
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
-from cicerone.io.base import OutputSink
+from cicerone.io.base import OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError, WriterLockBusyError
@@ -55,8 +55,14 @@ class OnlineRefresher(Protocol):
 
     def invalidate(self) -> None: ...
 
+
+@runtime_checkable
+class CommittingOnlineRefresher(Protocol):
     def commit(self) -> None: ...
 
+
+@runtime_checkable
+class AbortingOnlineRefresher(Protocol):
     def abort(self) -> None: ...
 
 
@@ -135,18 +141,13 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             logger.info("Skipping online persist: full retrain in progress")
             self._abort_online()
             return
-        holder = getattr(self._sink, "recommendations_write", None)
-        if callable(holder):
-            with holder():
-                if self._write_busy_check is not None and self._write_busy_check():
-                    logger.info("Skipping online persist: full retrain in progress")
-                    self._abort_online()
-                    return
-                self._ensure_fence()
-                self._commit_online()
-            return
-        self._ensure_fence()
-        self._commit_online()
+        with recommendations_write_guard(self._sink):
+            if self._write_busy_check is not None and self._write_busy_check():
+                logger.info("Skipping online persist: full retrain in progress")
+                self._abort_online()
+                return
+            self._ensure_fence()
+            self._commit_online()
 
     def abort_online(self) -> None:
         self._abort_online()
@@ -220,9 +221,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 manifest["online_users_refreshed"] = online_result.users_refreshed
                 manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
             self._ensure_fence()
-            ensure = getattr(self._sink, "ensure_writer_held", None)
-            if callable(ensure):
-                ensure()
+            ensure_sink_writer_held(self._sink)
             self._sink.write_manifest(manifest)
             self._store_users_in_cache(set(replace_ids), merged)
             if persist_online:
@@ -239,11 +238,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             pending_publish = (merged, str(manifest["generated_at"]), list(replace_ids))
             return len(events)
 
-        holder = getattr(self._sink, "recommendations_write", None)
-        if callable(holder):
-            with holder():
-                applied = _persist()
-        else:
+        with recommendations_write_guard(self._sink):
             applied = _persist()
         if pending_publish is not None:
             self._publish_sidecar(*pending_publish)
@@ -373,16 +368,14 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     def _commit_online(self) -> None:
         if self._online is None:
             return
-        commit = getattr(self._online, "commit", None)
-        if callable(commit):
-            commit()
+        if isinstance(self._online, CommittingOnlineRefresher):
+            self._online.commit()
 
     def _abort_online(self) -> None:
         if self._online is None:
             return
-        abort = getattr(self._online, "abort", None)
-        if callable(abort):
-            abort()
+        if isinstance(self._online, AbortingOnlineRefresher):
+            self._online.abort()
 
     def _refresh_online(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
         if self._online is None or self._variant_names:
