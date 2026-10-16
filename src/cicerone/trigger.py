@@ -15,6 +15,7 @@ from cicerone import job
 from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
+from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
 from cicerone.serve.metrics import record_retrain_trigger
@@ -100,14 +101,14 @@ def _current_marker(input_settings: IOSettings) -> str | None:
     try:
         backend = validate_storage_options(options)
         if backend == "local":
-            path = Path(options["path"]) / "events.parquet"
+            path = Path(options["path"]) / EVENTS_FILENAME
             if not path.exists():
                 return None
             return str(path.stat().st_mtime)
 
         client = build_s3_client(options)
         bucket = options["bucket"]
-        key = object_key(options, "events.parquet")
+        key = object_key(options, EVENTS_FILENAME)
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
     except Exception:

@@ -17,6 +17,7 @@ from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATIONS_TABLE,
 )
 from cicerone.io.engines import dispose_engines, engine_for, release_engine
+from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
@@ -137,7 +138,7 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     """Project source/item/variant columns for catalog guardrails."""
     if output.kind == "dataset":
         try:
-            frame = _read_parquet_columns(output, "recommendations.parquet", GUARDRAIL_COLUMNS)
+            frame = _read_parquet_columns(output, RECOMMENDATIONS_FILENAME, GUARDRAIL_COLUMNS)
         except FileNotFoundError:
             return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
         except S3_READ_ERRORS as exc:
@@ -204,7 +205,7 @@ def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
 
 def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
     try:
-        frame = read_parquet(output.options, "recommendations.parquet")
+        frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME)
     except FileNotFoundError:
         return empty_recommendations_frame()
     except S3_READ_ERRORS as exc:
@@ -221,7 +222,7 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
     try:
         frame = read_parquet(
             output.options,
-            "recommendations.parquet",
+            RECOMMENDATIONS_FILENAME,
             filters=[(USER_COLUMN, "in", user_ids)],
         )
     except FileNotFoundError:
@@ -308,7 +309,7 @@ def count_recommendation_users(output: IOSettings) -> int:
     if output.kind == "dataset":
         try:
             # Project only user_id — avoids materializing the full recommendations frame.
-            frame = read_parquet(output.options, "recommendations.parquet", columns=[USER_COLUMN])
+            frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME, columns=[USER_COLUMN])
         except FileNotFoundError:
             return 0
         except S3_READ_ERRORS as exc:
