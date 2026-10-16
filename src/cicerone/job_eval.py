@@ -258,15 +258,15 @@ def score_previous_run(
         return store.read_rows(since=job_track_since(settings))
 
     previous_recs: pd.DataFrame | None
-    track_rows: list[dict[str, Any]]
+    loaded_track: list[dict[str, Any]] | None
     if preloaded_recs is None and preloaded_track is None:
-        previous_recs, track_rows = try_load_pair(
+        previous_recs, loaded_track = try_load_pair(
             "load previous recommendations for eval",
             _load_recs,
             None,
             "read track rows",
             _load_track,
-            [],
+            None,
             parallel=settings.output.kind != "db",
         )
     else:
@@ -275,11 +275,14 @@ def score_previous_run(
         else:
             previous_recs = None if preloaded_recs.empty else preloaded_recs
         if not settings.track.enabled:
-            track_rows = []
+            loaded_track = []
         elif preloaded_track is None:
-            track_rows = try_load("read track rows", _load_track, [])
+            loaded_track = try_load("read track rows", _load_track, None)
         else:
-            track_rows = list(preloaded_track)
+            loaded_track = list(preloaded_track)
+    # A failed read is not an empty log: scoring it would replace the last report with zeros.
+    track_read_failed = loaded_track is None
+    track_rows = loaded_track or []
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -308,7 +311,7 @@ def score_previous_run(
             assigned = replayed[0]
 
     def _compute_track() -> dict[str, Any] | None:
-        if not settings.track.enabled:
+        if not settings.track.enabled or track_read_failed:
             return None
 
         def _track() -> dict[str, Any]:

@@ -417,3 +417,19 @@ def test_job_treats_a_redis_track_read_failure_as_optional(caplog):
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         assert try_load("read track rows", boom, None) is None
     assert any("Failed to read track rows (RedisError" in record.getMessage() for record in caplog.records)
+
+
+def test_job_does_not_score_an_unreadable_track_log_as_empty(tmp_path, monkeypatch):
+    from cicerone.config import make_settings
+    from cicerone.events.errors import RedisError
+    from cicerone.job import _score_previous_run
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = make_settings(track={"enabled": True, "redis_url": "redis://localhost:6379/0"}, output=output)
+
+    def unreachable(*_args, **_kwargs):
+        raise RedisError("Timeout reading from socket")
+
+    monkeypatch.setattr(TrackStore, "read_rows", unreachable)
+    track, _served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    assert track is None
