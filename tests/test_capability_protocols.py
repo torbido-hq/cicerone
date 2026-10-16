@@ -106,3 +106,50 @@ def test_capability_set_to_none_is_not_offered():
     with recommendations_write_guard(Disabled()):
         pass
     ensure_sink_writer_held(Disabled())
+
+
+def test_a_non_callable_release_generation_falls_back_to_release():
+    from cicerone.locks.hold import held_writer_lock
+
+    class Lock:
+        release_generation = 1
+        released = 0
+
+        def try_acquire(self) -> int:
+            return 7
+
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            self.released += 1
+
+        def owned(self, generation: int | None = None) -> bool:
+            return True
+
+        def is_locked(self) -> bool:
+            return True
+
+    lock = Lock()
+    assert not isinstance(lock, GenerationReleaseLock)
+    with held_writer_lock(lock):
+        pass
+    assert lock.released == 1
+
+
+def test_capabilities_supplied_per_instance_or_by_getattr_are_offered():
+    class Dynamic:
+        def __getattr__(self, name: str):
+            if name == "heartbeat":
+                return lambda events: None
+            raise AttributeError(name)
+
+    class Bare:
+        pass
+
+    per_instance = Bare()
+    per_instance.close = lambda: None  # type: ignore[attr-defined]
+    assert isinstance(Dynamic(), HeartbeatSource)
+    assert not isinstance(Dynamic(), ClosableSource)
+    assert isinstance(per_instance, ClosableSource)
+    assert not isinstance(Bare(), ClosableSource)

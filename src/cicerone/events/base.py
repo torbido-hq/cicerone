@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
+from cicerone.capability import CapabilityMeta
+
 
 @dataclass(frozen=True)
 class NormalizedEvent:
@@ -61,19 +63,19 @@ class EventSource(Protocol):
 
 # Optional source capabilities; callers check them with isinstance.
 @runtime_checkable
-class HeartbeatSource(Protocol):
+class HeartbeatSource(Protocol, metaclass=CapabilityMeta):
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         """Extend visibility/leases for in-flight ``events`` during a long apply."""
         ...
 
 
 @runtime_checkable
-class ClosableSource(Protocol):
+class ClosableSource(Protocol, metaclass=CapabilityMeta):
     def close(self) -> None: ...
 
 
 @runtime_checkable
-class EphemeralIdSource(Protocol):
+class EphemeralIdSource(Protocol, metaclass=CapabilityMeta):
     # Ids are regenerated on redelivery, so the worker dedupes by fingerprint instead.
     ephemeral_event_ids: bool
 

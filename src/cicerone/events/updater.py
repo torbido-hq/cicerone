@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID
+from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
@@ -57,12 +58,12 @@ class OnlineRefresher(Protocol):
 
 
 @runtime_checkable
-class CommittingOnlineRefresher(Protocol):
+class CommittingOnlineRefresher(Protocol, metaclass=CapabilityMeta):
     def commit(self) -> None: ...
 
 
 @runtime_checkable
-class AbortingOnlineRefresher(Protocol):
+class AbortingOnlineRefresher(Protocol, metaclass=CapabilityMeta):
     def abort(self) -> None: ...
 
 

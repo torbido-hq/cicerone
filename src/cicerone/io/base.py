@@ -9,6 +9,8 @@ from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
+from cicerone.capability import CapabilityMeta
+
 
 class InputSource(Protocol):
     def read_events(self) -> pd.DataFrame: ...
@@ -52,24 +54,24 @@ class OutputSink(Protocol):
 
 # Optional sink capabilities; callers check them with isinstance.
 @runtime_checkable
-class GuardedRecommendationsSink(Protocol):
+class GuardedRecommendationsSink(Protocol, metaclass=CapabilityMeta):
     def recommendations_write(self) -> AbstractContextManager[None]: ...
 
 
 @runtime_checkable
-class WriterHeldSink(Protocol):
+class WriterHeldSink(Protocol, metaclass=CapabilityMeta):
     def ensure_writer_held(self) -> None: ...
 
 
 @runtime_checkable
-class ArtifactFingerprintSink(Protocol):
+class ArtifactFingerprintSink(Protocol, metaclass=CapabilityMeta):
     def model_artifact_fingerprint(self) -> str | None:
         """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
         ...
 
 
 @runtime_checkable
-class ConditionalArtifactSink(Protocol):
+class ConditionalArtifactSink(Protocol, metaclass=CapabilityMeta):
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
         """Write only when the current fingerprint still matches ``expected_fingerprint``."""
         ...
@@ -114,7 +116,7 @@ class RecommendationReader(Protocol):
 
 
 @runtime_checkable
-class VariantSnapshotReader(Protocol):
+class VariantSnapshotReader(Protocol, metaclass=CapabilityMeta):
     def present_variant_names(self) -> tuple[str, ...] | None: ...
 
 

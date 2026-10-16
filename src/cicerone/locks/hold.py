@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from cicerone.capability import CapabilityMeta
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
 
 
@@ -40,20 +41,20 @@ class LockBackend(Protocol):
 
 # Optional lock capabilities; callers check them with isinstance.
 @runtime_checkable
-class TryAcquireLock(Protocol):
+class TryAcquireLock(Protocol, metaclass=CapabilityMeta):
     def try_acquire(self) -> int | None:
         """Hold generation on success, ``None`` when busy."""
         ...
 
 
 @runtime_checkable
-class GenerationLock(Protocol):
+class GenerationLock(Protocol, metaclass=CapabilityMeta):
     @property
     def hold_generation(self) -> int: ...
 
 
 @runtime_checkable
-class GenerationReleaseLock(Protocol):
+class GenerationReleaseLock(Protocol, metaclass=CapabilityMeta):
     def release_generation(self, generation: int) -> None: ...
 
 
