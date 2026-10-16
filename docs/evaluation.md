@@ -55,7 +55,8 @@ max_body_bytes = 2097152 # 2 MiB
 Storage is next to `[output]`: local `track.jsonl`, or a
 `recommendation_track` db table. Enabling `[track]` with object-store output
 is rejected at config load because JSONL append is not atomic. `events.ha =
-true` requires db output.
+true` requires db output, unless `track.redis_url` holds the impression/click
+log. History and eval stay on `[output]`.
 
 SQL-join shops that never call GET still POST `/track` when the widget
 renders.

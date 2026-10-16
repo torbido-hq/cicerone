@@ -8,7 +8,7 @@ import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +16,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
+from cicerone.events.errors import RedisError
 from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore, require_appendable_exposure_log
 from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, create_db_engine
@@ -69,6 +70,8 @@ def forget_user(
     user_id: str,
     *,
     writer_lock: LockBackend | None = None,
+    redis_url: str | None = None,
+    redis_key_prefix: str | None = None,
 ) -> ForgetResult:
     """Drop one user's output rows. Catalog users and events are left in place.
 
@@ -78,9 +81,26 @@ def forget_user(
     if not user_id:
         raise ValueError("user_id is required")
     require_forget_output(output)
+    redis_store = None
+    if redis_url:
+        redis_store = TrackStore(
+            output, writer_lock=writer_lock, redis_url=redis_url, redis_key_prefix=redis_key_prefix
+        )
+        # Fail before erasing anything when Redis is down or misconfigured.
+        redis_store.ping_redis()
     if output.kind == "db":
-        return _forget_db(output, user_id, writer_lock=writer_lock)
-    return _forget_local(output, user_id, writer_lock=writer_lock)
+        result = _forget_db(output, user_id, writer_lock=writer_lock)
+    else:
+        result = _forget_local(output, user_id, writer_lock=writer_lock)
+    if redis_store is None:
+        return result
+    # After the output erase: a Redis delete cannot join that transaction or swap.
+    try:
+        redis_removed = redis_store.delete_redis_rows(user_id)
+    except RedisError as exc:
+        exc.add_note("output rows were erased; run forget-user again to finish the Redis track log")
+        raise
+    return replace(result, track=result.track + redis_removed)
 
 
 def _forget_db(

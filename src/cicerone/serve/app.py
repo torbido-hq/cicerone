@@ -84,7 +84,7 @@ from cicerone.serve_schemas import (
     RecommendationsResponse,
 )
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -301,7 +301,7 @@ def create_app(
     overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
     app.state.assignment_overlay_cache = overlay_cache
     track_store = (
-        TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        open_track_store(settings, writer_lock=build_dataset_writer_lock(settings))
         if settings.track.enabled
         else None
     )

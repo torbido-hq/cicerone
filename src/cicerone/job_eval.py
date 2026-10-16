@@ -25,6 +25,7 @@ from cicerone.evaluation import (
     replay_ks,
 )
 from cicerone.evaluation.context import concat_history, stamp_recommendations
+from cicerone.events.errors import RedisError
 from cicerone.events.store import load_recommendations_frame
 from cicerone.experiment.assignment import resolve_assignment
 from cicerone.experiment.store import ExperimentStore
@@ -35,7 +36,7 @@ from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockBackend, LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import PublishError
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     ArrowTypeError,
     BotoCoreError,
     RecommendationSchemaError,
+    RedisError,
 )
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
@@ -242,7 +244,7 @@ def score_previous_run(
     if last_manifest:
         previous_generated_at = last_manifest.get("generated_at")
         previous_generated_at = str(previous_generated_at) if previous_generated_at else None
-    store = TrackStore(settings.output)
+    store = open_track_store(settings)
 
     def _load_recs() -> pd.DataFrame | None:
         recs = load_recommendations_frame(settings.output)
@@ -256,15 +258,15 @@ def score_previous_run(
         return store.read_rows(since=job_track_since(settings))
 
     previous_recs: pd.DataFrame | None
-    track_rows: list[dict[str, Any]]
+    loaded_track: list[dict[str, Any]] | None
     if preloaded_recs is None and preloaded_track is None:
-        previous_recs, track_rows = try_load_pair(
+        previous_recs, loaded_track = try_load_pair(
             "load previous recommendations for eval",
             _load_recs,
             None,
             "read track rows",
             _load_track,
-            [],
+            None,
             parallel=settings.output.kind != "db",
         )
     else:
@@ -273,11 +275,14 @@ def score_previous_run(
         else:
             previous_recs = None if preloaded_recs.empty else preloaded_recs
         if not settings.track.enabled:
-            track_rows = []
+            loaded_track = []
         elif preloaded_track is None:
-            track_rows = try_load("read track rows", _load_track, [])
+            loaded_track = try_load("read track rows", _load_track, None)
         else:
-            track_rows = list(preloaded_track)
+            loaded_track = list(preloaded_track)
+    # A failed read is not an empty log: scoring it would replace the last report with zeros.
+    track_read_failed = loaded_track is None
+    track_rows = loaded_track or []
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
     history = None
     if wanted:
@@ -306,7 +311,7 @@ def score_previous_run(
             assigned = replayed[0]
 
     def _compute_track() -> dict[str, Any] | None:
-        if not settings.track.enabled:
+        if not settings.track.enabled or track_read_failed:
             return None
 
         def _track() -> dict[str, Any]:

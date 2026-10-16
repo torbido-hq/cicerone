@@ -2771,7 +2771,7 @@
                 }
               }
             },
-            "description": "Writer lock busy or lost"
+            "description": "Writer lock busy or lost, or the Redis track log is unavailable"
           }
         },
         "security": [

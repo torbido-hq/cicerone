@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import Engine
 
-from cicerone.config.settings import IOSettings
+from cicerone.config.settings import IOSettings, Settings
 from cicerone.deprecation import renamed_attribute
 from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store_common import (
@@ -38,6 +38,7 @@ from cicerone.track.store_common import (
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
 from cicerone.track.store_db import TrackDbBackend
+from cicerone.track.store_redis import RedisTrackLog, default_redis_key_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,9 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         fence_lost: str = "lock lost before write",
         fence_kind: str = "lock",
         fence: WriteFence | None = None,
+        redis_url: str | None = None,
+        redis_client: Any = None,
+        redis_key_prefix: str | None = None,
     ):
         self._output = output
         self._kind = output.kind
@@ -89,6 +93,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             fence_lost=fence_lost,
             fence_kind=fence_kind,
         )
+        self._redis_url = redis_url or None
+        self._redis_client = redis_client
+        self._redis_key_prefix = redis_key_prefix or default_redis_key_prefix(output)
+        self._redis_log: RedisTrackLog | None = None
 
     @property
     def fence(self) -> WriteFence:
@@ -102,10 +110,25 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         with self._fence.lease():
             yield
 
+    def _track_log(self) -> RedisTrackLog | None:
+        if self._redis_url is None and self._redis_client is None:
+            return None
+        if self._redis_log is None:
+            self._redis_log = RedisTrackLog(
+                self._redis_url or "",
+                client=self._redis_client,
+                key_prefix=self._redis_key_prefix,
+            )
+        return self._redis_log
+
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
         payload = [row_with_event_id(row) for row in rows]
+        redis_log = self._track_log()
+        if redis_log is not None:
+            with self._append_lock, self._writer_lease():
+                return redis_log.append(payload)
         if self._kind == "db":
             with self._append_lock, self._writer_lease():
                 return self._append_rows_db(payload)
@@ -137,6 +160,19 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         """Delete one user's track rows on the caller's DB transaction (``forget-user``)."""
         return self._delete_user_rows_db(user_id, conn=conn)
 
+    def ping_redis(self) -> None:
+        redis_log = self._track_log()
+        if redis_log is not None:
+            redis_log.ping()
+
+    def delete_redis_rows(self, user_id: str) -> int:
+        """Delete one user's rows from the Redis track log; zero when the log is not on Redis."""
+        redis_log = self._track_log()
+        if redis_log is None:
+            return 0
+        with self._writer_lease():
+            return redis_log.delete_user(user_id)
+
     def delete_history_for_user(self, user_id: str, *, conn: Any) -> int:
         """Delete one user's history rows on the caller's DB transaction (``forget-user``)."""
         return self._delete_history_db(user_id, conn=conn)
@@ -153,7 +189,10 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
             rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
             rows = self._read_rows_dataset(since=since)
-            since = None
+        redis_log = self._track_log()
+        if redis_log is not None:
+            # [output] rows stay readable: written before the switch, or by an instance not yet switched.
+            rows = [*rows, *redis_log.read()]
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:
@@ -244,3 +283,13 @@ __all__ += list(_RENAMED)
 
 def __getattr__(name: str) -> Any:
     return renamed_attribute(__name__, _RENAMED, name)
+
+
+def open_track_store(settings: Settings, **kwargs: Any) -> TrackStore:
+    """Track log on Redis when ``track.redis_url`` is set; history and eval stay on output."""
+    return TrackStore(
+        settings.output,
+        redis_url=settings.track.redis_url,
+        redis_key_prefix=settings.track.redis_key_prefix,
+        **kwargs,
+    )
