@@ -26,12 +26,16 @@ def optional_nonempty_str(options: dict[str, Any], key: str, *, prefix: str) -> 
     return text
 
 
-def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str, minimum: int) -> int:
+def as_int(options: dict[str, Any], key: str, default: int, *, prefix: str) -> int:
     raw = options.get(key, default)
     try:
-        value = int(raw)
+        return int(raw)
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
+
+
+def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str, minimum: int) -> int:
+    value = as_int(options, key, default, prefix=prefix)
     if value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {value}")
     return value

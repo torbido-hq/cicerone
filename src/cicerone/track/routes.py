@@ -13,9 +13,9 @@ from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.serve.events_routes import (
+    attach_ingest_openapi,
     max_body_bytes,
     payloads_from_body,
-    put_pydantic_schema,
     read_limited_json,
 )
 from cicerone.serve.metrics import record_track_ingest
@@ -44,30 +44,13 @@ def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
 
 
 def attach_track_ingest_openapi(schema: dict[str, Any]) -> None:
-    post = schema.get("paths", {}).get(TRACK_PATH, {}).get("post")
-    if not isinstance(post, dict):
-        return
-    components = schema.setdefault("components", {}).setdefault("schemas", {})
-    put_pydantic_schema(components, TrackEvent)
-    put_pydantic_schema(components, TrackIngestRequest)
-    post["requestBody"] = {
-        "required": True,
-        "content": {
-            "application/json": {
-                "schema": {
-                    "title": "TrackIngestBody",
-                    "oneOf": [
-                        {"$ref": "#/components/schemas/TrackEvent"},
-                        {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/TrackEvent"},
-                        },
-                        {"$ref": "#/components/schemas/TrackIngestRequest"},
-                    ],
-                }
-            }
-        },
-    }
+    attach_ingest_openapi(
+        schema,
+        TRACK_PATH,
+        event_model=TrackEvent,
+        request_model=TrackIngestRequest,
+        title="TrackIngestBody",
+    )
 
 
 def mount_track_routes(
