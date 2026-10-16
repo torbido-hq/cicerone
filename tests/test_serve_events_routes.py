@@ -85,6 +85,21 @@ def test_post_events_auth_and_validation():
     ValidationErrorDetail.model_validate({"detail": detail})
 
 
+@pytest.mark.parametrize("occurred_at", ["NaN", "Infinity", "1e20"])
+def test_post_events_rejects_an_unusable_numeric_occurred_at(occurred_at):
+    source = WebhookEventSource({})
+    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    # Raw body: Python's json module emits and accepts NaN/Infinity, httpx's encoder refuses them.
+    body = f'{{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "occurred_at": {occurred_at}}}'
+    response = TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret", "Content-Type": "application/json"},
+        content=body,
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "occurred_at is out of range"
+
+
 def test_post_events_list_body_validation_error_returns_400():
     source = WebhookEventSource({})
     app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
