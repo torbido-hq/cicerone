@@ -1439,6 +1439,25 @@ def test_retrain_button_hidden_without_trigger():
     assert "Retrain" not in response.text
 
 
+def test_retrain_button_shown_with_a_dashboard_trigger_url():
+    from dataclasses import replace
+
+    settings = _settings()
+    settings = replace(settings, dashboard=replace(settings.dashboard, trigger_url="http://recommender:8080"))
+    response = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret"))).get(
+        "/dashboard", auth=("alice", "s3cret")
+    )
+    assert response.status_code == 200
+    assert "Retrain" in response.text
+
+
+def test_retrain_flash_messages_are_allowlisted():
+    from cicerone.dashboard_retrain import _NEEDS_URL, _TIMED_OUT
+    from cicerone.http_security import FLASH_ERR
+
+    assert {_NEEDS_URL, _TIMED_OUT} <= FLASH_ERR
+
+
 def test_retrain_posts_the_trigger_webhook(monkeypatch):
     captured: dict[str, str] = {}
 

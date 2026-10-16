@@ -22,7 +22,7 @@ from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
-from cicerone.dashboard_retrain import RetrainError, request_retrain
+from cicerone.dashboard_retrain import RetrainError, request_retrain, retrain_configured
 from cicerone.dashboard_users import load_users
 from cicerone.feature_config import load_feature_config
 from cicerone.http_auth import require_basic_auth
@@ -286,7 +286,7 @@ def create_app(
             "events_enabled": settings.events.enabled,
             "events_kind": settings.events.kind if settings.events.enabled else None,
             "incremental": _incremental_status(history),
-            "trigger_enabled": settings.trigger.enabled,
+            "trigger_enabled": retrain_configured(settings),
         }
 
     @app.get("/partials/status", dependencies=[Depends(auth)])

@@ -1567,3 +1567,28 @@ def test_load_settings_empty_lock_key_rejected(tmp_path):
     )
     with pytest.raises(ConfigError, match="job.trigger.lock_key must be a non-empty string"):
         load_settings(config_path)
+
+
+def test_load_settings_dashboard_trigger_url_and_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASH_TRIGGER_TOKEN", "tok")
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [dashboard]
+        trigger_url = "http://recommender:8080/"
+        trigger_auth_token = "${{DASH_TRIGGER_TOKEN}}"
+        {_base_io_toml()}
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.dashboard.trigger_url == "http://recommender:8080"
+    assert settings.dashboard.trigger_auth_token == "tok"
+
+
+@pytest.mark.parametrize(
+    "url", ["recommender:8080", "ftp://recommender", "http://", "http://u:p@recommender:8080", "http://h:99x"]
+)
+def test_load_settings_rejects_a_bad_dashboard_trigger_url(tmp_path, url):
+    config_path = write_toml(tmp_path, f'[dashboard]\ntrigger_url = "{url}"\n{_base_io_toml()}')
+    with pytest.raises(ConfigError, match="dashboard.trigger_url"):
+        load_settings(config_path)
