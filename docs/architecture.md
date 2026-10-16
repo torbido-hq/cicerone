@@ -33,7 +33,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `dataset.py` | Raw events/users/items → weighted rectools Dataset (`BuiltDataset`; keeps users+items frames for policy evaluation; caps keep most recent N) |
 | `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
 | `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |
-| `model/fit.py` | `fit_strategies`, `plan_model_run`, ProcessPool workers |
+| `model/fit.py` | `fit_strategies`, `FitOptions`, `plan_model_run`, ProcessPool workers |
 | `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
 | `model/combine.py` | Priority + weighted RRF combiners |
 | `model/epoch_metrics.py` | Optional collaborative/sequential per-epoch Precision/Recall logging |
