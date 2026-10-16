@@ -63,8 +63,9 @@ class RedisTrackLog:
         if not rows:
             return []
         lines = [json.dumps(row, separators=(",", ":")) for row in rows]
-        # One MULTI/EXEC for the batch: a failure before EXEC stores none of it, and HSETNX keeps
-        # a retry after a lost reply idempotent.
+        # One MULTI/EXEC on one key: Redis refuses the whole EXEC on OOM or a read-only replica,
+        # and a wrong-type key fails every HSETNX alike, so no batch is half stored.
+        # HSETNX keeps retries idempotent.
         with self._client.pipeline(transaction=True) as pipe:
             for row, line in zip(rows, lines, strict=True):
                 pipe.hsetnx(self._log_key, _event_key(row, line), line)
