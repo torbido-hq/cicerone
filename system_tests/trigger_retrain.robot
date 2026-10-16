@@ -15,6 +15,8 @@ Retrain Requires A Bearer Token
     POST On Session    trigger    /trigger/retrain    expected_status=401
 
 Retrain Accepts A Valid Token And Starts A Run
+    ${before}=    Latest Run Generated At
+    Set Suite Variable    ${RUN_BEFORE_TRIGGER}    ${before}
     ${headers}=    Trigger Auth Headers
     ${response}=    POST On Session    trigger    /trigger/retrain
     ...    headers=${headers}    expected_status=202
@@ -23,9 +25,20 @@ Triggered Run Eventually Appears On The Dashboard As Webhook
     Wait Until Keyword Succeeds    30s    1s    Dashboard Shows A Webhook Triggered Run
 
 *** Keywords ***
-Dashboard Shows A Webhook Triggered Run
+Latest Run Block
     ${response}=    GET On Session    dashboard    /partials/status    expected_status=200
     ${latest_run}=    Get Regexp Matches    ${response.text}    (?s)data-latest-run.*?</dl>
     Should Not Be Empty    ${latest_run}
-    Should Contain    ${latest_run}[0]    data-run-status="success"
-    Should Contain    ${latest_run}[0]    >webhook<
+    RETURN    ${latest_run}[0]
+
+Latest Run Generated At
+    ${block}=    Latest Run Block
+    ${generated}=    Get Regexp Matches    ${block}    data-run-generated="([^"]*)"    1
+    RETURN    ${generated}[0]
+
+Dashboard Shows A Webhook Triggered Run
+    # Only a run newer than the one seen before the trigger counts.
+    ${block}=    Latest Run Block
+    Should Not Contain    ${block}    data-run-generated="${RUN_BEFORE_TRIGGER}"
+    Should Contain    ${block}    data-run-status="success"
+    Should Contain    ${block}    >webhook<

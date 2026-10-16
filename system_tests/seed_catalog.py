@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, make_url
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.types import String
 
@@ -50,7 +50,11 @@ ITEMS = pd.DataFrame(
 
 
 def main() -> None:
-    engine = create_engine(DATABASE_URL)
+    url = make_url(DATABASE_URL)
+    # The tables are replaced, so only a dedicated test database may be seeded.
+    if not (url.database or "").endswith("_robot"):
+        raise SystemExit(f"Refusing to seed {url.database!r}: the database name must end with _robot")
+    engine = create_engine(url)
     try:
         EVENTS.to_sql("events", engine, if_exists="replace", index=False)
         USERS.to_sql(
@@ -63,7 +67,8 @@ def main() -> None:
         ITEMS.to_sql("items", engine, if_exists="replace", index=False)
     finally:
         engine.dispose()
-    print(f"Seeded {len(EVENTS)} events, {len(USERS)} users, {len(ITEMS)} items into {DATABASE_URL}")
+    target = url.render_as_string()
+    print(f"Seeded {len(EVENTS)} events, {len(USERS)} users, {len(ITEMS)} items into {target}")
 
 
 if __name__ == "__main__":
