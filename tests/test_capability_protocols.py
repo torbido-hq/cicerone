@@ -68,6 +68,21 @@ def test_online_trainer_stages_commits():
     assert issubclass(OnlineTrainer, AbortingOnlineRefresher)
 
 
+def test_online_commit_and_abort_are_independent():
+    class CommitOnly:
+        def commit(self) -> None:
+            return None
+
+    class AbortOnly:
+        def abort(self) -> None:
+            return None
+
+    assert isinstance(CommitOnly(), CommittingOnlineRefresher)
+    assert not isinstance(CommitOnly(), AbortingOnlineRefresher)
+    assert isinstance(AbortOnly(), AbortingOnlineRefresher)
+    assert not isinstance(AbortOnly(), CommittingOnlineRefresher)
+
+
 def test_redis_lock_fences_by_generation():
     assert issubclass(RedisLock, TryAcquireLock)
     assert issubclass(RedisLock, GenerationReleaseLock)
