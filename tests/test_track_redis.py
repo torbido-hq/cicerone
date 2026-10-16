@@ -60,6 +60,11 @@ class _FakeRedis:
         self._done("hsetnx")
         return stored
 
+    def ping(self) -> bool:
+        self._call("ping")
+        self._done("ping")
+        return True
+
     def pipeline(self, *, transaction: bool = True) -> _FakePipeline:
         assert transaction
         return _FakePipeline(self)
@@ -320,6 +325,37 @@ def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monke
     assert result.track == 2
     assert [json.loads(row)["user_id"] for row in client.rows] == ["bob"]
     assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["bob"]
+
+
+def test_redis_track_still_reads_rows_left_on_the_output(tmp_path):
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    TrackStore(output).append_rows([_row(event_id="imp-old"), _row(event_id="imp-both")])
+    client = _FakeRedis()
+    store = _store(client, output)
+    store.append_rows([_row(event_id="imp-both"), _row(user_id="bob", item_id="ipa-002", event_id="imp-new")])
+    assert sorted(row["event_id"] for row in store.read_rows()) == ["imp-both", "imp-new", "imp-old"]
+
+
+def test_forget_user_erases_nothing_when_redis_is_unreachable(tmp_path, monkeypatch):
+    from cicerone.events.errors import RedisError as RedisConnectionError
+    from cicerone.forget import forget_user
+    from cicerone.io.dataset_store import DatasetOutputSink
+
+    client = _FakeRedis()
+    monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    DatasetOutputSink(output.options).write_recommendations(
+        pd.DataFrame(
+            [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
+        )
+    )
+    _store(client, output).append_rows([_row()])
+
+    client.fail_next["ping"] = RedisConnectionError("Connection refused")
+    with pytest.raises(RedisConnectionError, match="Connection refused"):
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+    assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["alice"]
+    assert sorted(_log(client)) == ["imp-1"]
 
 
 def test_redis_delete_keeps_an_append_that_races_the_read():
