@@ -20,7 +20,7 @@ from cicerone.dataset import BuiltDataset, build_interactions
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
-from cicerone.io.base import OutputSink
+from cicerone.io.base import ArtifactFingerprintSink, ConditionalArtifactSink, OutputSink
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError
 from cicerone.model import recommend_with_models
@@ -342,10 +342,9 @@ class OnlineTrainer:
         return True
 
     def _fingerprint(self) -> str | None:
-        getter = getattr(self._sink, "model_artifact_fingerprint", None)
-        if not callable(getter):
+        if not isinstance(self._sink, ArtifactFingerprintSink):
             return None
-        token = getter()
+        token = self._sink.model_artifact_fingerprint()
         return None if token is None else str(token)
 
     def _install(self, artifact: ModelArtifact, digest: bytes, token: str | None = None) -> None:
@@ -400,10 +399,9 @@ class OnlineTrainer:
 
     def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
         self._ensure_fence()
-        replace = getattr(self._sink, "replace_model_artifact_if", None)
         expected = pending.baseline_token
-        if callable(replace) and expected is not None:
-            return bool(replace(payload, expected))
+        if isinstance(self._sink, ConditionalArtifactSink) and expected is not None:
+            return bool(self._sink.replace_model_artifact_if(payload, expected))
         if self._artifact_replaced(pending):
             return False
         self._sink.write_model_artifact(payload)

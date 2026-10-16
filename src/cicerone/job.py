@@ -6,7 +6,6 @@ import json
 import logging
 import sys
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -41,7 +40,7 @@ from cicerone.experiment.thompson import (
     window_trials_from_slices,
 )
 from cicerone.feature_config import FeatureConfig, load_feature_config
-from cicerone.io.base import OutputSink
+from cicerone.io.base import OutputSink, recommendations_write_guard
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.job_eval import job_track_since as _job_track_since
@@ -564,10 +563,9 @@ def _write_job_outputs(
     result = run.written
     # Artifact → snapshot → recommendations; success only after all writes.
     outputs_written = False
-    recs_write = getattr(sink, "recommendations_write", None)
     ensure_fence(fence_check)
     try:
-        with recs_write() if callable(recs_write) else nullcontext():
+        with recommendations_write_guard(sink):
             try:
                 if artifact_bytes is not None:
                     ensure_publication_fence(sink, fence_check)
@@ -726,11 +724,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     ):
         manifest["generated_at"] = datetime.now(UTC).isoformat()
         try:
-            holder = getattr(run.sink, "recommendations_write", None)
-            if callable(holder):
-                with holder():
-                    write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
-            else:
+            with recommendations_write_guard(run.sink):
                 write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
         except _SINK_WRITE_ERRORS as exc:
             _log_caught(

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any, Protocol
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
+
+from cicerone.capability import CapabilityMeta
 
 
 class InputSource(Protocol):
@@ -40,21 +43,47 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
-    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
-        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
-        ...
-
     def read_model_artifact(self) -> bytes | None:
         """Latest fitted-model blob, or ``None`` if the sink has not written one."""
-        ...
-
-    def model_artifact_fingerprint(self) -> str | None:
-        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
         ...
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
         """Persist items for serve-time category/availability filters."""
         ...
+
+
+# Optional sink capabilities; callers check them with isinstance.
+@runtime_checkable
+class GuardedRecommendationsSink(Protocol, metaclass=CapabilityMeta):
+    def recommendations_write(self) -> AbstractContextManager[None]: ...
+
+
+@runtime_checkable
+class WriterHeldSink(Protocol, metaclass=CapabilityMeta):
+    def ensure_writer_held(self) -> None: ...
+
+
+@runtime_checkable
+class ArtifactFingerprintSink(Protocol, metaclass=CapabilityMeta):
+    def model_artifact_fingerprint(self) -> str | None:
+        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
+        ...
+
+
+@runtime_checkable
+class ConditionalArtifactSink(Protocol, metaclass=CapabilityMeta):
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
+        ...
+
+
+def recommendations_write_guard(sink: object) -> AbstractContextManager[None]:
+    return sink.recommendations_write() if isinstance(sink, GuardedRecommendationsSink) else nullcontext()
+
+
+def ensure_sink_writer_held(sink: object) -> None:
+    if isinstance(sink, WriterHeldSink):
+        sink.ensure_writer_held()
 
 
 class RecommendationReader(Protocol):
@@ -84,6 +113,11 @@ class RecommendationReader(Protocol):
     ) -> None:
         """Configure serve-time category / availability columns on the items snapshot."""
         ...
+
+
+@runtime_checkable
+class VariantSnapshotReader(Protocol, metaclass=CapabilityMeta):
+    def present_variant_names(self) -> tuple[str, ...] | None: ...
 
 
 class BaseRecommendationReader(ABC):

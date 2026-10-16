@@ -8,7 +8,7 @@ from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from typing import Any
 
-from cicerone.events.base import EventSource, NormalizedEvent
+from cicerone.events.base import EventSource, HeartbeatSource, NormalizedEvent
 from cicerone.events.errors import EVENT_SOURCE_ERRORS
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,10 @@ def inflight_heartbeat(
     interval_seconds: float,
 ):
     """Beat at start of apply and again every ``interval_seconds`` until exit."""
-    beat = getattr(source, "heartbeat", None)
-    if not callable(beat):
+    if not isinstance(source, HeartbeatSource):
         yield
         return
+    beat = source.heartbeat
     _call_heartbeat(beat, events, fail_closed=True)
     if interval_seconds <= 0:
         yield

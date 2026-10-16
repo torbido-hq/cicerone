@@ -11,7 +11,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
 )
-from cicerone.events.base import EventSource, NormalizedEvent
+from cicerone.events.base import ClosableSource, EphemeralIdSource, EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import EVENT_APPLY_ERRORS, EVENT_SOURCE_ERRORS, EVENT_WORKER_ERRORS
 from cicerone.events.normalize import event_fingerprint
@@ -90,7 +90,7 @@ class EventWorker:
         self._retry_acks: list[NormalizedEvent] = []
         self._applied_event_ids = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
         self._applied_fingerprints = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
-        self._ephemeral_event_ids = bool(getattr(source, "ephemeral_event_ids", False))
+        self._ephemeral_event_ids = isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
         self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
 
     def start(self) -> None:
@@ -198,11 +198,10 @@ class EventWorker:
         return bool(health.connected)
 
     def _close_source(self) -> None:
-        close = getattr(self._source, "close", None)
-        if not callable(close):
+        if not isinstance(self._source, ClosableSource):
             return
         try:
-            close()
+            self._source.close()
         except EVENT_SOURCE_ERRORS:
             logger.exception("Event source close() failed during worker stop")
 

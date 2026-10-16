@@ -7,7 +7,9 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
+
+from cicerone.capability import CapabilityMeta
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,25 @@ class EventSource(Protocol):
     def health(self) -> EventSourceHealth:
         """Lag / connectivity for dashboard and metrics."""
         ...
+
+
+# Optional source capabilities; callers check them with isinstance.
+@runtime_checkable
+class HeartbeatSource(Protocol, metaclass=CapabilityMeta):
+    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
+        """Extend visibility/leases for in-flight ``events`` during a long apply."""
+        ...
+
+
+@runtime_checkable
+class ClosableSource(Protocol, metaclass=CapabilityMeta):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class EphemeralIdSource(Protocol, metaclass=CapabilityMeta):
+    # Ids are regenerated on redelivery, so the worker dedupes by fingerprint instead.
+    ephemeral_event_ids: bool
 
 
 class QueuedEventSource:

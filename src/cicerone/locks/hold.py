@@ -7,8 +7,9 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from cicerone.capability import CapabilityMeta
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
 
 
@@ -38,15 +39,37 @@ class LockBackend(Protocol):
         ...
 
 
+# Optional lock capabilities; callers check them with isinstance.
+@runtime_checkable
+class TryAcquireLock(Protocol, metaclass=CapabilityMeta):
+    def try_acquire(self) -> int | None:
+        """Hold generation on success, ``None`` when busy."""
+        ...
+
+
+@runtime_checkable
+class GenerationLock(Protocol, metaclass=CapabilityMeta):
+    @property
+    def hold_generation(self) -> int: ...
+
+
+@runtime_checkable
+class GenerationReleaseLock(Protocol, metaclass=CapabilityMeta):
+    def release_generation(self, generation: int) -> None: ...
+
+
+def _hold_generation(lock: LockBackend) -> int | None:
+    return lock.hold_generation if isinstance(lock, GenerationLock) else None
+
+
 def acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
-    try_acquire = getattr(lock, "try_acquire", None)
-    if callable(try_acquire):
-        generation = try_acquire()
+    if isinstance(lock, TryAcquireLock):
+        generation = lock.try_acquire()
         if generation is None:
             return False, None
         return True, generation
     if lock.acquire():
-        return True, getattr(lock, "hold_generation", None)
+        return True, _hold_generation(lock)
     return False, None
 
 
@@ -122,8 +145,7 @@ def lock_owned(lock: LockBackend, generation: int | None) -> bool:
     try:
         return bool(owned(generation=expected))
     except TypeError:
-        current = getattr(lock, "hold_generation", None)
-        return bool(owned()) and current == expected
+        return bool(owned()) and _hold_generation(lock) == expected
 
 
 def ensure_writer_owned(
@@ -168,9 +190,8 @@ def held_writer_lock(
         yield
     finally:
         unbind_writer_generation()
-        release_generation = getattr(lock, "release_generation", None)
-        if callable(release_generation) and generation is not None:
-            release_generation(generation)
+        if isinstance(lock, GenerationReleaseLock) and generation is not None:
+            lock.release_generation(generation)
         else:
             lock.release()
 
