@@ -209,7 +209,7 @@ def _cmd_forget_user(argv: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="cicerone forget-user",
-        description="Erase one user's recommendations, track rows, exposures, and history.",
+        description="Permanently erase one user's recommendations, track rows, exposures, and history.",
     )
     parser.add_argument("user_id", help="User id to erase from the output store")
     args = parser.parse_args(argv)

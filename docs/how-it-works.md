@@ -359,6 +359,10 @@ large database output each table is scanned once; erase during a quiet window.
 Rewritten local files keep their permission bits but are owned by the user
 running the command.
 
+The erase is permanent. Once the transaction commits or the files are
+swapped, cicerone keeps no copy, so back up the output store first if the
+rows may be needed again.
+
 When a distributed writer lock is configured, the command holds it for the
 erase. Without one, run it while no job or incremental flush is writing:
 such a write can put the user's recommendations back. The next job run also
