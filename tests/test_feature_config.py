@@ -327,3 +327,24 @@ item_column = "margin"
 def test_load_feature_config_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_feature_config(tmp_path / "does-not-exist.toml")
+
+
+@pytest.mark.parametrize(
+    ("toml", "message"),
+    [
+        ("[blending]\npopular_share = nan", "blending.popular_share must be a finite number"),
+        ("[blending]\nsteepness = inf", "blending.steepness must be a finite number"),
+        ("[blending]\nrrf_k = nan", "blending.rrf_k must be a finite number"),
+        ("[blending]\nmidpoint = inf", "blending.midpoint must be a finite number"),
+        ("[event_weights]\npurchase = nan", "event_weights.purchase must be a finite number"),
+        (
+            '[[boosts]]\nname = "b"\nkind = "boolean"\nitem_column = "x"\nfactor = inf',
+            "Boost rule 'b' factor must be a finite number",
+        ),
+    ],
+)
+def test_load_feature_config_rejects_non_finite_numbers(tmp_path, toml, message):
+    config_path = tmp_path / "features.toml"
+    config_path.write_text(toml + "\n")
+    with pytest.raises(ValueError, match=message):
+        load_feature_config(config_path)

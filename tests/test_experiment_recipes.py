@@ -499,3 +499,22 @@ def test_resolve_boost_policy_rejects_duplicate_replacement_names() -> None:
             _features().boosts,
             label="boosts",
         )
+
+
+@pytest.mark.parametrize("field", ["midpoint", "steepness", "saturate_at", "popular_share", "rrf_k"])
+def test_resolve_recipes_rejects_non_finite_variant_blending(field) -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp",
+            variants=(
+                VariantSettings(name="control", traffic=0.5),
+                VariantSettings(
+                    name="treatment", traffic=0.5, combiner="blend", blending={field: float("nan")}
+                ),
+            ),
+        ),
+    )
+    message = rf"experiment.variants\[treatment\].blending.{field} must be a finite"
+    with pytest.raises(ConfigError, match=message):
+        resolve_recipes(settings, _features())
