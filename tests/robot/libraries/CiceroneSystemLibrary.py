@@ -555,10 +555,12 @@ class CiceroneSystemLibrary:
         track_path = self.output_path / TRACK_FILENAME
         assert track_path.is_file()
         rows = [json.loads(line) for line in track_path.read_text().splitlines() if line.strip()]
-        assert {row["event_id"] for row in rows} == set(event_ids)
+        # Sorted lists, not sets: a duplicated row must fail the check.
+        assert sorted(row["event_id"] for row in rows) == sorted(event_ids)
 
     def track_store_should_hold_exactly(self, event_ids: list[str]) -> None:
-        assert {row["event_id"] for row in TrackStore(self.settings.output).read_rows()} == set(event_ids)
+        rows = TrackStore(self.settings.output).read_rows()
+        assert sorted(row["event_id"] for row in rows) == sorted(event_ids)
 
     def manifest_track_eval_should_record_ctr(self, impression_count: int) -> None:
         latest = self._manifest_reader().read_latest()
