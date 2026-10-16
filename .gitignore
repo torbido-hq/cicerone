@@ -5,6 +5,7 @@ __pycache__/
 coverage.xml
 coverage-data/
 robot-results/
+system_tests/results/
 htmlcov/
 .env
 
