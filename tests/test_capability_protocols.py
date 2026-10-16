@@ -153,3 +153,20 @@ def test_capabilities_supplied_per_instance_or_by_getattr_are_offered():
     assert not isinstance(Dynamic(), ClosableSource)
     assert isinstance(per_instance, ClosableSource)
     assert not isinstance(Bare(), ClosableSource)
+
+
+def test_a_combined_capability_protocol_checks_inherited_members():
+    from typing import Protocol, runtime_checkable
+
+    from cicerone.capability import CapabilityMeta
+
+    @runtime_checkable
+    class FullSink(GuardedRecommendationsSink, WriterHeldSink, Protocol, metaclass=CapabilityMeta):
+        pass
+
+    class HalfSink:
+        def ensure_writer_held(self) -> None:
+            return None
+
+    assert not isinstance(HalfSink(), FullSink)
+    assert isinstance(object.__new__(DatasetOutputSink), FullSink)
