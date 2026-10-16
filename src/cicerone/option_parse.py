@@ -30,7 +30,7 @@ def as_int(options: dict[str, Any], key: str, default: int, *, prefix: str) -> i
     raw = options.get(key, default)
     try:
         return int(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
 
 
