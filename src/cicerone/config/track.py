@@ -10,7 +10,7 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.config.settings import EvalSettings, TrackSettings
-from cicerone.config.validation import require_non_negative_int, require_positive_int
+from cicerone.config.validation import require_non_negative_int, require_positive_float, require_positive_int
 
 
 def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
@@ -39,9 +39,10 @@ def _load_positive_int_tuple(raw: object, *, name: str) -> tuple[int, ...]:
 def load_track_settings(raw: dict[str, Any] | None) -> TrackSettings:
     data = raw or {}
     enabled = bool(data.get("enabled", False))
-    window = float(data.get("attribution_window_hours", DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS))
-    if window <= 0:
-        raise ConfigError(f"track.attribution_window_hours must be > 0, got {window}")
+    window = require_positive_float(
+        float(data.get("attribution_window_hours", DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS)),
+        name="track.attribution_window_hours",
+    )
     min_impressions = require_non_negative_int(
         int(data.get("min_impressions", DEFAULT_TRACK_MIN_IMPRESSIONS)),
         name="track.min_impressions",

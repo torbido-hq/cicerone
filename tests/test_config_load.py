@@ -1547,3 +1547,31 @@ def test_load_settings_empty_lock_key_rejected(tmp_path):
     )
     with pytest.raises(ConfigError, match="job.trigger.lock_key must be a non-empty string"):
         load_settings(config_path)
+
+
+@pytest.mark.parametrize(
+    ("toml", "message"),
+    [
+        ("[job]\nmodel_weights = { popular = nan }", "model_weights.popular must be a finite number"),
+        ("[job]\nrrf_k = inf", "rrf_k must be a finite number"),
+        ("[job]\nhalf_life_days = inf", "job.half_life_days must be a finite number"),
+        ("[serve]\nrefresh_interval_seconds = nan", "serve.refresh_interval_seconds must be a finite number"),
+        ("[track]\nattribution_window_hours = inf", "track.attribution_window_hours must be a finite number"),
+        (
+            '[experiment]\nenabled = true\nid = "exp"\nalpha = nan\n'
+            '[[experiment.variants]]\nname = "a"\ntraffic = 0.5\n'
+            '[[experiment.variants]]\nname = "b"\ntraffic = 0.5',
+            "experiment.alpha must be a finite number",
+        ),
+        (
+            '[experiment]\nenabled = true\nid = "exp"\n'
+            '[[experiment.variants]]\nname = "a"\ntraffic = nan\n'
+            '[[experiment.variants]]\nname = "b"\ntraffic = 0.5',
+            r"experiment.variants\[a\].traffic must be a finite number",
+        ),
+    ],
+)
+def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
+    config_path = write_toml(tmp_path, f"{_base_io_toml()}\n{toml}\n")
+    with pytest.raises(ConfigError, match=message):
+        load_settings(config_path)

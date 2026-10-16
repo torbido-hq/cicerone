@@ -25,6 +25,7 @@ from cicerone.config.constants import (
 )
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.config.validation import (
+    require_finite,
     require_open_unit_interval,
     require_unit_interval,
     unique_policy_names,
@@ -130,7 +131,7 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
     name = str(raw.get("name") or "").strip()
     if not name:
         raise ConfigError(f"experiment.variants[{index}].name is required")
-    traffic = float(raw.get("traffic", 0.0))
+    traffic = require_finite(float(raw.get("traffic", 0.0)), name=f"experiment.variants[{name}].traffic")
     if traffic < 0:
         raise ConfigError(f"experiment.variants[{name}].traffic must be >= 0, got {traffic}")
     models = list(raw["models"]) if "models" in raw else None

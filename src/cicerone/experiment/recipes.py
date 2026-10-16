@@ -9,7 +9,12 @@ from typing import Any, TypeVar, cast
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
 from cicerone.config.settings import Settings, VariantSettings
-from cicerone.config.validation import unique_policy_names, validate_model_weights, validate_rrf_k
+from cicerone.config.validation import (
+    require_finite,
+    unique_policy_names,
+    validate_model_weights,
+    validate_rrf_k,
+)
 from cicerone.feature_config import (
     BLENDING_CURVES,
     BlendingConfig,
@@ -380,22 +385,16 @@ def _recipe_blending(
 ) -> BlendingConfig:
     enabled = combiner == COMBINER_BLEND
     overlay = variant.blending or {}
+    label = f"experiment.variants[{variant.name}].blending"
     updates: dict[str, Any] = {"enabled": enabled}
     if "curve" in overlay:
         curve = str(overlay["curve"])
         if curve not in BLENDING_CURVES:
             raise ConfigError(f"experiment.variants[{variant.name}].blending.curve {curve!r} is invalid")
         updates["curve"] = curve  # type: ignore[assignment]
-    if "midpoint" in overlay:
-        updates["midpoint"] = float(overlay["midpoint"])
-    if "steepness" in overlay:
-        updates["steepness"] = float(overlay["steepness"])
-    if "saturate_at" in overlay:
-        updates["saturate_at"] = float(overlay["saturate_at"])
-    if "popular_share" in overlay:
-        updates["popular_share"] = float(overlay["popular_share"])
-    if "rrf_k" in overlay:
-        updates["rrf_k"] = float(overlay["rrf_k"])
+    for field in ("midpoint", "steepness", "saturate_at", "popular_share", "rrf_k"):
+        if field in overlay:
+            updates[field] = require_finite(float(overlay[field]), name=f"{label}.{field}")
     if "latest_date_columns" in overlay:
         raw = overlay["latest_date_columns"]
         if isinstance(raw, str):
