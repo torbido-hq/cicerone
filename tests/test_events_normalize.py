@@ -44,6 +44,17 @@ def test_normalize_rejects_unusable_numeric_occurred_at(value):
         normalize_event(event_payload(occurred_at=value))
 
 
+def test_normalize_rejects_a_datetime_whose_timezone_has_no_offset():
+    from datetime import datetime, tzinfo
+
+    class _NoOffset(tzinfo):
+        def utcoffset(self, _dt):
+            return None
+
+    with pytest.raises(EventNormalizeError, match="timezone is required"):
+        normalize_event(event_payload(occurred_at=datetime(2026, 8, 13, 12, tzinfo=_NoOffset())))
+
+
 def test_normalize_occurred_at_epoch_and_z():
     from datetime import UTC, datetime
 

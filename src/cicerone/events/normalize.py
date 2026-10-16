@@ -48,7 +48,7 @@ def parse_occurred_at(value: Any) -> datetime:
             raise EventNormalizeError("occurred_at is invalid") from exc
     else:
         raise EventNormalizeError("occurred_at is invalid")
-    if dt.tzinfo is None:
+    if dt.tzinfo is None or dt.utcoffset() is None:
         raise EventNormalizeError("occurred_at timezone is required; use an explicit offset or 'Z'")
     try:
         return dt.astimezone(UTC)
