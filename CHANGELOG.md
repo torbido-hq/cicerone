@@ -42,6 +42,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Serendipity when prior interactions exist.
 - Experiments report RecTools Intersection between variant lists for the same
   users using persisted recommendation rank.
+- `cicerone forget-user USER_ID` removes that user's recommendation rows,
+  track events, exposures, and recommendation-history snapshots (including a
+  legacy history file) from a db or local dataset output. Database deletes
+  commit together. Local files are staged in exclusive temp files and swapped
+  in together, restoring the originals if a swap fails. Track and exposure
+  logs are streamed. A track or exposure line that is not a user row is
+  refused. Stored ids are matched after trimming. Object-store output is
+  refused. Catalog users and events stay.
 
 ### Changed
 

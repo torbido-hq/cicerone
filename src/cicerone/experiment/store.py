@@ -19,7 +19,7 @@ from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import engine_for
+from cicerone.io.db_store import create_db_engine
 from cicerone.io.options import (
     exclusive_file_lock,
     require_option,
@@ -27,6 +27,7 @@ from cicerone.io.options import (
     storage_backend,
 )
 from cicerone.locks import LockBackend, WriteFence
+from cicerone.track.store_db import delete_rows_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,8 @@ class ExperimentStore:
 
     def _db_engine(self) -> Engine:
         if self._engine is None:
-            self._engine = engine_for(require_option(self._options, "database_url", "db"))
+            url = require_option(self._options, "database_url", "db")
+            self._engine = create_db_engine(url, options=self._options)
         return self._engine
 
     def read_state(self) -> dict[str, Any] | None:
@@ -271,6 +273,14 @@ class ExperimentStore:
             return
         with self._fence.hold():
             _persist()
+
+    def delete_exposures_for_user(self, user_id: str, *, conn: Any) -> int:
+        """Delete one user's exposure rows on the caller's DB transaction (``forget-user``)."""
+        table = sql_identifier(
+            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
+            option="exposures_table",
+        )
+        return delete_rows_for_user(conn, table, user_id, fence=self._fence.ensure)
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         if self._kind == "db":

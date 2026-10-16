@@ -133,6 +133,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
     def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
         return len(self.append_accepted_rows(rows))
 
+    def delete_user_rows(self, user_id: str, *, conn: Any) -> int:
+        """Delete one user's track rows on the caller's DB transaction (``forget-user``)."""
+        return self._delete_user_rows_db(user_id, conn=conn)
+
+    def delete_history_for_user(self, user_id: str, *, conn: Any) -> int:
+        """Delete one user's history rows on the caller's DB transaction (``forget-user``)."""
+        return self._delete_history_db(user_id, conn=conn)
+
     def read_rows(
         self,
         *,

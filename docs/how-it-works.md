@@ -340,3 +340,31 @@ priority or RRF; blending may also mix in `latest`). Incremental events keep
 an existing sentinel and do not rebuild it from the flush. Without a sentinel
 the reader substitutes one `popular_fallback` / `latest` user's top-K, and
 404s if the table has neither.
+
+## Erase one user
+
+`cicerone forget-user USER_ID` drops that user's rows from the output store:
+recommendations, track events, exposures, and recommendation-history
+snapshots, including a legacy `recommendation_history.parquet`. It does not
+delete the catalog user or their training events (`DELETE /users/{id}` does
+that). The output must be `kind = "db"` or a local dataset path. Object-store
+output is refused because a JSONL rewrite there is not atomic. Database
+deletes commit in one transaction. Local files are staged first and swapped
+in together; if a swap fails, the files already swapped are put back. A
+crash during the swap can leave the originals as `.<file>.*.bak` next to
+them. A history or recommendations file that has rows but no `user_id`, and
+a track or exposure line that is not a user row, are refused before anything
+is removed. Stored ids are matched after trimming whitespace, so on a
+large database output each table is scanned once; erase during a quiet window.
+Rewritten local files keep their permission bits but are owned by the user
+running the command.
+
+The erase is permanent. Once the transaction commits or the files are
+swapped, cicerone keeps no copy, so back up the output store first if the
+rows may be needed again.
+
+When a distributed writer lock is configured, the command holds it for the
+erase. Without one, run it while no job or incremental flush is writing:
+such a write can put the user's recommendations back. The next job run also
+rebuilds recommendations for a user still in the catalog. Serve keeps rows it
+already cached until its next refresh (`serve.refresh_interval_seconds`).
