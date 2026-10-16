@@ -160,7 +160,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused), unless `redis_url` is set |
-| `redis_url` | unset | Impression/click log in Redis (`cicerone-recommender[redis]`). History and eval stay on `[output]`. Allows `events.ha` without db output. New rows go to Redis; rows already on `[output]` are still read, deduped by `event_id`. Turning it off again stops reading the Redis rows, and they are not copied back |
+| `redis_url` | unset | Impression/click log in Redis (`cicerone-recommender[redis]`). History and eval stay on `[output]`. Allows `events.ha` without db output. New rows go to Redis; rows already on `[output]` are still read, deduped by `event_id`. Turning it off again stops reading the Redis rows, and they are not copied back. Set it only once every replica runs a version that supports it: older versions ignore the key (with an `Unknown config key` warning) and never read the Redis log |
 | `redis_key_prefix` | derived from `[output]` | Prefix of the Redis log key (`<prefix>:track`). By default it is derived from the `[output]` location (credentials excluded), so deployments with different outputs never share a log; set it to share or rename one. Client calls time out after 5 s |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
