@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `[track].redis_url` stores impressions and clicks in Redis so `events.ha`
   can stay on when output is not a database. History and eval stay on
-  `[output]`. `forget-user` deletes those Redis rows too.
+  `[output]`, and track rows already there are still read. `forget-user`
+  deletes those Redis rows too.
 - Kafka ingest accepts optional `events.options.max_poll_interval_ms` and
   `session_timeout_ms` (>= 2; librdkafka `max.poll.interval.ms` /
   `session.timeout.ms`) so a long incremental apply can stay in the group.

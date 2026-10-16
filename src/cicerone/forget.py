@@ -81,16 +81,20 @@ def forget_user(
     if not user_id:
         raise ValueError("user_id is required")
     require_forget_output(output)
+    redis_store = None
+    if redis_url:
+        redis_store = TrackStore(
+            output, writer_lock=writer_lock, redis_url=redis_url, redis_key_prefix=redis_key_prefix
+        )
+        # Fail before erasing anything when Redis is down or misconfigured.
+        redis_store.ping_redis()
     if output.kind == "db":
         result = _forget_db(output, user_id, writer_lock=writer_lock)
     else:
         result = _forget_local(output, user_id, writer_lock=writer_lock)
-    if not redis_url:
+    if redis_store is None:
         return result
     # After the output erase: a Redis delete cannot join that transaction or swap.
-    redis_store = TrackStore(
-        output, writer_lock=writer_lock, redis_url=redis_url, redis_key_prefix=redis_key_prefix
-    )
     try:
         redis_removed = redis_store.delete_redis_rows(user_id)
     except RedisError as exc:

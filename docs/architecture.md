@@ -149,7 +149,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `db` | `recommendation_track` | tables | yes |
 | local dataset | `track.jsonl` | parquet parts | no |
 | object store | refused (JSONL append is not atomic) | single-file overwrite only | no |
-| `track.redis_url` | Redis list | still on `[output]` | yes, for the log |
+| `track.redis_url` | Redis hash, plus rows already on `[output]` | still on `[output]` | yes, for the log |
 
 1. `job.run()` loads `Settings` (`config.load_settings`) and `FeatureConfig`
    (`feature_config.load_feature_config`), builds the configured

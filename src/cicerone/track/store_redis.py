@@ -76,6 +76,9 @@ class RedisTrackLog:
         rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
         return rows
 
+    def ping(self) -> None:
+        self._client.ping()
+
     def delete_user(self, user_id: str) -> int:
         # HDEL touches only this user's fields, so concurrent appends and other rows are never rewritten.
         fields = [

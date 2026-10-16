@@ -160,6 +160,11 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         """Delete one user's track rows on the caller's DB transaction (``forget-user``)."""
         return self._delete_user_rows_db(user_id, conn=conn)
 
+    def ping_redis(self) -> None:
+        redis_log = self._track_log()
+        if redis_log is not None:
+            redis_log.ping()
+
     def delete_redis_rows(self, user_id: str) -> int:
         """Delete one user's rows from the Redis track log; zero when the log is not on Redis."""
         redis_log = self._track_log()
@@ -180,14 +185,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         since: str | None = None,
     ) -> list[dict[str, Any]]:
         since = iso_utc(since)
-        redis_log = self._track_log()
-        if redis_log is not None:
-            rows = redis_log.read()
-        elif self._kind == "db":
+        if self._kind == "db":
             rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
         else:
             rows = self._read_rows_dataset(since=since)
-            since = None
+        redis_log = self._track_log()
+        if redis_log is not None:
+            # [output] rows stay readable: written before the switch, or by an instance not yet switched.
+            rows = [*rows, *redis_log.read()]
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:
