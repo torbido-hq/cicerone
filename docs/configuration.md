@@ -201,6 +201,8 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | `lookup_k` | `20` | Inspector recs, capped by `job.top_k` |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
+| `trigger_url` | derived | Retrain webhook base URL as the dashboard reaches it (e.g. `http://recommender:8080`). Unset: `http://127.0.0.1:<[job.trigger].port>`, only when `[job.trigger].host` is loopback or a wildcard. Set it to show the Retrain button when the dashboard config has no `[job.trigger]`. The bearer token travels in the request, so use `https` or a private network |
+| `trigger_auth_token` | `[job.trigger].auth_token` | Bearer token for the Retrain request; `${ENV}` placeholders are resolved |
 
 ## `[publish]`
 

@@ -22,6 +22,7 @@ from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
+from cicerone.dashboard_retrain import RetrainError, request_retrain, retrain_configured
 from cicerone.dashboard_users import load_users
 from cicerone.feature_config import load_feature_config
 from cicerone.http_auth import require_basic_auth
@@ -51,6 +52,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
 _TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+_DASHBOARD_PATH = "/dashboard"
 _LOGOUT_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -97,6 +99,18 @@ def _flash_error(error: str) -> str:
     if error.startswith("Winner is"):
         return "That variant is not the winner"
     return "Experiment report is not available"
+
+
+def _dashboard_redirect(
+    request: Request | None = None,
+    *,
+    message: str = "",
+    error: str = "",
+) -> RedirectResponse:
+    response = RedirectResponse(url=_DASHBOARD_PATH, status_code=303)
+    if request is not None and (message or error):
+        set_flash_cookie(request, response, ok=message or None, error=error or None)
+    return response
 
 
 def _experiments_redirect(
@@ -272,6 +286,7 @@ def create_app(
             "events_enabled": settings.events.enabled,
             "events_kind": settings.events.kind if settings.events.enabled else None,
             "incremental": _incremental_status(history),
+            "trigger_enabled": retrain_configured(settings),
         }
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
@@ -289,6 +304,9 @@ def create_app(
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
+        message, retrain_error = parse_flash_cookie(request.cookies.get(FLASH_COOKIE))
+        context["message"] = message
+        context["retrain_error"] = retrain_error
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
         context.update(_lookup(user_id))
         context["page_title"] = page_title(
@@ -296,7 +314,19 @@ def create_app(
             manifest=context["manifest"],
             staleness=context["staleness"],
         )
-        return _html(request, "dashboard.html", context, settings=settings)
+        response = _html(request, "dashboard.html", context, settings=settings)
+        if request.cookies.get(FLASH_COOKIE) is not None:
+            clear_flash_cookie(response)
+        return response
+
+    @app.post("/dashboard/retrain", dependencies=[Depends(auth)])
+    def retrain(request: Request, csrf_token: str = Form("", alias=CSRF_FORM_FIELD)):
+        require_csrf(request, csrf_token)
+        try:
+            message = request_retrain(settings)
+        except RetrainError as exc:
+            return _dashboard_redirect(request, error=str(exc))
+        return _dashboard_redirect(request, message=message)
 
     @app.get("/dashboard/logout")
     def logout() -> HTMLResponse:

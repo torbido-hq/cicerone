@@ -1429,3 +1429,93 @@ def test_as_percent_formats_rates():
     assert _lift_label("ctr") == "CTR lift"
     assert _lift_label("conversion") == "Conversion lift"
     assert _lift_label("weighted") == "Mean lift"
+
+
+def test_retrain_button_hidden_without_trigger():
+    response = TestClient(create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))).get(
+        "/dashboard", auth=("alice", "s3cret")
+    )
+    assert response.status_code == 200
+    assert "Retrain" not in response.text
+
+
+def test_retrain_button_shown_with_a_dashboard_trigger_url():
+    from dataclasses import replace
+
+    settings = _settings()
+    settings = replace(settings, dashboard=replace(settings.dashboard, trigger_url="http://recommender:8080"))
+    response = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret"))).get(
+        "/dashboard", auth=("alice", "s3cret")
+    )
+    assert response.status_code == 200
+    assert "Retrain" in response.text
+
+
+def test_retrain_flash_messages_are_allowlisted():
+    from cicerone.dashboard_retrain import _NEEDS_URL, _TIMED_OUT
+    from cicerone.http_security import FLASH_ERR
+
+    assert {_NEEDS_URL, _TIMED_OUT} <= FLASH_ERR
+
+
+def test_retrain_posts_the_trigger_webhook(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class _Response:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["auth"] = request.get_header("Authorization")
+        captured["timeout"] = str(timeout)
+        return _Response()
+
+    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    settings = _settings(
+        trigger_enabled=True,
+        trigger_host="0.0.0.0",
+        trigger_port=8080,
+        trigger_auth_token="tok",
+    )
+    client = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret")))
+    token = _csrf_token(client)
+    response = client.post(
+        "/dashboard/retrain",
+        data={"csrf_token": token},
+        auth=("alice", "s3cret"),
+        headers=_same_origin(),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert captured["url"] == "http://127.0.0.1:8080/trigger/retrain"
+    assert captured["auth"] == "Bearer tok"
+    page = client.get("/dashboard", auth=("alice", "s3cret"))
+    assert "Retrain started" in page.text
+
+
+def test_retrain_reports_a_busy_trigger(monkeypatch):
+    import urllib.error
+
+    def _urlopen(request, timeout=0):
+        raise urllib.error.HTTPError(request.full_url, 429, "busy", hdrs=None, fp=None)
+
+    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    settings = _settings(trigger_enabled=True, trigger_auth_token=None)
+    client = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret")))
+    token = _csrf_token(client)
+    response = client.post(
+        "/dashboard/retrain",
+        data={"csrf_token": token},
+        auth=("alice", "s3cret"),
+        headers=_same_origin(),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = client.get("/dashboard", auth=("alice", "s3cret"))
+    assert "already in progress" in page.text

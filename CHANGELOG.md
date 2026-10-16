@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Dashboard status starts a retrain through the existing `POST /trigger/retrain`
+  webhook when `[job.trigger]` is enabled. The browser does not receive the
+  trigger token.
 - Kafka ingest accepts optional `events.options.max_poll_interval_ms` and
   `session_timeout_ms` (>= 2; librdkafka `max.poll.interval.ms` /
   `session.timeout.ms`) so a long incremental apply can stay in the group.

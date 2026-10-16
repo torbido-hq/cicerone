@@ -93,6 +93,9 @@ class DashboardSettings:
     lookup_k: int = 20
     lookup_events: int = 20
     lookup_user_attrs: tuple[str, ...] = ()
+    # Retrain webhook as the dashboard reaches it; unset derives a loopback URL from [job.trigger].
+    trigger_url: str | None = None
+    trigger_auth_token: str | None = None
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ FLASH_COOKIE_PATH = "/dashboard"
 _FLASH_OK_COOKIE = {
     "Promoted": "ok:Promoted",
     "Resumed split": "ok:Resumed%20split",
+    "Retrain started": "ok:Retrain%20started",
 }
 _FLASH_ERR_COOKIE = {
     "Unknown variant": "err:Unknown%20variant",
@@ -27,6 +28,18 @@ _FLASH_ERR_COOKIE = {
         "err:No%20active%20champion%2Fchallenger%20pair%20is%20available"
     ),
     "Experiment state could not be read": "err:Experiment%20state%20could%20not%20be%20read",
+    "Retrain trigger is unreachable": "err:Retrain%20trigger%20is%20unreachable",
+    "A run is already in progress or was just triggered": (
+        "err:A%20run%20is%20already%20in%20progress%20or%20was%20just%20triggered"
+    ),
+    "Retrain trigger is not enabled": "err:Retrain%20trigger%20is%20not%20enabled",
+    "Retrain trigger failed": "err:Retrain%20trigger%20failed",
+    "Retrain trigger did not answer in time; it may still start, check the latest run": (
+        "err:Retrain%20trigger%20did%20not%20answer%20in%20time%3B%20it%20may%20still%20start%2C%20check%20the%20latest%20run"
+    ),
+    "Set [dashboard].trigger_url to reach a trigger that is not on this host": (
+        "err:Set%20%5Bdashboard%5D.trigger_url%20to%20reach%20a%20trigger%20that%20is%20not%20on%20this%20host"
+    ),
 }
 FLASH_OK = frozenset(_FLASH_OK_COOKIE)
 FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)

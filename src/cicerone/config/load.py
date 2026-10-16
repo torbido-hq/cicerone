@@ -10,6 +10,7 @@ import warnings
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -121,6 +122,29 @@ _EVAL_FLAT_KEYS = (
     ("eval_event_types", "event_types"),
     ("eval_ks", "ks"),
 )
+
+
+def _load_dashboard_trigger_url(raw: object) -> str | None:
+    if raw is None:
+        return None
+    url = str(_resolve_env_placeholders(raw, "dashboard.trigger_url")).strip()
+    parsed = urlsplit(url)
+    try:
+        parsed.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError as exc:
+        raise ConfigError(f"dashboard.trigger_url has an invalid port: {url!r}") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ConfigError(f"dashboard.trigger_url must be an http(s) URL with a host, got {url!r}")
+    if parsed.username or parsed.password:
+        # The URL is logged; the token belongs in trigger_auth_token.
+        raise ConfigError("dashboard.trigger_url must not contain credentials; use trigger_auth_token")
+    return url.rstrip("/")
+
+
+def _optional_token(section: dict[str, Any], key: str, path: str) -> str | None:
+    if key not in section:
+        return None
+    return str(_resolve_env_placeholders(section[key], path)).strip() or None
 
 
 def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
@@ -684,6 +708,10 @@ def load_settings(config_path: str | None = None) -> Settings:
                 name="dashboard.lookup_events",
             ),
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
+            trigger_url=_load_dashboard_trigger_url(dashboard_raw.get("trigger_url")),
+            trigger_auth_token=_optional_token(
+                dashboard_raw, "trigger_auth_token", "dashboard.trigger_auth_token"
+            ),
         ),
         events=events,
         publish=publish,
