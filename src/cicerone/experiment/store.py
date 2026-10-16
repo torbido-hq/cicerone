@@ -2,65 +2,73 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-import pandas as pd
 from botocore.exceptions import BotoCoreError
-from sqlalchemy import Engine, inspect, text
-from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
-from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
-from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import engine_for
-from cicerone.io.options import (
-    exclusive_file_lock,
-    require_option,
-    sql_identifier,
-    storage_backend,
+from cicerone.experiment.store_dataset import (
+    EXPOSURE_LOG_BACKEND_ERROR,
+    EXPOSURES_FILENAME,
+    STATE_FILENAME,
+    ExperimentDatasetBackend,
+    require_appendable_exposure_log,
 )
+from cicerone.experiment.store_db import (
+    DEFAULT_EXPOSURES_TABLE,
+    DEFAULT_STATE_TABLE,
+    EXPOSURE_COLUMNS,
+    STATE_CORE_KEYS,
+    ExperimentDbBackend,
+)
+from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.locks import LockBackend, WriteFence
 
 logger = logging.getLogger(__name__)
 
 _OVERLAY_READ_ERRORS = (OSError, ValueError, BotoCoreError, *SQL_READ_ERRORS)
 
-STATE_FILENAME = "experiment_state.json"
-EXPOSURES_FILENAME = "exposures.jsonl"
-DEFAULT_EXPOSURES_TABLE = "recommendation_exposures"
-DEFAULT_STATE_TABLE = "experiment_state"
-EXPOSURE_LOG_BACKEND_ERROR = (
-    'experiment.log_exposures requires output kind = "db" or a local dataset path; '
-    "object-store JSONL append is not atomic"
-)
 EXPOSURE_LOG_HA_ERROR = 'experiment.log_exposures with events.ha requires output kind = "db"'
 
-EXPOSURE_COLUMNS: tuple[str, ...] = (
-    "user_id",
-    "experiment_id",
-    "variant",
-    "generated_at",
-    "exposed_at",
-)
+__all__ = [
+    "DEFAULT_EXPOSURES_TABLE",
+    "DEFAULT_STATE_TABLE",
+    "EXPOSURES_FILENAME",
+    "EXPOSURE_COLUMNS",
+    "EXPOSURE_LOG_BACKEND_ERROR",
+    "EXPOSURE_LOG_HA_ERROR",
+    "STATE_CORE_KEYS",
+    "STATE_FILENAME",
+    "ExperimentBackend",
+    "ExperimentStore",
+    "active_pair_from_state",
+    "build_experiment_backend",
+    "experiment_state",
+    "merge_experiment_state",
+    "require_appendable_exposure_log",
+]
 
 
-def require_appendable_exposure_log(output: IOSettings) -> None:
-    """Reject object-store JSONL append (read-modify-write is racy)."""
+class ExperimentBackend(Protocol):
+    """Writers validate and encode eagerly; the returned call runs under the writer fence."""
+
+    def read_state(self) -> dict[str, Any] | None: ...
+
+    def state_writer(self, state: dict[str, Any]) -> Callable[[], None]: ...
+
+    def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]: ...
+
+    def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]: ...
+
+
+def build_experiment_backend(output: IOSettings, fence: WriteFence) -> ExperimentBackend:
     if output.kind == "db":
-        return
-    if output.kind == "dataset" and storage_backend(output.options) == "local":
-        return
-    raise ConfigError(EXPOSURE_LOG_BACKEND_ERROR)
-
-
-STATE_CORE_KEYS: tuple[str, ...] = ("experiment_id", "promoted_variant", "promoted_at")
+        return ExperimentDbBackend(output.options, fence)
+    return ExperimentDatasetBackend(output, fence)
 
 
 def experiment_state(
@@ -113,30 +121,6 @@ def active_pair_from_state(state: Mapping[str, Any] | None) -> tuple[str, str] |
     return None
 
 
-def _state_payload_json(state: Mapping[str, Any]) -> str:
-    extra = {key: value for key, value in state.items() if key not in STATE_CORE_KEYS and key != "payload"}
-    return json.dumps(extra, separators=(",", ":"))
-
-
-def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
-    raw = row.pop("payload", None)
-    parsed: dict[str, Any] | None = None
-    if isinstance(raw, dict):
-        parsed = raw
-    elif isinstance(raw, str) and raw.strip():
-        try:
-            loaded = json.loads(raw)
-        except json.JSONDecodeError:
-            loaded = None
-        if isinstance(loaded, dict):
-            parsed = loaded
-    if parsed:
-        for key, value in parsed.items():
-            if key not in STATE_CORE_KEYS and key != "payload":
-                row[key] = value
-    return row
-
-
 class ExperimentStore:
     """Output-store side channel for promote state and exposure logs."""
 
@@ -150,10 +134,6 @@ class ExperimentStore:
         fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
-        self._output = output
-        self._kind = output.kind
-        self._options = output.options
-        self._engine: Engine | None = None
         self._promote_lock = threading.Lock()
         self._promote_loaded = False
         self._promote_experiment_id: str | None = None
@@ -166,14 +146,10 @@ class ExperimentStore:
             fence_lost=fence_lost,
             fence_kind=fence_kind,
         )
-
-    def _db_engine(self) -> Engine:
-        if self._engine is None:
-            self._engine = engine_for(require_option(self._options, "database_url", "db"))
-        return self._engine
+        self.backend = build_experiment_backend(output, self._fence)
 
     def read_state(self) -> dict[str, Any] | None:
-        state = self._read_state_db() if self._kind == "db" else self._read_state_dataset()
+        state = self.backend.read_state()
         self._remember_state(state)
         return state
 
@@ -222,15 +198,11 @@ class ExperimentStore:
 
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
-        encoded = None if self._kind == "db" else json.dumps(payload, indent=2).encode("utf-8")
+        write = self.backend.state_writer(payload)
 
         def _persist() -> None:
             self._fence.ensure()
-            if self._kind == "db":
-                self._write_state_db(payload)
-                return
-            assert encoded is not None
-            self._write_bytes(STATE_FILENAME, encoded, "application/json")
+            write()
 
         if self._fence.held_here():
             _persist()
@@ -247,24 +219,11 @@ class ExperimentStore:
     def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
             return
-        encoded = None
-        path = None
-        if self._kind != "db":
-            require_appendable_exposure_log(self._output)
-            encoded = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode(
-                "utf-8"
-            )
-            path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+        write = self.backend.exposure_writer(rows)
 
         def _persist() -> None:
             self._fence.ensure()
-            if self._kind == "db":
-                self._append_exposures_db(rows)
-                return
-            assert encoded is not None and path is not None
-            with exclusive_file_lock(path):
-                self._fence.ensure()
-                self._append_bytes(EXPOSURES_FILENAME, encoded)
+            write()
 
         if self._fence.held_here():
             _persist()
@@ -273,210 +232,7 @@ class ExperimentStore:
             _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
-        if self._kind == "db":
-            rows = self._read_exposures_db(experiment_id=experiment_id)
-        else:
-            rows = self._read_exposures_dataset()
+        rows = self.backend.read_exposures(experiment_id=experiment_id)
         if not experiment_id:
             return rows
         return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]
-
-    def _read_state_dataset(self) -> dict[str, Any] | None:
-        raw = self._read_bytes(STATE_FILENAME)
-        if raw is None:
-            return None
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            logger.warning("Invalid experiment_state.json")
-            raise
-        if not isinstance(parsed, dict):
-            raise ValueError("experiment_state.json is not an object")
-        return parsed
-
-    def _read_state_db(self) -> dict[str, Any] | None:
-        table = sql_identifier(
-            self._options.get("experiment_state_table", DEFAULT_STATE_TABLE),
-            option="experiment_state_table",
-        )
-        engine = self._db_engine()
-        try:
-            frame = pd.read_sql(
-                text(f'SELECT * FROM "{table}" ORDER BY (promoted_at IS NULL), promoted_at DESC LIMIT 1'),
-                engine,
-            )
-        except SQL_READ_ERRORS as exc:
-            if is_missing_column_error(exc):
-                try:
-                    frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
-                except SQL_READ_ERRORS as retry_exc:
-                    if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
-                        return None
-                    logger.exception("Failed to read experiment state table %r", table)
-                    raise
-            elif is_missing_table_error(exc):
-                return None
-            else:
-                logger.exception("Failed to read experiment state table %r", table)
-                raise
-        if frame.empty:
-            return None
-        return _hydrate_state_row(
-            {str(key): _jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
-        )
-
-    def _write_state_db(self, state: dict[str, Any]) -> None:
-        table = sql_identifier(
-            self._options.get("experiment_state_table", DEFAULT_STATE_TABLE),
-            option="experiment_state_table",
-        )
-        engine = self._db_engine()
-        experiment_id = str(state.get("experiment_id") or "")
-        promoted_variant = state.get("promoted_variant")
-        promoted_at = state.get("promoted_at")
-        if promoted_variant is not None:
-            promoted_variant = str(promoted_variant)
-        if promoted_at is not None:
-            promoted_at = str(promoted_at)
-        create_sql = text(
-            f'CREATE TABLE IF NOT EXISTS "{table}" ('
-            "experiment_id TEXT PRIMARY KEY, "
-            "promoted_variant TEXT, "
-            "promoted_at TEXT, "
-            "payload TEXT"
-            ")"
-        )
-        params = {
-            "experiment_id": experiment_id,
-            "promoted_variant": promoted_variant,
-            "promoted_at": promoted_at,
-            "payload": _state_payload_json(state),
-        }
-        insert_sql = text(
-            f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at, payload) '
-            "VALUES (:experiment_id, :promoted_variant, :promoted_at, :payload)"
-        )
-
-        def _fence() -> None:
-            self._fence.ensure()
-
-        def _replace_row(conn: Any) -> None:
-            _fence()
-            conn.execute(text(f'DELETE FROM "{table}"'))
-            _fence()
-            conn.execute(insert_sql, params)
-            _fence()
-
-        try:
-            with engine.begin() as conn:
-                _fence()
-                conn.execute(create_sql)
-                _replace_row(conn)
-        except SQLAlchemyError as exc:
-            if not is_missing_column_error(exc):
-                raise
-            with engine.begin() as conn:
-                _fence()
-                conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
-                _replace_row(conn)
-
-    def _append_exposures_db(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        table = sql_identifier(
-            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
-            option="exposures_table",
-        )
-        engine = self._db_engine()
-        with engine.begin() as conn:
-            self._fence.ensure()
-            pd.DataFrame(list(rows)).to_sql(table, conn, if_exists="append", index=False)
-            self._fence.ensure()
-
-    def _stored_exposure_columns(self, engine: Engine, table: str) -> list[str] | None:
-        try:
-            existing = {col["name"] for col in inspect(engine).get_columns(table)}
-        except NoSuchTableError:
-            return None
-        except SQL_READ_ERRORS as exc:
-            if is_missing_table_error(exc):
-                return None
-            logger.exception("Failed to inspect exposures table %r", table)
-            raise
-        return [column for column in EXPOSURE_COLUMNS if column in existing]
-
-    def _read_exposures_db(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
-        table = sql_identifier(
-            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
-            option="exposures_table",
-        )
-        engine = self._db_engine()
-        selected = self._stored_exposure_columns(engine, table)
-        if selected is not None and not selected:
-            logger.warning("Exposures table %r has none of the exposure columns; ignoring rows", table)
-            return []
-        if experiment_id and selected is not None and "experiment_id" not in selected:
-            logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
-            return []
-        # A missing table falls through to the read, whose error handling decides.
-        quoted = (
-            "*"
-            if selected is None
-            else ", ".join(f'"{sql_identifier(column, option="exposures column")}"' for column in selected)
-        )
-        if experiment_id:
-            sql = text(f'SELECT {quoted} FROM "{table}" WHERE experiment_id = :experiment_id')
-            params: dict[str, Any] = {"experiment_id": experiment_id}
-        else:
-            sql = text(f'SELECT {quoted} FROM "{table}"')
-            params = {}
-        try:
-            frame = pd.read_sql(sql, engine, params=params)
-        except SQL_READ_ERRORS as exc:
-            if is_missing_table_error(exc):
-                return []
-            # The table may appear after inspection without an experiment_id column.
-            if experiment_id and selected is None and is_missing_column_error(exc):
-                logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
-                return []
-            logger.exception("Failed to read exposures table %r", table)
-            raise
-        if frame.empty:
-            return []
-        records = frame.to_dict(orient="records")
-        return [{str(key): _jsonish(value) for key, value in row.items()} for row in records]
-
-    def _read_exposures_dataset(self) -> list[dict[str, Any]]:
-        raw = self._read_bytes(EXPOSURES_FILENAME)
-        if raw is None:
-            return []
-        rows: list[dict[str, Any]] = []
-        for line in raw.decode("utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                rows.append(parsed)
-        return rows
-
-    def _read_bytes(self, filename: str) -> bytes | None:
-        return read_storage_bytes(self._options, filename)
-
-    def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
-        write_storage_bytes(self._options, filename, payload, content_type)
-
-    def _append_bytes(self, filename: str, payload: bytes) -> None:
-        append_storage_bytes(self._options, filename, payload)
-
-
-def _jsonish(value: Any) -> Any:
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (ValueError, AttributeError):
-            pass
-    if pd.isna(value):  # type: ignore[arg-type]
-        return None
-    return value
