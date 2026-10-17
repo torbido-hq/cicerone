@@ -12,8 +12,8 @@ from support.prometheus_metrics import metric_samples, metric_value, registry_me
 
 from cicerone.config import Settings
 from cicerone.io.recommendation_reader import DatasetRecommendationReader
+from cicerone.metrics import METRICS_TOKEN_HEADER
 from cicerone.serve import create_app
-from cicerone.serve.metrics import METRICS_TOKEN_HEADER
 
 
 def _settings(**overrides) -> Settings:
@@ -221,7 +221,7 @@ def test_cache_hit_and_miss_counters(tmp_path: Path):
 
 def test_unknown_stored_source_is_ignored():
 
-    from cicerone.serve.metrics import record_recommendations_served
+    from cicerone.metrics import record_recommendations_served
 
     before = metric_value(
         generate_latest().decode(),
@@ -253,7 +253,7 @@ def test_unknown_stored_source_is_ignored():
 
 def test_cache_age_zero_before_successful_refresh(monkeypatch):
 
-    import cicerone.serve.metrics as metrics_mod
+    import cicerone.metrics as metrics_mod
 
     monkeypatch.setattr(metrics_mod, "_last_successful_refresh_at", None)
     metrics_mod.update_cache_age_gauge()
@@ -262,7 +262,7 @@ def test_cache_age_zero_before_successful_refresh(monkeypatch):
 
 def test_events_metrics_defaults_and_flush_recording():
 
-    from cicerone.serve import metrics as metrics_mod
+    from cicerone import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=False, lag=None)
     body = generate_latest().decode()
@@ -332,7 +332,7 @@ def test_metrics_endpoint_refreshes_events_source_health():
 
 def test_metrics_endpoint_resets_events_gauges_without_worker():
     app = create_app(_settings(), _FakeReader(_recs_df()), events_worker=None)
-    from cicerone.serve import metrics as metrics_mod
+    from cicerone import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=True, lag=9)
     body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
@@ -343,10 +343,23 @@ def test_metrics_endpoint_resets_events_gauges_without_worker():
 def test_record_events_flush_clamps_unknown_status(caplog):
     import logging
 
-    from cicerone.serve import metrics as metrics_mod
+    from cicerone import metrics as metrics_mod
 
     before = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
-    with caplog.at_level(logging.WARNING, logger="cicerone.serve.metrics"):
+    with caplog.at_level(logging.WARNING, logger="cicerone.metrics"):
         metrics_mod.record_events_flush(status="weird")
     assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
     assert any("Unknown events flush status" in rec.message for rec in caplog.records)
+
+
+def test_serve_metrics_path_aliases_cicerone_metrics(monkeypatch):
+    import cicerone.metrics as metrics_mod
+    import cicerone.serve.metrics as legacy
+    from cicerone.serve.metrics import REQUESTS_TOTAL, observe_cache_refresh
+
+    assert legacy is metrics_mod
+    assert REQUESTS_TOTAL is metrics_mod.REQUESTS_TOTAL
+    assert observe_cache_refresh is metrics_mod.observe_cache_refresh
+    monkeypatch.setattr(legacy, "_last_successful_refresh_at", None)
+    metrics_mod.update_cache_age_gauge()
+    assert metric_value(generate_latest().decode(), "cicerone_cache_age_seconds") == 0.0
