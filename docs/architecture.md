@@ -102,10 +102,11 @@ CONTRIBUTING.md). CI uses a separate throwaway instance via
 `POST /track`, a second job, and the Quality page.
 `tests/robot/system_dataset.robot` / `system_dataset_quality.robot` run the
 same journeys against local parquet (`kind = "dataset"`).
-`tests/test_system_mixed.py` / `test_system_mixed_quality.py` mix a
+`tests/robot/system_mixed.robot` / `system_mixed_quality.robot` mix a
 Postgres catalog with dataset output.
-`tests/test_system_events.py` continues a local parquet catalog through
-webhook `POST /events` write-through to serve and the dashboard.
+`tests/robot/system_events_db.robot` / `system_events_dataset.robot` continue
+a Postgres or local parquet catalog through webhook `POST /events`
+write-through to serve and the dashboard.
 
 Public imports stay stable after the package splits:
 `from cicerone.model import …` and `from cicerone.config import …`.
@@ -138,6 +139,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_system_db_helpers.py` | Unit tests for the Postgres system-suite support helpers (schema-reset guardrails, fixtures) |
 | `tests/robot/system_db.robot` / `system_db_quality.robot` | Postgres system spec (Robot Framework): job → serve/dashboard HTTP; track → second job → Quality |
 | `tests/robot/system_dataset.robot` / `system_dataset_quality.robot` | Local parquet system spec (Robot Framework): same journeys as the Postgres spec |
+| `tests/robot/system_mixed.robot` / `system_mixed_quality.robot` | Mixed I/O (Robot Framework): Postgres catalog in, local parquet out; track → Quality |
+| `tests/robot/system_events_db.robot` / `system_events_dataset.robot` | Webhook `POST /events` → flush → serve + dashboard on Postgres / parquet output |
 | `tests/test_explain.py` / `test_reasons.py` | Batch `reasons` JSON + serve-safe parse |
 
 ## Data flow
