@@ -40,6 +40,7 @@ lookup_events = 20 # inspector event rows (from [input], newest first)
 # lookup_user_attrs = ["region_slug"] # allowlisted user columns to show; default none
 # Retrain button: the trigger as this container reaches it (127.0.0.1 would be the dashboard itself).
 # trigger_url = "http://recommender:8080"
+# trigger_allow_http = true # plain http is refused off loopback; ok on the private compose network
 # trigger_auth_token = "${TRIGGER_AUTH_TOKEN}"
 
 # [job] is required by config.load_settings() even though the dashboard

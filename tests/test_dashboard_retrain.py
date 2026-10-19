@@ -14,7 +14,8 @@ def test_loopback_rewrites_wildcard_bind_hosts():
     assert (
         trigger_base_url(make_settings(trigger_host="0.0.0.0", trigger_port=8080)) == "http://127.0.0.1:8080"
     )
-    assert trigger_base_url(make_settings(trigger_host="::", trigger_port=9)) == "http://127.0.0.1:9"
+    assert trigger_base_url(make_settings(trigger_host="::", trigger_port=9)) == "http://[::1]:9"
+    assert trigger_base_url(make_settings(trigger_host="0:0:0:0:0:0:0:0", trigger_port=9)) == "http://[::1]:9"
     assert trigger_base_url(make_settings(trigger_host="::1", trigger_port=9)) == "http://[::1]:9"
     assert trigger_base_url(make_settings(trigger_host="127.0.0.2", trigger_port=9)) == "http://127.0.0.2:9"
     assert trigger_base_url(make_settings(trigger_host="localhost", trigger_port=9)) == "http://localhost:9"
@@ -45,13 +46,18 @@ def test_explicit_trigger_url_and_token_are_used_without_job_trigger(monkeypatch
     def _urlopen(request, timeout=0):
         captured["url"] = request.full_url
         captured["auth"] = request.get_header("Authorization")
+        captured["method"] = request.get_method()
         return _Response()
 
     monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     settings = _with_dashboard_trigger("http://recommender:8080", "dash-token", trigger_enabled=False)
     assert retrain_configured(settings) is True
     assert request_retrain(settings) == "Retrain started"
-    assert captured == {"url": "http://recommender:8080/trigger/retrain", "auth": "Bearer dash-token"}
+    assert captured == {
+        "url": "http://recommender:8080/trigger/retrain",
+        "auth": "Bearer dash-token",
+        "method": "POST",
+    }
 
 
 @pytest.mark.parametrize(
@@ -157,3 +163,27 @@ def test_a_redirect_is_not_followed_and_the_token_stays_put(caplog):
             server.server_close()
     assert leaked == []
     assert "answered 302" in caplog.text
+
+
+def test_a_connection_dropped_after_the_post_is_reported_as_ambiguous(caplog):
+    import socket
+    import threading
+
+    listener = socket.create_server(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+
+    def _accept_then_drop() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            conn.recv(65536)
+
+    worker = threading.Thread(target=_accept_then_drop, daemon=True)
+    worker.start()
+    try:
+        settings = _with_dashboard_trigger(f"http://127.0.0.1:{port}", token="tok")
+        with pytest.raises(RetrainError, match="may have started"):
+            request_retrain(settings)
+    finally:
+        worker.join(timeout=5)
+        listener.close()
+    assert "dropped the connection" in caplog.text

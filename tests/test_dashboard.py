@@ -1452,10 +1452,10 @@ def test_retrain_button_shown_with_a_dashboard_trigger_url():
 
 
 def test_retrain_flash_messages_are_allowlisted():
-    from cicerone.dashboard_retrain import _NEEDS_URL, _TIMED_OUT
+    from cicerone.dashboard_retrain import _DROPPED, _NEEDS_URL, _TIMED_OUT
     from cicerone.http_security import FLASH_ERR
 
-    assert {_NEEDS_URL, _TIMED_OUT} <= FLASH_ERR
+    assert {_DROPPED, _NEEDS_URL, _TIMED_OUT} <= FLASH_ERR
 
 
 def test_retrain_posts_the_trigger_webhook(monkeypatch):
@@ -1474,6 +1474,7 @@ def test_retrain_posts_the_trigger_webhook(monkeypatch):
         captured["url"] = request.full_url
         captured["auth"] = request.get_header("Authorization")
         captured["timeout"] = str(timeout)
+        captured["method"] = request.get_method()
         return _Response()
 
     monkeypatch.setattr("cicerone.dashboard_retrain._OPENER.open", _urlopen)
@@ -1495,6 +1496,7 @@ def test_retrain_posts_the_trigger_webhook(monkeypatch):
     assert response.status_code == 303
     assert captured["url"] == "http://127.0.0.1:8080/trigger/retrain"
     assert captured["auth"] == "Bearer tok"
+    assert captured["method"] == "POST"
     page = client.get("/dashboard", auth=("alice", "s3cret"))
     assert "Retrain started" in page.text
 
@@ -1503,6 +1505,7 @@ def test_retrain_reports_a_busy_trigger(monkeypatch):
     import urllib.error
 
     def _urlopen(request, timeout=0):
+        assert request.get_method() == "POST"
         raise urllib.error.HTTPError(request.full_url, 429, "busy", hdrs=None, fp=None)
 
     monkeypatch.setattr("cicerone.dashboard_retrain._OPENER.open", _urlopen)

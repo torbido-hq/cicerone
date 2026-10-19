@@ -1577,12 +1577,30 @@ def test_load_settings_dashboard_trigger_url_and_token(tmp_path, monkeypatch):
         [dashboard]
         trigger_url = "http://recommender:8080/"
         trigger_auth_token = "${{DASH_TRIGGER_TOKEN}}"
+        trigger_allow_http = true
         {_base_io_toml()}
         """,
     )
     settings = load_settings(config_path)
     assert settings.dashboard.trigger_url == "http://recommender:8080"
     assert settings.dashboard.trigger_auth_token == "tok"
+    assert settings.dashboard.trigger_allow_http is True
+
+
+def test_load_settings_refuses_plain_http_to_a_remote_trigger(tmp_path):
+    config_path = write_toml(
+        tmp_path, f'[dashboard]\ntrigger_url = "http://recommender:8080"\n{_base_io_toml()}'
+    )
+    with pytest.raises(ConfigError, match="trigger_allow_http"):
+        load_settings(config_path)
+    for url in (
+        "https://recommender:8443",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+        "http://[::1]:8080",
+    ):
+        config_path = write_toml(tmp_path, f'[dashboard]\ntrigger_url = "{url}"\n{_base_io_toml()}')
+        assert load_settings(config_path).dashboard.trigger_url == url
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import logging
 import urllib.error
@@ -15,8 +16,19 @@ _UNREACHABLE = "Retrain trigger is unreachable"
 _BUSY = "A run is already in progress or was just triggered"
 _DISABLED = "Retrain trigger is not enabled"
 _TIMED_OUT = "Retrain trigger did not answer in time; it may still start, check the latest run"
+_DROPPED = "Retrain trigger dropped the connection; it may have started, check the latest run"
 _NEEDS_URL = "Set [dashboard].trigger_url to reach a trigger that is not on this host"
-_WILDCARD_HOSTS = frozenset({"0.0.0.0", "::"})
+
+
+def _loopback_for_wildcard(host: str) -> str:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if not address.is_unspecified:
+        return host
+    # ::1 always reaches an IPv6 wildcard bind; 127.0.0.1 needs a dual-stack socket.
+    return "::1" if address.version == 6 else "127.0.0.1"
 
 
 def _is_loopback(host: str) -> bool:
@@ -49,9 +61,7 @@ def retrain_configured(settings: Settings) -> bool:
 def trigger_base_url(settings: Settings) -> str:
     if settings.dashboard.trigger_url:
         return settings.dashboard.trigger_url
-    host = settings.trigger.host
-    if host in _WILDCARD_HOSTS:
-        host = "127.0.0.1"
+    host = _loopback_for_wildcard(settings.trigger.host)
     # Only a same-host trigger is derived: the token must not cross a network over plain HTTP by default.
     if not _is_loopback(host):
         logger.warning("Retrain trigger host %r is not loopback and [dashboard].trigger_url is unset", host)
@@ -92,4 +102,8 @@ def request_retrain(settings: Settings) -> str:
         # The request was sent; the trigger may still accept it after we stop waiting.
         logger.warning("Retrain trigger at %s timed out", url)
         raise RetrainError(_TIMED_OUT) from exc
+    except (http.client.HTTPException, OSError) as exc:
+        # urllib wraps send errors in URLError; a raw error comes from reading the response, after the POST.
+        logger.warning("Retrain trigger at %s dropped the connection: %r", url, exc)
+        raise RetrainError(_DROPPED) from exc
     return "Retrain started"

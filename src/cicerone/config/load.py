@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -124,7 +125,16 @@ _EVAL_FLAT_KEYS = (
 )
 
 
-def _load_dashboard_trigger_url(raw: object) -> str | None:
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _load_dashboard_trigger_url(raw: object, *, allow_http: bool) -> str | None:
     if raw is None:
         return None
     url = str(_resolve_env_placeholders(raw, "dashboard.trigger_url")).strip()
@@ -141,6 +151,11 @@ def _load_dashboard_trigger_url(raw: object) -> str | None:
     if parsed.query or parsed.fragment or url.endswith(("?", "#")):
         # /trigger/retrain is appended to the path, and the URL is logged.
         raise ConfigError("dashboard.trigger_url must not contain a query or fragment")
+    if parsed.scheme == "http" and not allow_http and not _is_loopback_host(parsed.hostname):
+        raise ConfigError(
+            "dashboard.trigger_url over http sends the bearer token in clear to a non-loopback host; "
+            "use https, or set dashboard.trigger_allow_http = true on a private network"
+        )
     return url.rstrip("/")
 
 
@@ -537,6 +552,7 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
+    trigger_allow_http = bool(dashboard_raw.get("trigger_allow_http", DashboardSettings.trigger_allow_http))
 
     events = load_events_settings(
         raw.get("events", {}) or {},
@@ -711,10 +727,14 @@ def load_settings(config_path: str | None = None) -> Settings:
                 name="dashboard.lookup_events",
             ),
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
-            trigger_url=_load_dashboard_trigger_url(dashboard_raw.get("trigger_url")),
+            trigger_url=_load_dashboard_trigger_url(
+                dashboard_raw.get("trigger_url"),
+                allow_http=trigger_allow_http,
+            ),
             trigger_auth_token=_optional_token(
                 dashboard_raw, "trigger_auth_token", "dashboard.trigger_auth_token"
             ),
+            trigger_allow_http=trigger_allow_http,
         ),
         events=events,
         publish=publish,

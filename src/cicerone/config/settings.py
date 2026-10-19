@@ -96,6 +96,8 @@ class DashboardSettings:
     # Retrain webhook as the dashboard reaches it; unset derives a loopback URL from [job.trigger].
     trigger_url: str | None = None
     trigger_auth_token: str | None = None
+    # Plain http to a non-loopback trigger_url sends the token in clear; only for a private network.
+    trigger_allow_http: bool = False
 
 
 @dataclass(frozen=True)
