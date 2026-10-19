@@ -1293,11 +1293,17 @@ def test_track_read_history_s3_generated_ats_matches_z_and_offset() -> None:
 
 
 def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
-    from cicerone.locks import WriteFence
+    from cicerone.locks import LockLostError, WriteFence
     from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
 
     backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))
     assert backend._ensure_fence() is None
+    lost = TrackDbBackend(
+        {"database_url": "sqlite+pysqlite://"},
+        WriteFence.resolve(None, fence_check=lambda: False, fence_lost="track fence lost"),
+    )
+    with pytest.raises(LockLostError, match="track fence lost"):
+        lost._ensure_fence()
     assert _existing_event_ids(None, "recommendation_track", ["", ""]) == set()
 
 
