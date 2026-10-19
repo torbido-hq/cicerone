@@ -12,9 +12,12 @@ from __future__ import annotations
 import os
 
 import pandas as pd
-from sqlalchemy import create_engine, make_url
+from sqlalchemy import create_engine, inspect, make_url, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.types import String
+
+# Created on first seed; a non-empty database without it is not ours to replace.
+SEED_MARKER_TABLE = "cicerone_robot_seed"
 
 DATABASE_URL = os.environ.get(
     "ROBOT_DATABASE_URL",
@@ -56,6 +59,14 @@ def main() -> None:
         raise SystemExit(f"Refusing to seed {url.database!r}: the database name must end with _robot")
     engine = create_engine(url)
     try:
+        tables = set(inspect(engine).get_table_names())
+        if tables and SEED_MARKER_TABLE not in tables:
+            raise SystemExit(
+                f"Refusing to seed {url.database!r}: it has tables but no {SEED_MARKER_TABLE} marker, "
+                "so it is not a database this script created"
+            )
+        with engine.begin() as conn:
+            conn.execute(text(f'CREATE TABLE IF NOT EXISTS "{SEED_MARKER_TABLE}" (seeded_at TIMESTAMPTZ)'))
         EVENTS.to_sql("events", engine, if_exists="replace", index=False)
         USERS.to_sql(
             "users",

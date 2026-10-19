@@ -17,14 +17,17 @@ Retrain Requires A Bearer Token
 Retrain Accepts A Valid Token And Starts A Run
     ${before}=    Latest Run Generated At
     Set Suite Variable    ${RUN_BEFORE_TRIGGER}    ${before}
-    ${headers}=    Trigger Auth Headers
-    ${response}=    POST On Session    trigger    /trigger/retrain
-    ...    headers=${headers}    expected_status=202
+    # A cron run holds the run guard (429) until it finishes; retry until accepted.
+    Wait Until Keyword Succeeds    90s    2s    Trigger Is Accepted
 
 Triggered Run Eventually Appears On The Dashboard As Webhook
     Wait Until Keyword Succeeds    30s    1s    Dashboard Shows A Webhook Triggered Run
 
 *** Keywords ***
+Trigger Is Accepted
+    ${headers}=    Trigger Auth Headers
+    POST On Session    trigger    /trigger/retrain    headers=${headers}    expected_status=202
+
 Latest Run Block
     ${response}=    GET On Session    dashboard    /partials/status    expected_status=200
     ${latest_run}=    Get Regexp Matches    ${response.text}    (?s)data-latest-run.*?</dl>

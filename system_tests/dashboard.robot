@@ -14,15 +14,15 @@ Health Check Succeeds Without Auth
 Robots Txt Disallows Everything
     ${response}=    GET On Session    dashboard    /robots.txt
     Should Be Equal As Integers    ${response.status_code}    200
-    Should Contain    ${response.text}    Disallow: /
+    Should Match Regexp    ${response.text}    (?m)^Disallow: /\s*$
 
 Dashboard Requires Auth
-    Create Session    dashboard_no_auth    ${DASHBOARD_BASE_URL}
+    Create Session    dashboard_no_auth    ${DASHBOARD_BASE_URL}    timeout=${HTTP_TIMEOUT}
     GET On Session    dashboard_no_auth    /dashboard    expected_status=401
 
 Dashboard Rejects Wrong Password
     @{bad_auth}=    Create List    ${DASHBOARD_USERNAME}    wrong-password
-    Create Session    dashboard_bad_auth    ${DASHBOARD_BASE_URL}    auth=${bad_auth}
+    Create Session    dashboard_bad_auth    ${DASHBOARD_BASE_URL}    auth=${bad_auth}    timeout=${HTTP_TIMEOUT}
     GET On Session    dashboard_bad_auth    /dashboard    expected_status=401
 
 Dashboard Shows The Seeded Job Run As Successful

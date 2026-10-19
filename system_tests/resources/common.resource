@@ -21,16 +21,19 @@ ${TRIGGER_AUTH_TOKEN}     %{TRIGGER_AUTH_TOKEN=robot-trigger-token}
 ${KNOWN_USER_ID}          robot-u1
 ${UNKNOWN_USER_ID}        robot-user-does-not-exist
 
+# Per-request timeout so a stalled handler fails the keyword instead of hanging CI.
+${HTTP_TIMEOUT}           10
+
 *** Keywords ***
 Create Serve Session
-    Create Session    serve    ${SERVE_BASE_URL}
+    Create Session    serve    ${SERVE_BASE_URL}    timeout=${HTTP_TIMEOUT}
 
 Create Dashboard Session
     @{dashboard_auth}=    Create List    ${DASHBOARD_USERNAME}    ${DASHBOARD_PASSWORD}
-    Create Session    dashboard    ${DASHBOARD_BASE_URL}    auth=${dashboard_auth}
+    Create Session    dashboard    ${DASHBOARD_BASE_URL}    auth=${dashboard_auth}    timeout=${HTTP_TIMEOUT}
 
 Create Trigger Session
-    Create Session    trigger    ${TRIGGER_BASE_URL}
+    Create Session    trigger    ${TRIGGER_BASE_URL}    timeout=${HTTP_TIMEOUT}
 
 Serve Auth Headers
     ${headers}=    Create Dictionary    Authorization=Bearer ${SERVE_AUTH_TOKEN}
