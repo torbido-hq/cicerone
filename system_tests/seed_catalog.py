@@ -74,7 +74,8 @@ def main() -> None:
     # The tables are replaced, so only a dedicated test database may be seeded.
     if not (url.database or "").endswith("_robot"):
         raise SystemExit(f"Refusing to seed {url.database!r}: the database name must end with _robot")
-    engine = create_engine(url)
+    # The advisory lock below must be followed by fresh snapshots, whatever the server default.
+    engine = create_engine(url, isolation_level="READ COMMITTED")
     try:
         # One transaction: a failed seed leaves neither replaced tables nor the marker behind.
         with engine.begin() as conn:
