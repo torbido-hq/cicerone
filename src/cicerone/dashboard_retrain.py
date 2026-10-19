@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import urllib.error
 import urllib.request
@@ -15,8 +16,16 @@ _BUSY = "A run is already in progress or was just triggered"
 _DISABLED = "Retrain trigger is not enabled"
 _TIMED_OUT = "Retrain trigger did not answer in time; it may still start, check the latest run"
 _NEEDS_URL = "Set [dashboard].trigger_url to reach a trigger that is not on this host"
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::"})
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -44,7 +53,7 @@ def trigger_base_url(settings: Settings) -> str:
     if host in _WILDCARD_HOSTS:
         host = "127.0.0.1"
     # Only a same-host trigger is derived: the token must not cross a network over plain HTTP by default.
-    if host not in _LOOPBACK_HOSTS:
+    if not _is_loopback(host):
         logger.warning("Retrain trigger host %r is not loopback and [dashboard].trigger_url is unset", host)
         raise RetrainError(_NEEDS_URL)
     if ":" in host:

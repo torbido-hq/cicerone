@@ -138,6 +138,9 @@ def _load_dashboard_trigger_url(raw: object) -> str | None:
     if parsed.username or parsed.password:
         # The URL is logged; the token belongs in trigger_auth_token.
         raise ConfigError("dashboard.trigger_url must not contain credentials; use trigger_auth_token")
+    if parsed.query or parsed.fragment or url.endswith(("?", "#")):
+        # /trigger/retrain is appended to the path, and the URL is logged.
+        raise ConfigError("dashboard.trigger_url must not contain a query or fragment")
     return url.rstrip("/")
 
 

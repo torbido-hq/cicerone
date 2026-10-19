@@ -16,6 +16,8 @@ def test_loopback_rewrites_wildcard_bind_hosts():
     )
     assert trigger_base_url(make_settings(trigger_host="::", trigger_port=9)) == "http://127.0.0.1:9"
     assert trigger_base_url(make_settings(trigger_host="::1", trigger_port=9)) == "http://[::1]:9"
+    assert trigger_base_url(make_settings(trigger_host="127.0.0.2", trigger_port=9)) == "http://127.0.0.2:9"
+    assert trigger_base_url(make_settings(trigger_host="localhost", trigger_port=9)) == "http://localhost:9"
 
 
 def test_a_trigger_on_another_host_needs_an_explicit_url():

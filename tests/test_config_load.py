@@ -1586,7 +1586,17 @@ def test_load_settings_dashboard_trigger_url_and_token(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "url", ["recommender:8080", "ftp://recommender", "http://", "http://u:p@recommender:8080", "http://h:99x"]
+    "url",
+    [
+        "recommender:8080",
+        "ftp://recommender",
+        "http://",
+        "http://u:p@recommender:8080",
+        "http://h:99x",
+        "http://recommender:8080/?token=secret",
+        "http://recommender:8080/#frag",
+        "http://recommender:8080/?",
+    ],
 )
 def test_load_settings_rejects_a_bad_dashboard_trigger_url(tmp_path, url):
     config_path = write_toml(tmp_path, f'[dashboard]\ntrigger_url = "{url}"\n{_base_io_toml()}')
