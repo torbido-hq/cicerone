@@ -40,6 +40,14 @@ else:
             pass
 
 
+class PostWriteError(Exception):
+    """A step after a committed incremental write failed; the batch is acked, not re-applied."""
+
+    def __init__(self, message: str, *, applied: int):
+        super().__init__(message)
+        self.applied = applied
+
+
 EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     TimeoutError,

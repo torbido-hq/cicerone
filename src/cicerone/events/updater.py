@@ -15,6 +15,7 @@ from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
+from cicerone.events.errors import PostWriteError
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import empty_recommendations_frame
@@ -242,7 +243,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         with recommendations_write_guard(self._sink):
             applied = _persist()
         if pending_publish is not None:
-            self._publish_sidecar(*pending_publish)
+            try:
+                self._publish_sidecar(*pending_publish)
+            except Exception as exc:
+                raise PostWriteError(
+                    f"Incremental sidecar failed after a successful write: {exc}", applied=applied
+                ) from exc
         return applied
 
     def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str, replace_ids: list[str]) -> None:

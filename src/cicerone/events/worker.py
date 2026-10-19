@@ -13,7 +13,12 @@ from cicerone.config.constants import (
 )
 from cicerone.events.base import ClosableSource, EphemeralIdSource, EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import EVENT_APPLY_ERRORS, EVENT_SOURCE_ERRORS, EVENT_WORKER_ERRORS
+from cicerone.events.errors import (
+    EVENT_APPLY_ERRORS,
+    EVENT_SOURCE_ERRORS,
+    EVENT_WORKER_ERRORS,
+    PostWriteError,
+)
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
@@ -543,6 +548,14 @@ class EventWorker:
         try:
             with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
                 applied = self._updater.apply(ready, persist_online=False)
+        except PostWriteError as exc:
+            # The batch is written; nacking it would apply the same events twice.
+            record_events_tick_error()
+            cause = exc.__cause__
+            if isinstance(cause, LockLostError) and cause.kind == "apply":
+                update_events_leader(False)
+            logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=cause or exc)
+            applied = exc.applied
         except HeartbeatError:
             record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))

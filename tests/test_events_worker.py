@@ -8,13 +8,16 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import EVENT_APPLY_ERRORS
+from cicerone.events.errors import EVENT_APPLY_ERRORS, PostWriteError
 from cicerone.events.normalize import event_fingerprint, normalize_event
+from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
+from cicerone.locks import LockLostError
+from cicerone.serve.metrics import update_events_leader
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -3310,3 +3313,84 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert worker.stop(join_timeout_seconds=2.0) is True
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["retry-drain"]
+
+
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _BuggyPublisher:
+        def connect(self) -> None:
+            raise RuntimeError("sidecar bug")
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            raise AssertionError("publish must not run")
+
+        def close(self) -> None:
+            return None
+
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        publisher=_BuggyPublisher(),
+    )
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    assert worker.tick() == 1
+    assert source.health().lag == 0
+    assert updater.events_applied == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+    assert updater.events_applied == 1
+
+
+def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_write(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-lost"))
+
+    class _LostAfterWrite(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del persist_online
+            try:
+                raise LockLostError("events apply lock lost before write", kind="apply")
+            except LockLostError as exc:
+                raise PostWriteError("sidecar failed", applied=len(events)) from exc
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _LostAfterWrite(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    update_events_leader(True)
+    assert worker.tick() == 1
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_leader") == 0

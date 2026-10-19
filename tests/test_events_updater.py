@@ -10,6 +10,7 @@ from support.events import event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
+from cicerone.events.errors import PostWriteError
 from cicerone.events.normalize import normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
@@ -1326,7 +1327,7 @@ def test_incremental_updater_publish_failure_does_not_unsucceed(tmp_path, featur
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
 
-def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feature_config: FeatureConfig):
+def test_incremental_updater_wraps_fence_lost_after_connect(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -1358,8 +1359,11 @@ def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feat
         publisher=_Pub(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(LockLostError, match="events apply lock lost before write"):
+    with pytest.raises(PostWriteError) as raised:
         updater.apply(events)
+    assert isinstance(raised.value.__cause__, LockLostError)
+    assert "events apply lock lost before write" in str(raised.value.__cause__)
+    assert raised.value.applied == 1
     assert published == []
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
@@ -1441,7 +1445,7 @@ def test_incremental_updater_skips_publish_when_manifest_generation_changes(
     assert published == []
 
 
-def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
+def test_incremental_updater_wraps_unexpected_sidecar_error_after_write(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     out = tmp_path / "out"
@@ -1476,13 +1480,16 @@ def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
         publisher=_Pub(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(RuntimeError, match="generation check bug"):
+    with pytest.raises(PostWriteError) as raised:
         updater.apply(events)
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert "generation check bug" in str(raised.value.__cause__)
+    assert raised.value.applied == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
 
-def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
+def test_incremental_updater_wraps_writer_lock_busy_from_generation_check(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     out = tmp_path / "out"
@@ -1517,8 +1524,11 @@ def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
         publisher=_Pub(),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
-    with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
+    with pytest.raises(PostWriteError) as raised:
         updater.apply(events)
+    assert isinstance(raised.value.__cause__, WriterLockBusyError)
+    assert "dataset writer lock busy" in str(raised.value.__cause__)
+    assert raised.value.applied == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
