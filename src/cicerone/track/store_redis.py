@@ -11,6 +11,7 @@ from sqlalchemy.exc import ArgumentError
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
+from cicerone.events.errors import RedisError
 from cicerone.io.recommendation_schema import USER_COLUMN
 
 _REDIS_TIMEOUT_SECONDS = 5.0
@@ -47,6 +48,10 @@ def _parse_line(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _stored(result: object) -> bool:
+    return not isinstance(result, Exception) and bool(result)
+
+
 def _event_key(row: dict[str, Any], line: str) -> str:
     event_id = str(row.get("event_id") or "")
     return event_id or "sha256:" + hashlib.sha256(line.encode()).hexdigest()
@@ -63,14 +68,27 @@ class RedisTrackLog:
         if not rows:
             return []
         lines = [json.dumps(row, separators=(",", ":")) for row in rows]
-        # One MULTI/EXEC on one key: Redis refuses the whole EXEC on OOM or a read-only replica,
-        # and a wrong-type key fails every HSETNX alike, so no batch is half stored.
-        # HSETNX keeps retries idempotent.
+        fields = [_event_key(row, line) for row, line in zip(rows, lines, strict=True)]
+        # One MULTI/EXEC; HSETNX keeps retries idempotent. EXEC does not roll back a command that
+        # fails inside it, so a failed batch removes the rows it stored before raising.
         with self._client.pipeline(transaction=True) as pipe:
-            for row, line in zip(rows, lines, strict=True):
-                pipe.hsetnx(self._log_key, _event_key(row, line), line)
-            stored = pipe.execute()
-        return [row for row, fresh in zip(rows, stored, strict=True) if fresh]
+            for field, line in zip(fields, lines, strict=True):
+                pipe.hsetnx(self._log_key, field, line)
+            stored = pipe.execute(raise_on_error=False)
+        errors = [result for result in stored if isinstance(result, Exception)]
+        if errors:
+            self._remove_stored(
+                [field for field, result in zip(fields, stored, strict=True) if _stored(result)], errors[0]
+            )
+            raise errors[0]
+        return [row for row, result in zip(rows, stored, strict=True) if _stored(result)]
+
+    def _remove_stored(self, fields: list[str], error: Exception) -> None:
+        try:
+            for start in range(0, len(fields), _HDEL_BATCH):
+                self._client.hdel(self._log_key, *fields[start : start + _HDEL_BATCH])
+        except RedisError as exc:
+            error.add_note(f"removing the {len(fields)} row(s) this batch stored also failed: {exc}")
 
     def read(self) -> list[dict[str, Any]]:
         rows = [parsed for raw in self._client.hvals(self._log_key) if (parsed := _parse_line(str(raw)))]

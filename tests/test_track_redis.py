@@ -108,11 +108,20 @@ class _FakePipeline:
         self._queued.append(("hsetnx", args))
         return self
 
-    def execute(self) -> list[object]:
+    def execute(self, raise_on_error: bool = True) -> list[object]:
         self._client._call("execute")
-        results = [getattr(self._client, name)(*args) for name, args in self._queued]
+        # Like Redis, a command failing inside EXEC does not stop or undo the others.
+        results: list[object] = []
+        for name, args in self._queued:
+            try:
+                results.append(getattr(self._client, name)(*args))
+            except Exception as exc:
+                results.append(exc)
         self._queued.clear()
         self._client._done("execute")
+        errors = [result for result in results if isinstance(result, Exception)]
+        if raise_on_error and errors:
+            raise errors[0]
         return results
 
 
@@ -479,3 +488,30 @@ def test_redis_track_logs_its_key_and_size(caplog):
     assert f"Track log: redis key {key} (2 rows)" in caplog.text
     assert f"Track log: redis key {key} (unreachable at startup)" in caplog.text
     TrackStore(_OUTPUT).log_redis_location()
+
+
+def test_redis_append_removes_its_rows_when_a_command_fails_inside_exec():
+    from cicerone.events.errors import RedisError as RedisResponseError
+
+    client = _FakeRedis()
+    store = _store(client)
+    store.append_rows([_row(event_id="imp-0")])
+    client.after["hsetnx"] = lambda: client.fail_next.__setitem__("hsetnx", RedisResponseError("OOM"))
+    batch = [_row(event_id="imp-1"), _row(event_id="imp-2"), _row(event_id="imp-0")]
+    with pytest.raises(RedisResponseError, match="OOM"):
+        store.append_rows(batch)
+    assert sorted(_log(client)) == ["imp-0"]
+    assert store.append_rows(batch[:2]) == 2
+    assert sorted(_log(client)) == ["imp-0", "imp-1", "imp-2"]
+
+
+def test_redis_append_reports_a_failed_cleanup():
+    from cicerone.events.errors import RedisError as RedisResponseError
+
+    client = _FakeRedis()
+    store = _store(client)
+    client.after["hsetnx"] = lambda: client.fail_next.__setitem__("hsetnx", RedisResponseError("OOM"))
+    client.fail_next["hdel"] = RedisResponseError("connection lost")
+    with pytest.raises(RedisResponseError, match="OOM") as raised:
+        store.append_rows([_row(event_id="imp-1"), _row(event_id="imp-2")])
+    assert any("also failed" in note for note in raised.value.__notes__)
