@@ -11,12 +11,13 @@ from sqlalchemy.exc import ArgumentError
 
 from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.events.errors import RedisError
 from cicerone.io.recommendation_schema import USER_COLUMN
 
 _REDIS_TIMEOUT_SECONDS = 5.0
 _REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
 _HDEL_BATCH = 1000
+# HSCAN page size: big hashes are read in pages instead of one blocking HVALS/HGETALL reply.
+_SCAN_COUNT = 1000
 _CREDENTIAL_WORDS = ("password", "secret", "token", "access_key", "credential")
 
 
@@ -48,10 +49,6 @@ def _parse_line(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _stored(result: object) -> bool:
-    return not isinstance(result, Exception) and bool(result)
-
-
 def _event_key(row: dict[str, Any], line: str) -> str:
     event_id = str(row.get("event_id") or "")
     return event_id or "sha256:" + hashlib.sha256(line.encode()).hexdigest()
@@ -68,30 +65,19 @@ class RedisTrackLog:
         if not rows:
             return []
         lines = [json.dumps(row, separators=(",", ":")) for row in rows]
-        fields = [_event_key(row, line) for row, line in zip(rows, lines, strict=True)]
-        # One MULTI/EXEC; HSETNX keeps retries idempotent. EXEC does not roll back a command that
-        # fails inside it, so a failed batch removes the rows it stored before raising.
+        # One MULTI/EXEC; HSETNX keeps retries idempotent. A failed batch may leave some rows stored:
+        # the caller retries and HSETNX skips them. Deleting them could drop a row a concurrent
+        # retry was told is already stored.
         with self._client.pipeline(transaction=True) as pipe:
-            for field, line in zip(fields, lines, strict=True):
-                pipe.hsetnx(self._log_key, field, line)
-            stored = pipe.execute(raise_on_error=False)
-        errors = [result for result in stored if isinstance(result, Exception)]
-        if errors:
-            self._remove_stored(
-                [field for field, result in zip(fields, stored, strict=True) if _stored(result)], errors[0]
-            )
-            raise errors[0]
-        return [row for row, result in zip(rows, stored, strict=True) if _stored(result)]
-
-    def _remove_stored(self, fields: list[str], error: Exception) -> None:
-        try:
-            for start in range(0, len(fields), _HDEL_BATCH):
-                self._client.hdel(self._log_key, *fields[start : start + _HDEL_BATCH])
-        except RedisError as exc:
-            error.add_note(f"removing the {len(fields)} row(s) this batch stored also failed: {exc}")
+            for row, line in zip(rows, lines, strict=True):
+                pipe.hsetnx(self._log_key, _event_key(row, line), line)
+            stored = pipe.execute()
+        return [row for row, fresh in zip(rows, stored, strict=True) if fresh]
 
     def read(self) -> list[dict[str, Any]]:
-        rows = [parsed for raw in self._client.hvals(self._log_key) if (parsed := _parse_line(str(raw)))]
+        # HSCAN may return a field twice while the hash rehashes.
+        values = dict(self._client.hscan_iter(self._log_key, count=_SCAN_COUNT)).values()
+        rows = [parsed for raw in values if (parsed := _parse_line(str(raw)))]
         rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
         return rows
 
@@ -107,12 +93,14 @@ class RedisTrackLog:
 
     def delete_user(self, user_id: str) -> int:
         # HDEL touches only this user's fields, so concurrent appends and other rows are never rewritten.
-        fields = [
-            str(field)
-            for field, raw in self._client.hgetall(self._log_key).items()
-            if (parsed := _parse_line(str(raw))) is not None
-            and str(parsed.get(USER_COLUMN) or "").strip() == user_id
-        ]
+        fields = list(
+            dict.fromkeys(
+                str(field)
+                for field, raw in self._client.hscan_iter(self._log_key, count=_SCAN_COUNT)
+                if (parsed := _parse_line(str(raw))) is not None
+                and str(parsed.get(USER_COLUMN) or "").strip() == user_id
+            )
+        )
         removed = 0
         for start in range(0, len(fields), _HDEL_BATCH):
             removed += int(self._client.hdel(self._log_key, *fields[start : start + _HDEL_BATCH]) or 0)

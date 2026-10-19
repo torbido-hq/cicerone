@@ -297,7 +297,12 @@ def score_previous_run(
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
     assigned: dict[str, str] | None = None
     replay_failed = False
-    if settings.eval.enabled and previous_recs is not None and previous_generated_at:
+    if (
+        settings.eval.enabled
+        and previous_recs is not None
+        and previous_generated_at
+        and not track_read_failed
+    ):
         # Wrapped in a tuple so a failed replay (None) differs from "no assignments".
         replayed = try_load(
             "compute served eval",
@@ -327,6 +332,9 @@ def score_previous_run(
 
     def _compute_served() -> dict[str, Any] | None:
         if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
+            return None
+        if track_read_failed:
+            # Assignments and impressions come from the track log; keep the previous report.
             return None
 
         def _served() -> dict[str, Any] | None:

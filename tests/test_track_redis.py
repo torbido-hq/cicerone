@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
 
 import pandas as pd
 import pytest
@@ -32,6 +33,7 @@ class _FakeRedis:
         self.fail_next: dict[str, BaseException] = {}
         self.lose_reply: dict[str, BaseException] = {}
         self.after: dict[str, object] = {}
+        self.scan_pages: list[int] = []
 
     @property
     def rows(self) -> list[str]:
@@ -73,15 +75,12 @@ class _FakeRedis:
         assert transaction
         return _FakePipeline(self)
 
-    def hvals(self, key: str) -> list[str]:
-        self._call("hvals")
-        return list(self.hashes.get(key, {}).values())
-
-    def hgetall(self, key: str) -> dict[str, str]:
-        self._call("hgetall")
-        snapshot = dict(self.hashes.get(key, {}))
-        self._done("hgetall")
-        return snapshot
+    def hscan_iter(self, key: str, count: int = 10) -> Iterator[tuple[str, str]]:
+        self._call("hscan")
+        items = list(self.hashes.get(key, {}).items())
+        self.scan_pages.append(-(-len(items) // count) if items else 0)
+        yield from items
+        self._done("hscan")
 
     def hdel(self, key: str, *fields: str) -> int:
         self._call("hdel")
@@ -302,7 +301,7 @@ def test_redis_track_keeps_the_redis_error_type_when_unreachable(monkeypatch):
         pass
 
     class _Client:
-        def hvals(self, _key: str) -> list[str]:
+        def hscan_iter(self, _key: str, count: int = 10) -> list[tuple[str, str]]:
             raise _RedisError("Connection refused")
 
     fake = type(sys)("redis")
@@ -376,7 +375,7 @@ def test_redis_delete_keeps_an_append_that_races_the_read():
     store = _store(client)
     store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
     carol = _row(user_id="carol", item_id="ipa-003", event_id="imp-3")
-    client.after["hgetall"] = lambda: store.append_rows([carol])
+    client.after["hscan"] = lambda: store.append_rows([carol])
     assert store.delete_redis_rows("alice") == 1
     assert sorted(_log(client)) == ["imp-2", "imp-3"]
 
@@ -490,28 +489,59 @@ def test_redis_track_logs_its_key_and_size(caplog):
     TrackStore(_OUTPUT).log_redis_location()
 
 
-def test_redis_append_removes_its_rows_when_a_command_fails_inside_exec():
+def test_redis_append_failed_inside_exec_is_completed_by_a_retry():
     from cicerone.events.errors import RedisError as RedisResponseError
 
     client = _FakeRedis()
     store = _store(client)
-    store.append_rows([_row(event_id="imp-0")])
     client.after["hsetnx"] = lambda: client.fail_next.__setitem__("hsetnx", RedisResponseError("OOM"))
-    batch = [_row(event_id="imp-1"), _row(event_id="imp-2"), _row(event_id="imp-0")]
+    batch = [_row(event_id="imp-1"), _row(event_id="imp-2")]
     with pytest.raises(RedisResponseError, match="OOM"):
         store.append_rows(batch)
-    assert sorted(_log(client)) == ["imp-0"]
-    assert store.append_rows(batch[:2]) == 2
-    assert sorted(_log(client)) == ["imp-0", "imp-1", "imp-2"]
+    # The stored row stays: a concurrent retry that sees it as a duplicate must not lose it.
+    assert sorted(_log(client)) == ["imp-1"]
+    assert store.append_rows([batch[0]]) == 0
+    assert store.append_rows(batch) == 1
+    assert sorted(_log(client)) == ["imp-1", "imp-2"]
 
 
-def test_redis_append_reports_a_failed_cleanup():
-    from cicerone.events.errors import RedisError as RedisResponseError
+def test_job_keeps_the_served_eval_when_the_track_log_is_unreadable(tmp_path, monkeypatch):
+    from cicerone.config import make_settings
+    from cicerone.events.errors import RedisError
+    from cicerone.io.dataset_store import DatasetOutputSink
+    from cicerone.job import _score_previous_run
 
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    DatasetOutputSink(output.options).write_recommendations(
+        pd.DataFrame(
+            [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
+        )
+    )
+    settings = make_settings(
+        track={"enabled": True, "redis_url": "redis://localhost:6379/0"},
+        eval={"enabled": True},
+        output=output,
+    )
+
+    def unreachable(*_args, **_kwargs):
+        raise RedisError("Timeout reading from socket")
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("served eval must not run on a substitute empty track log")
+
+    monkeypatch.setattr(TrackStore, "read_rows", unreachable)
+    monkeypatch.setattr("cicerone.job_eval.replay_assignments", must_not_run)
+    monkeypatch.setattr("cicerone.job_eval.evaluate_served", must_not_run)
+    track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "2026-08-28T03:00:00Z"})
+    assert track is None
+    assert served is None
+
+
+def test_redis_track_reads_and_erases_in_scan_pages(monkeypatch):
+    monkeypatch.setattr("cicerone.track.store_redis._SCAN_COUNT", 2)
     client = _FakeRedis()
     store = _store(client)
-    client.after["hsetnx"] = lambda: client.fail_next.__setitem__("hsetnx", RedisResponseError("OOM"))
-    client.fail_next["hdel"] = RedisResponseError("connection lost")
-    with pytest.raises(RedisResponseError, match="OOM") as raised:
-        store.append_rows([_row(event_id="imp-1"), _row(event_id="imp-2")])
-    assert any("also failed" in note for note in raised.value.__notes__)
+    store.append_rows([_row(event_id=f"imp-{n}") for n in range(5)])
+    assert len(store.read_rows()) == 5
+    assert store.delete_redis_rows("alice") == 5
+    assert client.scan_pages[-2:] == [3, 3]
