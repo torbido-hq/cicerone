@@ -419,6 +419,34 @@ def test_forget_user_notes_a_redis_failure_after_the_output_erase(tmp_path, monk
     assert forget_user(output, "alice", redis_url="redis://localhost:6379/0").track == 1
 
 
+def test_forget_user_notes_a_lost_writer_lease_after_the_output_erase(tmp_path, monkeypatch):
+    from cicerone.forget import forget_user
+    from cicerone.io.dataset_store import DatasetOutputSink
+    from cicerone.locks.hold import LockLostError
+
+    client = _FakeRedis()
+    monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    DatasetOutputSink(output.options).write_recommendations(
+        pd.DataFrame(
+            [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
+        )
+    )
+    _store(client, output).append_rows([_row()])
+
+    def lose_lease(self, user_id):
+        raise LockLostError("writer lease lost")
+
+    monkeypatch.setattr(TrackStore, "delete_redis_rows", lose_lease)
+    with pytest.raises(LockLostError) as raised:
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+    assert raised.value.__notes__ == [
+        "output rows were erased; run forget-user again to finish the Redis track log"
+    ]
+    assert pd.read_parquet(tmp_path / "recommendations.parquet").empty
+    assert sorted(_log(client)) == ["imp-1"]
+
+
 def test_job_treats_a_redis_track_read_failure_as_optional(caplog):
     from cicerone.events.errors import RedisError
     from cicerone.job_eval import try_load

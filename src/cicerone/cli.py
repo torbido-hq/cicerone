@@ -224,17 +224,22 @@ def _cmd_forget_user(argv: list[str]) -> int:
                 result = forget_user(settings.output, args.user_id, writer_lock=lock, **redis)
     except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
         print(str(exc), file=sys.stderr)
+        _print_notes(exc)
         return 2
     except (OSError, ArrowException, SQLAlchemyError, RedisError) as exc:
         print(f"forget-user failed: {exc}", file=sys.stderr)
-        for note in getattr(exc, "__notes__", ()):
-            print(note, file=sys.stderr)
+        _print_notes(exc)
         return 1
     print(
         f"forgot {args.user_id}: recommendations={result.recommendations} "
         f"track={result.track} exposures={result.exposures} history={result.history}"
     )
     return 0
+
+
+def _print_notes(exc: BaseException) -> None:
+    for note in getattr(exc, "__notes__", ()):
+        print(note, file=sys.stderr)
 
 
 def _cmd_export_openapi(argv: list[str]) -> int:
