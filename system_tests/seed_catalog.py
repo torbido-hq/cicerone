@@ -14,9 +14,10 @@ import os
 import pandas as pd
 from sqlalchemy import create_engine, inspect, make_url, text
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.types import String
 
-# Created on first seed; a non-empty database without it is not ours to replace.
+# Written with the seed; a non-empty database without a matching one is not ours to replace.
 SEED_MARKER_TABLE = "cicerone_robot_seed"
 
 DATABASE_URL = os.environ.get(
@@ -52,6 +53,20 @@ ITEMS = pd.DataFrame(
 )
 
 
+def _owned(conn, tables: set[str]) -> bool:
+    if not tables:
+        return True
+    if SEED_MARKER_TABLE not in tables:
+        return False
+    # The marker records the database OID, so a copied or unrelated database with the table is refused.
+    current = conn.execute(text("SELECT oid FROM pg_database WHERE datname = current_database()")).scalar()
+    try:
+        stored = conn.execute(text(f'SELECT database_oid FROM "{SEED_MARKER_TABLE}"')).scalars().all()
+    except ProgrammingError:
+        return False
+    return stored == [current]
+
+
 def main() -> None:
     url = make_url(DATABASE_URL)
     # The tables are replaced, so only a dedicated test database may be seeded.
@@ -59,23 +74,29 @@ def main() -> None:
         raise SystemExit(f"Refusing to seed {url.database!r}: the database name must end with _robot")
     engine = create_engine(url)
     try:
-        tables = set(inspect(engine).get_table_names())
-        if tables and SEED_MARKER_TABLE not in tables:
-            raise SystemExit(
-                f"Refusing to seed {url.database!r}: it has tables but no {SEED_MARKER_TABLE} marker, "
-                "so it is not a database this script created"
-            )
+        # One transaction: a failed seed leaves neither replaced tables nor the marker behind.
         with engine.begin() as conn:
-            conn.execute(text(f'CREATE TABLE IF NOT EXISTS "{SEED_MARKER_TABLE}" (seeded_at TIMESTAMPTZ)'))
-        EVENTS.to_sql("events", engine, if_exists="replace", index=False)
-        USERS.to_sql(
-            "users",
-            engine,
-            if_exists="replace",
-            index=False,
-            dtype={"favorite_styles": ARRAY(String)},
-        )
-        ITEMS.to_sql("items", engine, if_exists="replace", index=False)
+            if not _owned(conn, set(inspect(conn).get_table_names())):
+                raise SystemExit(
+                    f"Refusing to seed {url.database!r}: it has tables but no {SEED_MARKER_TABLE} marker "
+                    "for this database, so it is not one this script created"
+                )
+            EVENTS.to_sql("events", conn, if_exists="replace", index=False)
+            USERS.to_sql(
+                "users",
+                conn,
+                if_exists="replace",
+                index=False,
+                dtype={"favorite_styles": ARRAY(String)},
+            )
+            ITEMS.to_sql("items", conn, if_exists="replace", index=False)
+            conn.execute(text(f'DROP TABLE IF EXISTS "{SEED_MARKER_TABLE}"'))
+            conn.execute(
+                text(
+                    f'CREATE TABLE "{SEED_MARKER_TABLE}" AS SELECT oid AS database_oid, now() AS seeded_at '
+                    "FROM pg_database WHERE datname = current_database()"
+                )
+            )
     finally:
         engine.dispose()
     target = url.render_as_string()
