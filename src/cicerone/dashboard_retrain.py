@@ -19,6 +19,15 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::"})
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+# A followed redirect would resend the bearer token to whatever host it names; a 3xx is a failure.
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class RetrainError(Exception):
     """The webhook refused the request or could not be reached."""
 
@@ -54,7 +63,7 @@ def request_retrain(settings: Settings) -> str:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=b"", method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with _OPENER.open(request, timeout=5) as response:
             if response.status != 202:
                 logger.warning("Retrain trigger at %s answered %s", url, response.status)
                 raise RetrainError("Retrain trigger failed")

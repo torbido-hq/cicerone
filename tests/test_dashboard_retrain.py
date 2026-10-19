@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 from conftest import make_settings
 
+from cicerone import dashboard_retrain
 from cicerone.dashboard_retrain import RetrainError, request_retrain, retrain_configured, trigger_base_url
 
 
@@ -44,7 +45,7 @@ def test_explicit_trigger_url_and_token_are_used_without_job_trigger(monkeypatch
         captured["auth"] = request.get_header("Authorization")
         return _Response()
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     settings = _with_dashboard_trigger("http://recommender:8080", "dash-token", trigger_enabled=False)
     assert retrain_configured(settings) is True
     assert request_retrain(settings) == "Retrain started"
@@ -58,7 +59,7 @@ def test_timeout_is_reported_as_ambiguous(monkeypatch, caplog, failure):
     def _urlopen(request, timeout=0):
         raise failure
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     with (
         caplog.at_level("WARNING", logger="cicerone.dashboard_retrain"),
         pytest.raises(RetrainError, match="may still start"),
@@ -76,7 +77,7 @@ def test_unreachable_trigger(monkeypatch, caplog):
     def _urlopen(request, timeout=0):
         raise urllib.error.URLError("down")
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     with (
         caplog.at_level("WARNING", logger="cicerone.dashboard_retrain"),
         pytest.raises(RetrainError, match="unreachable"),
@@ -95,7 +96,7 @@ def test_unexpected_status_is_a_failure(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", lambda *_a, **_k: _Response())
+    monkeypatch.setattr(dashboard_retrain._OPENER, "open", lambda *_a, **_k: _Response())
     with pytest.raises(RetrainError, match="failed"):
         request_retrain(make_settings(trigger_enabled=True, trigger_auth_token=None))
 
@@ -104,6 +105,53 @@ def test_http_error_is_a_failure(monkeypatch):
     def _urlopen(request, timeout=0):
         raise urllib.error.HTTPError(request.full_url, 500, "nope", hdrs=None, fp=None)
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     with pytest.raises(RetrainError, match="failed"):
         request_retrain(make_settings(trigger_enabled=True, trigger_auth_token=None))
+
+
+def test_a_redirect_is_not_followed_and_the_token_stays_put(caplog):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    leaked: list[str | None] = []
+
+    class _Elsewhere(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            leaked.append(self.headers.get("Authorization"))
+            self.send_response(202)
+            self.end_headers()
+
+        do_POST = do_GET  # noqa: N815
+
+        def log_message(self, *_args):
+            return None
+
+    elsewhere = ThreadingHTTPServer(("127.0.0.1", 0), _Elsewhere)
+    target = f"http://localhost:{elsewhere.server_address[1]}/trigger/retrain"
+
+    class _Redirect(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return None
+
+    trigger = ThreadingHTTPServer(("127.0.0.1", 0), _Redirect)
+    for server in (elsewhere, trigger):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        settings = _with_dashboard_trigger(
+            f"http://127.0.0.1:{trigger.server_address[1]}", token="secret-token"
+        )
+        with pytest.raises(RetrainError, match="Retrain trigger failed"):
+            request_retrain(settings)
+    finally:
+        for server in (elsewhere, trigger):
+            server.shutdown()
+            server.server_close()
+    assert leaked == []
+    assert "answered 302" in caplog.text
