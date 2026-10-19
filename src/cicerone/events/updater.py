@@ -110,6 +110,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
+        self._written_events = 0
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
@@ -120,6 +121,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     @property
     def last_success_at(self) -> datetime | None:
         return self._last_success_at
+
+    @property
+    def written_events(self) -> int:
+        """Events of the current ``apply`` whose recommendations are already written."""
+        return self._written_events
 
     @property
     def events_applied(self) -> int:
@@ -155,6 +161,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._abort_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
+        self._written_events = 0
         if not events:
             return 0
         if self.retrain_busy():
@@ -205,6 +212,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 return 0
             self._ensure_fence()
             n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
+            self._written_events = len(events)
             now = datetime.now(UTC)
             manifest = {
                 "triggered_by": "incremental",

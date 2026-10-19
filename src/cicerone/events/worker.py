@@ -589,6 +589,11 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             raise
+        except BaseException:
+            # Interrupted after the write: ack it so a redelivery after restart is not applied again.
+            if self._updater.written_events == len(ready):
+                self._ack_written_on_interrupt(ready)
+            raise
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
@@ -638,6 +643,14 @@ class EventWorker:
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _ack_written_on_interrupt(self, ready: list[NormalizedEvent]) -> None:
+        self._remember_applied(ready)
+        try:
+            self._updater.abort_online()
+            self._ack_live_ids([event.event_id for event in ready])
+        except Exception:
+            logger.exception("Event source ack failed while interrupted after a successful write")
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None

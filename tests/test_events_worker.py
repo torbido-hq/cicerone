@@ -3394,3 +3394,78 @@ def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_wri
     assert worker.tick() == 1
     assert source.health().lag == 0
     assert registry_metric_value("cicerone_events_leader") == 0
+
+
+def test_event_worker_acks_written_events_when_interrupted_after_the_write(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _InterruptedPublisher:
+        def connect(self) -> None:
+            raise KeyboardInterrupt
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            raise AssertionError("publish must not run")
+
+        def close(self) -> None:
+            return None
+
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="interrupted-1", user_id="u1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        publisher=_InterruptedPublisher(),
+    )
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert source.health().lag == 0
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+    source.ingest(event_payload(event_id="interrupted-1", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+
+
+def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="interrupted-before"))
+
+    class _InterruptedBeforeWrite(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del events, persist_online
+            raise KeyboardInterrupt
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _InterruptedBeforeWrite(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert source.health().lag == 1
