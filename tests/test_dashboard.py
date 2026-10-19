@@ -1476,7 +1476,7 @@ def test_retrain_posts_the_trigger_webhook(monkeypatch):
         captured["timeout"] = str(timeout)
         return _Response()
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("cicerone.dashboard_retrain._OPENER.open", _urlopen)
     settings = _settings(
         trigger_enabled=True,
         trigger_host="0.0.0.0",
@@ -1505,7 +1505,7 @@ def test_retrain_reports_a_busy_trigger(monkeypatch):
     def _urlopen(request, timeout=0):
         raise urllib.error.HTTPError(request.full_url, 429, "busy", hdrs=None, fp=None)
 
-    monkeypatch.setattr("cicerone.dashboard_retrain.urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr("cicerone.dashboard_retrain._OPENER.open", _urlopen)
     settings = _settings(trigger_enabled=True, trigger_auth_token=None)
     client = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret")))
     token = _csrf_token(client)
