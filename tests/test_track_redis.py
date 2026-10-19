@@ -433,3 +433,27 @@ def test_job_does_not_score_an_unreadable_track_log_as_empty(tmp_path, monkeypat
     monkeypatch.setattr(TrackStore, "read_rows", unreachable)
     track, _served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
+
+
+def test_redis_track_filtered_read_keeps_the_matching_copy_of_an_event(tmp_path):
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    TrackStore(output).append_rows([_row(event_id="dup", experiment_id="exp-old")])
+    client = _FakeRedis()
+    store = _store(client, output)
+    store.append_rows([_row(event_id="dup", experiment_id="exp-new")])
+    assert [row["experiment_id"] for row in store.read_rows(experiment_id="exp-new")] == ["exp-new"]
+    assert [row["experiment_id"] for row in store.read_rows()] == ["exp-old"]
+
+
+def test_forget_user_refuses_object_store_output_before_touching_redis(monkeypatch):
+    from cicerone.config import ConfigError
+    from cicerone.forget import forget_user
+
+    client = _FakeRedis()
+    monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
+    output = IOSettings(kind="dataset", options={"storage_backend": "s3", "bucket": "b", "path": "unused"})
+    _store(client, output).append_rows([_row()])
+    client.fail_next["ping"] = AssertionError("Redis must not be contacted")
+    with pytest.raises(ConfigError, match="forget-user requires"):
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+    assert sorted(_log(client)) == ["imp-1"]

@@ -358,6 +358,11 @@ them. A history or recommendations file that has rows but no `user_id`, and
 a track or exposure line that is not a user row, are refused before anything
 is removed. Stored ids are matched after trimming whitespace, so on a
 large database output each table is scanned once; erase during a quiet window.
+Track events for the user that arrive while the command runs, on any
+replica, may be kept: pause that user's traffic or run the command again
+afterwards. With `track.redis_url` and object-store output the command is
+refused like any object-store output, before anything (Redis included) is
+erased.
 Rewritten local files keep their permission bits but are owned by the user
 running the command.
 

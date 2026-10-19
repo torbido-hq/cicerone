@@ -196,13 +196,14 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
         seen: set[str] = set()
         unique: list[dict[str, Any]] = []
         for row in rows:
+            # Filter first: an [output] copy that fails the filter must not hide a matching Redis row.
+            if not row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
+                continue
             event_id = str(row.get("event_id") or "")
             if event_id and event_id in seen:
                 continue
             if event_id:
                 seen.add(event_id)
-            if not row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
-                continue
             unique.append(row)
         return unique
 
