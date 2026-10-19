@@ -57,6 +57,8 @@ or docs to read next.
    [Why this item](#why-this-item).
 
 Full `job.run()` is the drift backstop (cron or `POST /trigger/retrain`).
+When `[job.trigger]` is enabled, the dashboard status page posts that same
+webhook. The trigger token stays on the dashboard process.
 
 ## What `GET /recommendations` does
 

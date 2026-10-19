@@ -77,9 +77,26 @@
         >
           Refresh
         </button>
+        {% if trigger_enabled %}
+        <form action="/dashboard/retrain" method="post" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button
+            type="submit"
+            class="min-h-10 rounded border border-slate-800 bg-slate-800 px-4 py-2 text-sm text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-800 focus-visible:ring-offset-2"
+          >
+            Retrain
+          </button>
+        </form>
+        {% endif %}
         <span data-status-indicator class="htmx-indicator text-sm text-slate-600" role="status">Refreshing…</span>
         <span data-poll-hint class="text-sm text-slate-600" hidden>Updates paused (reduced motion).</span>
       </div>
+      {% if message %}
+      <p class="mb-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900" role="status">{{ message }}</p>
+      {% endif %}
+      {% if retrain_error %}
+      <p class="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert">{{ retrain_error }}</p>
+      {% endif %}
       <div data-status-error class="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800" role="alert" hidden></div>
       <p id="status-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></p>
       <div

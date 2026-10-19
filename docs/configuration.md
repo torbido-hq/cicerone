@@ -201,6 +201,9 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | `lookup_k` | `20` | Inspector recs, capped by `job.top_k` |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
+| `trigger_url` | derived | Retrain webhook base URL as the dashboard reaches it (e.g. `http://recommender:8080`). Unset: `http://127.0.0.1:<[job.trigger].port>` (`[::1]` for an IPv6 wildcard), only when `[job.trigger].host` is loopback or a wildcard. Set it to show the Retrain button when the dashboard config has no `[job.trigger]`, and whenever the dashboard runs in a different container or host from the trigger: the derived `127.0.0.1` is the dashboard's own. No query or fragment. `http` to a non-loopback host is refused unless `trigger_allow_http` is set |
+| `trigger_auth_token` | `[job.trigger].auth_token` of this config | Bearer token for the Retrain request; `${ENV}` placeholders are resolved. The fallback only works when this same config file has `[job.trigger].auth_token`; with separate dashboard and job configs, set it here |
+| `trigger_allow_http` | `false` | Allow a plain-`http` `trigger_url` to a non-loopback host. The token is then sent in clear, so only on a private network (e.g. a compose network) |
 
 ## `[publish]`
 

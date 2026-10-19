@@ -117,6 +117,8 @@ services:
       OUTPUT_S3_BUCKET: ${OUTPUT_S3_BUCKET:-}
       # Unset by default — set in .env when the dashboard reads a kind = "db" output.
       OUTPUT_DATABASE_URL: ${OUTPUT_DATABASE_URL:-}
+      # Bearer token for [dashboard].trigger_auth_token / [job.trigger].auth_token (Retrain button).
+      TRIGGER_AUTH_TOKEN: ${TRIGGER_AUTH_TOKEN:-}
     command: ["dashboard", "--config", "/app/config/cicerone.dashboard.toml"]
     ports:
       - "127.0.0.1:8090:8090"

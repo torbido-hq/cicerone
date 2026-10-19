@@ -264,3 +264,19 @@ def test_config_page_unset_token_is_em_dash(tmp_path):
     assert "super-secret" not in html
     assert MISSING in html
     assert "No feature config file" in html
+
+
+def test_config_display_redacts_the_dashboard_trigger_token():
+    from dataclasses import replace
+
+    settings = make_settings(dashboard_enabled=True)
+    settings = replace(
+        settings,
+        dashboard=replace(
+            settings.dashboard,
+            trigger_url="http://recommender:8080",
+            trigger_auth_token="dash-trigger-secret",
+        ),
+    )
+    display = config_display(settings, config_path="/app/config/cicerone.dashboard.toml", usernames=())
+    assert "dash-trigger-secret" not in str(display)

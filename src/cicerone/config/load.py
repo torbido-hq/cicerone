@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
@@ -10,6 +11,7 @@ import warnings
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -121,6 +123,46 @@ _EVAL_FLAT_KEYS = (
     ("eval_event_types", "event_types"),
     ("eval_ks", "ks"),
 )
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _load_dashboard_trigger_url(raw: object, *, allow_http: bool) -> str | None:
+    if raw is None:
+        return None
+    url = str(_resolve_env_placeholders(raw, "dashboard.trigger_url")).strip()
+    parsed = urlsplit(url)
+    try:
+        parsed.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError as exc:
+        raise ConfigError(f"dashboard.trigger_url has an invalid port: {url!r}") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ConfigError(f"dashboard.trigger_url must be an http(s) URL with a host, got {url!r}")
+    if parsed.username or parsed.password:
+        # The URL is logged; the token belongs in trigger_auth_token.
+        raise ConfigError("dashboard.trigger_url must not contain credentials; use trigger_auth_token")
+    if parsed.query or parsed.fragment or url.endswith(("?", "#")):
+        # /trigger/retrain is appended to the path, and the URL is logged.
+        raise ConfigError("dashboard.trigger_url must not contain a query or fragment")
+    if parsed.scheme == "http" and not allow_http and not _is_loopback_host(parsed.hostname):
+        raise ConfigError(
+            "dashboard.trigger_url over http sends the bearer token in clear to a non-loopback host; "
+            "use https, or set dashboard.trigger_allow_http = true on a private network"
+        )
+    return url.rstrip("/")
+
+
+def _optional_token(section: dict[str, Any], key: str, path: str) -> str | None:
+    if key not in section:
+        return None
+    return str(_resolve_env_placeholders(section[key], path)).strip() or None
 
 
 def _resolve_env_placeholders(value: Any, path: str = "") -> Any:
@@ -510,6 +552,7 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
+    trigger_allow_http = bool(dashboard_raw.get("trigger_allow_http", DashboardSettings.trigger_allow_http))
 
     events = load_events_settings(
         raw.get("events", {}) or {},
@@ -684,6 +727,14 @@ def load_settings(config_path: str | None = None) -> Settings:
                 name="dashboard.lookup_events",
             ),
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
+            trigger_url=_load_dashboard_trigger_url(
+                dashboard_raw.get("trigger_url"),
+                allow_http=trigger_allow_http,
+            ),
+            trigger_auth_token=_optional_token(
+                dashboard_raw, "trigger_auth_token", "dashboard.trigger_auth_token"
+            ),
+            trigger_allow_http=trigger_allow_http,
         ),
         events=events,
         publish=publish,

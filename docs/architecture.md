@@ -79,7 +79,7 @@ search weights, see [search-weights.md](search-weights.md).
 | `locks/keys.py` | Lock key helpers shared by the Postgres and Redis backends |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
-| `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
+| `dashboard.py` | Standalone FastAPI dashboard: job status/history, user-id lookup, optional retrain (`cicerone dashboard`) |
 | `dashboard_lookup.py` | Dashboard inspector: recs lookup, `[input]` event history, allowlisted user attrs, assigned experiment variant |
 | `dashboard_experiments.py` | Experiments page: always-valid CIs, guardrails, promote winner |
 | `dashboard_config.py` | Configuration page: redacted view of the loaded Settings and features.toml |
@@ -396,7 +396,9 @@ compose maps port `8090`) for checking whether
 the last job run succeeded and inspecting a user's current top-K — it is
 **not** gated by `[job].mode` like serve/batch, so it's available even in
 plain batch-only deployments with no other HTTP surface. Like serve mode, it
-never imports `cicerone.model`/`dataset`/`automl`.
+never imports `cicerone.model`/`dataset`/`automl`. When `[job.trigger]` is
+enabled, status can POST the existing `/trigger/retrain` webhook; the
+trigger token stays on the dashboard process.
 
 - `io.factory.build_manifest_reader(settings.output)` builds a
   `ManifestReader` (`io/manifest_reader.py`) matching the configured output

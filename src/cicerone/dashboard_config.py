@@ -21,6 +21,7 @@ MISSING = "—"
 _SECRET_KEYS = frozenset(
     {
         "auth_token",
+        "trigger_auth_token",
         "metrics_token",
         "secret_access_key",
         "access_key_id",
