@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
@@ -14,26 +14,58 @@ from sqlalchemy import Engine, bindparam, text
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import engine_for
 from cicerone.io.options import require_option, sql_identifier
+from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
     DEFAULT_HISTORY_TABLE,
     DEFAULT_TRACK_TABLE,
     HISTORY_COLUMNS,
+    filter_history,
     history_sql_filter,
     jsonish,
     track_row_sql_filter,
+    unique_matching_rows,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class TrackDbBackend:
-    _engine: Engine | None
-    _engine_lock: threading.Lock
-    _options: dict[str, Any]
+    """Track rows, eval report and history in ``[output]`` tables."""
+
+    def __init__(self, options: dict[str, Any], fence: WriteFence):
+        self._options = options
+        self._fence = fence
+        self._engine: Engine | None = None
+        self._engine_lock = threading.Lock()
+        self._append_lock = threading.Lock()
 
     def _ensure_fence(self) -> None:
-        return None
+        self._fence.ensure()
+
+    def append_accepted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        with self._append_lock, self._fence.lease():
+            return self._append_rows_db(rows)
+
+    def read_rows(
+        self, *, kind: str | None, experiment_id: str | None, since: str | None
+    ) -> list[dict[str, Any]]:
+        rows = self._read_rows_db(kind=kind, experiment_id=experiment_id, since=since)
+        return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=since)
+
+    def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
+        return lambda: self._write_eval_db(payload)
+
+    def read_eval(self) -> dict[str, Any] | None:
+        return self._read_eval_db()
+
+    def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
+        del generated_at
+        return lambda: self._append_history_db(frame)
+
+    def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
+        frame = self._read_history_db(generated_ats=generated_ats)
+        return filter_history(frame, generated_ats=generated_ats, since=since)
 
     def _db_engine(self) -> Engine:
         engine = self._engine

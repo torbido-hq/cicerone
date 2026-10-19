@@ -187,9 +187,9 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
     assert len(store.read_history()) == 1
-    engine = store._db_engine()
+    engine = store.backend._db_engine()
     store.append_rows([_row(event_id="imp-2", item_id="ipa-002")])
-    assert store._db_engine() is engine
+    assert store.backend._db_engine() is engine
     assert len(store.read_rows()) == 2
 
 
@@ -222,7 +222,7 @@ def test_track_store_sqlite_concurrent_engine_init_reuses_one(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
     with ThreadPoolExecutor(max_workers=8) as pool:
-        engines = list(pool.map(lambda _: store._db_engine(), range(8)))
+        engines = list(pool.map(lambda _: store.backend._db_engine(), range(8)))
     assert len({id(engine) for engine in engines}) == 1
 
 
@@ -230,7 +230,7 @@ def test_track_store_sqlite_unknown_rowcount_does_not_over_accept(tmp_path) -> N
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(output)
-    engine = store._db_engine()
+    engine = store.backend._db_engine()
     real_begin = engine.begin
 
     class _HideRowcount:
@@ -449,7 +449,7 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     store = TrackStore(output)
     store.append_rows([_row()])
     store.write_eval({"ok": True})
-    engine = store._db_engine()
+    engine = store.backend._db_engine()
     with engine.begin() as conn:
         conn.execute(
             text('UPDATE "recommendation_eval" SET payload = :payload'),
@@ -512,13 +512,13 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
     store = TrackStore(output)
     assert store.append_rows([_row()]) == 1
     reads = {"n": 0}
-    original = store._read_bytes
+    original = store.backend._read_bytes
 
     def _count(filename: str) -> bytes | None:
         reads["n"] += 1
         return original(filename)
 
-    monkeypatch.setattr(store, "_read_bytes", _count)
+    monkeypatch.setattr(store.backend, "_read_bytes", _count)
     assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
     assert reads["n"] == 0
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
@@ -1023,11 +1023,11 @@ def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
             _row(event_id="new", occurred_at="2026-08-28T13:00:00Z"),
         ]
     )
-    store._known_ids = None
+    store.backend._known_ids = None
     recent = store.read_rows(since="2026-08-28T12:00:00Z")
     assert {row["event_id"] for row in recent} == {"new"}
-    assert store._known_ids is not None
-    assert {"old", "new"} <= store._known_ids
+    assert store.backend._known_ids is not None
+    assert {"old", "new"} <= store.backend._known_ids
 
 
 def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
@@ -1161,15 +1161,15 @@ def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
 def test_jsonl_append_retries_after_write_failure(tmp_path, monkeypatch) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(output)
-    original = store._append_bytes
+    original = store.backend._append_bytes
 
     def _boom(filename: str, payload: bytes) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(store, "_append_bytes", _boom)
+    monkeypatch.setattr(store.backend, "_append_bytes", _boom)
     with pytest.raises(OSError, match="disk full"):
         store.append_accepted_rows([_row(event_id="retry-1")])
-    monkeypatch.setattr(store, "_append_bytes", original)
+    monkeypatch.setattr(store.backend, "_append_bytes", original)
     accepted = store.append_accepted_rows([_row(event_id="retry-1")])
     assert [row["event_id"] for row in accepted] == ["retry-1"]
     assert [row["event_id"] for row in store.read_rows()] == ["retry-1"]
@@ -1293,8 +1293,43 @@ def test_track_read_history_s3_generated_ats_matches_z_and_offset() -> None:
 
 
 def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
+    from cicerone.locks import WriteFence
     from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
 
-    backend = TrackDbBackend.__new__(TrackDbBackend)
+    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))
     assert backend._ensure_fence() is None
     assert _existing_event_ids(None, "recommendation_track", ["", ""]) == set()
+
+
+def test_build_track_backend_picks_the_output_kind(tmp_path) -> None:
+    from cicerone.track.store import build_track_backend
+    from cicerone.track.store_dataset import TrackDatasetBackend
+    from cicerone.track.store_db import TrackDbBackend
+
+    db = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'track.db'}"})
+    dataset = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(db)
+    assert isinstance(store.backend, TrackDbBackend)
+    assert isinstance(TrackStore(dataset).backend, TrackDatasetBackend)
+    assert isinstance(build_track_backend(dataset, store.fence), TrackDatasetBackend)
+
+
+def test_track_writes_encode_before_taking_the_writer_lease(tmp_path) -> None:
+    class _NeverAcquire:
+        def acquire(self) -> bool:
+            raise AssertionError("encoding must fail before the writer lease is taken")
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return False
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    store = TrackStore(output, writer_lock=_NeverAcquire())
+    with pytest.raises(TypeError):
+        store.write_eval({"report": object()})
+    assert not (tmp_path / "track_eval.json").exists()
