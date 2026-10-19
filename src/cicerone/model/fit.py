@@ -259,7 +259,7 @@ class FitOptions:
             max_workers=settings.max_workers,
             epoch_metrics=settings.epoch_metrics,
             item_based_k_neighbors=settings.item_based_k_neighbors,
-            model_configs=settings.model_configs,
+            model_configs=deepcopy(settings.model_configs),
             content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
         )
 

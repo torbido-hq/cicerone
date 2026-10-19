@@ -307,6 +307,16 @@ def test_fit_options_from_settings_copies_the_fit_settings():
     )
 
 
+def test_fit_options_from_settings_is_a_snapshot_of_model_configs():
+    from support.settings import make_settings
+
+    settings = make_settings(model_configs={"collaborative": {"epochs": 2}})
+    options = FitOptions.from_settings(settings)
+    settings.model_configs["collaborative"]["epochs"] = 9
+    settings.model_configs["item_based"] = {"K": 3}
+    assert options.model_configs == {"collaborative": {"epochs": 2}}
+
+
 def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_items, feature_config):
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
