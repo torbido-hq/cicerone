@@ -77,6 +77,13 @@ class RedisTrackLog:
         rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
         return rows
 
+    @property
+    def key(self) -> str:
+        return self._log_key
+
+    def size(self) -> int:
+        return int(self._client.hlen(self._log_key))
+
     def ping(self) -> None:
         self._client.ping()
 

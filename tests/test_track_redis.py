@@ -60,6 +60,10 @@ class _FakeRedis:
         self._done("hsetnx")
         return stored
 
+    def hlen(self, key: str) -> int:
+        self._call("hlen")
+        return len(self.hashes.get(key, {}))
+
     def ping(self) -> bool:
         self._call("ping")
         self._done("ping")
@@ -457,3 +461,21 @@ def test_forget_user_refuses_object_store_output_before_touching_redis(monkeypat
     with pytest.raises(ConfigError, match="forget-user requires"):
         forget_user(output, "alice", redis_url="redis://localhost:6379/0")
     assert sorted(_log(client)) == ["imp-1"]
+
+
+def test_redis_track_logs_its_key_and_size(caplog):
+    import logging
+
+    from cicerone.events.errors import RedisError as RedisConnectionError
+
+    client = _FakeRedis()
+    store = _store(client)
+    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+    key = next(iter(client.hashes))
+    with caplog.at_level(logging.INFO, logger="cicerone.track.store"):
+        store.log_redis_location()
+        client.fail_next["hlen"] = RedisConnectionError("Connection refused")
+        store.log_redis_location()
+    assert f"Track log: redis key {key} (2 rows)" in caplog.text
+    assert f"Track log: redis key {key} (unreachable at startup)" in caplog.text
+    TrackStore(_OUTPUT).log_redis_location()

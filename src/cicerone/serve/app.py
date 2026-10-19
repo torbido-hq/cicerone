@@ -305,6 +305,8 @@ def create_app(
         if settings.track.enabled
         else None
     )
+    if track_store is not None:
+        track_store.log_redis_location()
     overlay = (
         consumed
         if consumed is not None

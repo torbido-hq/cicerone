@@ -15,6 +15,7 @@ from sqlalchemy import Engine
 
 from cicerone.config.settings import IOSettings, Settings
 from cicerone.deprecation import renamed_attribute
+from cicerone.events.errors import RedisError
 from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,  # noqa: F401
@@ -120,6 +121,18 @@ class TrackStore(TrackDbBackend, TrackDatasetBackend):
                 key_prefix=self._redis_key_prefix,
             )
         return self._redis_log
+
+    def log_redis_location(self) -> None:
+        """Log the Redis key and its size, so a wrong prefix shows up as an unexpected key or an empty log."""
+        redis_log = self._track_log()
+        if redis_log is None:
+            return
+        try:
+            rows = redis_log.size()
+        except RedisError:
+            logger.warning("Track log: redis key %s (unreachable at startup)", redis_log.key)
+            return
+        logger.info("Track log: redis key %s (%d rows)", redis_log.key, rows)
 
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
