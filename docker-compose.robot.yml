@@ -1,0 +1,126 @@
+version: "3.9"
+
+# Robot Framework system tests (see system_tests/README.md), run locally with
+# the commands below and in CI as the `system-tests` job in
+# .github/workflows/ci.yml. Brings up a throwaway Postgres plus the real
+# recommender/serve/dashboard images, seeds a tiny catalog, then runs the
+# Robot suite against the actually-running containers over HTTP:
+#
+#   mkdir -p system_tests/results
+#   docker compose -f docker-compose.robot.yml up --build -d \
+#     postgres recommender serve dashboard
+#   docker compose -f docker-compose.robot.yml run --rm --build \
+#     --user "$(id -u):$(id -g)" robot
+#   docker compose -f docker-compose.robot.yml down -v
+#
+# (run/up split deliberately — seed/robot are one-shot containers that exit
+# 0 on success; --abort-on-container-exit would treat that as a failure of
+# the whole stack if seed/recommender/serve/dashboard were started together
+# with it.)
+#
+# --user + pre-creating the results dir keep its contents owned by the
+# invoking host user instead of root (the robot image has no app user).
+#
+# Results (log.html/report.html/output.xml) land in system_tests/results/.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cicerone
+      POSTGRES_PASSWORD: cicerone
+      POSTGRES_DB: cicerone_robot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cicerone -d cicerone_robot"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  seed:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./system_tests:/app/system_tests:ro
+    entrypoint: []
+    command: ["python", "system_tests/seed_catalog.py"]
+
+  recommender:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    command: ["start", "--config", "/app/config/cicerone.robot.toml"]
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8080/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 90
+      start_period: 10s
+
+  serve:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    command: ["start", "--config", "/app/config/cicerone.robot.serve.toml"]
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      recommender:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    command: ["dashboard", "--config", "/app/config/cicerone.robot.dashboard.toml"]
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      recommender:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8090/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  robot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.robot
+    environment:
+      SERVE_BASE_URL: http://serve:8000
+      SERVE_AUTH_TOKEN: robot-serve-token
+      DASHBOARD_BASE_URL: http://dashboard:8090
+      DASHBOARD_USERNAME: robot
+      DASHBOARD_PASSWORD: robot-password
+      TRIGGER_BASE_URL: http://recommender:8080
+      TRIGGER_AUTH_TOKEN: robot-trigger-token
+    volumes:
+      - ./system_tests/results:/app/system_tests/results
+    depends_on:
+      serve:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
