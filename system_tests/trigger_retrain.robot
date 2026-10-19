@@ -17,16 +17,19 @@ Retrain Requires A Bearer Token
 Retrain Accepts A Valid Token And Starts A Run
     ${before}=    Latest Run Generated At
     Set Suite Variable    ${RUN_BEFORE_TRIGGER}    ${before}
-    # A cron run holds the run guard (429) until it finishes; retry until accepted.
-    Wait Until Keyword Succeeds    90s    2s    Trigger Is Accepted
+    # A cron run holds the run guard (429) until it finishes; only a 429 is retried.
+    Wait Until Keyword Succeeds    90s    2s    Trigger Is Not Busy
+    Should Be Equal As Integers    ${TRIGGER_STATUS}    202
 
 Triggered Run Eventually Appears On The Dashboard As Webhook
     Wait Until Keyword Succeeds    30s    1s    Dashboard Shows A Webhook Triggered Run
 
 *** Keywords ***
-Trigger Is Accepted
+Trigger Is Not Busy
     ${headers}=    Trigger Auth Headers
-    POST On Session    trigger    /trigger/retrain    headers=${headers}    expected_status=202
+    ${response}=    POST On Session    trigger    /trigger/retrain    headers=${headers}    expected_status=any
+    Set Test Variable    ${TRIGGER_STATUS}    ${response.status_code}
+    Should Not Be Equal As Integers    ${response.status_code}    429    Trigger busy (429)
 
 Latest Run Block
     ${response}=    GET On Session    dashboard    /partials/status    expected_status=200

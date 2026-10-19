@@ -187,3 +187,15 @@ def test_a_connection_dropped_after_the_post_is_reported_as_ambiguous(caplog):
         worker.join(timeout=5)
         listener.close()
     assert "dropped the connection" in caplog.text
+
+
+def test_is_loopback_host_is_shared_by_config_and_the_derived_url():
+    from cicerone.config import load as config_load
+    from cicerone.config.validation import is_loopback_host
+
+    assert config_load.is_loopback_host is is_loopback_host
+    assert dashboard_retrain.is_loopback_host is is_loopback_host
+    for host in ("localhost", "LOCALHOST", "127.0.0.1", "127.0.0.2", "::1"):
+        assert is_loopback_host(host)
+    for host in ("recommender", "10.0.0.5", "::", "0.0.0.0", "loopback.example"):
+        assert not is_loopback_host(host)

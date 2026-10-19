@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 from cicerone.config import Settings
+from cicerone.config.validation import is_loopback_host
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +30,6 @@ def _loopback_for_wildcard(host: str) -> str:
         return host
     # ::1 always reaches an IPv6 wildcard bind; 127.0.0.1 needs a dual-stack socket.
     return "::1" if address.version == 6 else "127.0.0.1"
-
-
-def _is_loopback(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -63,7 +55,7 @@ def trigger_base_url(settings: Settings) -> str:
         return settings.dashboard.trigger_url
     host = _loopback_for_wildcard(settings.trigger.host)
     # Only a same-host trigger is derived: the token must not cross a network over plain HTTP by default.
-    if not _is_loopback(host):
+    if not is_loopback_host(host):
         logger.warning("Retrain trigger host %r is not loopback and [dashboard].trigger_url is unset", host)
         raise RetrainError(_NEEDS_URL)
     if ":" in host:
@@ -103,7 +95,7 @@ def request_retrain(settings: Settings) -> str:
         logger.warning("Retrain trigger at %s timed out", url)
         raise RetrainError(_TIMED_OUT) from exc
     except (http.client.HTTPException, OSError) as exc:
-        # urllib wraps send errors in URLError; a raw error comes from reading the response, after the POST.
+        # urllib wraps send errors in URLError; one raised unwrapped is past the send, e.g. reading the reply.
         logger.warning("Retrain trigger at %s dropped the connection: %r", url, exc)
         raise RetrainError(_DROPPED) from exc
     return "Retrain started"

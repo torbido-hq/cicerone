@@ -61,7 +61,9 @@ def _owned(conn, tables: set[str]) -> bool:
     # The marker records the database OID, so a copied or unrelated database with the table is refused.
     current = conn.execute(text("SELECT oid FROM pg_database WHERE datname = current_database()")).scalar()
     try:
-        stored = conn.execute(text(f'SELECT database_oid FROM "{SEED_MARKER_TABLE}"')).scalars().all()
+        # A savepoint keeps the transaction usable if the marker has another shape.
+        with conn.begin_nested():
+            stored = conn.execute(text(f'SELECT database_oid FROM "{SEED_MARKER_TABLE}"')).scalars().all()
     except ProgrammingError:
         return False
     return stored == [current]
@@ -76,6 +78,8 @@ def main() -> None:
     try:
         # One transaction: a failed seed leaves neither replaced tables nor the marker behind.
         with engine.begin() as conn:
+            # Two seeders at once would both see an empty database; serialize them.
+            conn.execute(text(f"SELECT pg_advisory_xact_lock(hashtext('{SEED_MARKER_TABLE}'))"))
             if not _owned(conn, set(inspect(conn).get_table_names())):
                 raise SystemExit(
                     f"Refusing to seed {url.database!r}: it has tables but no {SEED_MARKER_TABLE} marker "
