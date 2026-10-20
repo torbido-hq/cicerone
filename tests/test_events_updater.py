@@ -978,9 +978,9 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     replace_calls: list[tuple[list[str], set[str]]] = []
     real_replace = sink.replace_recommendations_for_users
 
-    def tracking_replace(df, *, user_ids):  # type: ignore[no-untyped-def]
+    def tracking_replace(df, *, user_ids, **kwargs):  # type: ignore[no-untyped-def]
         replace_calls.append((sorted(user_ids), set(df["user_id"].astype(str)) if not df.empty else set()))
-        return real_replace(df, user_ids=user_ids)
+        return real_replace(df, user_ids=user_ids, **kwargs)
 
     monkeypatch.setattr(sink, "replace_recommendations_for_users", tracking_replace)
     updater = IncrementalUpdater(

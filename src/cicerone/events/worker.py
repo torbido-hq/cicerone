@@ -22,11 +22,13 @@ from cicerone.events.errors import (
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
+from cicerone.io.applied_events import replay_key
 from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
 from cicerone.metrics import (
     record_events_apply_busy,
     record_events_flush,
     record_events_lock,
+    record_events_replayed,
     record_events_tick_error,
     update_events_leader,
     update_events_source_health,
@@ -97,6 +99,7 @@ class EventWorker:
         self._applied_fingerprints = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
         self._ephemeral_event_ids = isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
         self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
+        updater.use_replay_key(self._replay_key)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -265,6 +268,11 @@ class EventWorker:
 
     def _fingerprint_dedupe(self, event: NormalizedEvent) -> bool:
         return self._ephemeral_event_ids and event.generated_event_id
+
+    def _replay_key(self, event: NormalizedEvent) -> str:
+        if self._fingerprint_dedupe(event):
+            return replay_key("fingerprint", event_fingerprint(event))
+        return replay_key("id", event.event_id)
 
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
@@ -545,6 +553,17 @@ class EventWorker:
                 self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
+        try:
+            replayed = self._updater.applied_before(ready)
+        except EVENT_APPLY_ERRORS:
+            record_events_flush(status="error")
+            logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
+            self._return_events(ready)
+            return 0
+        if replayed:
+            ready = self._ack_replayed(ready, replayed)
+            if not ready:
+                return 0
         applied: int | None = None
         try:
             try:
@@ -644,6 +663,20 @@ class EventWorker:
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _ack_replayed(
+        self, ready: list[NormalizedEvent], replayed: list[NormalizedEvent]
+    ) -> list[NormalizedEvent]:
+        # Recorded by an earlier write (e.g. before a restart): ack instead of applying twice.
+        logger.info("Acking %d event(s) already applied by an earlier write", len(replayed))
+        record_events_replayed(len(replayed))
+        self._remember_applied(replayed)
+        try:
+            self._ack_unbuffered(replayed)
+        except EVENT_SOURCE_ERRORS:
+            logger.exception("Event source ack failed for already-applied event(s); retrying later")
+        skip = {id(event) for event in replayed}
+        return [event for event in ready if id(event) not in skip]
 
     def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:
         record_events_tick_error()

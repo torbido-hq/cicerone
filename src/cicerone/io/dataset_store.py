@@ -15,12 +15,14 @@ import logging
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from pyarrow.lib import ArrowException
 
+from cicerone.io.applied_events import APPLIED_EVENTS_ATTR, merge_applied_keys, unexpired_keys
 from cicerone.io.blob import S3_READ_ERRORS, read_storage_bytes, write_storage_bytes
 from cicerone.io.filenames import (
     EVENTS_FILENAME,
@@ -225,21 +227,34 @@ class DatasetOutputSink:
         with self._maybe_recommendations_lock():
             self._write_recommendations_unlocked(df)
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+    def _read_recommendations_or_empty(self, columns: Sequence[str] | None = None) -> pd.DataFrame:
+        try:
+            return read_parquet(self._options, RECOMMENDATIONS_FILENAME, columns=columns)
+        except FileNotFoundError:
+            return pd.DataFrame()
+        except S3_READ_ERRORS as exc:
+            if is_s3_not_found(exc):
+                return pd.DataFrame()
+            raise
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
+        wanted = {str(key) for key in keys}
+        if not wanted:
+            return set()
+        frame = self._read_recommendations_or_empty(columns=[USER_COLUMN])
+        recorded = frame.attrs.get(APPLIED_EVENTS_ATTR) or {}
+        return wanted & unexpired_keys(recorded, datetime.now(UTC))
+
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         # Read-modify-write under host fcntl plus the optional dataset-append lease.
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
         with self._maybe_recommendations_lock():
-            try:
-                existing = read_parquet(self._options, RECOMMENDATIONS_FILENAME)
-            except FileNotFoundError:
-                existing = pd.DataFrame()
-            except S3_READ_ERRORS as exc:
-                if is_s3_not_found(exc):
-                    existing = pd.DataFrame()
-                else:
-                    raise
+            existing = self._read_recommendations_or_empty()
+            recorded = existing.attrs.get(APPLIED_EVENTS_ATTR) or {}
             if existing.empty:
                 remaining = existing
             elif USER_COLUMN not in existing.columns:
@@ -249,7 +264,13 @@ class DatasetOutputSink:
             else:
                 remaining = existing[~existing[USER_COLUMN].astype(str).isin(ids)]
             parts = [frame for frame in (remaining, df) if not frame.empty]
-            merged = pd.concat(parts, ignore_index=True) if parts else df
+            merged = pd.concat(parts, ignore_index=True) if parts else df.copy()
+            # The record rides in the same parquet write as the rows, so it lands only with them.
+            merged.attrs = {}
+            if applied_keys or recorded:
+                merged.attrs[APPLIED_EVENTS_ATTR] = merge_applied_keys(
+                    recorded, applied_keys, datetime.now(UTC)
+                )
             self._write_recommendations_unlocked(merged)
             if merged.empty or USER_COLUMN not in merged.columns:
                 return 0

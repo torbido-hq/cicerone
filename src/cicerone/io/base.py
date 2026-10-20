@@ -54,6 +54,17 @@ class OutputSink(Protocol):
 
 # Optional sink capabilities; callers check them with isinstance.
 @runtime_checkable
+class AppliedEventLog(Protocol, metaclass=CapabilityMeta):
+    """Records incremental event keys in the same write as the recommendations they produced."""
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]: ...
+
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int: ...
+
+
+@runtime_checkable
 class GuardedRecommendationsSink(Protocol, metaclass=CapabilityMeta):
     def recommendations_write(self) -> AbstractContextManager[None]: ...
 

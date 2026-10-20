@@ -293,8 +293,17 @@ publishing, a failed heartbeat) is logged with
 its traceback and counted in `cicerone_events_tick_errors_total`, and the
 batch is acked so it is not applied twice; a lost apply fence also drops
 leadership. The cache and serve reader are refreshed before those steps.
-A crash or interrupt between the write and the ack still redelivers the
-batch, which is then applied again. A
+A redelivery after a crash or interrupt between the write and the ack is
+not applied again: a hash of each event's id (or of its fingerprint, for
+generated ids) is saved in the same write as the recommendations — the
+`incremental_applied_events` table on db output
+(`[output].applied_events_table`), the `recommendations.parquet` metadata
+on dataset output — and an event already recorded is acked instead of
+applied (`cicerone_events_replayed_total`). A key counts for 7 days; older
+ones are ignored and pruned on the next write. Dataset output keeps at most
+the newest 100,000 keys, and a full retrain clears them there (db output
+keeps its table). This relies on one writer: run several replicas with the
+apply lock described below. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
 land after a later write.
 Requires the matching extra.
@@ -369,6 +378,7 @@ Serve `/metrics` (when events are enabled):
 | `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
+| `cicerone_events_replayed_total` | Redelivered events already applied by an earlier write, acked without applying |
 | `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths, and flush failures after a committed write |
 | `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
 | `cicerone_events_leader` | `1` while this replica owns the apply lock |
