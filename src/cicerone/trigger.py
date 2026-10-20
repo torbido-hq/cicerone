@@ -18,7 +18,7 @@ from cicerone.http_security import SecurityHeadersMiddleware
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
-from cicerone.serve.metrics import record_retrain_trigger
+from cicerone.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
 

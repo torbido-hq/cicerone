@@ -66,7 +66,7 @@ def test_post_track_increments_prometheus(tmp_path):
     from prometheus_client import generate_latest
     from support.prometheus_metrics import metric_value
 
-    from cicerone.serve.metrics import record_track_ingest
+    from cicerone.metrics import record_track_ingest
 
     before = metric_value(
         generate_latest().decode(),
