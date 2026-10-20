@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Quality live metrics load recommendations for users in the lookback window.
 - Config loading logs a warning for each unknown key in `cicerone.toml`
   (e.g. a typo like `top_K`) instead of silently ignoring it.
+- `ExperimentStore` delegates to a db or dataset backend
+  (`cicerone.experiment.store_db` / `store_dataset`) picked once by
+  `build_experiment_backend`, instead of branching on the output kind.
 - Underscore helpers shared across modules are now public (e.g.
   `cicerone.evaluation.merge_asof_events`, `cicerone.locks.hold.lock_owned`).
   `_annotate_source` is now `annotate_impression_source`.
