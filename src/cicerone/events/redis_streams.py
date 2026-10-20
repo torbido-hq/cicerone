@@ -11,6 +11,7 @@ from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import RedisError
 from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.option_parse import as_int
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,7 @@ def validate_redis_stream_options(options: dict[str, Any]) -> None:
 
 
 def _as_int(options: dict[str, Any], key: str, default: int) -> int:
-    raw = options.get(key, default)
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be an integer, got {raw!r}") from exc
+    return as_int(options, key, default, prefix="events.options")
 
 
 def _require_str(options: dict[str, Any], key: str) -> str:
