@@ -22,6 +22,13 @@ import pandas as pd
 from pyarrow.lib import ArrowException
 
 from cicerone.io.blob import S3_READ_ERRORS, read_storage_bytes, write_storage_bytes
+from cicerone.io.filenames import (
+    EVENTS_FILENAME,
+    ITEMS_FILENAME,
+    MANIFEST_FILENAME,
+    RECOMMENDATIONS_FILENAME,
+    USERS_FILENAME,
+)
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -64,7 +71,7 @@ class DatasetInputSource:
         return read_parquet(self._options, filename)
 
     def read_events(self) -> pd.DataFrame:
-        return self._read("events.parquet")
+        return self._read(EVENTS_FILENAME)
 
     def _read_optional(self, filename: str, label: str) -> pd.DataFrame | None:
         try:
@@ -81,10 +88,10 @@ class DatasetInputSource:
             raise
 
     def read_users(self) -> pd.DataFrame | None:
-        return self._read_optional("users.parquet", "user")
+        return self._read_optional(USERS_FILENAME, "user")
 
     def read_items(self) -> pd.DataFrame | None:
-        return self._read_optional("items.parquet", "item")
+        return self._read_optional(ITEMS_FILENAME, "item")
 
     def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
         try:
@@ -107,11 +114,11 @@ class DatasetInputSource:
         return filter_rows_for_user(frame, user_id)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
-        return newest_events(self._read_for_user("events.parquet", user_id), limit)
+        return newest_events(self._read_for_user(EVENTS_FILENAME, user_id), limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         try:
-            frame = self._read_for_user("users.parquet", user_id)
+            frame = self._read_for_user(USERS_FILENAME, user_id)
         except FileNotFoundError:
             return None
         except S3_READ_ERRORS as exc:
@@ -212,7 +219,7 @@ class DatasetOutputSink:
         buffer = io.BytesIO()
         df.to_parquet(buffer, index=False)
         self._ensure_writer_still_held()
-        self._write_bytes("recommendations.parquet", buffer.getvalue(), "application/octet-stream")
+        self._write_bytes(RECOMMENDATIONS_FILENAME, buffer.getvalue(), "application/octet-stream")
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
         with self._maybe_recommendations_lock():
@@ -225,7 +232,7 @@ class DatasetOutputSink:
             return 0
         with self._maybe_recommendations_lock():
             try:
-                existing = read_parquet(self._options, "recommendations.parquet")
+                existing = read_parquet(self._options, RECOMMENDATIONS_FILENAME)
             except FileNotFoundError:
                 existing = pd.DataFrame()
             except S3_READ_ERRORS as exc:
@@ -260,11 +267,11 @@ class DatasetOutputSink:
         with self._maybe_recommendations_lock():
             self._ensure_writer_still_held()
             if skip_if_newer_than is not None and _existing_manifest_newer(
-                self._read_bytes("manifest.json"), skip_if_newer_than
+                self._read_bytes(MANIFEST_FILENAME), skip_if_newer_than
             ):
                 return False
             self._ensure_writer_still_held()
-            self._write_bytes("manifest.json", payload, "application/json")
+            self._write_bytes(MANIFEST_FILENAME, payload, "application/json")
             return True
 
     def _read_bytes(self, filename: str) -> bytes | None:

@@ -31,7 +31,7 @@ from cicerone.io.recommendation_reader_common import (
     item_snapshot_columns,
     normalize_items_snapshot,
 )
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 

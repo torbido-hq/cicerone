@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `cicerone.locks.WriteFence` bundles a writer lock with its fence check.
   `build_output_sink`, the output sinks, `TrackStore` and `ExperimentStore`
   accept `fence=`; the `writer_lock` / `fence_*` keywords still work.
+- `cicerone.model.FitOptions` bundles the strategy-fit settings
+  (`max_workers`, `epoch_metrics`, `item_based_k_neighbors`,
+  `model_configs`, `content_fallback_max_neighbors`). `fit_strategies` and
+  `train_and_recommend` accept `fit=`; the individual keywords still work.
 
 ### Changed
 
