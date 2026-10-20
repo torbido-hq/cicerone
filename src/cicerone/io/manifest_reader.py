@@ -79,12 +79,16 @@ class DbManifestReader:
         return rows[0] if rows else None
 
     def read_recent(self, limit: int) -> list[dict[str, Any]]:
-        from sqlalchemy import MetaData, Table, inspect, select
+        from sqlalchemy import Integer, MetaData, Table, inspect, select
 
         if not inspect(self._engine).has_table(self._table):
             return []
         table = Table(self._table, MetaData(), autoload_with=self._engine)
         stmt = select(table).order_by(table.c.generated_at.desc()).limit(limit)
         df = pd.read_sql(stmt, self._engine)
+        # read_sql turns an integer column with a NULL into float64 (5 -> 5.0).
+        for column in table.columns:
+            if isinstance(column.type, Integer) and column.name in df:
+                df[column.name] = df[column.name].astype("Int64")
         df = df.astype(object).where(df.notna(), None)
         return df.to_dict(orient="records")

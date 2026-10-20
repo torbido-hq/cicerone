@@ -99,6 +99,26 @@ def test_db_reader_nan_columns_from_a_pre_upgrade_row_become_none():
     assert latest["error"] is None
 
 
+def test_db_reader_keeps_integer_columns_integral_next_to_a_null():
+    # A full run leaves incremental_events_applied NULL; the incremental run's count must stay 1, not 1.0.
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+    sink.write_manifest(
+        {
+            "generated_at": "2026-07-28T00:00:00+00:00",
+            "status": "success",
+            "n_events": 1,
+            "incremental_events_applied": 1,
+        }
+    )
+    sink.write_manifest({"generated_at": "2026-07-27T00:00:00+00:00", "status": "success", "n_events": 7})
+
+    runs = DbManifestReader({"database_url": TEST_DATABASE_URL}).read_recent(2)
+
+    assert [type(run["incremental_events_applied"]) for run in runs] == [int, type(None)]
+    assert [run["incremental_events_applied"] for run in runs] == [1, None]
+    assert [run["n_events"] for run in runs] == [1, 7]
+
+
 def test_db_reader_missing_database_url_raises():
     with pytest.raises(ConfigError, match="database_url"):
         DbManifestReader({})
