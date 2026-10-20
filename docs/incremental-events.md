@@ -169,8 +169,9 @@ OpenAPI documents the route when webhook events are enabled (`/docs`,
 `kind = "webhook"` keeps `_pending` and `_in_flight` **in process
 memory**. A `202` is not a durable write. A hard restart drops accepted
 events that have not flushed. Graceful stop tries to drain the buffer;
-if the apply lock is busy or the fence is lost, those events are nacked
-back into memory and still die with the process.
+if the apply lock is busy or the fence is lost before the write, those
+events are nacked back into memory and still die with the process. Once
+their recommendations are written they are acked.
 
 That is different from:
 
@@ -286,10 +287,11 @@ source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}
 (also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
 after a successful write are logged and do not fail the job or incremental
 flush. A lost retrain fence after the write still fails the job. In an
-incremental flush, any other sidecar error after the write (a bug, a lost
-apply fence) is logged with its traceback and counted in
-`cicerone_events_tick_errors_total`, and the batch is acked so it is not
-applied twice; a lost apply fence also drops leadership. A
+incremental flush, any failure after the recommendations write (a sidecar
+or manifest error, a lost apply fence, a failed heartbeat) is logged with
+its traceback and counted in `cicerone_events_tick_errors_total`, and the
+batch is acked so it is not applied twice; a lost apply fence also drops
+leadership. An interrupt after the write acks the batch too. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
 land after a later write.
 Requires the matching extra.

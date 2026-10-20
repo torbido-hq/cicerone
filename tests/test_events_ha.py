@@ -814,8 +814,11 @@ def test_ha_worker_nacks_when_heartbeat_raises(tmp_path, feature_config: Feature
     assert source.health().lag == 1
 
 
-def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: FeatureConfig):
-    _out, settings = _seed_out(tmp_path)
+def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_raises(
+    tmp_path, feature_config: FeatureConfig
+):
+    # The write happened, so a nack would apply the batch twice.
+    out, settings = _seed_out(tmp_path)
 
     class _LaterBoom(WebhookEventSource):
         def __init__(self) -> None:
@@ -844,9 +847,13 @@ def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: F
         return original(events, persist_online=persist_online)
 
     worker._updater.apply = _slow  # type: ignore[method-assign]
-    assert worker.tick() == 0
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
     assert source.beats >= 2
-    assert source.health().lag == 1
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = pd.read_parquet(out / "recommendations.parquet")
+    assert "ihbl" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
 def test_inflight_heartbeat_preserves_apply_error():

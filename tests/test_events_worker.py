@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pandas as pd
 import pytest
 from support.events import event_payload
@@ -8,7 +10,7 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import EVENT_APPLY_ERRORS, PostWriteError
+from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
@@ -16,7 +18,6 @@ from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.locks import LockLostError
 from cicerone.serve.metrics import update_events_leader
 
 
@@ -3360,40 +3361,114 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
     assert updater.events_applied == 1
 
 
-def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_write(
-    tmp_path, feature_config: FeatureConfig
-):
+def _dataset_updater(tmp_path, feature_config: FeatureConfig, **kwargs):  # type: ignore[no-untyped-def]
     out = tmp_path / "out"
-    out.mkdir()
+    out.mkdir(exist_ok=True)
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
         top_k=3,
     )
-    source = WebhookEventSource({})
-    source.ingest(event_payload(event_id="post-write-lost"))
-
-    class _LostAfterWrite(IncrementalUpdater):
-        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
-            del persist_online
-            try:
-                raise LockLostError("events apply lock lost before write", kind="apply")
-            except LockLostError as exc:
-                raise PostWriteError("sidecar failed", applied=len(events)) from exc
-
-    worker = EventWorker(
-        source,
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
-        _LostAfterWrite(
-            sink=build_output_sink(settings.output),
-            output_settings=settings.output,
-            feature_config=feature_config,
-            top_k=3,
-        ),
+    sink = build_output_sink(settings.output)
+    updater = IncrementalUpdater(
+        sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
     )
+    return settings, sink, updater
+
+
+def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]
+    written = load_recommendations_frame(settings.output)
+    return set(written[written["user_id"] == user_id]["item_id"].astype(str))
+
+
+def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_write(
+    tmp_path, feature_config: FeatureConfig
+):
+    lost = {"after_write": False}
+    settings, sink, updater = _dataset_updater(
+        tmp_path, feature_config, fence_check=lambda: not lost["after_write"]
+    )
+    replace = sink.replace_recommendations_for_users
+
+    def _replace_then_lose(*args, **kwargs):  # type: ignore[no-untyped-def]
+        written = replace(*args, **kwargs)
+        lost["after_write"] = True
+        return written
+
+    sink.replace_recommendations_for_users = _replace_then_lose  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
     update_events_leader(True)
+
     assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
     assert source.health().lag == 0
     assert registry_metric_value("cicerone_events_leader") == 0
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+
+
+def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendations(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+
+    assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
+
+
+def test_event_worker_does_not_ack_a_new_batch_on_an_earlier_write(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    _settings, _sink, updater = _dataset_updater(tmp_path, feature_config)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="first", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    assert worker.tick() == 1
+    assert updater.writes == 1
+
+    @contextmanager
+    def _interrupted_heartbeat(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise KeyboardInterrupt
+        yield
+
+    monkeypatch.setattr("cicerone.events.worker.inflight_heartbeat", _interrupted_heartbeat)
+    source.ingest(event_payload(event_id="second", user_id="u2", item_id="i8"))
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+def test_event_worker_acks_when_interrupted_during_the_ack(tmp_path, feature_config: FeatureConfig):
+    settings, _sink, updater = _dataset_updater(tmp_path, feature_config)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="ack-interrupted", user_id="u1", item_id="i9"))
+    ack = source.ack
+    calls = {"n": 0}
+
+    def _interrupt_first_ack(event_ids):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise KeyboardInterrupt
+        return ack(event_ids)
+
+    source.ack = _interrupt_first_ack  # type: ignore[method-assign]
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert calls["n"] == 2
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
 
 
 def test_event_worker_acks_written_events_when_interrupted_after_the_write(
@@ -3437,6 +3512,43 @@ def test_event_worker_acks_written_events_when_interrupted_after_the_write(
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
     source.ingest(event_payload(event_id="interrupted-1", user_id="u1", item_id="i9"))
     assert worker.tick() == 0
+
+
+def test_event_worker_keeps_a_failed_interrupt_ack_and_persists_online(
+    tmp_path, feature_config: FeatureConfig
+):
+    class _InterruptedPublisher:
+        def connect(self) -> None:
+            raise KeyboardInterrupt
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            raise AssertionError("publish must not run")
+
+        def close(self) -> None:
+            return None
+
+    persisted: list[int] = []
+    settings, _sink, updater = _dataset_updater(tmp_path, feature_config, publisher=_InterruptedPublisher())
+    updater.persist_online = lambda: persisted.append(1)  # type: ignore[method-assign]
+    updater.abort_online = lambda: (_ for _ in ()).throw(AssertionError("refresh must not be dropped"))  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="ack-fails", user_id="u1", item_id="i9"))
+
+    def _ack_fails(_event_ids):  # type: ignore[no-untyped-def]
+        raise OSError("broker gone")
+
+    source.ack = _ack_fails  # type: ignore[method-assign]
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert "i9" in _written_items(settings, "u1")
+    assert [event.event_id for event in worker._retry_acks] == ["ack-fails"]
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    assert persisted == [1]
+    worker._ack_written_on_interrupt(list(worker._retry_acks))
+    assert [event.event_id for event in worker._retry_acks] == ["ack-fails"]
 
 
 def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(

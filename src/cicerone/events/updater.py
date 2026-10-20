@@ -15,7 +15,6 @@ from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.errors import PostWriteError
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import empty_recommendations_frame
@@ -110,7 +109,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._written_events = 0
+        self._writes = 0
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
@@ -123,9 +122,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         return self._last_success_at
 
     @property
-    def written_events(self) -> int:
-        """Events of the current ``apply`` whose recommendations are already written."""
-        return self._written_events
+    def writes(self) -> int:
+        """Committed recommendation writes so far; a change across ``apply`` means it wrote."""
+        return self._writes
 
     @property
     def events_applied(self) -> int:
@@ -161,7 +160,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._abort_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
-        self._written_events = 0
         if not events:
             return 0
         if self.retrain_busy():
@@ -212,7 +210,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 return 0
             self._ensure_fence()
             n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
-            self._written_events = len(events)
+            self._writes += 1
             now = datetime.now(UTC)
             manifest = {
                 "triggered_by": "incremental",
@@ -251,12 +249,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         with recommendations_write_guard(self._sink):
             applied = _persist()
         if pending_publish is not None:
-            try:
-                self._publish_sidecar(*pending_publish)
-            except Exception as exc:
-                raise PostWriteError(
-                    f"Incremental sidecar failed after a successful write: {exc}", applied=applied
-                ) from exc
+            self._publish_sidecar(*pending_publish)
         return applied
 
     def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str, replace_ids: list[str]) -> None:

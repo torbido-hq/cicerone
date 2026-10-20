@@ -54,10 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- An incremental sidecar failure after a successful write (an unexpected
-  error, a lost apply fence, a busy writer lock) no longer nacks the
-  batch, so the events are not applied twice. It is logged, counted in
-  `cicerone_events_tick_errors_total`, and the batch is acked.
+- An incremental flush that fails after its recommendations are written
+  (a sidecar or manifest error, a lost apply fence, a failed heartbeat)
+  no longer nacks the batch, so the events are not applied twice. It is
+  logged, counted in `cicerone_events_tick_errors_total`, and the batch is
+  acked; an interrupt after the write acks it too.
 - Redis Streams polling, health, heartbeat, and close paths only recover
   from Redis client errors. Unexpected exceptions now propagate.
 - Kafka consumption only recovers from Kafka client errors while polling,
