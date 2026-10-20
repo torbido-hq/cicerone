@@ -36,9 +36,12 @@ skips the `db` tests (no `TEST_DATABASE_URL`) and will under-report coverage
 
 The `robot` service runs the Robot Framework system/E2E suites
 (`tests/robot/*.robot`): the local-parquet journeys
-(`system_dataset.robot`, `system_dataset_quality.robot`) need no database;
-the Postgres journeys (`system_db.robot`, `system_db_quality.robot`) share
-the same throwaway `db-test` instance as the pytest `db` tests. It runs
+(`system_dataset.robot`, `system_dataset_quality.robot`,
+`system_events_dataset.robot`) need no database; the Postgres journeys
+(`system_db.robot`, `system_db_quality.robot`, `system_events_db.robot`)
+and the mixed db-in / dataset-out journeys (`system_mixed.robot`,
+`system_mixed_quality.robot`) share the same throwaway `db-test` instance
+as the pytest `db` tests. It runs
 under `coverage run` (serve/dashboard/job code runs in-process via
 `TestClient`, so coverage captures it like pytest-cov does) writing into
 the `coverage-data` bind mount shared with `test`; `coverage-report` then
