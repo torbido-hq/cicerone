@@ -644,11 +644,12 @@ class EventWorker:
             )
             self._persist_online_after_ack()
             raise
-        self._persist_online_after_ack()
         if post_write_failed:
             record_events_flush(status="error")
-        else:
-            record_events_flush(status="success", events=applied)
+            self._persist_online_after_ack()
+            return applied
+        self._persist_online_after_ack()
+        record_events_flush(status="success", events=applied)
         return applied
 
     def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:

@@ -3444,6 +3444,30 @@ def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, fea
     assert registry_metric_value("cicerone_events_flush_events_total") == before_events
 
 
+def test_event_worker_counts_a_post_write_failure_when_the_online_persist_raises(
+    tmp_path, feature_config: FeatureConfig
+):
+    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    def _persist_bug() -> None:
+        raise RuntimeError("persist bug")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    updater.persist_online = _persist_bug  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-raises", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+
+    with pytest.raises(RuntimeError, match="persist bug"):
+        worker.tick()
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert source.health().lag == 0
+
+
 def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
     tmp_path, feature_config: FeatureConfig
 ):
