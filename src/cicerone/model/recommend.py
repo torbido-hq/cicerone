@@ -17,7 +17,7 @@ from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.explain import attach_reasons
 from cicerone.feature_config import FeatureConfig
-from cicerone.model.fit import ModelRunPlan, fit_strategies, plan_model_run
+from cicerone.model.fit import FitOptions, ModelRunPlan, fit_strategies, merge_fit_options, plan_model_run
 from cicerone.model.recommend_cache import RecommendCache
 from cicerone.model.recommend_cohort import (
     boost_overfetch_k,  # noqa: F401
@@ -143,8 +143,20 @@ def train_and_recommend(
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
     explain: ExplainSettings | None = None,
+    *,
+    fit: FitOptions | None = None,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
+    options = merge_fit_options(
+        fit,
+        FitOptions(
+            max_workers=max_workers,
+            epoch_metrics=epoch_metrics,
+            item_based_k_neighbors=item_based_k_neighbors,
+            model_configs=model_configs,
+            content_fallback_max_neighbors=content_fallback_max_neighbors,
+        ),
+    )
     if run_plan is None:
         run_plan = plan_model_run(
             enabled_models,
@@ -156,13 +168,9 @@ def train_and_recommend(
         target_users,
         enabled_models=list(run_plan.recommend_models),
         strategy_cache=strategy_cache,
-        max_workers=max_workers,
-        epoch_metrics=epoch_metrics,
         epoch_metrics_top_k=top_k,
-        item_based_k_neighbors=item_based_k_neighbors,
-        model_configs=model_configs,
-        content_fallback_max_neighbors=content_fallback_max_neighbors,
         content_feature_columns=config.item_features,
+        fit=options,
     )
     return recommend_with_models(
         fitted,
@@ -175,6 +183,6 @@ def train_and_recommend(
         rrf_k=rrf_k,
         run_plan=run_plan,
         recommend_cache=recommend_cache,
-        max_workers=max_workers,
+        max_workers=options.max_workers,
         explain=explain,
     )
