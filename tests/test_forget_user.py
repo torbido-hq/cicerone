@@ -387,6 +387,24 @@ def test_cli_forget_user_reports_storage_errors(tmp_path, monkeypatch, capsys) -
     assert "forget-user failed: read-only file system" in capsys.readouterr().err
 
 
+def test_cli_forget_user_prints_the_note_on_a_lost_writer_lease(tmp_path, monkeypatch, capsys) -> None:
+    import cicerone.forget as forget_mod
+    from cicerone.locks import LockLostError
+
+    def lose_lease(*_args, **_kwargs):
+        exc = LockLostError("writer lease lost")
+        exc.add_note("output rows were erased; run forget-user again to finish the Redis track log")
+        raise exc
+
+    monkeypatch.setattr(forget_mod, "forget_user", lose_lease)
+    config = _cli_config(tmp_path)
+    assert main(["--config", str(config), "forget-user", "u1"]) == 2
+    assert capsys.readouterr().err.splitlines() == [
+        "writer lease lost",
+        "output rows were erased; run forget-user again to finish the Redis track log",
+    ]
+
+
 def _local_bytes(root) -> dict[str, bytes]:
     return {
         str(path.relative_to(root)): path.read_bytes()

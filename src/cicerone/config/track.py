@@ -53,7 +53,25 @@ def load_track_settings(raw: dict[str, Any] | None) -> TrackSettings:
             data.get("conversion_event_types"), name="track.conversion_event_types"
         ),
         min_impressions=min_impressions,
+        redis_url=_load_redis_url(data.get("redis_url")),
+        redis_key_prefix=_load_redis_key_prefix(data.get("redis_key_prefix")),
     )
+
+
+def _load_redis_url(raw: object) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError("track.redis_url must be a non-empty string")
+    return raw.strip()
+
+
+def _load_redis_key_prefix(raw: object) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError("track.redis_key_prefix must be a non-empty string")
+    return raw.strip()
 
 
 def load_eval_settings(raw: dict[str, Any] | None) -> EvalSettings:

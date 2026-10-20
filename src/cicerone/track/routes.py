@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
 from cicerone.config import Settings
+from cicerone.events.errors import RedisError
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.serve.events_routes import (
@@ -27,7 +28,7 @@ from cicerone.serve_schemas import (
     ValidationErrorDetail,
 )
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
-from cicerone.track.store import TrackStore
+from cicerone.track.store import TrackStore, open_track_store
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ def mount_track_routes(
     track_store = (
         store
         if store is not None
-        else TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        else open_track_store(settings, writer_lock=build_dataset_writer_lock(settings))
     )
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)
@@ -97,7 +98,10 @@ def mount_track_routes(
             },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
             413: {"model": ErrorDetail, "description": "Request body too large"},
-            503: {"model": ErrorDetail, "description": "Writer lock busy or lost"},
+            503: {
+                "model": ErrorDetail,
+                "description": "Writer lock busy or lost, or the Redis track log is unavailable",
+            },
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
@@ -127,6 +131,9 @@ def mount_track_routes(
         except LockLostError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=503, detail="Writer lock was lost") from exc
+        except RedisError as exc:
+            record_track_ingest(kind="other", status="error")
+            raise HTTPException(status_code=503, detail="Redis track log is unavailable") from exc
         except Exception:
             record_track_ingest(kind="other", status="error")
             raise

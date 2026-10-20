@@ -47,7 +47,7 @@ from cicerone.locks import (
     build_output_writer_lock,
     held_writer_lock,
 )
-from cicerone.track.store import TrackStore
+from cicerone.track.store import open_track_store
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
@@ -295,7 +295,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             track_f = pool.submit(
                 try_load,
                 "read track rows for experiment metrics",
-                lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
+                lambda: open_track_store(settings).read_rows(experiment_id=experiment.id, since=since),
                 None,
             )
         events = events_f.result()
