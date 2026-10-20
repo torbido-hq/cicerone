@@ -290,9 +290,10 @@ flush. A lost retrain fence after the write still fails the job. In an
 incremental flush, any failure after the recommendations write (a manifest
 error, a lost apply fence, a busy writer lock or unexpected error while
 publishing, a failed heartbeat) is logged with
-its traceback and counted in `cicerone_events_tick_errors_total`, and the
-batch is acked so it is not applied twice; a lost apply fence also drops
-leadership. The cache and serve reader are refreshed before those steps.
+its traceback, counted in `cicerone_events_tick_errors_total` and as a
+flush `error`, and the batch is acked so it is not applied twice; a lost
+apply fence also drops leadership and the pending online fit. The cache
+and serve reader are refreshed before those steps.
 A crash or interrupt between the write and the ack still redelivers the
 batch, which is then applied again. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
@@ -366,7 +367,7 @@ Serve `/metrics` (when events are enabled):
 | --- | --- |
 | `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that plus approximate visible queue depth. Redis Streams: `XPENDING` + group `lag`. DB: rows after watermark. |
 | `cicerone_events_source_connected` | `1` when the source reports connected |
-| `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` |
+| `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` (including failures after a committed write) |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
 | `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths, and flush failures after a committed write |

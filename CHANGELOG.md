@@ -58,8 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
   no longer nacks the batch, so the events are not applied twice. It is
-  logged, counted in `cicerone_events_tick_errors_total`, and the batch is
-  acked. `IncrementalUpdater.apply` raises `PostWriteError` for these.
+  logged, counted in `cicerone_events_tick_errors_total` and as a flush
+  `error`, and the batch is acked. `IncrementalUpdater.apply` raises
+  `PostWriteError` for these.
 - Redis Streams polling, health, heartbeat, and close paths only recover
   from Redis client errors. Unexpected exceptions now propagate.
 - Kafka consumption only recovers from Kafka client errors while polling,

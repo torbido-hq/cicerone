@@ -546,6 +546,7 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         applied: int | None = None
+        post_write_failed = False
         try:
             try:
                 with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
@@ -555,6 +556,7 @@ class EventWorker:
                     raise
                 # apply returned and only the heartbeat failed on exit: the batch is applied, so ack it.
                 self._log_post_write_failure(ready, exc)
+                post_write_failed = True
         except PostWriteError as exc:
             # The batch is written; nacking it would apply the same events twice.
             self._log_post_write_failure(ready, exc)
@@ -562,6 +564,7 @@ class EventWorker:
             if isinstance(cause, LockLostError) and cause.kind == "apply":
                 update_events_leader(False)
             applied = exc.applied
+            post_write_failed = True
         except HeartbeatError:
             record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
@@ -642,7 +645,10 @@ class EventWorker:
             self._persist_online_after_ack()
             raise
         self._persist_online_after_ack()
-        record_events_flush(status="success", events=applied)
+        if post_write_failed:
+            record_events_flush(status="error")
+        else:
+            record_events_flush(status="success", events=applied)
         return applied
 
     def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:

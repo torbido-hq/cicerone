@@ -3424,6 +3424,26 @@ def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendatio
     assert source.health().lag == 0
 
 
+def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, feature_config: FeatureConfig):
+    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails-metric", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_success = registry_metric_value("cicerone_events_flush_total", {"status": "success"})
+    before_events = registry_metric_value("cicerone_events_flush_events_total")
+
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "success"}) == before_success
+    assert registry_metric_value("cicerone_events_flush_events_total") == before_events
+
+
 def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
     tmp_path, feature_config: FeatureConfig
 ):
