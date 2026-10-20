@@ -83,6 +83,8 @@ class ExperimentDatasetBackend:
                 parsed = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(parsed, dict):
+            if isinstance(parsed, dict) and (
+                not experiment_id or str(parsed.get("experiment_id") or "") == experiment_id
+            ):
                 rows.append(parsed)
         return rows

@@ -54,7 +54,10 @@ __all__ = [
 
 
 class ExperimentBackend(Protocol):
-    """Writers validate and encode eagerly; the returned call runs under the writer fence."""
+    """Writers validate and encode eagerly; the returned call does the I/O under the writer fence.
+
+    ``read_exposures`` returns only the given experiment's rows.
+    """
 
     def read_state(self) -> dict[str, Any] | None: ...
 
@@ -235,4 +238,5 @@ class ExperimentStore:
         rows = self.backend.read_exposures(experiment_id=experiment_id)
         if not experiment_id:
             return rows
+        # Backends filter too; this keeps the string match the db filter may not (a legacy numeric column).
         return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]

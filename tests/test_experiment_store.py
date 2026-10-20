@@ -1244,3 +1244,48 @@ def test_dataset_writes_encode_before_taking_the_writer_lock(tmp_path) -> None:
         store.write_state(experiment_state("exp", promoted_variant="control", extra=object()))
     assert not (tmp_path / "exposures.jsonl").exists()
     assert not (tmp_path / "experiment_state.json").exists()
+
+
+def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) -> None:
+    import cicerone.experiment.store_db as store_db
+
+    class _NeverAcquire:
+        def acquire(self) -> bool:
+            raise AssertionError("preparing the write must fail before the writer lock is taken")
+
+        def release(self) -> None:
+            return None
+
+        def owned(self) -> bool:
+            return False
+
+        def is_locked(self) -> bool:
+            return False
+
+    output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"})
+    store = ExperimentStore(output, writer_lock=_NeverAcquire())
+    with pytest.raises(TypeError):
+        store.write_state(experiment_state("exp", promoted_variant="control", extra=object()))
+
+    def _bad_frame(_rows):
+        raise ValueError("bad exposure rows")
+
+    monkeypatch.setattr(store_db.pd, "DataFrame", _bad_frame)
+    with pytest.raises(ValueError, match="bad exposure rows"):
+        store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": "control"}])
+
+
+def test_dataset_backend_filters_exposures_by_experiment(tmp_path) -> None:
+    from cicerone.experiment.store import build_experiment_backend
+    from cicerone.locks import WriteFence
+
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    backend = build_experiment_backend(output, WriteFence.resolve(None))
+    backend.exposure_writer(
+        [
+            {"experiment_id": "exp-a", "user_id": "u1", "variant": "control"},
+            {"experiment_id": "exp-b", "user_id": "u2", "variant": "treatment"},
+        ]
+    )()
+    assert [row["user_id"] for row in backend.read_exposures(experiment_id="exp-a")] == ["u1"]
+    assert [row["user_id"] for row in backend.read_exposures()] == ["u1", "u2"]

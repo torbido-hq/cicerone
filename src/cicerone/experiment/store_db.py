@@ -119,6 +119,10 @@ class ExperimentDbBackend:
         )
 
     def write_state(self, state: dict[str, Any]) -> None:
+        self.state_writer(state)()
+
+    def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
+        # Encode before the caller takes the fence; only the SQL runs under it.
         table = self._state_table()
         engine = self.engine()
         experiment_id = str(state.get("experiment_id") or "")
@@ -157,32 +161,37 @@ class ExperimentDbBackend:
             conn.execute(insert_sql, params)
             _fence()
 
-        try:
-            with engine.begin() as conn:
-                _fence()
-                conn.execute(create_sql)
-                _replace_row(conn)
-        except SQLAlchemyError as exc:
-            if not is_missing_column_error(exc):
-                raise
-            with engine.begin() as conn:
-                _fence()
-                conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
-                _replace_row(conn)
+        def _write() -> None:
+            try:
+                with engine.begin() as conn:
+                    _fence()
+                    conn.execute(create_sql)
+                    _replace_row(conn)
+            except SQLAlchemyError as exc:
+                if not is_missing_column_error(exc):
+                    raise
+                with engine.begin() as conn:
+                    _fence()
+                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
+                    _replace_row(conn)
 
-    def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
-        return lambda: self.write_state(state)
+        return _write
 
     def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
-        return lambda: self.append_exposures(rows)
-
-    def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
         table = self._exposures_table()
         engine = self.engine()
-        with engine.begin() as conn:
-            self._fence.ensure()
-            pd.DataFrame(list(rows)).to_sql(table, conn, if_exists="append", index=False)
-            self._fence.ensure()
+        frame = pd.DataFrame(list(rows))
+
+        def _append() -> None:
+            with engine.begin() as conn:
+                self._fence.ensure()
+                frame.to_sql(table, conn, if_exists="append", index=False)
+                self._fence.ensure()
+
+        return _append
+
+    def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        self.exposure_writer(rows)()
 
     def stored_exposure_columns(self, engine: Engine, table: str) -> list[str] | None:
         try:
