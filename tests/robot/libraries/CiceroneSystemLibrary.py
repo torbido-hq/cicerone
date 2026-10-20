@@ -60,6 +60,14 @@ _DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
 _OUTPUT_FILES = ("recommendations.parquet", "items_snapshot.parquet", "manifest.json", "model.artifact")
 
 
+def _has_row(frame: pd.DataFrame, **values: str) -> bool:
+    """One row carries every value (compared as strings)."""
+    match = pd.Series(True, index=frame.index)
+    for column, value in values.items():
+        match &= frame[column].astype(str) == value
+    return bool(match.any())
+
+
 class CiceroneSystemLibrary:
     """One instance per suite — mirrors the module-scoped pytest fixtures it replaces."""
 
@@ -277,13 +285,18 @@ class CiceroneSystemLibrary:
         assert body["items"]
 
     def serve_should_support_category_filter(self, user_id: str, category: str, *allowed_ids: str) -> None:
-        response = self._serve_client().get(
-            f"/recommendations/{user_id}?category={category}", headers=_SERVE_HEADERS
-        )
-        assert response.status_code == 200
-        served_ids = {row["item_id"] for row in response.json()["items"]}
+        def served(query: str) -> set[str]:
+            path = f"/recommendations/{user_id}?exclude_unavailable=false&limit=10{query}"
+            response = self._serve_client().get(path, headers=_SERVE_HEADERS)
+            assert response.status_code == 200
+            return {row["item_id"] for row in response.json()["items"]}
+
+        served_ids = served(f"&category={category}")
         assert served_ids
         assert served_ids <= set(allowed_ids)
+        # The job already drops unavailable items, so a recommendation list may hold one category;
+        # a category matching none of it must empty the response, or the filter did nothing.
+        assert served("") and not served("&category=not-in-catalog")
 
     def serve_should_support_exclude_unavailable(self, user_id: str, *excluded_ids: str) -> None:
         response = self._serve_client().get(
@@ -468,12 +481,9 @@ class CiceroneSystemLibrary:
 
     def postgres_recommendations_should_contain_incremental_row(self, user_id: str, item_id: str) -> None:
         live = self._rec_reader().get_recommendations(user_id, k=10)
-        assert item_id in set(live["item_id"].astype(str))
-        assert INCREMENTAL_SOURCE in set(live["source"].astype(str))
+        assert _has_row(live, item_id=item_id, source=INCREMENTAL_SOURCE)
         stored = pd.read_sql("SELECT user_id, item_id, source FROM recommendations", self.engine)
-        rows = stored.loc[stored["user_id"].astype(str) == user_id]
-        assert item_id in set(rows["item_id"].astype(str))
-        assert INCREMENTAL_SOURCE in set(rows["source"].astype(str))
+        assert _has_row(stored, user_id=user_id, item_id=item_id, source=INCREMENTAL_SOURCE)
 
     def dashboard_should_show_no_incremental_flushes(self) -> None:
         response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
@@ -487,15 +497,12 @@ class CiceroneSystemLibrary:
         assert response.status_code == 200
         assert "Source: webhook" in response.text
         assert "No incremental flushes recorded in recent manifests yet." not in response.text
-        assert "Events applied" in response.text
-        assert f"<dd>{int(applied)}</dd>" in response.text
+        assert re.search(rf"Events applied</dt>\s*<dd>{int(applied)}</dd>", response.text)
         assert "success" in response.text
 
     def dataset_recommendations_should_contain_incremental_row(self, user_id: str, item_id: str) -> None:
         on_disk = pd.read_parquet(self.output_path / "recommendations.parquet")
-        live = on_disk.loc[on_disk["user_id"].astype(str) == user_id]
-        assert item_id in set(live["item_id"].astype(str))
-        assert INCREMENTAL_SOURCE in set(live["source"].astype(str))
+        assert _has_row(on_disk, user_id=user_id, item_id=item_id, source=INCREMENTAL_SOURCE)
 
     # -- mixed I/O (db in, dataset out) ---------------------------------------
     def settings_should_read_db_and_write_dataset(self) -> None:
