@@ -17,6 +17,7 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import (
     is_s3_not_found,
     read_parquet,
@@ -37,7 +38,7 @@ from cicerone.io.recommendation_reader_common import (
     resolve_fallback_user_id,
     select_cold_start_fallback,
 )
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         return chosen or None
 
     def _read_recommendations(self) -> pd.DataFrame:
-        return read_parquet(self._options, "recommendations.parquet")
+        return read_parquet(self._options, RECOMMENDATIONS_FILENAME)
 
     def _read_items_snapshot(
         self,

@@ -11,6 +11,7 @@ from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
 from cicerone.model import (
     STRATEGIES,
+    FitOptions,
     RecommenderModel,
     Strategy,
     fit_strategies,
@@ -248,6 +249,72 @@ def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_
     )
     params = fitted["item_based"].get_params(simple_types=True)
     assert params["model.K"] == 7
+
+
+def test_fit_options_reach_the_fitted_strategy(sample_items, feature_config):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fitted: dict = {}
+    train_and_recommend(
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["item_based"],
+        strategy_cache=fitted,
+        fit=FitOptions(item_based_k_neighbors=7),
+    )
+    assert fitted["item_based"].get_params(simple_types=True)["model.K"] == 7
+
+    _, direct = fit_strategies(
+        built, ["u1"], enabled_models=["item_based"], fit=FitOptions(item_based_k_neighbors=5)
+    )
+    assert direct["item_based"].get_params(simple_types=True)["model.K"] == 5
+
+
+def test_fit_options_and_fit_keywords_cannot_be_combined(sample_items, feature_config):
+    built = build_dataset(synthetic_events(), None, sample_items, feature_config, half_life_days=90)
+    with pytest.raises(TypeError, match="not both"):
+        fit_strategies(built, ["u1"], enabled_models=["popular"], max_workers=2, fit=FitOptions())
+    with pytest.raises(TypeError, match="not both"):
+        train_and_recommend(
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["popular"],
+            item_based_k_neighbors=7,
+            fit=FitOptions(),
+        )
+
+
+def test_fit_options_from_settings_copies_the_fit_settings():
+    from support.settings import make_settings
+
+    settings = make_settings(
+        max_workers=3,
+        item_based_k_neighbors=9,
+        model_configs={"collaborative": {"epochs": 2}},
+        content_fallback_max_neighbors=11,
+    )
+    assert FitOptions.from_settings(settings) == FitOptions(
+        max_workers=3,
+        epoch_metrics=settings.epoch_metrics,
+        item_based_k_neighbors=9,
+        model_configs={"collaborative": {"epochs": 2}},
+        content_fallback_max_neighbors=11,
+    )
+
+
+def test_fit_options_from_settings_is_a_snapshot_of_model_configs():
+    from support.settings import make_settings
+
+    settings = make_settings(model_configs={"collaborative": {"epochs": 2}})
+    options = FitOptions.from_settings(settings)
+    settings.model_configs["collaborative"]["epochs"] = 9
+    settings.model_configs["item_based"] = {"K": 3}
+    assert options.model_configs == {"collaborative": {"epochs": 2}}
 
 
 def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_items, feature_config):

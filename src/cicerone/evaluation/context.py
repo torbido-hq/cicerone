@@ -18,6 +18,7 @@ from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.factory import build_input_source
+from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
     is_s3_not_found,
     read_parquet,
@@ -178,7 +179,7 @@ def _read_metric_parquet(
             try:
                 return read_parquet(
                     options,
-                    "events.parquet",
+                    EVENTS_FILENAME,
                     columns=list(columns),
                     filters=filters,
                 )
@@ -212,7 +213,7 @@ def load_metric_events(
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             try:
-                frame = read_parquet(inp.options, "events.parquet")
+                frame = read_parquet(inp.options, EVENTS_FILENAME)
             except _METRIC_READ_ERRORS:
                 frame = build_input_source(inp).read_events()
         keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]

@@ -71,6 +71,7 @@ from cicerone.locks import (
 from cicerone.model import (
     DEFAULT_MODELS,
     RRF_K,
+    FitOptions,
     ModelRunPlan,
     RecommenderModel,
     fit_strategies,
@@ -457,13 +458,9 @@ def _recommend_job(
             target_users,
             enabled_models=list(fit_plan.recommend_models),
             strategy_cache=fitted if settings.save_model_artifact else None,
-            max_workers=settings.max_workers,
-            epoch_metrics=settings.epoch_metrics,
             epoch_metrics_top_k=settings.top_k,
-            item_based_k_neighbors=settings.item_based_k_neighbors,
-            model_configs=settings.model_configs,
-            content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
             content_feature_columns=feature_config.item_features,
+            fit=FitOptions.from_settings(settings),
         )
         frames: list[pd.DataFrame] = []
         recommend_cache: RecommendCache = {}
@@ -513,13 +510,9 @@ def _recommend_job(
         weights=weights,
         rrf_k=rrf_k,
         strategy_cache=fitted if settings.save_model_artifact else None,
-        max_workers=settings.max_workers,
-        epoch_metrics=settings.epoch_metrics,
-        item_based_k_neighbors=settings.item_based_k_neighbors,
-        model_configs=settings.model_configs,
-        content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
         run_plan=run_plan,
         explain=settings.explain,
+        fit=FitOptions.from_settings(settings),
     )
     return JobRecommendations(recommendations, fitted, run_plan, enabled_models, weights, rrf_k)
 

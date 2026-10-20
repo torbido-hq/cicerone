@@ -23,7 +23,7 @@ from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
 from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
-from cicerone.serve.metrics import (
+from cicerone.metrics import (
     record_events_apply_busy,
     record_events_flush,
     record_events_lock,
