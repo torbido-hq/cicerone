@@ -28,12 +28,7 @@ from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
-from cicerone.reasons import parse_reasons
-from cicerone.serve.bootstrap_events import start_events_runtime
-from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
-from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
-from cicerone.serve.metrics import (
+from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
     REQUEST_LATENCY_SECONDS,
     REQUESTS_TOTAL,
@@ -42,6 +37,11 @@ from cicerone.serve.metrics import (
     update_cache_age_gauge,
     update_events_source_health,
 )
+from cicerone.reasons import parse_reasons
+from cicerone.serve.bootstrap_events import start_events_runtime
+from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
+from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
+from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
 from cicerone.serve.recommendations import RecommendationService
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
