@@ -287,11 +287,14 @@ source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}
 (also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
 after a successful write are logged and do not fail the job or incremental
 flush. A lost retrain fence after the write still fails the job. In an
-incremental flush, any failure after the recommendations write (a sidecar
-or manifest error, a lost apply fence, a failed heartbeat) is logged with
+incremental flush, any failure after the recommendations write (a manifest
+error, a lost apply fence, a busy writer lock or unexpected error while
+publishing, a failed heartbeat) is logged with
 its traceback and counted in `cicerone_events_tick_errors_total`, and the
 batch is acked so it is not applied twice; a lost apply fence also drops
-leadership. An interrupt after the write acks the batch too. A
+leadership. The cache and serve reader are refreshed before those steps.
+A crash or interrupt between the write and the ack still redelivers the
+batch, which is then applied again. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
 land after a later write.
 Requires the matching extra.
@@ -366,7 +369,7 @@ Serve `/metrics` (when events are enabled):
 | `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
-| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths, and flush failures after a committed write |
 | `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
 | `cicerone_events_leader` | `1` while this replica owns the apply lock |
 | `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` or `retrain` |

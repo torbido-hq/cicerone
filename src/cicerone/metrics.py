@@ -78,7 +78,7 @@ EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
 )
 EVENTS_TICK_ERRORS_TOTAL = Counter(
     "cicerone_events_tick_errors_total",
-    "Unhandled exceptions in the event worker tick loop",
+    "Unhandled exceptions in the event worker tick loop, and flush failures after a committed write",
 )
 EVENTS_LOCK_TOTAL = Counter(
     "cicerone_events_lock_total",

@@ -856,6 +856,48 @@ def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_raises(
     assert "ihbl" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
+def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
+    tmp_path, feature_config: FeatureConfig
+):
+    # An unexpected heartbeat error is re-raised raw at exit; the batch is still written.
+    out, settings = _seed_out(tmp_path)
+
+    class _LaterBug(WebhookEventSource):
+        def __init__(self) -> None:
+            super().__init__({})
+            self.beats = 0
+
+        def heartbeat(self, events):  # type: ignore[no-untyped-def]
+            del events
+            self.beats += 1
+            if self.beats > 1:
+                raise RuntimeError("heartbeat bug")
+
+    source = _LaterBug()
+    source.ingest(event_payload(event_id="hbb", user_id="u1", item_id="ihbb"))
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        heartbeat_interval_seconds=0.05,
+    )
+    original = worker._updater.apply
+
+    def _slow(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+        time.sleep(0.16)
+        return original(events, persist_online=persist_online)
+
+    worker._updater.apply = _slow  # type: ignore[method-assign]
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
+    assert source.beats >= 2
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = pd.read_parquet(out / "recommendations.parquet")
+    assert "ihbb" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+
 def test_inflight_heartbeat_preserves_apply_error():
     from cicerone.events.worker import inflight_heartbeat
 

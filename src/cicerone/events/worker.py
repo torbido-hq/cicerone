@@ -17,6 +17,7 @@ from cicerone.events.errors import (
     EVENT_APPLY_ERRORS,
     EVENT_SOURCE_ERRORS,
     EVENT_WORKER_ERRORS,
+    PostWriteError,
 )
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
@@ -544,23 +545,55 @@ class EventWorker:
                 self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
-        # Snapshot before the heartbeat: a count left by an earlier batch must not mark this one written.
-        writes_before = self._updater.writes
+        applied: int | None = None
         try:
-            with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
-                applied = self._updater.apply(ready, persist_online=False)
-        except Exception as exc:
-            if self._updater.writes == writes_before:
-                return self._return_failed(ready, exc)
+            try:
+                with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
+                    applied = self._updater.apply(ready, persist_online=False)
+            except Exception as exc:
+                if not applied:
+                    raise
+                # apply returned and only the heartbeat failed on exit: the batch is applied, so ack it.
+                self._log_post_write_failure(ready, exc)
+        except PostWriteError as exc:
             # The batch is written; nacking it would apply the same events twice.
-            record_events_tick_error()
-            if isinstance(exc, LockLostError) and exc.kind == "apply":
+            self._log_post_write_failure(ready, exc)
+            cause = exc.__cause__
+            if isinstance(cause, LockLostError) and cause.kind == "apply":
                 update_events_leader(False)
-            logger.error("Failed after a successful write; acking %d event(s)", len(ready), exc_info=exc)
-            applied = len(ready)
-        except BaseException:
-            if self._updater.writes != writes_before:
-                self._ack_written_on_interrupt(ready)
+            applied = exc.applied
+        except HeartbeatError:
+            record_events_flush(status="error")
+            logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
+            return 0
+        except LockLostError as exc:
+            record_events_flush(status="error")
+            if exc.kind == "apply":
+                update_events_leader(False)
+            logger.error("%s; nacking %d event(s)", exc, len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
+            return 0
+        except WriterLockBusyError as exc:
+            record_events_flush(status="busy")
+            record_events_apply_busy(reason="lock")
+            logger.info("%s; nacking %d event(s)", exc, len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
+            return 0
+        except EVENT_APPLY_ERRORS:
+            record_events_flush(status="error")
+            logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
+            return 0
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
+            self._updater.abort_online()
+            self._return_events(ready)
             raise
         if applied == 0:
             record_events_flush(status="busy")
@@ -578,39 +611,6 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
-        try:
-            return self._ack_applied(ready, applied)
-        except BaseException as exc:
-            if not isinstance(exc, Exception):
-                # Interrupted before the ack finished: the batch is applied, so ack it rather than replay it.
-                self._ack_written_on_interrupt(ready)
-            raise
-
-    def _return_failed(self, ready: list[NormalizedEvent], exc: Exception) -> int:
-        if isinstance(exc, HeartbeatError):
-            record_events_flush(status="error")
-            logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
-        elif isinstance(exc, LockLostError):
-            record_events_flush(status="error")
-            if exc.kind == "apply":
-                update_events_leader(False)
-            logger.error("%s; nacking %d event(s)", exc, len(ready))
-        elif isinstance(exc, WriterLockBusyError):
-            record_events_flush(status="busy")
-            record_events_apply_busy(reason="lock")
-            logger.info("%s; nacking %d event(s)", exc, len(ready))
-        else:
-            record_events_flush(status="error")
-            logger.error(
-                "Incremental apply failed; returning %d event(s) to source", len(ready), exc_info=exc
-            )
-        self._updater.abort_online()
-        self._return_events(ready)
-        if isinstance(exc, (HeartbeatError, LockLostError, WriterLockBusyError, *EVENT_APPLY_ERRORS)):
-            return 0
-        raise exc
-
-    def _ack_applied(self, ready: list[NormalizedEvent], applied: int) -> int:
         self._remember_applied(ready)
         try:
             live_ids = self._ack_live_ids([event.event_id for event in ready])
@@ -645,19 +645,9 @@ class EventWorker:
         record_events_flush(status="success", events=applied)
         return applied
 
-    def _ack_written_on_interrupt(self, ready: list[NormalizedEvent]) -> None:
-        self._remember_applied(ready)
-        queued = {event.event_id for event in self._retry_acks}
-        self._retry_acks.extend(event for event in ready if event.event_id not in queued)
-        try:
-            live_ids = self._ack_live_ids([event.event_id for event in ready])
-        except Exception:
-            record_events_tick_error()
-            logger.exception("Event source ack failed while interrupted after a successful write")
-        else:
-            self._drop_retry_acks([event for event in ready if event.event_id in live_ids])
-        # The events are acked, so a dropped refresh would never be replayed into the online model.
-        self._persist_online_after_ack()
+    def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:
+        record_events_tick_error()
+        logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None

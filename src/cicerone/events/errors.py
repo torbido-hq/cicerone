@@ -40,6 +40,14 @@ else:
             pass
 
 
+class PostWriteError(Exception):
+    """``apply`` failed after its recommendations were written; the batch must not be applied again."""
+
+    def __init__(self, message: str, *, applied: int):
+        super().__init__(message)
+        self.applied = applied
+
+
 EVENT_SOURCE_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     TimeoutError,
