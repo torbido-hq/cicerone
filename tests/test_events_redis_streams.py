@@ -226,6 +226,10 @@ def test_validate_rejects_bad_tuning():
         validate_redis_stream_options(_options(claim_idle_ms=0))
     with pytest.raises(ConfigError, match="consumer_name"):
         validate_redis_stream_options(_options(consumer_name="  "))
+    with pytest.raises(ConfigError, match="block_ms must be an integer, got inf"):
+        validate_redis_stream_options(_options(block_ms=float("inf")))
+    with pytest.raises(ConfigError, match="claim_idle_ms must be an integer, got 'soon'"):
+        validate_redis_stream_options(_options(claim_idle_ms="soon"))
 
 
 def test_poll_ack_and_health(monkeypatch):

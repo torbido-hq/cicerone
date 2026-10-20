@@ -77,32 +77,47 @@ def put_pydantic_schema(components: dict[str, Any], model: type[BaseModel]) -> N
     components[model.__name__] = _rewrite_json_schema_defs(generated)
 
 
-def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
-    """Document flexible POST /events JSON bodies (handler parses ``Request``)."""
-    post = schema.get("paths", {}).get(EVENTS_PATH, {}).get("post")
+def attach_ingest_openapi(
+    schema: dict[str, Any],
+    path: str,
+    *,
+    event_model: type[BaseModel],
+    request_model: type[BaseModel],
+    title: str,
+) -> None:
+    """Document a flexible ingest body: one event, a list, or ``{"events": [...]}``."""
+    post = schema.get("paths", {}).get(path, {}).get("post")
     if not isinstance(post, dict):
         return
     components = schema.setdefault("components", {}).setdefault("schemas", {})
-    put_pydantic_schema(components, InteractionEvent)
-    put_pydantic_schema(components, EventsIngestRequest)
+    put_pydantic_schema(components, event_model)
+    put_pydantic_schema(components, request_model)
+    event_ref = f"#/components/schemas/{event_model.__name__}"
     post["requestBody"] = {
         "required": True,
         "content": {
             "application/json": {
                 "schema": {
-                    "title": "EventsIngestBody",
+                    "title": title,
                     "oneOf": [
-                        {"$ref": "#/components/schemas/InteractionEvent"},
-                        {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/InteractionEvent"},
-                        },
-                        {"$ref": "#/components/schemas/EventsIngestRequest"},
+                        {"$ref": event_ref},
+                        {"type": "array", "items": {"$ref": event_ref}},
+                        {"$ref": f"#/components/schemas/{request_model.__name__}"},
                     ],
                 }
             }
         },
     }
+
+
+def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
+    attach_ingest_openapi(
+        schema,
+        EVENTS_PATH,
+        event_model=InteractionEvent,
+        request_model=EventsIngestRequest,
+        title="EventsIngestBody",
+    )
 
 
 def payloads_from_body(body: object) -> list[object]:
