@@ -43,6 +43,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   strategy's block instead of across them, so a model with large raw scores
   (popularity counts) no longer jumps ahead of an earlier strategy. Weighted
   RRF and blending are unchanged.
+- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
+  is unset, so a quiet stream no longer parks the event worker. An
+  explicit `block_ms = 0` keeps that behaviour and logs a warning.
+- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
+  rejected as invalid instead of stopping the event worker.
+- The db event source logs and skips an invalid row instead of stopping
+  the worker, and moves its watermark past a run of invalid rows longer
+  than one fetch.
 
 ## [0.8.5] - 2026-10-14
 

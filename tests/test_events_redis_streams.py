@@ -557,3 +557,28 @@ def test_repeated_nack_does_not_duplicate(monkeypatch):
 def test_whitespace_required_options_rejected():
     with pytest.raises(ConfigError, match="redis_url"):
         validate_redis_stream_options({"redis_url": "  ", "stream": "s", "consumer_group": "g"})
+
+
+@pytest.mark.parametrize(("block_ms", "expected"), [(None, None), (0, 0), (250, 250)])
+def test_read_sends_block_only_when_configured(monkeypatch, block_ms, expected):
+    # Redis treats BLOCK 0 as "wait forever"; unset must not send it.
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    seen: list[int | None] = []
+    real_read = client.xreadgroup
+
+    def _recording_read(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("block"))
+        return real_read(*args, **kwargs)
+
+    client.xreadgroup = _recording_read  # type: ignore[method-assign]
+    options = _options() if block_ms is None else _options(block_ms=block_ms)
+    source = RedisStreamsEventSource(options)
+    source.connect()
+    assert list(source.poll(1)) == []
+    assert seen == [expected]
+
+
+def test_explicit_block_zero_warns(caplog):
+    with caplog.at_level("WARNING", logger="cicerone.events.redis_streams"):
+        RedisStreamsEventSource(_options(block_ms=0))
+    assert "block_ms = 0" in caplog.text
