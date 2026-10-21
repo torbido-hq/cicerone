@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+import pytest
+from support.events import event_payload
+from support.prometheus_metrics import registry_metric_value
+
+from cicerone.config import IOSettings, make_settings
+from cicerone.events.buffer import MicroBatchBuffer
+from cicerone.events.normalize import event_fingerprint
+from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.webhook import WebhookEventSource
+from cicerone.events.worker import EventWorker
+from cicerone.feature_config import FeatureConfig
+from cicerone.io import applied_events
+from cicerone.io.applied_events import merge_applied_keys, replay_key
+from cicerone.io.base import AppliedEventLog
+from cicerone.io.factory import build_output_sink
+
+
+def _outputs(tmp_path) -> dict[str, IOSettings]:  # type: ignore[no-untyped-def]
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    return {
+        "dataset": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        "db": IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"}),
+    }
+
+
+def _worker(
+    output: IOSettings, feature_config: FeatureConfig, source: WebhookEventSource, batch_size: int = 1
+):  # type: ignore[no-untyped-def]
+    settings = make_settings(output=output, top_k=3)
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    return EventWorker(
+        source, MicroBatchBuffer(batch_size=batch_size, batch_window_seconds=60.0), updater
+    ), updater
+
+
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_a_redelivery_after_a_restart_is_acked_not_applied_again(tmp_path, feature_config, kind) -> None:
+    output = _outputs(tmp_path)[kind]
+    first_source = WebhookEventSource({})
+    first_source.ingest(event_payload(event_id="replayed-1", user_id="u1", item_id="i9"))
+    first, first_updater = _worker(output, feature_config, first_source)
+    assert first.tick() == 1
+    assert first_updater.events_applied == 1
+
+    # A new process: nothing in memory, the source redelivers the same event.
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="replayed-1", user_id="u1", item_id="i9"))
+    source.ingest(event_payload(event_id="fresh-2", user_id="u2", item_id="i8"))
+    worker, updater = _worker(output, feature_config, source, batch_size=2)
+    before = registry_metric_value("cicerone_events_replayed_total")
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_replayed_total") == before + 1
+    assert updater.events_applied == 1
+    assert source.health().lag == 0
+    recorded = updater.applied_before([_event("replayed-1"), _event("fresh-2")])
+    assert [event.event_id for event in recorded] == ["replayed-1", "fresh-2"]
+
+
+def _event(event_id: str):  # type: ignore[no-untyped-def]
+    from cicerone.events.normalize import normalize_event
+
+    return normalize_event(event_payload(event_id=event_id, user_id="u1", item_id="i9"))
+
+
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_sinks_record_applied_keys_only_with_the_rows(tmp_path, kind) -> None:
+    sink = build_output_sink(_outputs(tmp_path)[kind])
+    assert isinstance(sink, AppliedEventLog)
+    assert sink.applied_event_keys(["k1"]) == set()
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1", "k2"])
+    assert sink.applied_event_keys(["k1", "k3"]) == {"k1"}
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"])
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1", "k2"}
+
+
+def test_a_failed_dataset_write_records_nothing(tmp_path, monkeypatch) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["dataset"])
+
+    def _write_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sink, "_write_bytes", _write_fails)
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    with pytest.raises(OSError, match="disk full"):
+        sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    monkeypatch.undo()
+    assert sink.applied_event_keys(["k1"]) == set()
+
+
+def test_db_record_drops_keys_older_than_the_retention(tmp_path, monkeypatch) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["old"])
+    later = datetime.now(UTC) + applied_events.APPLIED_EVENTS_RETENTION + timedelta(minutes=1)
+    monkeypatch.setattr("cicerone.io.db_store.datetime", _FrozenDatetime(later))
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["new"])
+    assert sink.applied_event_keys(["old", "new"]) == {"new"}
+
+
+class _FrozenDatetime:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def now(self, tz=None):  # type: ignore[no-untyped-def]
+        return self._now
+
+
+def test_merge_applied_keys_drops_expired_and_caps_the_newest(monkeypatch) -> None:
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    expired = (now - applied_events.APPLIED_EVENTS_RETENTION - timedelta(seconds=1)).isoformat()
+    kept = (now - timedelta(days=1)).isoformat()
+    merged = merge_applied_keys({"expired": expired, "kept": kept}, ["new"], now)
+    assert merged == {"kept": kept, "new": now.isoformat()}
+
+    monkeypatch.setattr(applied_events, "APPLIED_EVENTS_MAX_KEYS", 2)
+    capped = merge_applied_keys({"a": kept, "b": (now - timedelta(days=2)).isoformat()}, ["c"], now)
+    assert capped == {"a": kept, "c": now.isoformat()}
+
+
+def test_worker_returns_the_batch_when_the_record_lookup_fails(tmp_path, feature_config) -> None:
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="lookup-fails", user_id="u1", item_id="i9"))
+    worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, source)
+
+    def _lookup_fails(_events):  # type: ignore[no-untyped-def]
+        raise OSError("storage unreachable")
+
+    updater.applied_before = _lookup_fails  # type: ignore[method-assign]
+    assert worker.tick() == 0
+    assert updater.events_applied == 0
+    assert source.health().lag == 1
+
+
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_an_expired_key_no_longer_counts_before_any_prune(tmp_path, monkeypatch, kind) -> None:
+    sink = build_output_sink(_outputs(tmp_path)[kind])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    later = datetime.now(UTC) + applied_events.APPLIED_EVENTS_RETENTION + timedelta(minutes=1)
+    monkeypatch.setattr(f"cicerone.io.{kind}_store.datetime", _FrozenDatetime(later))
+    assert sink.applied_event_keys(["k1"]) == set()
+
+
+def test_replay_keys_are_hashed_per_kind() -> None:
+    assert replay_key("id", "abc") != replay_key("fingerprint", "abc")
+    assert "abc" not in replay_key("id", "abc")
+
+
+def test_generated_ids_are_recorded_by_fingerprint(tmp_path, feature_config) -> None:
+    class _EphemeralSource(WebhookEventSource):
+        ephemeral_event_ids = True
+
+    worker, _updater = _worker(_outputs(tmp_path)["dataset"], feature_config, _EphemeralSource({}))
+    generated = replace(_event("generated-1"), generated_event_id=True)
+    assert worker._replay_key(generated) == replay_key("fingerprint", event_fingerprint(generated))
+    assert worker._replay_key(_event("given-1")) == replay_key("id", "given-1")

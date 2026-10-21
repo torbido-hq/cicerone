@@ -28,7 +28,7 @@ from cicerone.events.updater_merge import (
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
-from cicerone.io.base import OutputSink, ensure_sink_writer_held, recommendations_write_guard
+from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError, WriterLockBusyError
@@ -110,6 +110,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
+        self._replay_key: Callable[[NormalizedEvent], str] = lambda event: event.event_id
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
@@ -120,6 +121,17 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     @property
     def last_success_at(self) -> datetime | None:
         return self._last_success_at
+
+    def use_replay_key(self, key: Callable[[NormalizedEvent], str]) -> None:
+        """Key under which applied events are recorded with the write (the worker's dedupe key)."""
+        self._replay_key = key
+
+    def applied_before(self, events: Sequence[NormalizedEvent]) -> list[NormalizedEvent]:
+        """Events already recorded by an earlier write, e.g. redelivered after a restart."""
+        if not events or not isinstance(self._sink, AppliedEventLog):
+            return []
+        recorded = self._sink.applied_event_keys([self._replay_key(event) for event in events])
+        return [event for event in events if self._replay_key(event) in recorded]
 
     @property
     def events_applied(self) -> int:
@@ -205,7 +217,14 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 self._abort_online()
                 return 0
             self._ensure_fence()
-            n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
+            user_ids = sorted(set(replace_ids))
+            if isinstance(self._sink, AppliedEventLog):
+                keys = [self._replay_key(event) for event in events]
+                n_users = self._sink.replace_recommendations_for_users(
+                    merged, user_ids=user_ids, applied_keys=keys
+                )
+            else:
+                n_users = self._sink.replace_recommendations_for_users(merged, user_ids=user_ids)
             written = True
             # The rows are committed: bring the cache and reader up to date before any step that can fail.
             self._store_users_in_cache(set(replace_ids), merged)

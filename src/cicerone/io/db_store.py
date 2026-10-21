@@ -24,8 +24,10 @@ from sqlalchemy import (
     Engine,
     LargeBinary,
     MetaData,
+    String,
     Table,
     bindparam,
+    delete,
     insert,
     inspect,
     select,
@@ -34,6 +36,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
+from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
@@ -304,14 +307,52 @@ class DatabaseOutputSink:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
                 self._ensure_fence()
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
         with self.recommendations_write():
-            return self._replace_recommendations_for_users_unlocked(df, ids)
+            return self._replace_recommendations_for_users_unlocked(df, ids, applied_keys)
 
-    def _replace_recommendations_for_users_unlocked(self, df: pd.DataFrame, ids: list[str]) -> int:
+    def _applied_events_table(self) -> Table:
+        name = sql_identifier(
+            self._options.get("applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE),
+            option="applied_events_table",
+        )
+        return Table(
+            name,
+            MetaData(),
+            Column("event_key", String, primary_key=True),
+            Column("applied_at", String, nullable=False),
+        )
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
+        wanted = sorted({str(key) for key in keys})
+        table = self._applied_events_table()
+        if not wanted or not inspect(self._engine).has_table(table.name):
+            return set()
+        with self._engine.connect() as conn:
+            cutoff = applied_cutoff(datetime.now(UTC))
+            query = select(table.c.event_key).where(
+                table.c.event_key.in_(wanted), table.c.applied_at >= cutoff
+            )
+            rows = conn.execute(query)
+            return {str(row[0]) for row in rows}
+
+    def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
+        wanted = sorted({str(key) for key in keys})
+        now = datetime.now(UTC)
+        table = self._applied_events_table()
+        table.create(conn, checkfirst=True)
+        conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
+        conn.execute(delete(table).where(table.c.event_key.in_(wanted)))
+        conn.execute(insert(table), [{"event_key": key, "applied_at": now.isoformat()} for key in wanted])
+
+    def _replace_recommendations_for_users_unlocked(
+        self, df: pd.DataFrame, ids: list[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         table, _columns, user_col = recommendations_sql_names(
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
@@ -348,6 +389,10 @@ class DatabaseOutputSink:
             if not df.empty:
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            if applied_keys:
+                # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
+                self._ensure_fence()
+                self._record_applied_keys(conn, applied_keys)
             self._ensure_fence()
             count_savepoint = conn.begin_nested()
             try:
