@@ -391,25 +391,28 @@ class DatabaseOutputSink:
             self._applied_table_seen = True
         scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
-        # A full write by a version without the key table leaves keys behind; its manifest supersedes them.
-        full_write_at = self._latest_full_write_at()
-        if full_write_at is not None and full_write_at > cutoff:
-            cutoff = full_write_at
-        found: set[str] = set()
+        found: dict[str, str] = {}
         try:
             with self._engine.connect() as conn:
                 for part in chunked(wanted):
-                    query = select(table.c.event_key).where(
+                    query = select(table.c.event_key, table.c.applied_at).where(
                         table.c.recommendations_table == scope,
                         table.c.event_key.in_(part),
                         table.c.applied_at >= cutoff,
                     )
-                    found.update(str(row[0]) for row in conn.execute(query))
+                    found.update((str(key), str(applied_at)) for key, applied_at in conn.execute(query))
         except _MISSING_TABLE_ERRORS:
             # The table may have been dropped; check again on the next lookup.
             self._applied_table_seen = False
             raise
-        return found
+        if not found:
+            return set()
+        # A full write by a version without the key table leaves keys behind; its manifest supersedes them.
+        # Checked only when keys match, which is rare (a redelivery), so most flushes skip the manifest query.
+        full_write_at = self._latest_full_write_at()
+        if full_write_at is None:
+            return set(found)
+        return {key for key, applied_at in found.items() if applied_at >= full_write_at}
 
     def _latest_full_write_at(self) -> str | None:
         table = sql_identifier(

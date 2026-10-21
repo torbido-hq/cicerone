@@ -12,7 +12,7 @@ from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.normalize import event_fingerprint
+from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -311,3 +311,26 @@ def test_db_keys_recorded_before_a_full_write_manifest_are_ignored(tmp_path) -> 
 
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k2"])
     assert sink.applied_event_keys(["k1", "k2"]) == {"k2"}
+
+
+def test_db_lookup_without_a_match_skips_the_manifest_query(tmp_path, monkeypatch) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+
+    def _manifest_query():  # type: ignore[no-untyped-def]
+        raise AssertionError("manifest queried without a matching key")
+
+    monkeypatch.setattr(sink, "_latest_full_write_at", _manifest_query)
+    assert sink.applied_event_keys(["k2"]) == set()
+
+
+def test_a_batch_carries_one_event_per_event_id() -> None:
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
+    events = [
+        normalize_event(event_payload(event_id="same", user_id="u1", item_id="i1")),
+        normalize_event(event_payload(event_id="same", user_id="u2", item_id="i2")),
+    ]
+    result = buffer.extend(events)
+    assert [event.user_id for event in result.duplicates] == ["u2"]
+    assert [event.event_id for event in buffer.flush()] == ["same"]
