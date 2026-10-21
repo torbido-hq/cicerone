@@ -19,6 +19,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
 
+### Fixed
+
+- An incremental flush that fails after its recommendations are written
+  (a manifest error, a lost apply fence or unexpected sidecar error, a
+  failed heartbeat)
+  no longer nacks the batch, so the events are not applied twice. It is
+  logged, counted in `cicerone_events_tick_errors_total` and as a flush
+  `error`, and the batch is acked. `IncrementalUpdater.apply` still raises
+  the original error; the new `last_apply_written` says the rows landed.
+  The reader refresh, manifest and sidecar publish that failed are retried
+  on later ticks until they succeed.
+- A batch redelivered after a crash between the incremental write and the
+  ack is acked instead of applied again. Event keys are saved with the
+  recommendations write (db `incremental_applied_events` table, dataset
+  parquet metadata), scoped to the recommendations table, and count for 7
+  days; a full write clears them. Replays are counted in
+  `cicerone_events_replayed_total`.
+- An incremental manifest on db output adds the columns the job manifest
+  table lacks (`last_incremental_at`, `incremental_events_applied`,
+  `online_*`) instead of failing the insert.
+
 ## [0.8.5] - 2026-10-14
 
 ### Added

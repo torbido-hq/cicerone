@@ -10,11 +10,13 @@ from cicerone.events.base import EventSourceError, EventSourceHealth
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
+from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
+from cicerone.serve.metrics import update_events_leader
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -3310,3 +3312,200 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert worker.stop(join_timeout_seconds=2.0) is True
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["retry-drain"]
+
+
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _BuggyPublisher:
+        def __init__(self) -> None:
+            self.connects = 0
+            self.published: list[list[str]] = []
+
+        def connect(self) -> None:
+            self.connects += 1
+            if self.connects == 1:
+                raise RuntimeError("sidecar bug")
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            self.published.append(list(user_ids or []))
+
+        def close(self) -> None:
+            return None
+
+    publisher = _BuggyPublisher()
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        publisher=publisher,
+    )
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    # An unexpected publisher bug is re-raised, but only after the written batch is acked.
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
+    assert source.health().lag == 0
+    assert updater.events_applied == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+    assert updater.events_applied == 1
+    [repaired] = publisher.published
+    assert "u1" in repaired
+
+
+def _dataset_updater(tmp_path, feature_config: FeatureConfig, **kwargs):  # type: ignore[no-untyped-def]
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    sink = build_output_sink(settings.output)
+    updater = IncrementalUpdater(
+        sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
+    )
+    return settings, sink, updater
+
+
+def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]
+    written = load_recommendations_frame(settings.output)
+    return set(written[written["user_id"] == user_id]["item_id"].astype(str))
+
+
+def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_write(
+    tmp_path, feature_config: FeatureConfig
+):
+    lost = {"after_write": False}
+    settings, sink, updater = _dataset_updater(
+        tmp_path, feature_config, fence_check=lambda: not lost["after_write"]
+    )
+    replace = sink.replace_recommendations_for_users
+
+    def _replace_then_lose(*args, **kwargs):  # type: ignore[no-untyped-def]
+        written = replace(*args, **kwargs)
+        lost["after_write"] = True
+        return written
+
+    sink.replace_recommendations_for_users = _replace_then_lose  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    update_events_leader(True)
+
+    assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_leader") == 0
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+
+
+def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendations(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+
+    assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
+
+
+def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, feature_config: FeatureConfig):
+    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails-metric", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_success = registry_metric_value("cicerone_events_flush_total", {"status": "success"})
+    before_events = registry_metric_value("cicerone_events_flush_events_total")
+
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "success"}) == before_success
+    assert registry_metric_value("cicerone_events_flush_events_total") == before_events
+
+
+def test_event_worker_counts_a_post_write_failure_when_the_online_persist_raises(
+    tmp_path, feature_config: FeatureConfig
+):
+    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    def _persist_bug() -> None:
+        raise RuntimeError("persist bug")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    updater.persist_online = _persist_bug  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-raises", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+
+    with pytest.raises(RuntimeError, match="persist bug"):
+        worker.tick()
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert source.health().lag == 0
+
+
+def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="interrupted-before"))
+
+    class _InterruptedBeforeWrite(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del events, persist_online
+            raise KeyboardInterrupt
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _InterruptedBeforeWrite(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert source.health().lag == 1

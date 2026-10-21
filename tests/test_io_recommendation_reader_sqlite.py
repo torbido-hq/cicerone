@@ -658,3 +658,17 @@ def test_sqlite_db_sink_fence_rejects_writes(tmp_path):
         sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1"}]))
     with pytest.raises(LockLostError, match="events apply lock lost"):
         sink.write_model_artifact(b"x")
+
+
+def test_sqlite_db_reader_refresh_reports_a_failed_items_reload(tmp_path, monkeypatch):
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    url = _sqlite_url(tmp_path)
+    reader = DbRecommendationReader({"database_url": url})
+    assert reader.refresh() is True
+
+    def _read_fails(*_args, **_kwargs):
+        raise PoolTimeout("pool exhausted")
+
+    monkeypatch.setattr(pd, "read_sql", _read_fails)
+    assert reader.refresh() is False
