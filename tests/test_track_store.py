@@ -1320,7 +1320,8 @@ def test_build_track_backend_picks_the_output_kind(tmp_path) -> None:
     assert isinstance(build_track_backend(dataset, store.fence), TrackDatasetBackend)
 
 
-def test_track_writes_encode_before_taking_the_writer_lease(tmp_path) -> None:
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> None:
     class _NeverAcquire:
         def acquire(self) -> bool:
             raise AssertionError("encoding must fail before the writer lease is taken")
@@ -1334,7 +1335,10 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path) -> None:
         def is_locked(self) -> bool:
             return False
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    if kind == "dataset":
+        output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    else:
+        output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     store = TrackStore(output, writer_lock=_NeverAcquire())
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})

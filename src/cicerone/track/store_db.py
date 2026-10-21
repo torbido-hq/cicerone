@@ -54,7 +54,8 @@ class TrackDbBackend:
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=since)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
-        return lambda: self._write_eval_db(payload)
+        encoded = json.dumps(payload)
+        return lambda: self._write_eval_db(encoded)
 
     def read_eval(self) -> dict[str, Any] | None:
         return self._read_eval_db()
@@ -163,13 +164,12 @@ class TrackDbBackend:
         records = frame.to_dict(orient="records")
         return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
 
-    def _write_eval_db(self, payload: dict[str, Any]) -> None:
+    def _write_eval_db(self, encoded: str) -> None:
         table = sql_identifier(
             self._options.get("eval_table", DEFAULT_EVAL_TABLE),
             option="eval_table",
         )
         engine = self._db_engine()
-        encoded = json.dumps(payload)
         with engine.begin() as conn:
             conn.execute(
                 text(
