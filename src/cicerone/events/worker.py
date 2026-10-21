@@ -276,10 +276,12 @@ class EventWorker:
     def _fingerprint_dedupe(self, event: NormalizedEvent) -> bool:
         return self._ephemeral_event_ids and event.generated_event_id
 
-    def _replay_key(self, event: NormalizedEvent) -> str:
+    def _replay_key(self, event: NormalizedEvent) -> str | None:
         # event_id is the idempotency key across every producer of one output (docs/incremental-events.md).
+        # A generated id is not stable and identical payloads can be distinct events, so those stay
+        # at-least-once: no durable key, only the in-memory fingerprint dedupe.
         if self._fingerprint_dedupe(event):
-            return replay_key("fingerprint", event_fingerprint(event))
+            return None
         return replay_key("id", event.event_id)
 
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:

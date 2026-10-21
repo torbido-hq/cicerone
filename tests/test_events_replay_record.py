@@ -12,7 +12,7 @@ from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.normalize import event_fingerprint, normalize_event
+from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
@@ -167,14 +167,15 @@ def test_replay_keys_are_hashed_per_kind() -> None:
     assert "abc" not in replay_key("id", "abc")
 
 
-def test_generated_ids_are_recorded_by_fingerprint(tmp_path, feature_config) -> None:
+def test_generated_ids_get_no_durable_replay_key(tmp_path, feature_config) -> None:
     class _EphemeralSource(WebhookEventSource):
         ephemeral_event_ids = True
 
-    worker, _updater = _worker(_outputs(tmp_path)["dataset"], feature_config, _EphemeralSource({}))
+    worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, _EphemeralSource({}))
     generated = replace(_event("generated-1"), generated_event_id=True)
-    assert worker._replay_key(generated) == replay_key("fingerprint", event_fingerprint(generated))
+    assert worker._replay_key(generated) is None
     assert worker._replay_key(_event("given-1")) == replay_key("id", "given-1")
+    assert updater.applied_before([generated]) == []
 
 
 def test_db_keys_are_scoped_to_their_recommendations_table(tmp_path) -> None:

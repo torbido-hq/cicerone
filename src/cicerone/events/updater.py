@@ -115,7 +115,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._replay_key: Callable[[NormalizedEvent], str] = lambda event: replay_key("id", event.event_id)
+        self._replay_key: Callable[[NormalizedEvent], str | None] = lambda event: replay_key(
+            "id", event.event_id
+        )
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
@@ -130,16 +132,19 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     def last_success_at(self) -> datetime | None:
         return self._last_success_at
 
-    def use_replay_key(self, key: Callable[[NormalizedEvent], str]) -> None:
-        """Key under which applied events are recorded with the write (the worker's dedupe key)."""
+    def use_replay_key(self, key: Callable[[NormalizedEvent], str | None]) -> None:
+        """Key under which applied events are recorded with the write; None leaves an event at-least-once."""
         self._replay_key = key
 
     def applied_before(self, events: Sequence[NormalizedEvent]) -> list[NormalizedEvent]:
         """Events already recorded by an earlier write, e.g. redelivered after a restart."""
         if not events or not isinstance(self._sink, AppliedEventLog):
             return []
-        recorded = self._sink.applied_event_keys([self._replay_key(event) for event in events])
-        return [event for event in events if self._replay_key(event) in recorded]
+        keyed = [(event, key) for event in events if (key := self._replay_key(event)) is not None]
+        if not keyed:
+            return []
+        recorded = self._sink.applied_event_keys([key for _event, key in keyed])
+        return [event for event, key in keyed if key in recorded]
 
     @property
     def events_applied(self) -> int:
@@ -231,7 +236,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._ensure_fence()
             user_ids = sorted(set(replace_ids))
             if isinstance(self._sink, AppliedEventLog):
-                keys = [self._replay_key(event) for event in events]
+                keys = [key for event in events if (key := self._replay_key(event)) is not None]
                 n_users = self._sink.replace_recommendations_for_users(
                     merged, user_ids=user_ids, applied_keys=keys
                 )

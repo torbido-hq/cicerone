@@ -303,3 +303,21 @@ def test_an_unexpected_post_write_worker_error_is_left_for_the_loop_to_count(
         worker.tick()
     assert source.health().lag == 0
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
+
+
+def test_a_failed_manifest_still_queues_the_sidecar_publish(tmp_path, feature_config: FeatureConfig) -> None:
+    settings = _settings(tmp_path)
+    sink = build_output_sink(settings.output)
+    sink.write_manifest, _calls = _fails_once(sink.write_manifest, OSError("disk full"))  # type: ignore[method-assign]
+    publisher = _Publisher()
+    _sink, updater = _updater(settings, feature_config, sink=sink, publisher=publisher)
+
+    with pytest.raises(OSError, match="disk full"):
+        updater.apply(_events())
+    assert publisher.published == []
+    assert updater._repair.publish_user_ids == {"u1"}
+
+    updater.repair_post_write()
+    assert not updater.post_write_pending
+    [(_frame, user_ids)] = publisher.published
+    assert "u1" in user_ids

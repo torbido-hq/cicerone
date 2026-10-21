@@ -301,8 +301,9 @@ error) are retried by the apply-lock holder on later ticks, at most every
 exists, and the sidecar gets the affected users' rows as storage holds
 them then. These retries live in process memory and are lost on restart.
 A redelivery after a crash or interrupt between the write and the ack is
-not applied again: a hash of each event's id (or of its fingerprint, for
-generated ids) is saved in the same write as the recommendations — the
+not applied again (an id the source generated, e.g. RabbitMQ without `event_id`,
+stays at-least-once): a hash of each event's id is saved in the same write as
+the recommendations — the
 `incremental_applied_events` table on db output
 (`[output].applied_events_table`, a name no other output table uses; keyed
 by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
