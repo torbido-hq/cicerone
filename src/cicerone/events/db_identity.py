@@ -164,6 +164,12 @@ def cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, 
     return cursor_tuple(event.occurred_at, event.event_id)
 
 
+def cursor_from_payload(payload: dict[str, Any]) -> tuple[datetime, str]:
+    """``(occurred_at, stable event id)`` of a row, without the rest of normalize_event."""
+    occurred_at = db_occurred_at(payload.get("occurred_at"))
+    return occurred_at, _stable_event_id(payload, occurred_at)
+
+
 def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
     """Lag path: parse occurred_at + stable id without full normalize_event."""
     occurred_at = db_occurred_at(payload.get("occurred_at"))

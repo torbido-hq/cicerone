@@ -46,6 +46,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
+  is unset, so a quiet stream no longer parks the event worker. An
+  explicit `block_ms = 0` keeps that behaviour and logs a warning.
+- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
+  rejected as invalid instead of stopping the event worker.
+- The db event source logs and skips an invalid row instead of stopping
+  the worker, and moves its watermark past a run of invalid rows longer
+  than one fetch.
 
 ## [0.8.5] - 2026-10-14
 

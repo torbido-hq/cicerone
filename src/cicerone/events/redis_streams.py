@@ -64,7 +64,15 @@ class RedisStreamsEventSource(QueuedEventSource):
         )
         start = options.get("group_start_id", _DEFAULT_GROUP_START_ID)
         self._group_start_id = str(start).strip() or _DEFAULT_GROUP_START_ID
-        self._block_ms = _as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
+        # Unset sends no BLOCK (non-blocking read). An explicit 0 keeps Redis's "wait forever".
+        self._block_ms: int | None = (
+            _as_int(options, "block_ms", _DEFAULT_BLOCK_MS) if options.get("block_ms") is not None else None
+        )
+        if self._block_ms == 0:
+            logger.warning(
+                "events.options.block_ms = 0 makes each read wait until an entry arrives; "
+                "buffered events are not flushed while the stream is quiet"
+            )
         self._claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
 
         self._client: Any | None = None

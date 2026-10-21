@@ -198,14 +198,17 @@ are a separate cheap path between those runs.
 Watermark poll over `events_table` / `events_query`. No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
-flush `ack`. When an `event_id` column exists, poll orders by
+flush `ack`, or past invalid rows that sort before every pending event.
+Like acks, this assumes new rows arrive in cursor order. When an `event_id` column exists, poll orders by
 `(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
-share a cursor.
+share a cursor. An invalid row (e.g. no `user_id`, `quantity` below 1) is logged
+once and skipped; with an `event_id` column the watermark also moves past a run
+of invalid rows longer than one fetch.
 
 ### `s3`
 
@@ -223,7 +226,9 @@ replica can retry without waiting out the visibility timeout.
 
 Consumer group (`XREADGROUP` / `XACK` / `XAUTOCLAIM` for idle PEL
 recovery). Required: `redis_url`, `stream`, `consumer_group`. Optional
-`consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`,
+`consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`
+(how long one read waits for new entries; unset does not wait, `0` waits
+until an entry arrives and so holds buffered events on a quiet stream),
 `claim_idle_ms`. Flat hash fields match the event contract; missing
 `event_id` uses the stream entry id. Requires
 `pip install 'cicerone-recommender[redis]'` or

@@ -900,3 +900,43 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
     assert released == []
     source.close()
     assert released == [url]
+
+
+def _event_row(event_id: str, minute: int, **overrides) -> dict:
+    row = {
+        "user_id": "u1",
+        "item_id": f"i{event_id}",
+        "event_type": "view",
+        "quantity": 1,
+        "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
+        "event_id": event_id,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_db_poll_skips_an_invalid_row_and_logs_it_once(tmp_path, caplog):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row("e1", 0), _event_row("bad", 1, quantity=0), _event_row("e2", 2)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.db"):
+        polled = list(source.poll(10))
+        source.nack(polled)
+        list(source.poll(10))
+    assert [event.event_id for event in polled] == ["e1", "e2"]
+    assert caplog.text.count("Skipping invalid event row") == 1
+
+
+def test_db_poll_moves_past_more_invalid_rows_than_one_fetch(tmp_path):
+    url = _sqlite_url(tmp_path)
+    bad = [_event_row(f"bad{index:03d}", 0, quantity=0) for index in range(30)]
+    _seed_events(url, [*bad, _event_row("good", 1)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    polled: list = []
+    for _ in range(5):
+        polled = list(source.poll(1))
+        if polled:
+            break
+    assert [event.event_id for event in polled] == ["good"]

@@ -62,7 +62,8 @@ def _parse_quantity(value: Any) -> int:
         return 1
     try:
         quantity = int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
+        # OverflowError: JSON ``Infinity`` / ``1e400`` parse to float inf.
         raise EventNormalizeError("quantity must be an integer") from exc
     if quantity < 1:
         raise EventNormalizeError("quantity must be >= 1")
