@@ -3326,15 +3326,22 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
     )
 
     class _BuggyPublisher:
+        def __init__(self) -> None:
+            self.connects = 0
+            self.published: list[list[str]] = []
+
         def connect(self) -> None:
-            raise RuntimeError("sidecar bug")
+            self.connects += 1
+            if self.connects == 1:
+                raise RuntimeError("sidecar bug")
 
         def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            raise AssertionError("publish must not run")
+            self.published.append(list(user_ids or []))
 
         def close(self) -> None:
             return None
 
+    publisher = _BuggyPublisher()
     source = WebhookEventSource({})
     source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
     updater = IncrementalUpdater(
@@ -3342,12 +3349,14 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=3,
-        publisher=_BuggyPublisher(),
+        publisher=publisher,
     )
     worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
     before_tick = registry_metric_value("cicerone_events_tick_errors_total")
 
-    assert worker.tick() == 1
+    # An unexpected publisher bug is re-raised, but only after the written batch is acked.
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
     assert source.health().lag == 0
     assert updater.events_applied == 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
@@ -3357,6 +3366,8 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
     source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
     assert worker.tick() == 0
     assert updater.events_applied == 1
+    [repaired] = publisher.published
+    assert "u1" in repaired
 
 
 def _dataset_updater(tmp_path, feature_config: FeatureConfig, **kwargs):  # type: ignore[no-untyped-def]

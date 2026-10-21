@@ -225,6 +225,10 @@ class DatasetOutputSink:
         self._write_bytes(RECOMMENDATIONS_FILENAME, buffer.getvalue(), "application/octet-stream")
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
+        if APPLIED_EVENTS_ATTR in df.attrs:
+            # A full write replaces every row, so no earlier incremental key describes it.
+            df = df.copy(deep=False)
+            df.attrs = {key: value for key, value in df.attrs.items() if key != APPLIED_EVENTS_ATTR}
         with self._maybe_recommendations_lock():
             self._write_recommendations_unlocked(df)
 

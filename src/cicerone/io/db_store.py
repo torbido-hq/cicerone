@@ -392,7 +392,6 @@ class DatabaseOutputSink:
         now = datetime.now(UTC)
         table = self._applied_events_table()
         scope = self._recommendations_table_name()
-        table.create(conn, checkfirst=True)
         conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
         for part in chunked(wanted):
             conn.execute(
@@ -429,6 +428,10 @@ class DatabaseOutputSink:
             bindparam("user_ids", expanding=True)
         )
         count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
+        if applied_keys:
+            # CREATE TABLE commits implicitly on MySQL, so never inside the rows' transaction.
+            with self._engine.begin() as ddl:
+                self._applied_events_table().create(ddl, checkfirst=True)
         with self._engine.begin() as conn:
             self._ensure_fence()
             savepoint = conn.begin_nested()

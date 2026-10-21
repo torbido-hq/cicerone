@@ -859,7 +859,7 @@ def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_raises(
 def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
     tmp_path, feature_config: FeatureConfig
 ):
-    # An unexpected heartbeat error is re-raised raw at exit; the batch is still written.
+    # An unexpected heartbeat error is re-raised, but only after the written batch is acked.
     out, settings = _seed_out(tmp_path)
 
     class _LaterBug(WebhookEventSource):
@@ -890,7 +890,8 @@ def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
 
     worker._updater.apply = _slow  # type: ignore[method-assign]
     before_tick = registry_metric_value("cicerone_events_tick_errors_total")
-    assert worker.tick() == 1
+    with pytest.raises(RuntimeError, match="heartbeat bug"):
+        worker.tick()
     assert source.beats >= 2
     assert source.health().lag == 0
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1

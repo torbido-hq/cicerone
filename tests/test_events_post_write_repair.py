@@ -3,10 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from support.events import event_payload
+from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import PostWriteError
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
@@ -74,7 +74,7 @@ def test_a_failed_manifest_is_written_by_the_repair(tmp_path, feature_config: Fe
     sink.write_manifest, _calls = _fails_once(sink.write_manifest, OSError("disk full"))  # type: ignore[method-assign]
     _sink, updater = _updater(settings, feature_config, sink=sink)
 
-    with pytest.raises(PostWriteError):
+    with pytest.raises(OSError, match="disk full"):
         updater.apply(_events())
     assert updater.post_write_pending
     assert build_manifest_reader(settings.output).read_latest() is None
@@ -92,7 +92,7 @@ def test_the_repair_does_not_overwrite_a_newer_manifest(tmp_path, feature_config
     real_write = sink.write_manifest
     sink.write_manifest, _calls = _fails_once(real_write, OSError("disk full"))  # type: ignore[method-assign]
     _sink, updater = _updater(settings, feature_config, sink=sink)
-    with pytest.raises(PostWriteError):
+    with pytest.raises(OSError, match="disk full"):
         updater.apply(_events())
 
     real_write({"triggered_by": "job", "status": "success", "generated_at": "2999-01-01T00:00:00+00:00"})
@@ -110,7 +110,7 @@ def test_a_failed_reader_refresh_is_retried(tmp_path, feature_config: FeatureCon
             raise RuntimeError("reader refresh failed")
 
     _sink, updater = _updater(_settings(tmp_path), feature_config, on_success=_refresh)
-    with pytest.raises(PostWriteError):
+    with pytest.raises(RuntimeError, match="reader refresh failed"):
         updater.apply(_events())
     assert updater.post_write_pending
 
@@ -128,7 +128,7 @@ def test_a_failed_sidecar_publish_is_retried_with_the_stored_rows(
     if isinstance(failure, PublishError):
         assert updater.apply(_events()) == 1
     else:
-        with pytest.raises(PostWriteError):
+        with pytest.raises(RuntimeError, match="sidecar bug"):
             updater.apply(_events())
     assert publisher.published == []
     assert updater.post_write_pending
@@ -148,7 +148,7 @@ def test_a_failed_repair_backs_off(tmp_path, feature_config: FeatureConfig) -> N
         raise RuntimeError("reader refresh failed")
 
     _sink, updater = _updater(_settings(tmp_path), feature_config, on_success=_refresh)
-    with pytest.raises(PostWriteError):
+    with pytest.raises(RuntimeError, match="reader refresh failed"):
         updater.apply(_events())
     with pytest.raises(RuntimeError):
         updater.repair_post_write()
@@ -182,7 +182,7 @@ def test_the_publish_repair_skips_when_a_full_write_lands_meanwhile(
 ) -> None:
     publisher = _Publisher(fail_with=RuntimeError("sidecar bug"))
     sink, updater = _updater(_settings(tmp_path), feature_config, publisher=publisher)
-    with pytest.raises(PostWriteError):
+    with pytest.raises(RuntimeError, match="sidecar bug"):
         updater.apply(_events())
     load_users = updater._load_users
 
@@ -195,3 +195,21 @@ def test_the_publish_repair_skips_when_a_full_write_lands_meanwhile(
     updater.repair_post_write()
     assert publisher.published == []
     assert not updater.post_write_pending
+
+
+def test_the_worker_counts_a_handled_publish_failure_as_a_flush_error(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    publisher = _Publisher(fail_with=PublishError("broker down"))
+    _sink, updater = _updater(_settings(tmp_path), feature_config, publisher=publisher)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="publish-fails", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    assert worker.tick() == 1
+    assert source.health().lag == 0
+    assert updater.post_write_pending
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1

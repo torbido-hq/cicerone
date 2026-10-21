@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import event
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
@@ -186,6 +188,12 @@ def test_db_keys_are_scoped_to_their_recommendations_table(tmp_path) -> None:
 
 def test_db_key_lookup_and_record_handle_more_keys_than_the_parameter_limit(tmp_path) -> None:
     sink = build_output_sink(_outputs(tmp_path)["db"])
+
+    @event.listens_for(sink._engine, "connect")
+    def _low_parameter_limit(dbapi_connection, _record):  # type: ignore[no-untyped-def]
+        dbapi_connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 600)
+
+    sink._engine.dispose()
     keys = [f"k{index}" for index in range(1_200)]
     rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=keys)
@@ -235,3 +243,53 @@ def test_dataset_key_lookup_reads_no_recommendation_rows(tmp_path, monkeypatch) 
 
     monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _no_row_reads)
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+
+
+def test_a_dataset_full_write_drops_keys_carried_by_its_frame(tmp_path) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["dataset"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    rows.attrs[applied_events.APPLIED_EVENTS_ATTR] = {"k1": datetime.now(UTC).isoformat()}
+    sink.write_recommendations(rows)
+    assert sink.applied_event_keys(["k1"]) == set()
+    assert applied_events.APPLIED_EVENTS_ATTR in rows.attrs
+
+
+def test_db_creates_the_key_table_outside_the_rows_transaction(tmp_path) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    steps: list[str] = []
+
+    @event.listens_for(sink._engine, "before_cursor_execute")
+    def _statement(_conn, _cursor, statement, *_args):  # type: ignore[no-untyped-def]
+        steps.append(statement.split("(")[0].strip())
+
+    @event.listens_for(sink._engine, "commit")
+    def _commit(_conn):  # type: ignore[no-untyped-def]
+        steps.append("COMMIT")
+
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    create = next(i for i, step in enumerate(steps) if step.startswith("CREATE TABLE incremental_applied"))
+    rows_delete = next(i for i, step in enumerate(steps) if step.startswith("DELETE FROM recommendations"))
+    assert "COMMIT" in steps[create:rows_delete]
+
+
+def test_worker_returns_fresh_events_when_acking_replays_raises(tmp_path, feature_config) -> None:
+    output = _outputs(tmp_path)["dataset"]
+    first_source = WebhookEventSource({})
+    first_source.ingest(event_payload(event_id="replayed-x", user_id="u1", item_id="i9"))
+    first, _first_updater = _worker(output, feature_config, first_source)
+    assert first.tick() == 1
+
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="replayed-x", user_id="u1", item_id="i9"))
+    source.ingest(event_payload(event_id="fresh-x", user_id="u2", item_id="i8"))
+    worker, updater = _worker(output, feature_config, source, batch_size=2)
+
+    def _ack_bug(_events):  # type: ignore[no-untyped-def]
+        raise RuntimeError("ack bug")
+
+    worker._ack_unbuffered = _ack_bug  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="ack bug"):
+        worker.tick()
+    assert updater.events_applied == 0
+    assert [event.event_id for event in source.poll(10)] == ["fresh-x"]

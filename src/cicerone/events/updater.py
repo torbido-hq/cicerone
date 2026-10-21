@@ -15,7 +15,6 @@ from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.errors import PostWriteError
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.post_write import PostWriteRepair
@@ -123,6 +122,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._explain_enabled = explain_enabled
         self._publisher = require_incremental_publisher(publisher)
         self._repair = PostWriteRepair()
+        self._last_publish_failed = False
+        self._last_apply_written = False
 
     @property
     def last_success_at(self) -> datetime | None:
@@ -173,6 +174,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._abort_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
+        self._last_apply_written = False
+        self._last_publish_failed = False
         if not events:
             return 0
         if self.retrain_busy():
@@ -232,6 +235,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 )
             else:
                 n_users = self._sink.replace_recommendations_for_users(merged, user_ids=user_ids)
+            self._last_apply_written = True
             now = datetime.now(UTC)
             manifest: dict[str, Any] = {
                 "triggered_by": "incremental",
@@ -276,20 +280,25 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 applied = _persist()
             if pending_publish is not None and self._publish_sidecar(*pending_publish):
                 done.add("publish")
-        except Exception as exc:
-            if written is None:
-                raise
-            self._queue_repair(*written, done)
-            raise PostWriteError(
-                f"Incremental flush failed after its recommendations were written: {exc}", applied=len(events)
-            ) from exc
-        if written is not None and "publish" not in done:
-            self._queue_repair(*written, done)
+            self._last_publish_failed = written is not None and "publish" not in done
+        finally:
+            if written is not None:
+                self._queue_repair(*written, done)
         return applied
 
     @property
     def post_write_pending(self) -> bool:
         return self._repair.pending
+
+    @property
+    def last_apply_written(self) -> bool:
+        """The last ``apply`` wrote its rows, even if it then raised: its events must not be applied again."""
+        return self._last_apply_written
+
+    @property
+    def last_publish_failed(self) -> bool:
+        """The last ``apply`` wrote its rows but its sidecar publish failed (queued for repair)."""
+        return self._last_publish_failed
 
     def _queue_repair(self, manifest: dict[str, Any], user_ids: list[str], done: set[str]) -> None:
         if "refresh" not in done and self._on_success is not None:
@@ -324,11 +333,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 current = self._load_users(user_ids)
                 if self._publish_sidecar(current, generation, sorted(user_ids)):
                     repair.publish_user_ids -= user_ids
-        except Exception:
-            repair.back_off()
-            raise
-        if repair.pending:
-            repair.back_off()
+        finally:
+            if repair.pending:
+                repair.back_off()
 
     def _publish_sidecar(
         self, merged: pd.DataFrame, generated_at: str | None, replace_ids: list[str]

@@ -17,7 +17,6 @@ from cicerone.events.errors import (
     EVENT_APPLY_ERRORS,
     EVENT_SOURCE_ERRORS,
     EVENT_WORKER_ERRORS,
-    PostWriteError,
 )
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater
@@ -37,6 +36,14 @@ from cicerone.metrics import (
 logger = logging.getLogger(__name__)
 
 _ONLINE_PERSIST_ATTEMPTS = 3
+# Failures after a committed write that are acked and logged; anything else is re-raised after the ack.
+_POST_WRITE_ERRORS: tuple[type[BaseException], ...] = (
+    *EVENT_APPLY_ERRORS,
+    LockLostError,
+    WriterLockBusyError,
+    HeartbeatError,
+)
+_REPAIR_ERRORS: tuple[type[BaseException], ...] = (*EVENT_APPLY_ERRORS, WriterLockBusyError)
 _APPLIED_EVENT_ID_CAP = 10_000
 
 
@@ -501,8 +508,7 @@ class EventWorker:
             if exc.kind == "apply":
                 update_events_leader(False)
             logger.error("%s; post-write repair retried later", exc)
-        except Exception:
-            # Its batch is acked already; keep it pending rather than stop the worker.
+        except _REPAIR_ERRORS:
             record_events_tick_error()
             logger.exception("Post-write repair failed; retrying later")
 
@@ -595,24 +601,24 @@ class EventWorker:
                 return 0
         applied: int | None = None
         post_write_failed = False
+        # Re-raised after the ack; it is logged first, so an online-persist error may take precedence.
+        unexpected: Exception | None = None
         try:
             try:
                 with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
                     applied = self._updater.apply(ready, persist_online=False)
             except Exception as exc:
-                if not applied:
+                # Once the rows are written any error must still ack them (nacking applies the events
+                # twice), so this cannot be narrowed; an unexpected one is re-raised after the ack.
+                if not applied and not self._updater.last_apply_written:
                     raise
-                # apply returned and only the heartbeat failed on exit: the batch is applied, so ack it.
+                if not isinstance(exc, _POST_WRITE_ERRORS):
+                    unexpected = exc
                 self._log_post_write_failure(ready, exc)
+                if isinstance(exc, LockLostError) and exc.kind == "apply":
+                    update_events_leader(False)
+                applied = applied or len(ready)
                 post_write_failed = True
-        except PostWriteError as exc:
-            # The batch is written; nacking it would apply the same events twice.
-            self._log_post_write_failure(ready, exc)
-            cause = exc.__cause__
-            if isinstance(cause, LockLostError) and cause.kind == "apply":
-                update_events_leader(False)
-            applied = exc.applied
-            post_write_failed = True
         except HeartbeatError:
             record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
@@ -646,6 +652,10 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             raise
+        if applied and not post_write_failed and self._updater.last_publish_failed:
+            # Written and acked; the publish is queued for repair, but this flush did not complete.
+            record_events_tick_error()
+            post_write_failed = True
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
@@ -670,6 +680,8 @@ class EventWorker:
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
             self._retry_acks.extend(ready)
             self._persist_online_after_ack()
+            if unexpected is not None:
+                raise unexpected from None
             return applied
         except Exception:
             record_events_flush(status="error")
@@ -695,6 +707,8 @@ class EventWorker:
         if post_write_failed:
             record_events_flush(status="error")
             self._persist_online_after_ack()
+            if unexpected is not None:
+                raise unexpected
             return applied
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
@@ -707,12 +721,17 @@ class EventWorker:
         logger.info("Acking %d event(s) already applied by an earlier write", len(replayed))
         record_events_replayed(len(replayed))
         self._remember_applied(replayed)
+        skip = {id(event) for event in replayed}
+        fresh = [event for event in ready if id(event) not in skip]
         try:
             self._ack_unbuffered(replayed)
         except EVENT_SOURCE_ERRORS:
             logger.exception("Event source ack failed for already-applied event(s); retrying later")
-        skip = {id(event) for event in replayed}
-        return [event for event in ready if id(event) not in skip]
+        except Exception:
+            record_events_flush(status="error")
+            self._return_events(fresh)
+            raise
+        return fresh
 
     def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:
         record_events_tick_error()
