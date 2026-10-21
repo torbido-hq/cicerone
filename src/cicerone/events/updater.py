@@ -277,10 +277,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return len(events)
 
         try:
+            # The publish stays under the write guard so a full write cannot land between its check and send.
             with recommendations_write_guard(self._sink):
                 applied = _persist()
-            if pending_publish is not None and self._publish_sidecar(*pending_publish):
-                done.add("publish")
+                if pending_publish is not None and self._publish_sidecar(*pending_publish):
+                    done.add("publish")
             self._last_publish_failed = written is not None and "publish" not in done
         finally:
             if written is not None:
@@ -327,11 +328,13 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 repair.manifest = None
             if repair.publish_user_ids:
                 user_ids = set(repair.publish_user_ids)
-                # Publish what storage holds now; a full write after this read skips it as superseded.
-                generation = latest_manifest_generated_at(self._output_settings)
-                self._evict_users(user_ids)
-                current = self._load_users(user_ids)
-                if self._publish_sidecar(current, generation, sorted(user_ids)):
+                # Publish what storage holds now, under the guard so no full write lands before the send.
+                with recommendations_write_guard(self._sink):
+                    generation = latest_manifest_generated_at(self._output_settings)
+                    self._evict_users(user_ids)
+                    current = self._load_users(user_ids)
+                    published = self._publish_sidecar(current, generation, sorted(user_ids))
+                if published:
                     repair.publish_user_ids -= user_ids
         finally:
             if repair.pending:

@@ -430,3 +430,26 @@ def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) ->
         {"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", "applied_events_table": "t" * 64}
     )
     assert all(len(str(index.name)) <= 64 for index in sink._applied_events_table().indexes)
+
+
+def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    class _Inspector:
+        def has_table(self, _table):  # type: ignore[no-untyped-def]
+            return True
+
+        def get_columns(self, _table):  # type: ignore[no-untyped-def]
+            return [{"name": "generated_at"}]
+
+    class _Conn:
+        dialect = mysql.dialect()
+        sql: list[str] = []
+
+        def execute(self, statement):  # type: ignore[no-untyped-def]
+            self.sql.append(str(statement))
+
+    conn = _Conn()
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: _Inspector())
+    db_store._add_missing_manifest_columns(conn, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
+    assert conn.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]

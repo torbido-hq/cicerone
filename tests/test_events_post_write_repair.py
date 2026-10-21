@@ -8,6 +8,7 @@ from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import IOSettings, make_settings
+from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
@@ -266,3 +267,39 @@ def test_a_repair_that_raises_returns_the_ready_batch(
     with pytest.raises(RuntimeError, match="repair bug"):
         worker.tick()
     assert [event.event_id for event in source.poll(10)] == ["ready"]
+
+
+def test_the_sidecar_publish_holds_the_write_guard(tmp_path, feature_config: FeatureConfig) -> None:
+    publisher = _Publisher(fail_with=PublishError("broker down"))
+    sink, updater = _updater(_settings(tmp_path), feature_config, publisher=publisher)
+    guarded: list[bool] = []
+    publish = publisher.publish
+
+    def _publish(df, *, user_ids=None):  # type: ignore[no-untyped-def]
+        guarded.append(sink._recs_write_depth() > 0)
+        publish(df, user_ids=user_ids)
+
+    publisher.publish = _publish  # type: ignore[method-assign]
+    assert updater.apply(_events()) == 1
+    updater.repair_post_write()
+    assert guarded == [True]
+    assert updater.apply(_events("n2")) == 1
+    assert guarded == [True, True]
+
+
+def test_an_unexpected_post_write_worker_error_is_left_for_the_loop_to_count(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    settings = _settings(tmp_path)
+    sink = build_output_sink(settings.output)
+    sink.write_manifest, _calls = _fails_once(sink.write_manifest, EventSourceError("source bug"))  # type: ignore[method-assign]
+    _sink, updater = _updater(settings, feature_config, sink=sink)
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="counted-once", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    with pytest.raises(EventSourceError):
+        worker.tick()
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick

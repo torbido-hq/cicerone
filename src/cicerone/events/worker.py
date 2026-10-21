@@ -623,7 +623,9 @@ class EventWorker:
                     raise
                 if not isinstance(exc, _POST_WRITE_ERRORS):
                     unexpected = exc
-                self._log_post_write_failure(ready, exc)
+                # The worker loop counts a re-raised worker error itself.
+                counted_by_loop = unexpected is not None and isinstance(unexpected, EVENT_WORKER_ERRORS)
+                self._log_post_write_failure(ready, exc, count=not counted_by_loop)
                 if isinstance(exc, LockLostError) and exc.kind == "apply":
                     update_events_leader(False)
                 applied = applied or len(ready)
@@ -742,8 +744,11 @@ class EventWorker:
             raise
         return fresh
 
-    def _log_post_write_failure(self, ready: list[NormalizedEvent], exc: BaseException) -> None:
-        record_events_tick_error()
+    def _log_post_write_failure(
+        self, ready: list[NormalizedEvent], exc: BaseException, *, count: bool = True
+    ) -> None:
+        if count:
+            record_events_tick_error()
         logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
     def _persist_online_after_ack(self) -> None:

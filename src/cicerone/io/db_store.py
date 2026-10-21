@@ -131,7 +131,8 @@ def _add_missing_manifest_columns(conn: Any, table: str, manifest: dict) -> None
         column = sql_identifier(key, option="manifest key")
         column_type = _manifest_column_type(value).compile(dialect=conn.dialect)
         logger.info("Adding column %r to manifest table %r", column, table)
-        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_type}'))
+        quote = conn.dialect.identifier_preparer.quote
+        conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
 
 
 def _manifest_column_type(value: Any) -> Any:
