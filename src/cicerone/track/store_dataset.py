@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,7 @@ from typing import Any
 import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
 
+from cicerone.config.settings import IOSettings
 from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
 from cicerone.io.options import (
     build_s3_client,
@@ -24,14 +26,22 @@ from cicerone.io.options import (
     require_option,
     validate_storage_options,
 )
+from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
+    EVAL_FILENAME,
+    HISTORY_COLUMNS,
     HISTORY_DIR,
     HISTORY_FILENAME,
     TRACK_FILENAME,
+    filter_history,
     history_part_matches,
     history_stem_before,
+    require_appendable_track_log,
     row_matches,
+    unique_matching_rows,
 )
+
+logger = logging.getLogger(__name__)
 
 _HISTORY_READ_WORKERS = 8
 _S3_READ_ERRORS = (BotoCoreError, ClientError)
@@ -50,10 +60,75 @@ def _collect_frames(loaders: list[Callable[[], pd.DataFrame | None]]) -> list[pd
 
 
 class TrackDatasetBackend:
-    _options: dict[str, Any]
-    _known_ids: set[str] | None
-    _track_size: int | None
-    _append_lock: threading.Lock
+    """``track.jsonl``, ``track_eval.json`` and history parquet parts on the dataset store."""
+
+    def __init__(self, output: IOSettings, fence: WriteFence):
+        self._output = output
+        self._options = output.options
+        self._fence = fence
+        self._known_ids: set[str] | None = None
+        self._track_size: int | None = None
+        self._append_lock = threading.Lock()
+
+    def append_accepted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        require_appendable_track_log(self._output)
+        with self._dataset_append_lock(), self._fence.lease():
+            known = self._refresh_known_ids()
+            fresh: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for row in rows:
+                event_id = str(row.get("event_id") or "")
+                if event_id and (event_id in known or event_id in seen):
+                    continue
+                fresh.append(row)
+                if event_id:
+                    seen.add(event_id)
+            if not fresh:
+                return []
+            encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
+            self._fence.ensure()
+            self._append_bytes(TRACK_FILENAME, encoded)
+            known.update(seen)
+            self._track_size = (self._track_size or 0) + len(encoded)
+            return fresh
+
+    def read_rows(
+        self, *, kind: str | None, experiment_id: str | None, since: str | None
+    ) -> list[dict[str, Any]]:
+        # ``since`` is applied while reading the file.
+        rows = self._read_rows_dataset(since=since)
+        return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=None)
+
+    def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
+        encoded = json.dumps(payload, indent=2).encode("utf-8")
+        return lambda: self._write_bytes(EVAL_FILENAME, encoded, "application/json")
+
+    def read_eval(self) -> dict[str, Any] | None:
+        raw = self._read_bytes(EVAL_FILENAME)
+        if raw is None:
+            return None
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            logger.warning("Invalid track_eval.json; ignoring")
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
+        buf = BytesIO()
+        frame.to_parquet(buf, index=False)
+        part = f"{HISTORY_DIR}/{history_part_name(generated_at)}"
+        payload = buf.getvalue()
+        return lambda: self._write_bytes(part, payload, "application/octet-stream")
+
+    def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
+        frames = []
+        if generated_ats is None and since is None:
+            frames.extend(self._read_legacy_history())
+        frames.extend(self._read_history_parts(generated_ats=generated_ats, since=since))
+        if not frames:
+            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+        return filter_history(pd.concat(frames, ignore_index=True), generated_ats=generated_ats, since=since)
 
     def _read_legacy_history(self) -> list[pd.DataFrame]:
         from cicerone.io.options import read_parquet
