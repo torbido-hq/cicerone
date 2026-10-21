@@ -197,7 +197,8 @@ def test_config_and_the_derived_url_agree_on_loopback_hosts():
         return f"[{host}]" if ":" in host else host
 
     for host in ("localhost", "LOCALHOST", "127.0.0.1", "127.0.0.2", "::1"):
-        assert _load_dashboard_trigger_url(f"http://{url_host(host)}:8080", allow_http=False)
+        url = f"http://{url_host(host)}:8080"
+        assert _load_dashboard_trigger_url(f"{url}/", allow_http=False) == url
         assert (
             trigger_base_url(make_settings(trigger_host=host, trigger_port=9)) == f"http://{url_host(host)}:9"
         )
