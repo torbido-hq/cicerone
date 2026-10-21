@@ -31,7 +31,7 @@ from cicerone.io.recommendation_reader_common import (
     item_snapshot_columns,
     normalize_items_snapshot,
 )
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +107,14 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
             return False
 
-    def refresh(self) -> None:
+    def refresh(self) -> bool:
+        """False when the items snapshot could not be reloaded and the previous one was kept."""
         self._variant_supported = None
         self._present_variants = None
         started = time.perf_counter()
         items_ok = self._reload_items()
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
+        return items_ok
 
     def _supports_variant_column(self) -> bool | None:
         cached = self._variant_supported

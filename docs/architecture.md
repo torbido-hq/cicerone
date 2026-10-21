@@ -33,7 +33,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `dataset.py` | Raw events/users/items → weighted rectools Dataset (`BuiltDataset`; keeps users+items frames for policy evaluation; caps keep most recent N) |
 | `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
 | `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |
-| `model/fit.py` | `fit_strategies`, `plan_model_run`, ProcessPool workers |
+| `model/fit.py` | `fit_strategies`, `FitOptions`, `plan_model_run`, ProcessPool workers |
 | `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
 | `model/combine.py` | Priority + weighted RRF combiners |
 | `model/epoch_metrics.py` | Optional collaborative/sequential per-epoch Precision/Recall logging |
@@ -55,8 +55,8 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
-| `serve/metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve/code_samples.py` | OpenAPI `x-codeSamples` snippets for serve mode (ReDoc / exported schema) |
+| `metrics.py` | Prometheus metric objects + helpers (default in-process registry); `serve.metrics` is an alias |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
@@ -307,7 +307,7 @@ serve-only image.
   table directly per request and caches those same item columns from
   `recommendation_items`. Both
   readers record cache hit/miss and refresh success/failure/duration metrics
-  (`cicerone.serve.metrics`). Layers (in-memory webhook queue vs output vs
+  (`cicerone.metrics`). Layers (in-memory webhook queue vs output vs
   track store): [configuration.md](configuration.md#where-state-lives).
 - `serve.create_app()` exposes `GET /health` and
   `GET /recommendations/{user_id}` (`limit`/`k`, `category`,

@@ -13,15 +13,20 @@ from cicerone.config.constants import (
 )
 from cicerone.events.base import ClosableSource, EphemeralIdSource, EventSource, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import EVENT_APPLY_ERRORS, EVENT_SOURCE_ERRORS, EVENT_WORKER_ERRORS
+from cicerone.events.errors import (
+    EVENT_APPLY_ERRORS,
+    EVENT_SOURCE_ERRORS,
+    EVENT_WORKER_ERRORS,
+)
 from cicerone.events.normalize import event_fingerprint
-from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
 from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
-from cicerone.serve.metrics import (
+from cicerone.metrics import (
     record_events_apply_busy,
     record_events_flush,
     record_events_lock,
+    record_events_replayed,
     record_events_tick_error,
     update_events_leader,
     update_events_source_health,
@@ -30,6 +35,14 @@ from cicerone.serve.metrics import (
 logger = logging.getLogger(__name__)
 
 _ONLINE_PERSIST_ATTEMPTS = 3
+# Failures after a committed write that are acked and logged; anything else is re-raised after the ack.
+_POST_WRITE_ERRORS: tuple[type[BaseException], ...] = (
+    *EVENT_APPLY_ERRORS,
+    LockLostError,
+    WriterLockBusyError,
+    HeartbeatError,
+)
+_REPAIR_ERRORS: tuple[type[BaseException], ...] = (*EVENT_APPLY_ERRORS, WriterLockBusyError)
 _APPLIED_EVENT_ID_CAP = 10_000
 
 
@@ -92,6 +105,7 @@ class EventWorker:
         self._applied_fingerprints = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
         self._ephemeral_event_ids = isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
         self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
+        updater.use_replay_key(self._replay_key)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -260,6 +274,13 @@ class EventWorker:
 
     def _fingerprint_dedupe(self, event: NormalizedEvent) -> bool:
         return self._ephemeral_event_ids and event.generated_event_id
+
+    def _replay_key(self, event: NormalizedEvent) -> str | None:
+        # A generated id is not stable and identical payloads can be distinct events, so those stay
+        # at-least-once: no durable key, only the in-memory fingerprint dedupe.
+        if self._fingerprint_dedupe(event):
+            return None
+        return event_replay_key(event)
 
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:
@@ -451,12 +472,17 @@ class EventWorker:
         if self._apply_lock is None:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
-            return self._flush_ready(ready) if ready else 0
+            return self._repair_then_flush(ready)
 
         if self._poll_without_lock:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
             if not ready:
+                if self._updater.post_write_pending and self._acquire_apply_lock():
+                    try:
+                        self._repair_post_write()
+                    finally:
+                        self._release_apply_lock()
                 return 0
             return self._with_apply_lock(ready)
 
@@ -465,9 +491,33 @@ class EventWorker:
         try:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
-            return self._flush_ready(ready) if ready else 0
+            return self._repair_then_flush(ready)
         finally:
             self._release_apply_lock()
+
+    def _repair_then_flush(self, ready: list[NormalizedEvent]) -> int:
+        repaired = False
+        try:
+            self._repair_post_write()
+            repaired = True
+        finally:
+            if not repaired and ready:
+                self._return_events(ready)
+        return self._flush_ready(ready) if ready else 0
+
+    def _repair_post_write(self) -> None:
+        if not self._updater.post_write_pending:
+            return
+        try:
+            self._updater.repair_post_write()
+        except LockLostError as exc:
+            record_events_tick_error()
+            if exc.kind == "apply":
+                update_events_leader(False)
+            logger.error("%s; post-write repair retried later", exc)
+        except _REPAIR_ERRORS:
+            record_events_tick_error()
+            logger.exception("Post-write repair failed; retrying later")
 
     def _poll_into_buffer(self) -> None:
         if self._held:
@@ -516,7 +566,7 @@ class EventWorker:
             self._return_events(ready)
             return 0
         try:
-            return self._flush_ready(ready)
+            return self._repair_then_flush(ready)
         finally:
             self._release_apply_lock()
 
@@ -541,8 +591,46 @@ class EventWorker:
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         try:
-            with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
-                applied = self._updater.apply(ready, persist_online=False)
+            replayed = self._updater.applied_before(ready)
+        except EVENT_APPLY_ERRORS:
+            record_events_flush(status="error")
+            logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
+            self._return_events(ready)
+            return 0
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
+            self._return_events(ready)
+            raise
+        if replayed:
+            ready = self._ack_replayed(ready, replayed)
+            if not ready:
+                return 0
+        applied: int | None = None
+        post_write_failed = False
+        # Re-raised after the ack; it is logged first, so an online-persist error may take precedence.
+        unexpected: Exception | None = None
+        apply_started = False
+        try:
+            try:
+                with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
+                    apply_started = True
+                    applied = self._updater.apply(ready, persist_online=False)
+            except Exception as exc:
+                # Once the rows are written any error must still ack them (nacking applies the events
+                # twice), so this cannot be narrowed; an unexpected one is re-raised after the ack.
+                # last_apply_written describes the previous batch until this batch's apply starts.
+                if not applied and not (apply_started and self._updater.last_apply_written):
+                    raise
+                if not isinstance(exc, _POST_WRITE_ERRORS):
+                    unexpected = exc
+                # The worker loop counts a re-raised worker error itself.
+                counted_by_loop = unexpected is not None and isinstance(unexpected, EVENT_WORKER_ERRORS)
+                self._log_post_write_failure(ready, exc, count=not counted_by_loop)
+                if isinstance(exc, LockLostError) and exc.kind == "apply":
+                    update_events_leader(False)
+                applied = applied or len(ready)
+                post_write_failed = True
         except HeartbeatError:
             record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
@@ -576,6 +664,10 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             raise
+        if applied and not post_write_failed and self._updater.last_publish_failed:
+            # Written and acked; the publish is queued for repair, but this flush did not complete.
+            record_events_tick_error()
+            post_write_failed = True
         if applied == 0:
             record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
@@ -600,6 +692,8 @@ class EventWorker:
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
             self._retry_acks.extend(ready)
             self._persist_online_after_ack()
+            if unexpected is not None:
+                raise unexpected from None
             return applied
         except Exception:
             record_events_flush(status="error")
@@ -622,9 +716,41 @@ class EventWorker:
             )
             self._persist_online_after_ack()
             raise
+        if post_write_failed:
+            record_events_flush(status="error")
+            self._persist_online_after_ack()
+            if unexpected is not None:
+                raise unexpected
+            return applied
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _ack_replayed(
+        self, ready: list[NormalizedEvent], replayed: list[NormalizedEvent]
+    ) -> list[NormalizedEvent]:
+        # Recorded by an earlier write (e.g. before a restart): ack instead of applying twice.
+        logger.info("Acking %d event(s) already applied by an earlier write", len(replayed))
+        record_events_replayed(len(replayed))
+        self._remember_applied(replayed)
+        skip = {id(event) for event in replayed}
+        fresh = [event for event in ready if id(event) not in skip]
+        try:
+            self._ack_unbuffered(replayed)
+        except EVENT_SOURCE_ERRORS:
+            logger.exception("Event source ack failed for already-applied event(s); retrying later")
+        except Exception:
+            record_events_flush(status="error")
+            self._return_events(fresh)
+            raise
+        return fresh
+
+    def _log_post_write_failure(
+        self, ready: list[NormalizedEvent], exc: BaseException, *, count: bool = True
+    ) -> None:
+        if count:
+            record_events_tick_error()
+        logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
     def _persist_online_after_ack(self) -> None:
         last_error: BaseException | None = None

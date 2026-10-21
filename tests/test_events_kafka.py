@@ -53,6 +53,8 @@ def test_optional_int_validation():
         optional_int({"n": "nope"}, "n", 3, prefix="x", minimum=1)
     with pytest.raises(ConfigError, match=">= 1"):
         optional_int({"n": 0}, "n", 3, prefix="x", minimum=1)
+    with pytest.raises(ConfigError, match="x.n must be an integer, got -inf"):
+        optional_int({"n": float("-inf")}, "n", 3, prefix="x", minimum=1)
 
 
 def test_optional_float_validation():

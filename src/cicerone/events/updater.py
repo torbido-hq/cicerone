@@ -6,7 +6,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -15,8 +15,9 @@ from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import events_to_dataframe
+from cicerone.events.normalize import event_fingerprint, events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
+from cicerone.events.post_write import PostWriteRepair
 from cicerone.events.store import empty_recommendations_frame
 from cicerone.events.updater_cache import UpdaterUserCache
 from cicerone.events.updater_merge import (
@@ -27,7 +28,8 @@ from cicerone.events.updater_merge import (
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
-from cicerone.io.base import OutputSink, ensure_sink_writer_held, recommendations_write_guard
+from cicerone.io.applied_events import replay_key
+from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError, WriterLockBusyError
@@ -36,7 +38,11 @@ from cicerone.publish.base import (
     publish_recommendations,
     require_incremental_publisher,
 )
-from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
+from cicerone.publish.sidecar import (
+    latest_manifest_generated_at,
+    log_sidecar_generation_skip,
+    sidecar_generation_current,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +71,11 @@ class CommittingOnlineRefresher(Protocol, metaclass=CapabilityMeta):
 @runtime_checkable
 class AbortingOnlineRefresher(Protocol, metaclass=CapabilityMeta):
     def abort(self) -> None: ...
+
+
+def event_replay_key(event: NormalizedEvent) -> str:
+    """Durable replay key: the id plus the payload, so only a true redelivery matches a recorded event."""
+    return replay_key("event", f"{event.event_id}\x1f{event_fingerprint(event)}")
 
 
 class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
@@ -109,16 +120,34 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
+        self._replay_key: Callable[[NormalizedEvent], str | None] = event_replay_key
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
         self._publisher = require_incremental_publisher(publisher)
+        self._repair = PostWriteRepair()
+        self._last_publish_failed = False
+        self._last_apply_written = False
 
     @property
     def last_success_at(self) -> datetime | None:
         return self._last_success_at
+
+    def use_replay_key(self, key: Callable[[NormalizedEvent], str | None]) -> None:
+        """Key under which applied events are recorded with the write; None leaves an event at-least-once."""
+        self._replay_key = key
+
+    def applied_before(self, events: Sequence[NormalizedEvent]) -> list[NormalizedEvent]:
+        """Events already recorded by an earlier write, e.g. redelivered after a restart."""
+        if not events or not isinstance(self._sink, AppliedEventLog):
+            return []
+        keyed = [(event, key) for event in events if (key := self._replay_key(event)) is not None]
+        if not keyed:
+            return []
+        recorded = self._sink.applied_event_keys([key for _event, key in keyed])
+        return [event for event, key in keyed if key in recorded]
 
     @property
     def events_applied(self) -> int:
@@ -154,6 +183,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._abort_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
+        self._last_apply_written = False
+        self._last_publish_failed = False
         if not events:
             return 0
         if self.retrain_busy():
@@ -172,9 +203,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
         pending_publish: tuple[pd.DataFrame, str, list[str]] | None = None
+        written: tuple[dict[str, Any], list[str]] | None = None
+        done: set[str] = set()
 
         def _persist() -> int:
-            nonlocal pending_publish
+            nonlocal pending_publish, written
             if not self._ensure_write_allowed():
                 self._abort_online()
                 return 0
@@ -188,6 +221,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 online_by_user,
             )
             if merged is None or not replace_ids:
+                # Nothing is written or kept online, so a redelivery is a no-op too and needs no replay key.
                 self._abort_online()
                 now = datetime.now(UTC)
                 self._last_success_at = now
@@ -203,9 +237,17 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 self._abort_online()
                 return 0
             self._ensure_fence()
-            n_users = self._sink.replace_recommendations_for_users(merged, user_ids=sorted(set(replace_ids)))
+            user_ids = sorted(set(replace_ids))
+            if isinstance(self._sink, AppliedEventLog):
+                keys = [key for event in events if (key := self._replay_key(event)) is not None]
+                n_users = self._sink.replace_recommendations_for_users(
+                    merged, user_ids=user_ids, applied_keys=keys
+                )
+            else:
+                n_users = self._sink.replace_recommendations_for_users(merged, user_ids=user_ids)
+            self._last_apply_written = True
             now = datetime.now(UTC)
-            manifest = {
+            manifest: dict[str, Any] = {
                 "triggered_by": "incremental",
                 "status": "success",
                 "error": None,
@@ -221,16 +263,20 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 manifest["online_fit_partial_epochs"] = online_result.fit_partial_epochs
                 manifest["online_users_refreshed"] = online_result.users_refreshed
                 manifest["online_events_dropped_unknown"] = online_result.events_dropped_unknown
+            written = (manifest, user_ids)
+            # The rows are committed: bring the cache and reader up to date before any step that can fail.
+            self._store_users_in_cache(set(replace_ids), merged)
+            self._last_success_at = now
+            self._events_applied += len(events)
+            # A reader refresh returns False when it kept the previous recommendations.
+            if self._on_success is None or self._on_success() is not False:
+                done.add("refresh")
             self._ensure_fence()
             ensure_sink_writer_held(self._sink)
             self._sink.write_manifest(manifest)
-            self._store_users_in_cache(set(replace_ids), merged)
+            done.add("manifest")
             if persist_online:
                 self._commit_online()
-            self._last_success_at = now
-            self._events_applied += len(events)
-            if self._on_success is not None:
-                self._on_success()
             logger.info(
                 "Incremental update wrote recommendations for %d user(s) from %d event(s)",
                 len(replace_ids),
@@ -239,28 +285,94 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             pending_publish = (merged, str(manifest["generated_at"]), list(replace_ids))
             return len(events)
 
-        with recommendations_write_guard(self._sink):
-            applied = _persist()
-        if pending_publish is not None:
-            self._publish_sidecar(*pending_publish)
+        try:
+            # The publish stays under the write guard so a full write cannot land between its check and send;
+            # the lease renews while held and publishers bound their own timeouts.
+            with recommendations_write_guard(self._sink):
+                applied = _persist()
+                if pending_publish is not None and self._publish_sidecar(*pending_publish):
+                    done.add("publish")
+            self._last_publish_failed = written is not None and "publish" not in done
+        finally:
+            if written is not None:
+                self._queue_repair(*written, done)
         return applied
 
-    def _publish_sidecar(self, merged: pd.DataFrame, generated_at: str, replace_ids: list[str]) -> None:
-        if self._publisher is None:
+    @property
+    def post_write_pending(self) -> bool:
+        return self._repair.pending
+
+    @property
+    def last_apply_written(self) -> bool:
+        """The last ``apply`` wrote its rows, even if it then raised: its events must not be applied again."""
+        return self._last_apply_written
+
+    @property
+    def last_publish_failed(self) -> bool:
+        """The last ``apply`` wrote its rows but its sidecar publish failed (queued for repair)."""
+        return self._last_publish_failed
+
+    def _queue_repair(self, manifest: dict[str, Any], user_ids: list[str], done: set[str]) -> None:
+        if "refresh" not in done and self._on_success is not None:
+            self._repair.refresh = True
+        if "manifest" not in done:
+            # A newer manifest supersedes an older pending one.
+            self._repair.manifest = manifest
+        if "publish" not in done and self._publisher is not None:
+            self._repair.publish_user_ids.update(user_ids)
+
+    def repair_post_write(self) -> None:
+        """Retry the reader refresh, manifest and sidecar publish that failed after an earlier write."""
+        repair = self._repair
+        if not repair.due() or self.retrain_busy():
             return
+        try:
+            if repair.refresh:
+                repair.refresh = self._on_success is not None and self._on_success() is False
+            if repair.manifest is not None:
+                with recommendations_write_guard(self._sink):
+                    self._ensure_fence()
+                    ensure_sink_writer_held(self._sink)
+                    generated_at = str(repair.manifest["generated_at"])
+                    self._sink.write_manifest(repair.manifest, skip_if_newer_than=generated_at)
+                repair.manifest = None
+            if repair.publish_user_ids:
+                user_ids = set(repair.publish_user_ids)
+                # Publish what storage holds now, under the guard so no full write lands before the send.
+                with recommendations_write_guard(self._sink):
+                    generation = latest_manifest_generated_at(self._output_settings)
+                    self._evict_users(user_ids)
+                    current = self._load_users(user_ids)
+                    published = self._publish_sidecar(current, generation, sorted(user_ids))
+                if published:
+                    repair.publish_user_ids -= user_ids
+        finally:
+            if repair.pending:
+                repair.back_off()
+
+    def _publish_sidecar(
+        self, merged: pd.DataFrame, generated_at: str | None, replace_ids: list[str]
+    ) -> bool:
+        """False when the publish failed or its generation could not be confirmed, so it should be retried."""
+        if self._publisher is None:
+            return True
         try:
             self._ensure_fence()
             self._publisher.connect()
             self._ensure_fence()
-            current = sidecar_generation_current(self._output_settings, generated_at)
+            current: bool | None = True
+            if generated_at is not None:
+                current = sidecar_generation_current(self._output_settings, generated_at)
             if current:
                 publish_recommendations(self._publisher, merged, user_ids=replace_ids)
             else:
                 log_sidecar_generation_skip(current, incremental=True)
+            return current is not None
         except (LockLostError, WriterLockBusyError):
             raise
         except _SIDECAR_PUBLISH_ERRORS as exc:
             log_caught("Incremental publish failed after successful write", exc, log=logger)
+            return False
 
     def _merge_affected(
         self,

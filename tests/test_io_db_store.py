@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import Table, create_engine, text
+from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.schema import CreateTable
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -219,6 +223,29 @@ def test_database_output_writes_manifest_appends():
     assert list(stored["n_events"]) == [1, 2]
 
 
+def test_database_output_manifest_adds_columns_a_later_manifest_brings():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+
+    sink.write_manifest({"triggered_by": "job", "n_events": 10})
+    sink.write_manifest(
+        {
+            "triggered_by": "incremental",
+            "n_events": 1,
+            "incremental_events_applied": 1,
+            "last_incremental_at": "2026-10-21T00:00:00+00:00",
+            "partial_outputs": True,
+            "online_fit_partial_epochs": 0.5,
+        }
+    )
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["triggered_by"]) == ["job", "incremental"]
+    assert stored["incremental_events_applied"].iloc[1] == 1
+    assert stored["last_incremental_at"].iloc[1] == "2026-10-21T00:00:00+00:00"
+    assert stored["online_fit_partial_epochs"].iloc[1] == 0.5
+
+
 def test_database_output_writes_and_replaces_model_artifact():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 
@@ -392,3 +419,148 @@ def test_database_get_user_from_table():
 
     assert source.get_user("u1")["region_slug"] == "lazio"
     assert source.get_user("ghost") is None
+
+
+def test_applied_events_table_compiles_for_mysql(tmp_path) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    ddl = str(CreateTable(sink._applied_events_table()).compile(dialect=mysql.dialect()))
+    assert "event_key VARCHAR(64)" in ddl
+
+
+def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) -> None:
+    sink = DatabaseOutputSink(
+        {"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", "applied_events_table": "t" * 64}
+    )
+    [index] = sink._applied_events_table().indexes
+    assert [column.name for column in index.columns] == ["applied_at"]
+    assert len(str(index.name)) <= 64
+
+
+def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    class _Inspector:
+        def has_table(self, _table):  # type: ignore[no-untyped-def]
+            return True
+
+        def get_columns(self, _table):  # type: ignore[no-untyped-def]
+            return [{"name": "generated_at"}]
+
+    class _Engine:
+        dialect = mysql.dialect()
+        sql: list[str] = []
+
+        @contextmanager
+        def begin(self):  # type: ignore[no-untyped-def]
+            yield self
+
+        def execute(self, statement):  # type: ignore[no-untyped-def]
+            self.sql.append(str(statement))
+
+    engine = _Engine()
+    monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
+    db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
+    assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
+
+
+def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    assert sink._applied_scope("Recs") == sink._applied_scope("recs")
+    monkeypatch.setattr(sink._engine.dialect, "name", "mysql")
+    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
+
+
+def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    real_inspect = db_store.inspect
+    calls: list[object] = []
+
+    def _counting_inspect(target):  # type: ignore[no-untyped-def]
+        calls.append(target)
+        return real_inspect(target)
+
+    monkeypatch.setattr(db_store, "inspect", _counting_inspect)
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+    assert len(calls) <= 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"applied_events_table": "recommendations"},
+        {"recommendations_table": "custom_recs", "applied_events_table": "Custom_Recs"},
+    ],
+)
+def test_applied_events_table_must_not_reuse_another_output_table(tmp_path, options) -> None:
+    with pytest.raises(ValueError, match="already used by another output table"):
+        DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", **options})
+
+
+def test_a_manifest_column_added_concurrently_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'out.db'}"
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"generated_at": "2026-01-01T00:00:00+00:00"})
+    with create_engine(url).begin() as conn:
+        conn.execute(text("ALTER TABLE recommendation_runs ADD COLUMN n_events BIGINT"))
+    real_inspect = db_store.inspect
+    calls = {"n": 0}
+
+    class _StaleInspector:
+        def __init__(self, inner) -> None:  # type: ignore[no-untyped-def]
+            self._inner = inner
+
+        def has_table(self, table):  # type: ignore[no-untyped-def]
+            return self._inner.has_table(table)
+
+        def get_columns(self, table):  # type: ignore[no-untyped-def]
+            return [column for column in self._inner.get_columns(table) if column["name"] != "n_events"]
+
+    def _inspect(target):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        inner = real_inspect(target)
+        return _StaleInspector(inner) if calls["n"] == 1 else inner
+
+    monkeypatch.setattr(db_store, "inspect", _inspect)
+    db_store._add_missing_manifest_columns(
+        sink._engine, "recommendation_runs", {"generated_at": "x", "n_events": 1}
+    )
+    assert calls["n"] == 2
+
+
+def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    real_create = Table.create
+
+    applied_name = sink._applied_events_table().name
+
+    def _create_then_lose_the_race(table, bind=None, checkfirst=False):  # type: ignore[no-untyped-def]
+        real_create(table, bind, checkfirst=checkfirst)
+        if table.name == applied_name:
+            raise OperationalError("CREATE TABLE", {}, Exception("table already exists"))
+
+    monkeypatch.setattr(Table, "create", _create_then_lose_the_race)
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    assert sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"]) == 1
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+
+
+def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+
+    def _insert_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("insert failed")
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _insert_fails)
+    with pytest.raises(OSError, match="insert failed"):
+        sink.write_recommendations(rows)
+    monkeypatch.undo()
+    assert sink.applied_event_keys(["k1"]) == set()
