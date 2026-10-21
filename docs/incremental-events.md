@@ -198,8 +198,7 @@ are a separate cheap path between those runs.
 Watermark poll over `events_table` / `events_query`. No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
-flush `ack`, or past invalid rows that sort before every pending event.
-Like acks, this assumes new rows arrive in cursor order. When an `event_id` column exists, poll orders by
+flush `ack`. When an `event_id` column exists, poll orders by
 `(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
@@ -207,8 +206,8 @@ Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
 share a cursor. An invalid row (e.g. no `user_id`, `quantity` below 1) is logged
-once and skipped; with an `event_id` column the watermark also moves past a run
-of invalid rows longer than one fetch.
+once, by its identity columns only, and skipped. A run of invalid rows longer
+than one fetch still holds the watermark; fix or delete those rows.
 
 ### `s3`
 
