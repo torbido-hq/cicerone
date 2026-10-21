@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, text
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
@@ -348,3 +348,29 @@ def test_a_different_event_reusing_a_recorded_id_is_applied(tmp_path, feature_co
     other = normalize_event(event_payload(event_id="reused", user_id="u2", item_id="i2"))
     assert worker._replay_key(other) != worker._replay_key(first)
     assert updater.applied_before([other]) == []
+
+
+def test_db_writes_without_keys_still_prune_expired_ones(tmp_path, monkeypatch) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["old"])
+    later = datetime.now(UTC) + applied_events.APPLIED_EVENTS_RETENTION + timedelta(minutes=1)
+    monkeypatch.setattr("cicerone.io.db_store.datetime", _FrozenDatetime(later))
+    fresh = build_output_sink(_outputs_db_only(tmp_path))
+    fresh.replace_recommendations_for_users(rows, user_ids=["u1"])
+    with fresh._engine.connect() as conn:
+        stored = {row[0] for row in conn.execute(select(fresh._applied_events_table().c.event_key))}
+    assert stored == set()
+
+
+def _outputs_db_only(tmp_path) -> IOSettings:  # type: ignore[no-untyped-def]
+    return IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+
+
+def test_db_write_without_keys_survives_a_dropped_key_table(tmp_path) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    with sink._engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE {sink._applied_events_table().name}"))
+    assert sink.replace_recommendations_for_users(rows, user_ids=["u1"]) == 1

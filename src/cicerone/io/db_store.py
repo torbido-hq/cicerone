@@ -322,6 +322,7 @@ class DatabaseOutputSink:
             fence_kind=fence_kind,
         )
         self._applied_table_seen = False
+        self._applied_table_checked = False
         self._check_applied_events_table_name()
 
     @contextmanager
@@ -391,6 +392,7 @@ class DatabaseOutputSink:
             # Another output sharing the database may have created it first.
             if not inspect(self._engine).has_table(table.name):
                 raise
+        self._applied_table_seen = True
 
     def _check_applied_events_table_name(self) -> None:
         name = self._applied_events_table().name
@@ -471,12 +473,22 @@ class DatabaseOutputSink:
             return None
         return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
+    def _applied_events_table_exists(self) -> bool:
+        if not self._applied_table_seen and not self._applied_table_checked:
+            self._applied_table_checked = True
+            self._applied_table_seen = inspect(self._engine).has_table(self._applied_events_table().name)
+        return self._applied_table_seen
+
+    def _prune_applied_keys(self, conn: Any, now: datetime) -> None:
+        table = self._applied_events_table()
+        conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
+
     def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
         wanted = sorted({str(key) for key in keys})
         now = datetime.now(UTC)
         table = self._applied_events_table()
         scope = self._applied_scope(self._recommendations_table_name())
-        conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
+        self._prune_applied_keys(conn, now)
         for part in chunked(wanted):
             conn.execute(
                 delete(table).where(table.c.recommendations_table == scope, table.c.event_key.in_(part))
@@ -540,6 +552,17 @@ class DatabaseOutputSink:
                 # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
                 self._ensure_fence()
                 self._record_applied_keys(conn, applied_keys)
+            elif self._applied_events_table_exists():
+                # Batches without durable keys still prune, so expired rows never pile up.
+                self._ensure_fence()
+                prune = conn.begin_nested()
+                try:
+                    self._prune_applied_keys(conn, datetime.now(UTC))
+                    prune.commit()
+                except _MISSING_TABLE_ERRORS:
+                    # The table was dropped: skip pruning, never the rows write; check again later.
+                    prune.rollback()
+                    self._applied_table_seen = self._applied_table_checked = False
             self._ensure_fence()
             count_savepoint = conn.begin_nested()
             try:
