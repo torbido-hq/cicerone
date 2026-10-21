@@ -429,7 +429,9 @@ def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) ->
     sink = DatabaseOutputSink(
         {"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", "applied_events_table": "t" * 64}
     )
-    assert all(len(str(index.name)) <= 64 for index in sink._applied_events_table().indexes)
+    [index] = sink._applied_events_table().indexes
+    assert [column.name for column in index.columns] == ["applied_at"]
+    assert len(str(index.name)) <= 64
 
 
 def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
@@ -448,6 +450,16 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
 
         def execute(self, statement):  # type: ignore[no-untyped-def]
             self.sql.append(str(statement))
+
+        def begin_nested(self):  # type: ignore[no-untyped-def]
+            return _Savepoint()
+
+    class _Savepoint:
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
 
     conn = _Conn()
     monkeypatch.setattr(db_store, "inspect", lambda _conn: _Inspector())
@@ -488,3 +500,37 @@ def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) ->
 def test_applied_events_table_must_not_reuse_another_output_table(tmp_path, options) -> None:
     with pytest.raises(ValueError, match="already used by another output table"):
         DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", **options})
+
+
+def test_a_manifest_column_added_concurrently_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'out.db'}"
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"generated_at": "2026-01-01T00:00:00+00:00"})
+    with create_engine(url).begin() as conn:
+        conn.execute(text("ALTER TABLE recommendation_runs ADD COLUMN n_events BIGINT"))
+    real_inspect = db_store.inspect
+    calls = {"n": 0}
+
+    class _StaleInspector:
+        def __init__(self, inner) -> None:  # type: ignore[no-untyped-def]
+            self._inner = inner
+
+        def has_table(self, table):  # type: ignore[no-untyped-def]
+            return self._inner.has_table(table)
+
+        def get_columns(self, table):  # type: ignore[no-untyped-def]
+            return [column for column in self._inner.get_columns(table) if column["name"] != "n_events"]
+
+    def _inspect(target):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        inner = real_inspect(target)
+        return _StaleInspector(inner) if calls["n"] == 1 else inner
+
+    monkeypatch.setattr(db_store, "inspect", _inspect)
+    with sink._engine.begin() as conn:
+        db_store._add_missing_manifest_columns(
+            conn, "recommendation_runs", {"generated_at": "x", "n_events": 1}
+        )
+    assert calls["n"] == 2

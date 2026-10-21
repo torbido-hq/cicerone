@@ -132,7 +132,15 @@ def _add_missing_manifest_columns(conn: Any, table: str, manifest: dict) -> None
         column_type = _manifest_column_type(value).compile(dialect=conn.dialect)
         logger.info("Adding column %r to manifest table %r", column, table)
         quote = conn.dialect.identifier_preparer.quote
-        conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
+        savepoint = conn.begin_nested()
+        try:
+            conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
+            savepoint.commit()
+        except _MISSING_TABLE_ERRORS:
+            savepoint.rollback()
+            # A concurrent writer may have added the same column first.
+            if column not in {existing["name"] for existing in inspect(conn).get_columns(table)}:
+                raise
 
 
 def _manifest_column_type(value: Any) -> Any:
