@@ -130,6 +130,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Catalog writes and incremental persist update the consumed overlay under the same lock as the store mutation.
 - `DELETE /items/{id}` also removes that item's events so leftover interactions cannot resurrect it.
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
+- The input poller retries a change on the next poll when its trigger is
+  rejected (run in progress, debounce), instead of dropping it until cron.
 
 ## [0.8.5] - 2026-10-14
 

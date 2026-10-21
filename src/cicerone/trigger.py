@@ -128,9 +128,9 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
     while True:
         time.sleep(interval_seconds)
         marker = _current_marker(input_settings)
-        if marker is not None and marker != last_marker:
+        # A rejected trigger (busy, debounced) keeps the change pending for the next poll.
+        if marker is not None and marker != last_marker and guard.trigger("s3-poll"):
             last_marker = marker
-            guard.trigger("s3-poll")
 
 
 def create_app(settings: Settings, guard: RunGuard) -> FastAPI:

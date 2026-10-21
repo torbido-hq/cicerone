@@ -263,6 +263,65 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
     assert guard.calls == ["s3-poll"]
 
 
+def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
+    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    guard = _FakeGuard(result=False)
+    markers = iter(["v1"])
+    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
+    sleep_calls = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] == 3:
+            guard.result = True
+        if sleep_calls["n"] >= 5:
+            raise SystemExit("stop after four ticks")
+
+    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
+
+    with pytest.raises(SystemExit):
+        poll_input_forever(input_settings, guard, interval_seconds=0.01)
+
+    assert guard.calls == ["s3-poll", "s3-poll", "s3-poll"]
+
+
+def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp_path, monkeypatch):
+    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    release = threading.Event()
+    runs: list[str] = []
+
+    def blocking_run(triggered_by: str) -> None:
+        runs.append(triggered_by)
+        if triggered_by == "cron":
+            release.wait(timeout=5)
+
+    guard = RunGuard(debounce_seconds=0, run_fn=blocking_run)
+    assert guard.trigger("cron") is True
+    markers = iter(["v1"])
+    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
+    sleeps = {"n": 0}
+    real_sleep = time.sleep
+
+    def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] == 3:
+            release.set()
+            deadline = time.monotonic() + 5
+            while guard.busy and time.monotonic() < deadline:
+                real_sleep(0.01)
+        if sleeps["n"] >= 5:
+            raise SystemExit("stop")
+
+    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        poll_input_forever(input_settings, guard, interval_seconds=0.01)
+
+    deadline = time.monotonic() + 5
+    while guard.busy and time.monotonic() < deadline:
+        real_sleep(0.01)
+    assert runs == ["cron", "s3-poll"]
+
+
 def test_current_marker_local_backend_reflects_mtime(tmp_path):
     from cicerone.trigger import _current_marker
 
