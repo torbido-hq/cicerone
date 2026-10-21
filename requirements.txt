@@ -11,7 +11,7 @@ scikit-learn==1.9.1
 # Configurable I/O: static datasets (S3/R2-compatible or local files) or a
 # database (input can be read straight from a Postgres source; output can
 # be written to a Postgres table).
-boto3==1.43.111
+boto3==1.43.114
 pyarrow==25.0.1
 SQLAlchemy==2.1.4
 psycopg[binary]==3.3.6
@@ -20,7 +20,7 @@ psycopg[binary]==3.3.6
 croniter==6.2.4
 
 # Serve mode's read API + the event-driven retrain trigger's webhook
-fastapi==0.143.0
+fastapi==0.143.2
 python-multipart==0.0.32
 uvicorn[standard]==0.54.0
 prometheus-client==0.26.0
