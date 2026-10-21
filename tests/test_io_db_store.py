@@ -219,6 +219,29 @@ def test_database_output_writes_manifest_appends():
     assert list(stored["n_events"]) == [1, 2]
 
 
+def test_database_output_manifest_adds_columns_a_later_manifest_brings():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+
+    sink.write_manifest({"triggered_by": "job", "n_events": 10})
+    sink.write_manifest(
+        {
+            "triggered_by": "incremental",
+            "n_events": 1,
+            "incremental_events_applied": 1,
+            "last_incremental_at": "2026-10-21T00:00:00+00:00",
+            "partial_outputs": True,
+            "online_fit_partial_epochs": 0.5,
+        }
+    )
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["triggered_by"]) == ["job", "incremental"]
+    assert stored["incremental_events_applied"].iloc[1] == 1
+    assert stored["last_incremental_at"].iloc[1] == "2026-10-21T00:00:00+00:00"
+    assert stored["online_fit_partial_epochs"].iloc[1] == 0.5
+
+
 def test_database_output_writes_and_replaces_model_artifact():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 

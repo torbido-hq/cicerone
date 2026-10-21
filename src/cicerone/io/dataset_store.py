@@ -37,6 +37,7 @@ from cicerone.io.options import (
     is_s3_not_found,
     object_key,
     read_parquet,
+    read_parquet_attrs,
     require_option,
     validate_storage_options,
 )
@@ -227,9 +228,9 @@ class DatasetOutputSink:
         with self._maybe_recommendations_lock():
             self._write_recommendations_unlocked(df)
 
-    def _read_recommendations_or_empty(self, columns: Sequence[str] | None = None) -> pd.DataFrame:
+    def _read_recommendations_or_empty(self) -> pd.DataFrame:
         try:
-            return read_parquet(self._options, RECOMMENDATIONS_FILENAME, columns=columns)
+            return read_parquet(self._options, RECOMMENDATIONS_FILENAME)
         except FileNotFoundError:
             return pd.DataFrame()
         except S3_READ_ERRORS as exc:
@@ -241,8 +242,15 @@ class DatasetOutputSink:
         wanted = {str(key) for key in keys}
         if not wanted:
             return set()
-        frame = self._read_recommendations_or_empty(columns=[USER_COLUMN])
-        recorded = frame.attrs.get(APPLIED_EVENTS_ATTR) or {}
+        try:
+            attrs = read_parquet_attrs(self._options, RECOMMENDATIONS_FILENAME)
+        except FileNotFoundError:
+            return set()
+        except S3_READ_ERRORS as exc:
+            if is_s3_not_found(exc):
+                return set()
+            raise
+        recorded = attrs.get(APPLIED_EVENTS_ATTR) or {}
         return wanted & unexpired_keys(recorded, datetime.now(UTC))
 
     def replace_recommendations_for_users(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import io
+import json
 import logging
 import re
 import threading
@@ -269,6 +270,26 @@ def read_parquet(
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
     obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
+
+
+def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]:
+    """``DataFrame.attrs`` pandas stored in a parquet footer, read without loading any column."""
+    import pyarrow.parquet as pq
+
+    backend = validate_storage_options(options)
+    if backend == "local":
+        schema = pq.read_schema(Path(require_option(options, "path", "local")) / filename)
+    else:
+        bucket = require_option(options, "bucket", "s3")
+        key = object_key(options, filename)
+        try:
+            schema = pq.read_schema(f"{bucket}/{key}", filesystem=_s3_filesystem(options))
+        except _PYARROW_S3_FALLBACK_ERRORS:
+            logger.debug("pyarrow S3 schema read failed; falling back to GetObject", exc_info=True)
+            obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
+            schema = pq.read_schema(io.BytesIO(read_s3_body(obj)))
+    raw = (schema.metadata or {}).get(b"PANDAS_ATTRS")
+    return json.loads(raw) if raw else {}
 
 
 def _s3_filesystem(options: dict[str, Any]):

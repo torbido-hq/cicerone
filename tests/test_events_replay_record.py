@@ -170,3 +170,68 @@ def test_generated_ids_are_recorded_by_fingerprint(tmp_path, feature_config) -> 
     generated = replace(_event("generated-1"), generated_event_id=True)
     assert worker._replay_key(generated) == replay_key("fingerprint", event_fingerprint(generated))
     assert worker._replay_key(_event("given-1")) == replay_key("id", "given-1")
+
+
+def test_db_keys_are_scoped_to_their_recommendations_table(tmp_path) -> None:
+    url = f"sqlite+pysqlite:///{tmp_path / 'shared.db'}"
+    first = build_output_sink(IOSettings(kind="db", options={"database_url": url}))
+    second = build_output_sink(
+        IOSettings(kind="db", options={"database_url": url, "recommendations_table": "other_recs"})
+    )
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    first.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    assert first.applied_event_keys(["k1"]) == {"k1"}
+    assert second.applied_event_keys(["k1"]) == set()
+
+
+def test_db_key_lookup_and_record_handle_more_keys_than_the_parameter_limit(tmp_path) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    keys = [f"k{index}" for index in range(1_200)]
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=keys)
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=keys)
+    assert sink.applied_event_keys(keys) == set(keys)
+
+
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_a_full_write_clears_the_applied_keys(tmp_path, kind) -> None:
+    sink = build_output_sink(_outputs(tmp_path)[kind])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    sink.write_recommendations(rows)
+    assert sink.applied_event_keys(["k1"]) == set()
+
+
+def test_worker_returns_the_batch_when_the_lookup_raises_unexpectedly(tmp_path, feature_config) -> None:
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="lookup-bug", user_id="u1", item_id="i9"))
+    worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, source)
+
+    def _lookup_bug(_events):  # type: ignore[no-untyped-def]
+        raise RuntimeError("lookup bug")
+
+    updater.applied_before = _lookup_bug  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="lookup bug"):
+        worker.tick()
+    assert updater.events_applied == 0
+    assert source.health().lag == 1
+
+
+def test_merge_applied_keys_warns_when_the_cap_drops_unexpired_keys(monkeypatch, caplog) -> None:
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    monkeypatch.setattr(applied_events, "APPLIED_EVENTS_MAX_KEYS", 1)
+    with caplog.at_level("WARNING", logger="cicerone.io.applied_events"):
+        merge_applied_keys({"a": (now - timedelta(days=1)).isoformat()}, ["b"], now)
+    assert "Dropping the oldest 1 applied-event key(s)" in caplog.text
+
+
+def test_dataset_key_lookup_reads_no_recommendation_rows(tmp_path, monkeypatch) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["dataset"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+
+    def _no_row_reads(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("the lookup must read only the parquet footer")
+
+    monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _no_row_reads)
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}

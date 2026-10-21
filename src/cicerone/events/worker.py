@@ -464,12 +464,17 @@ class EventWorker:
         if self._apply_lock is None:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
-            return self._flush_ready(ready) if ready else 0
+            return self._repair_then_flush(ready)
 
         if self._poll_without_lock:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
             if not ready:
+                if self._updater.post_write_pending and self._acquire_apply_lock():
+                    try:
+                        self._repair_post_write()
+                    finally:
+                        self._release_apply_lock()
                 return 0
             return self._with_apply_lock(ready)
 
@@ -478,9 +483,28 @@ class EventWorker:
         try:
             self._poll_into_buffer()
             ready = self._buffer.flush_if_ready()
-            return self._flush_ready(ready) if ready else 0
+            return self._repair_then_flush(ready)
         finally:
             self._release_apply_lock()
+
+    def _repair_then_flush(self, ready: list[NormalizedEvent]) -> int:
+        self._repair_post_write()
+        return self._flush_ready(ready) if ready else 0
+
+    def _repair_post_write(self) -> None:
+        if not self._updater.post_write_pending:
+            return
+        try:
+            self._updater.repair_post_write()
+        except LockLostError as exc:
+            record_events_tick_error()
+            if exc.kind == "apply":
+                update_events_leader(False)
+            logger.error("%s; post-write repair retried later", exc)
+        except Exception:
+            # Its batch is acked already; keep it pending rather than stop the worker.
+            record_events_tick_error()
+            logger.exception("Post-write repair failed; retrying later")
 
     def _poll_into_buffer(self) -> None:
         if self._held:
@@ -529,7 +553,7 @@ class EventWorker:
             self._return_events(ready)
             return 0
         try:
-            return self._flush_ready(ready)
+            return self._repair_then_flush(ready)
         finally:
             self._release_apply_lock()
 
@@ -560,6 +584,11 @@ class EventWorker:
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
             self._return_events(ready)
             return 0
+        except Exception:
+            record_events_flush(status="error")
+            logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
+            self._return_events(ready)
+            raise
         if replayed:
             ready = self._ack_replayed(ready, replayed)
             if not ready:

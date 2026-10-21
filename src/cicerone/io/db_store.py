@@ -19,13 +19,18 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     DateTime,
     Engine,
+    Float,
+    Index,
     LargeBinary,
     MetaData,
     String,
     Table,
+    Text,
     bindparam,
     delete,
     insert,
@@ -36,7 +41,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
-from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff
+from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
@@ -86,6 +91,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_APPLIED_EVENTS_TABLE,
     }
 )
 
@@ -110,6 +116,31 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
         if stamp > started_at:
             return True
     return False
+
+
+def _add_missing_manifest_columns(conn: Any, table: str, manifest: dict) -> None:
+    # The table takes its columns from the first manifest; an incremental one adds keys a job manifest lacks.
+    inspector = inspect(conn)
+    if not inspector.has_table(table):
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    for key, value in manifest.items():
+        if key in existing:
+            continue
+        column = sql_identifier(key, option="manifest key")
+        column_type = _manifest_column_type(value).compile(dialect=conn.dialect)
+        logger.info("Adding column %r to manifest table %r", column, table)
+        conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_type}'))
+
+
+def _manifest_column_type(value: Any) -> Any:
+    if isinstance(value, bool):
+        return Boolean()
+    if isinstance(value, int):
+        return BigInteger()
+    if isinstance(value, float):
+        return Float()
+    return Text()
 
 
 def _clear_table_for_replace(conn, table: str) -> None:
@@ -303,6 +334,7 @@ class DatabaseOutputSink:
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 _clear_table_for_replace(conn, table)
+                self._clear_applied_keys(conn, table)
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
                 self._ensure_fence()
@@ -321,34 +353,63 @@ class DatabaseOutputSink:
             self._options.get("applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE),
             option="applied_events_table",
         )
+        # Keys are scoped to the recommendations table, so outputs sharing a database don't see each other's.
         return Table(
             name,
             MetaData(),
+            Column("recommendations_table", String, primary_key=True),
             Column("event_key", String, primary_key=True),
             Column("applied_at", String, nullable=False),
+            Index(f"{name}_applied_at", "applied_at"),
         )
+
+    def _recommendations_table_name(self) -> str:
+        table, _columns, _user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
+        )
+        return table
 
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = sorted({str(key) for key in keys})
         table = self._applied_events_table()
         if not wanted or not inspect(self._engine).has_table(table.name):
             return set()
+        scope = self._recommendations_table_name()
+        cutoff = applied_cutoff(datetime.now(UTC))
+        found: set[str] = set()
         with self._engine.connect() as conn:
-            cutoff = applied_cutoff(datetime.now(UTC))
-            query = select(table.c.event_key).where(
-                table.c.event_key.in_(wanted), table.c.applied_at >= cutoff
-            )
-            rows = conn.execute(query)
-            return {str(row[0]) for row in rows}
+            for part in chunked(wanted):
+                query = select(table.c.event_key).where(
+                    table.c.recommendations_table == scope,
+                    table.c.event_key.in_(part),
+                    table.c.applied_at >= cutoff,
+                )
+                found.update(str(row[0]) for row in conn.execute(query))
+        return found
 
     def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
         wanted = sorted({str(key) for key in keys})
         now = datetime.now(UTC)
         table = self._applied_events_table()
+        scope = self._recommendations_table_name()
         table.create(conn, checkfirst=True)
         conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
-        conn.execute(delete(table).where(table.c.event_key.in_(wanted)))
-        conn.execute(insert(table), [{"event_key": key, "applied_at": now.isoformat()} for key in wanted])
+        for part in chunked(wanted):
+            conn.execute(
+                delete(table).where(table.c.recommendations_table == scope, table.c.event_key.in_(part))
+            )
+        stamp = now.isoformat()
+        # executemany: SQLAlchemy batches these within the dialect's parameter limit.
+        conn.execute(
+            insert(table),
+            [{"recommendations_table": scope, "event_key": key, "applied_at": stamp} for key in wanted],
+        )
+
+    def _clear_applied_keys(self, conn: Any, recommendations_table: str) -> None:
+        # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
+        table = self._applied_events_table()
+        if inspect(conn).has_table(table.name):
+            conn.execute(delete(table).where(table.c.recommendations_table == recommendations_table))
 
     def _replace_recommendations_for_users_unlocked(
         self, df: pd.DataFrame, ids: list[str], applied_keys: Sequence[str] = ()
@@ -418,6 +479,7 @@ class DatabaseOutputSink:
             if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                 return False
             self._ensure_fence()
+            _add_missing_manifest_columns(conn, table, manifest)
             pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
             self._ensure_fence()
         return True

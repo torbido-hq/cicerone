@@ -293,18 +293,27 @@ publishing, a failed heartbeat) is logged with
 its traceback, counted in `cicerone_events_tick_errors_total` and as a
 flush `error`, and the batch is acked so it is not applied twice; a lost
 apply fence also drops leadership and the pending online fit. The cache
-and serve reader are refreshed before those steps.
+and serve reader are refreshed before those steps. The steps that failed
+(reader refresh, manifest, sidecar publish, including a handled publish
+error) are retried by the apply-lock holder on later ticks, at most every
+30 seconds, until they succeed: the manifest is written unless a newer one
+exists, and the sidecar gets the affected users' rows as storage holds
+them then. These retries live in process memory and are lost on restart.
 A redelivery after a crash or interrupt between the write and the ack is
 not applied again: a hash of each event's id (or of its fingerprint, for
 generated ids) is saved in the same write as the recommendations — the
 `incremental_applied_events` table on db output
-(`[output].applied_events_table`), the `recommendations.parquet` metadata
-on dataset output — and an event already recorded is acked instead of
-applied (`cicerone_events_replayed_total`). A key counts for 7 days; older
-ones are ignored and pruned on the next write. Dataset output keeps at most
-the newest 100,000 keys, and a full retrain clears them there (db output
-keeps its table). This relies on one writer: run several replicas with the
-apply lock described below. A
+(`[output].applied_events_table`, keyed by recommendations table, so
+outputs sharing a database stay separate), the `recommendations.parquet`
+metadata on dataset output — and an event already recorded is acked
+instead of applied (`cicerone_events_replayed_total`). `event_id` is the
+idempotency key: a different event reusing a recorded id within the window
+is acked, not applied. A key counts for 7 days; older ones are ignored and
+pruned on the next write. Dataset output keeps at most the newest 100,000
+keys (dropping unexpired ones logs a warning). A full write clears the keys
+on both outputs. On db output the role needs `CREATE TABLE` for the first
+incremental write, or create the table beforehand. This relies on one
+writer: run several replicas with the apply lock described below. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
 land after a later write.
 Requires the matching extra.

@@ -60,12 +60,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no longer nacks the batch, so the events are not applied twice. It is
   logged, counted in `cicerone_events_tick_errors_total` and as a flush
   `error`, and the batch is acked. `IncrementalUpdater.apply` raises
-  `PostWriteError` for these.
+  `PostWriteError` for these. The reader refresh, manifest and sidecar
+  publish that failed are retried on later ticks until they succeed.
 - A batch redelivered after a crash between the incremental write and the
   ack is acked instead of applied again. Event keys are saved with the
   recommendations write (db `incremental_applied_events` table, dataset
-  parquet metadata) and count for 7 days; replays are counted in
+  parquet metadata), scoped to the recommendations table, and count for 7
+  days; a full write clears them. Replays are counted in
   `cicerone_events_replayed_total`.
+- An incremental manifest on db output adds the columns the job manifest
+  table lacks (`last_incremental_at`, `incremental_events_applied`,
+  `online_*`) instead of failing the insert.
 - Redis Streams polling, health, heartbeat, and close paths only recover
   from Redis client errors. Unexpected exceptions now propagate.
 - Kafka consumption only recovers from Kafka client errors while polling,

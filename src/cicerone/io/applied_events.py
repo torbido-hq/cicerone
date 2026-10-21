@@ -6,14 +6,19 @@ A redelivery after a restart is then recognised and acked instead of applied twi
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Mapping
+import logging
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 APPLIED_EVENTS_RETENTION = timedelta(days=7)
 # Dataset output keeps the record in the parquet metadata; cap it so the file stays small.
 APPLIED_EVENTS_MAX_KEYS = 100_000
 DEFAULT_APPLIED_EVENTS_TABLE = "incremental_applied_events"
 APPLIED_EVENTS_ATTR = "cicerone_applied_events"
+# Below every dialect's bind-parameter limit (SQLite's default is 999).
+APPLIED_EVENTS_CHUNK = 500
 
 
 def replay_key(kind: str, value: str) -> str:
@@ -37,5 +42,15 @@ def merge_applied_keys(existing: Mapping[str, str], keys: Iterable[str], now: da
     merged.update(dict.fromkeys((str(key) for key in keys), stamp))
     if len(merged) <= APPLIED_EVENTS_MAX_KEYS:
         return merged
+    logger.warning(
+        "Dropping the oldest %d applied-event key(s) within the retention window; "
+        "a redelivery of those events would be applied again",
+        len(merged) - APPLIED_EVENTS_MAX_KEYS,
+    )
     newest = sorted(merged.items(), key=lambda entry: entry[1], reverse=True)[:APPLIED_EVENTS_MAX_KEYS]
     return dict(newest)
+
+
+def chunked(keys: Sequence[str]) -> Iterator[Sequence[str]]:
+    for start in range(0, len(keys), APPLIED_EVENTS_CHUNK):
+        yield keys[start : start + APPLIED_EVENTS_CHUNK]
