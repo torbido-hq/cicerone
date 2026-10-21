@@ -19,9 +19,8 @@ from cicerone.events.errors import (
     EVENT_WORKER_ERRORS,
 )
 from cicerone.events.normalize import event_fingerprint
-from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
-from cicerone.io.applied_events import replay_key
 from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
 from cicerone.metrics import (
     record_events_apply_busy,
@@ -277,12 +276,11 @@ class EventWorker:
         return self._ephemeral_event_ids and event.generated_event_id
 
     def _replay_key(self, event: NormalizedEvent) -> str | None:
-        # event_id is the idempotency key across every producer of one output (docs/incremental-events.md).
         # A generated id is not stable and identical payloads can be distinct events, so those stay
         # at-least-once: no durable key, only the in-memory fingerprint dedupe.
         if self._fingerprint_dedupe(event):
             return None
-        return replay_key("id", event.event_id)
+        return event_replay_key(event)
 
     def _remember_applied(self, events: Sequence[NormalizedEvent]) -> None:
         for event in events:

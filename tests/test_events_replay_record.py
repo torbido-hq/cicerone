@@ -13,7 +13,7 @@ from support.prometheus_metrics import registry_metric_value
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
-from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
@@ -69,7 +69,8 @@ def test_a_redelivery_after_a_restart_is_acked_not_applied_again(tmp_path, featu
     assert registry_metric_value("cicerone_events_replayed_total") == before + 1
     assert updater.events_applied == 1
     assert source.health().lag == 0
-    recorded = updater.applied_before([_event("replayed-1"), _event("fresh-2")])
+    fresh = normalize_event(event_payload(event_id="fresh-2", user_id="u2", item_id="i8"))
+    recorded = updater.applied_before([_event("replayed-1"), fresh])
     assert [event.event_id for event in recorded] == ["replayed-1", "fresh-2"]
 
 
@@ -174,7 +175,7 @@ def test_generated_ids_get_no_durable_replay_key(tmp_path, feature_config) -> No
     worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, _EphemeralSource({}))
     generated = replace(_event("generated-1"), generated_event_id=True)
     assert worker._replay_key(generated) is None
-    assert worker._replay_key(_event("given-1")) == replay_key("id", "given-1")
+    assert worker._replay_key(_event("given-1")) == event_replay_key(_event("given-1"))
     assert updater.applied_before([generated]) == []
 
 
@@ -335,3 +336,15 @@ def test_a_batch_carries_one_event_per_event_id() -> None:
     result = buffer.extend(events)
     assert [event.user_id for event in result.duplicates] == ["u2"]
     assert [event.event_id for event in buffer.flush()] == ["same"]
+
+
+def test_a_different_event_reusing_a_recorded_id_is_applied(tmp_path, feature_config) -> None:
+    source = WebhookEventSource({})
+    worker, updater = _worker(_outputs(tmp_path)["db"], feature_config, source)
+    first = normalize_event(event_payload(event_id="reused", user_id="u1", item_id="i1"))
+    assert updater.apply([first]) == 1
+    assert updater.applied_before([first]) == [first]
+
+    other = normalize_event(event_payload(event_id="reused", user_id="u2", item_id="i2"))
+    assert worker._replay_key(other) != worker._replay_key(first)
+    assert updater.applied_before([other]) == []

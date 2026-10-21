@@ -308,9 +308,8 @@ the recommendations — the
 (`[output].applied_events_table`, a name no other output table uses; keyed
 by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
 metadata on dataset output — and an event already recorded is acked
-instead of applied (`cicerone_events_replayed_total`). `event_id` is the
-idempotency key: a different event reusing a recorded id within the window
-is acked, not applied. A key counts for 7 days; older ones are ignored and
+instead of applied (`cicerone_events_replayed_total`). The key covers the id
+and the payload, so a different event reusing a recorded id is applied. A key counts for 7 days; older ones are ignored and
 pruned on the next write. Dataset output keeps at most the newest 100,000
 keys (dropping unexpired ones logs a warning). A full write clears the keys
 on both outputs; on db output a key older than the latest full-write manifest

@@ -15,7 +15,7 @@ from cicerone.capability import CapabilityMeta
 from cicerone.config import IOSettings
 from cicerone.errors import OPTIONAL_IO_ERRORS, PUBLISH_ERRORS, log_caught
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import events_to_dataframe
+from cicerone.events.normalize import event_fingerprint, events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.post_write import PostWriteRepair
 from cicerone.events.store import empty_recommendations_frame
@@ -73,6 +73,11 @@ class AbortingOnlineRefresher(Protocol, metaclass=CapabilityMeta):
     def abort(self) -> None: ...
 
 
+def event_replay_key(event: NormalizedEvent) -> str:
+    """Durable replay key: the id plus the payload, so only a true redelivery matches a recorded event."""
+    return replay_key("event", f"{event.event_id}\x1f{event_fingerprint(event)}")
+
+
 class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     """Write-through popular/latest slices for affected users; preserves personalized rows."""
 
@@ -115,9 +120,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._replay_key: Callable[[NormalizedEvent], str | None] = lambda event: replay_key(
-            "id", event.event_id
-        )
+        self._replay_key: Callable[[NormalizedEvent], str | None] = event_replay_key
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)
