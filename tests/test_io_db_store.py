@@ -476,3 +476,15 @@ def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) ->
     assert sink.applied_event_keys(["k1"]) == {"k1"}
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
     assert len(calls) <= 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"applied_events_table": "recommendations"},
+        {"recommendations_table": "custom_recs", "applied_events_table": "Custom_Recs"},
+    ],
+)
+def test_applied_events_table_must_not_reuse_another_output_table(tmp_path, options) -> None:
+    with pytest.raises(ValueError, match="already used by another output table"):
+        DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", **options})

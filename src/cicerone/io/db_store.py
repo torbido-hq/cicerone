@@ -315,6 +315,7 @@ class DatabaseOutputSink:
             fence_kind=fence_kind,
         )
         self._applied_table_seen = False
+        self._check_applied_events_table_name()
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
@@ -368,6 +369,17 @@ class DatabaseOutputSink:
             # Hashed so a long table name still gives an index name within MySQL's 64 characters.
             Index(f"ix_applied_at_{hashlib.sha256(name.encode()).hexdigest()[:16]}", "applied_at"),
         )
+
+    def _check_applied_events_table_name(self) -> None:
+        name = self._applied_events_table().name
+        others = {
+            str(value)
+            for key, value in self._options.items()
+            if key.endswith("_table") and key != "applied_events_table"
+        }
+        others |= DEFAULT_DB_TABLES - {DEFAULT_APPLIED_EVENTS_TABLE}
+        if name.lower() in {other.lower() for other in others}:
+            raise ValueError(f"applied_events_table {name!r} is already used by another output table")
 
     def _recommendations_table_name(self) -> str:
         table, _columns, _user_col = recommendations_sql_names(

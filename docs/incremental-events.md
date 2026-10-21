@@ -304,8 +304,8 @@ A redelivery after a crash or interrupt between the write and the ack is
 not applied again: a hash of each event's id (or of its fingerprint, for
 generated ids) is saved in the same write as the recommendations — the
 `incremental_applied_events` table on db output
-(`[output].applied_events_table`, keyed by recommendations table, so
-outputs sharing a database stay separate), the `recommendations.parquet`
+(`[output].applied_events_table`, a name no other output table uses; keyed
+by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
 metadata on dataset output — and an event already recorded is acked
 instead of applied (`cicerone_events_replayed_total`). `event_id` is the
 idempotency key: a different event reusing a recorded id within the window
