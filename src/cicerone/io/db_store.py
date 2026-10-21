@@ -314,6 +314,7 @@ class DatabaseOutputSink:
             fence_lost=fence_lost,
             fence_kind=fence_kind,
         )
+        self._applied_table_seen = False
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
@@ -355,7 +356,8 @@ class DatabaseOutputSink:
             self._options.get("applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE),
             option="applied_events_table",
         )
-        # Keys are scoped to the recommendations table, so outputs sharing a database don't see each other's.
+        # Keys are scoped to the recommendations table (see _applied_scope), so outputs sharing a database
+        # don't see each other's.
         return Table(
             name,
             MetaData(),
@@ -373,29 +375,43 @@ class DatabaseOutputSink:
         )
         return table
 
+    @staticmethod
+    def _applied_scope(recommendations_table: str) -> str:
+        # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
+        return hashlib.sha256(recommendations_table.encode()).hexdigest()
+
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = sorted({str(key) for key in keys})
         table = self._applied_events_table()
-        if not wanted or not inspect(self._engine).has_table(table.name):
+        if not wanted:
             return set()
-        scope = self._recommendations_table_name()
+        if not self._applied_table_seen:
+            if not inspect(self._engine).has_table(table.name):
+                return set()
+            self._applied_table_seen = True
+        scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
         found: set[str] = set()
-        with self._engine.connect() as conn:
-            for part in chunked(wanted):
-                query = select(table.c.event_key).where(
-                    table.c.recommendations_table == scope,
-                    table.c.event_key.in_(part),
-                    table.c.applied_at >= cutoff,
-                )
-                found.update(str(row[0]) for row in conn.execute(query))
+        try:
+            with self._engine.connect() as conn:
+                for part in chunked(wanted):
+                    query = select(table.c.event_key).where(
+                        table.c.recommendations_table == scope,
+                        table.c.event_key.in_(part),
+                        table.c.applied_at >= cutoff,
+                    )
+                    found.update(str(row[0]) for row in conn.execute(query))
+        except _MISSING_TABLE_ERRORS:
+            # The table may have been dropped; check again on the next lookup.
+            self._applied_table_seen = False
+            raise
         return found
 
     def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
         wanted = sorted({str(key) for key in keys})
         now = datetime.now(UTC)
         table = self._applied_events_table()
-        scope = self._recommendations_table_name()
+        scope = self._applied_scope(self._recommendations_table_name())
         conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
         for part in chunked(wanted):
             conn.execute(
@@ -412,7 +428,8 @@ class DatabaseOutputSink:
         # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
         table = self._applied_events_table()
         if inspect(conn).has_table(table.name):
-            conn.execute(delete(table).where(table.c.recommendations_table == recommendations_table))
+            scope = self._applied_scope(recommendations_table)
+            conn.execute(delete(table).where(table.c.recommendations_table == scope))
 
     def _replace_recommendations_for_users_unlocked(
         self, df: pd.DataFrame, ids: list[str], applied_keys: Sequence[str] = ()

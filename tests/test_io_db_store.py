@@ -453,3 +453,26 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
     monkeypatch.setattr(db_store, "inspect", lambda _conn: _Inspector())
     db_store._add_missing_manifest_columns(conn, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert conn.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
+
+
+def test_applied_event_scope_tells_case_distinct_tables_apart() -> None:
+    assert DatabaseOutputSink._applied_scope("Recs") != DatabaseOutputSink._applied_scope("recs")
+
+
+def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    real_inspect = db_store.inspect
+    calls: list[object] = []
+
+    def _counting_inspect(target):  # type: ignore[no-untyped-def]
+        calls.append(target)
+        return real_inspect(target)
+
+    monkeypatch.setattr(db_store, "inspect", _counting_inspect)
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+    assert len(calls) <= 1
