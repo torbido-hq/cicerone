@@ -189,13 +189,24 @@ def test_a_connection_dropped_after_the_post_is_reported_as_ambiguous(caplog):
     assert "dropped the connection" in caplog.text
 
 
-def test_is_loopback_host_is_shared_by_config_and_the_derived_url():
-    from cicerone.config import load as config_load
-    from cicerone.config.validation import is_loopback_host
+def test_config_and_the_derived_url_agree_on_loopback_hosts():
+    from cicerone.config import ConfigError
+    from cicerone.config.load import _load_dashboard_trigger_url
 
-    assert config_load.is_loopback_host is is_loopback_host
-    assert dashboard_retrain.is_loopback_host is is_loopback_host
+    def url_host(host: str) -> str:
+        return f"[{host}]" if ":" in host else host
+
     for host in ("localhost", "LOCALHOST", "127.0.0.1", "127.0.0.2", "::1"):
-        assert is_loopback_host(host)
-    for host in ("recommender", "10.0.0.5", "::", "0.0.0.0", "loopback.example"):
-        assert not is_loopback_host(host)
+        assert _load_dashboard_trigger_url(f"http://{url_host(host)}:8080", allow_http=False)
+        assert (
+            trigger_base_url(make_settings(trigger_host=host, trigger_port=9)) == f"http://{url_host(host)}:9"
+        )
+    for host in ("recommender", "10.0.0.5", "loopback.example"):
+        with pytest.raises(ConfigError, match="trigger_allow_http"):
+            _load_dashboard_trigger_url(f"http://{host}:8080", allow_http=False)
+        with pytest.raises(RetrainError):
+            trigger_base_url(make_settings(trigger_host=host, trigger_port=9))
+    # A wildcard bind derives a loopback URL, but is never a loopback target itself.
+    for host in ("0.0.0.0", "::"):
+        with pytest.raises(ConfigError, match="trigger_allow_http"):
+            _load_dashboard_trigger_url(f"http://{url_host(host)}:8080", allow_http=False)
