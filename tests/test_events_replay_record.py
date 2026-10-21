@@ -296,3 +296,18 @@ def test_worker_returns_fresh_events_when_acking_replays_raises(tmp_path, featur
         worker.tick()
     assert updater.events_applied == 0
     assert [event.event_id for event in source.poll(10)] == ["fresh-x"]
+
+
+def test_db_keys_recorded_before_a_full_write_manifest_are_ignored(tmp_path) -> None:
+    sink = build_output_sink(_outputs(tmp_path)["db"])
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    sink.write_manifest({"triggered_by": "incremental", "generated_at": datetime.now(UTC).isoformat()})
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+
+    # An older version's full write: rows and manifest replaced, the key table left alone.
+    sink.write_manifest({"triggered_by": "cron", "generated_at": datetime.now(UTC).isoformat()})
+    assert sink.applied_event_keys(["k1"]) == set()
+
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k2"])
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k2"}

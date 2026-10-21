@@ -213,6 +213,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 online_by_user,
             )
             if merged is None or not replace_ids:
+                # Nothing is written or kept online, so a redelivery is a no-op too and needs no replay key.
                 self._abort_online()
                 now = datetime.now(UTC)
                 self._last_success_at = now
@@ -277,7 +278,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return len(events)
 
         try:
-            # The publish stays under the write guard so a full write cannot land between its check and send.
+            # The publish stays under the write guard so a full write cannot land between its check and send;
+            # the lease renews while held and publishers bound their own timeouts.
             with recommendations_write_guard(self._sink):
                 applied = _persist()
                 if pending_publish is not None and self._publish_sidecar(*pending_publish):

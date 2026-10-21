@@ -277,6 +277,7 @@ class EventWorker:
         return self._ephemeral_event_ids and event.generated_event_id
 
     def _replay_key(self, event: NormalizedEvent) -> str:
+        # event_id is the idempotency key across every producer of one output (docs/incremental-events.md).
         if self._fingerprint_dedupe(event):
             return replay_key("fingerprint", event_fingerprint(event))
         return replay_key("id", event.event_id)

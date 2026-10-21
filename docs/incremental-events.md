@@ -64,7 +64,8 @@ Same columns as batch input:
 
 Optional transport fields:
 
-- `event_id` — idempotency / ack key (generated if omitted)
+- `event_id` — idempotency / ack key (generated if omitted); must be unique
+  across every producer feeding one output
 - `idempotency_key` — alias accepted by the webhook JSON body
 
 ## Enable the webhook
@@ -311,7 +312,8 @@ idempotency key: a different event reusing a recorded id within the window
 is acked, not applied. A key counts for 7 days; older ones are ignored and
 pruned on the next write. Dataset output keeps at most the newest 100,000
 keys (dropping unexpired ones logs a warning). A full write clears the keys
-on both outputs. On db output the role needs `CREATE TABLE` for the first
+on both outputs; on db output a key older than the latest full-write manifest
+is also ignored, so a full write by an older version supersedes it too. On db output the role needs `CREATE TABLE` for the first
 incremental write, or create the table beforehand. This relies on one
 writer: run several replicas with the apply lock described below. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot

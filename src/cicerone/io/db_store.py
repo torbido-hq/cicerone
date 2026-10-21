@@ -391,6 +391,10 @@ class DatabaseOutputSink:
             self._applied_table_seen = True
         scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
+        # A full write by a version without the key table leaves keys behind; its manifest supersedes them.
+        full_write_at = self._latest_full_write_at()
+        if full_write_at is not None and full_write_at > cutoff:
+            cutoff = full_write_at
         found: set[str] = set()
         try:
             with self._engine.connect() as conn:
@@ -406,6 +410,26 @@ class DatabaseOutputSink:
             self._applied_table_seen = False
             raise
         return found
+
+    def _latest_full_write_at(self) -> str | None:
+        table = sql_identifier(
+            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
+            option="manifest_table",
+        )
+        quote = self._engine.dialect.identifier_preparer.quote
+        query = text(
+            f"SELECT MAX({quote('generated_at')}) FROM {quote(table)} "
+            f"WHERE {quote('triggered_by')} IS NULL OR {quote('triggered_by')} <> 'incremental'"
+        )
+        try:
+            with self._engine.connect() as conn:
+                value = conn.execute(query).scalar()
+        except _MISSING_TABLE_ERRORS:
+            # No manifest table (or no such columns) yet: no full write to supersede the keys.
+            return None
+        if value is None:
+            return None
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
     def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
         wanted = sorted({str(key) for key in keys})
