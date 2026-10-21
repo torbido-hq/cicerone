@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import Table, create_engine, text
 from sqlalchemy.dialects import mysql
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.schema import CreateTable
 from support.postgres_defaults import resolve_test_database_url
 
@@ -444,27 +446,21 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
         def get_columns(self, _table):  # type: ignore[no-untyped-def]
             return [{"name": "generated_at"}]
 
-    class _Conn:
+    class _Engine:
         dialect = mysql.dialect()
         sql: list[str] = []
+
+        @contextmanager
+        def begin(self):  # type: ignore[no-untyped-def]
+            yield self
 
         def execute(self, statement):  # type: ignore[no-untyped-def]
             self.sql.append(str(statement))
 
-        def begin_nested(self):  # type: ignore[no-untyped-def]
-            return _Savepoint()
-
-    class _Savepoint:
-        def commit(self) -> None:
-            return None
-
-        def rollback(self) -> None:
-            return None
-
-    conn = _Conn()
-    monkeypatch.setattr(db_store, "inspect", lambda _conn: _Inspector())
-    db_store._add_missing_manifest_columns(conn, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
-    assert conn.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
+    engine = _Engine()
+    monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
+    db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
+    assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
 
 def test_applied_event_scope_tells_case_distinct_tables_apart() -> None:
@@ -529,8 +525,24 @@ def test_a_manifest_column_added_concurrently_does_not_fail_the_write(tmp_path, 
         return _StaleInspector(inner) if calls["n"] == 1 else inner
 
     monkeypatch.setattr(db_store, "inspect", _inspect)
-    with sink._engine.begin() as conn:
-        db_store._add_missing_manifest_columns(
-            conn, "recommendation_runs", {"generated_at": "x", "n_events": 1}
-        )
+    db_store._add_missing_manifest_columns(
+        sink._engine, "recommendation_runs", {"generated_at": "x", "n_events": 1}
+    )
     assert calls["n"] == 2
+
+
+def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    real_create = Table.create
+
+    applied_name = sink._applied_events_table().name
+
+    def _create_then_lose_the_race(table, bind=None, checkfirst=False):  # type: ignore[no-untyped-def]
+        real_create(table, bind, checkfirst=checkfirst)
+        if table.name == applied_name:
+            raise OperationalError("CREATE TABLE", {}, Exception("table already exists"))
+
+    monkeypatch.setattr(Table, "create", _create_then_lose_the_race)
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    assert sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"]) == 1
+    assert sink.applied_event_keys(["k1"]) == {"k1"}

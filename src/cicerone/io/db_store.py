@@ -119,27 +119,26 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
     return False
 
 
-def _add_missing_manifest_columns(conn: Any, table: str, manifest: dict) -> None:
+def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> None:
     # The table takes its columns from the first manifest; an incremental one adds keys a job manifest lacks.
-    inspector = inspect(conn)
+    # Each ALTER runs in its own transaction, before the insert: DDL commits implicitly on MySQL.
+    inspector = inspect(engine)
     if not inspector.has_table(table):
         return
     existing = {column["name"] for column in inspector.get_columns(table)}
+    quote = engine.dialect.identifier_preparer.quote
     for key, value in manifest.items():
         if key in existing:
             continue
         column = sql_identifier(key, option="manifest key")
-        column_type = _manifest_column_type(value).compile(dialect=conn.dialect)
+        column_type = _manifest_column_type(value).compile(dialect=engine.dialect)
         logger.info("Adding column %r to manifest table %r", column, table)
-        quote = conn.dialect.identifier_preparer.quote
-        savepoint = conn.begin_nested()
         try:
-            conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
-            savepoint.commit()
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
         except _MISSING_TABLE_ERRORS:
-            savepoint.rollback()
             # A concurrent writer may have added the same column first.
-            if column not in {existing["name"] for existing in inspect(conn).get_columns(table)}:
+            if column not in {column_info["name"] for column_info in inspect(engine).get_columns(table)}:
                 raise
 
 
@@ -378,6 +377,17 @@ class DatabaseOutputSink:
             Index(f"ix_applied_at_{hashlib.sha256(name.encode()).hexdigest()[:16]}", "applied_at"),
         )
 
+    def _create_applied_events_table(self) -> None:
+        table = self._applied_events_table()
+        # CREATE TABLE commits implicitly on MySQL, so never inside the rows' transaction.
+        try:
+            with self._engine.begin() as ddl:
+                table.create(ddl, checkfirst=True)
+        except _MISSING_TABLE_ERRORS:
+            # Another output sharing the database may have created it first.
+            if not inspect(self._engine).has_table(table.name):
+                raise
+
     def _check_applied_events_table_name(self) -> None:
         name = self._applied_events_table().name
         others = {
@@ -497,9 +507,7 @@ class DatabaseOutputSink:
         )
         count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
         if applied_keys:
-            # CREATE TABLE commits implicitly on MySQL, so never inside the rows' transaction.
-            with self._engine.begin() as ddl:
-                self._applied_events_table().create(ddl, checkfirst=True)
+            self._create_applied_events_table()
         with self._engine.begin() as conn:
             self._ensure_fence()
             savepoint = conn.begin_nested()
@@ -546,13 +554,15 @@ class DatabaseOutputSink:
             option="manifest_table",
         )
         logger.info("Appending run manifest to database table %r", table)
-        with self.recommendations_write(), self._engine.begin() as conn:
-            if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
-                return False
+        with self.recommendations_write():
             self._ensure_fence()
-            _add_missing_manifest_columns(conn, table, manifest)
-            pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
-            self._ensure_fence()
+            _add_missing_manifest_columns(self._engine, table, manifest)
+            with self._engine.begin() as conn:
+                if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
+                    return False
+                self._ensure_fence()
+                pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
+                self._ensure_fence()
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:
