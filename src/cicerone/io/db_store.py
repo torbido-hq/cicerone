@@ -11,6 +11,7 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -357,11 +358,12 @@ class DatabaseOutputSink:
         return Table(
             name,
             MetaData(),
-            # Bounded so MySQL can create and index them; keys are sha256 hex digests.
-            Column("recommendations_table", String(255), primary_key=True),
-            Column("event_key", String(255), primary_key=True),
+            # 64 chars: a SQL identifier and a sha256 hex key; the composite key fits a 767-byte index.
+            Column("recommendations_table", String(64), primary_key=True),
+            Column("event_key", String(64), primary_key=True),
             Column("applied_at", String(64), nullable=False),
-            Index(f"{name}_applied_at", "applied_at"),
+            # Hashed so a long table name still gives an index name within MySQL's 64 characters.
+            Index(f"ix_applied_at_{hashlib.sha256(name.encode()).hexdigest()[:16]}", "applied_at"),
         )
 
     def _recommendations_table_name(self) -> str:

@@ -248,3 +248,21 @@ def test_a_heartbeat_failure_after_a_written_batch_returns_the_next_batch(
     source.ingest(event_payload(event_id="not-written", user_id="u1", item_id="i8"))
     assert worker.tick() == 0
     assert source.health().lag == 1
+
+
+def test_a_repair_that_raises_returns_the_ready_batch(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+) -> None:
+    _sink, updater = _updater(_settings(tmp_path), feature_config)
+    source = WebhookEventSource({})
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    updater._repair.refresh = True
+
+    def _repair_bug() -> None:
+        raise RuntimeError("repair bug")
+
+    monkeypatch.setattr(updater, "repair_post_write", _repair_bug)
+    source.ingest(event_payload(event_id="ready", user_id="u1", item_id="i9"))
+    with pytest.raises(RuntimeError, match="repair bug"):
+        worker.tick()
+    assert [event.event_id for event in source.poll(10)] == ["ready"]

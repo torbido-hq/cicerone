@@ -718,11 +718,16 @@ def test_s3_backend_round_trip(s3_options):
     assert list(events["user_id"]) == ["u1"]
 
 
-def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options):
+def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options, monkeypatch):
     sink = DatasetOutputSink(s3_options)
     assert sink.applied_event_keys(["k1"]) == set()
     df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5, "source": "personalized"}])
     sink.replace_recommendations_for_users(df, user_ids=["u1"], applied_keys=["k1"])
+
+    def _rows_read(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("applied_event_keys read the recommendation rows")
+
+    monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _rows_read)
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
 
 

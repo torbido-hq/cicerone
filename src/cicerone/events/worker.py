@@ -495,7 +495,13 @@ class EventWorker:
             self._release_apply_lock()
 
     def _repair_then_flush(self, ready: list[NormalizedEvent]) -> int:
-        self._repair_post_write()
+        repaired = False
+        try:
+            self._repair_post_write()
+            repaired = True
+        finally:
+            if not repaired and ready:
+                self._return_events(ready)
         return self._flush_ready(ready) if ready else 0
 
     def _repair_post_write(self) -> None:

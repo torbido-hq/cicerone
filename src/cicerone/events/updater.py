@@ -28,6 +28,7 @@ from cicerone.events.updater_merge import (
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
+from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_schema import recommendation_output_columns
@@ -114,7 +115,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
-        self._replay_key: Callable[[NormalizedEvent], str] = lambda event: event.event_id
+        self._replay_key: Callable[[NormalizedEvent], str] = lambda event: replay_key("id", event.event_id)
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
         self._variant_names = tuple(str(name) for name in variant_names)

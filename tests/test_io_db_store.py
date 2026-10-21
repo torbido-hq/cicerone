@@ -422,4 +422,11 @@ def test_database_get_user_from_table():
 def test_applied_events_table_compiles_for_mysql(tmp_path) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     ddl = str(CreateTable(sink._applied_events_table()).compile(dialect=mysql.dialect()))
-    assert "event_key VARCHAR(255)" in ddl
+    assert "event_key VARCHAR(64)" in ddl
+
+
+def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) -> None:
+    sink = DatabaseOutputSink(
+        {"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", "applied_events_table": "t" * 64}
+    )
+    assert all(len(str(index.name)) <= 64 for index in sink._applied_events_table().indexes)
