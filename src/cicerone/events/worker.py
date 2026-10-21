@@ -603,14 +603,17 @@ class EventWorker:
         post_write_failed = False
         # Re-raised after the ack; it is logged first, so an online-persist error may take precedence.
         unexpected: Exception | None = None
+        apply_started = False
         try:
             try:
                 with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
+                    apply_started = True
                     applied = self._updater.apply(ready, persist_online=False)
             except Exception as exc:
                 # Once the rows are written any error must still ack them (nacking applies the events
                 # twice), so this cannot be narrowed; an unexpected one is re-raised after the ack.
-                if not applied and not self._updater.last_apply_written:
+                # last_apply_written describes the previous batch until this batch's apply starts.
+                if not applied and not (apply_started and self._updater.last_apply_written):
                     raise
                 if not isinstance(exc, _POST_WRITE_ERRORS):
                     unexpected = exc

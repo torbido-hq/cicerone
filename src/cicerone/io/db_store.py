@@ -357,9 +357,10 @@ class DatabaseOutputSink:
         return Table(
             name,
             MetaData(),
-            Column("recommendations_table", String, primary_key=True),
-            Column("event_key", String, primary_key=True),
-            Column("applied_at", String, nullable=False),
+            # Bounded so MySQL can create and index them; keys are sha256 hex digests.
+            Column("recommendations_table", String(255), primary_key=True),
+            Column("event_key", String(255), primary_key=True),
+            Column("applied_at", String(64), nullable=False),
             Index(f"{name}_applied_at", "applied_at"),
         )
 

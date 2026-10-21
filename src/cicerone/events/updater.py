@@ -258,9 +258,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             self._store_users_in_cache(set(replace_ids), merged)
             self._last_success_at = now
             self._events_applied += len(events)
-            if self._on_success is not None:
-                self._on_success()
-            done.add("refresh")
+            # A reader refresh returns False when it kept the previous recommendations.
+            if self._on_success is None or self._on_success() is not False:
+                done.add("refresh")
             self._ensure_fence()
             ensure_sink_writer_held(self._sink)
             self._sink.write_manifest(manifest)
@@ -315,9 +315,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if not repair.due() or self.retrain_busy():
             return
         try:
-            if repair.refresh and self._on_success is not None:
-                self._on_success()
-            repair.refresh = False
+            if repair.refresh:
+                repair.refresh = self._on_success is not None and self._on_success() is False
             if repair.manifest is not None:
                 with recommendations_write_guard(self._sink):
                     self._ensure_fence()

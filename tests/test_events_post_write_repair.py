@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pandas as pd
 import pytest
 from support.events import event_payload
@@ -10,7 +12,7 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker
+from cicerone.events.worker import EventWorker, HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_manifest_reader, build_output_sink
 from cicerone.publish.base import PublishError
@@ -213,3 +215,36 @@ def test_the_worker_counts_a_handled_publish_failure_as_a_flush_error(
     assert updater.post_write_pending
     assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+
+
+def test_a_reader_refresh_that_keeps_old_data_is_retried(tmp_path, feature_config: FeatureConfig) -> None:
+    results = [False, True]
+    _sink, updater = _updater(_settings(tmp_path), feature_config, on_success=lambda: results.pop(0))
+
+    assert updater.apply(_events()) == 1
+    assert updater.post_write_pending
+
+    updater.repair_post_write()
+    assert results == []
+    assert not updater.post_write_pending
+
+
+def test_a_heartbeat_failure_after_a_written_batch_returns_the_next_batch(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+) -> None:
+    _sink, updater = _updater(_settings(tmp_path), feature_config)
+    source = WebhookEventSource({})
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    source.ingest(event_payload(event_id="written", user_id="u1", item_id="i9"))
+    assert worker.tick() == 1
+    assert updater.last_apply_written
+
+    @contextmanager
+    def _heartbeat_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise HeartbeatError("lease lost")
+        yield
+
+    monkeypatch.setattr("cicerone.events.worker.inflight_heartbeat", _heartbeat_fails)
+    source.ingest(event_payload(event_id="not-written", user_id="u1", item_id="i8"))
+    assert worker.tick() == 0
+    assert source.health().lag == 1

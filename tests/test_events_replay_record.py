@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, select
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
@@ -113,6 +113,9 @@ def test_db_record_drops_keys_older_than_the_retention(tmp_path, monkeypatch) ->
     monkeypatch.setattr("cicerone.io.db_store.datetime", _FrozenDatetime(later))
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["new"])
     assert sink.applied_event_keys(["old", "new"]) == {"new"}
+    with sink._engine.connect() as conn:
+        stored = {row[0] for row in conn.execute(select(sink._applied_events_table().c.event_key))}
+    assert stored == {"new"}
 
 
 class _FrozenDatetime:

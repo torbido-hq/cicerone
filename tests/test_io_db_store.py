@@ -6,6 +6,8 @@ import threading
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateTable
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -415,3 +417,9 @@ def test_database_get_user_from_table():
 
     assert source.get_user("u1")["region_slug"] == "lazio"
     assert source.get_user("ghost") is None
+
+
+def test_applied_events_table_compiles_for_mysql(tmp_path) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    ddl = str(CreateTable(sink._applied_events_table()).compile(dialect=mysql.dialect()))
+    assert "event_key VARCHAR(255)" in ddl
