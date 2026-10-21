@@ -285,11 +285,20 @@ def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]
         try:
             schema = pq.read_schema(f"{bucket}/{key}", filesystem=_s3_filesystem(options))
         except _PYARROW_S3_FALLBACK_ERRORS:
-            logger.debug("pyarrow S3 schema read failed; falling back to GetObject", exc_info=True)
-            obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
-            schema = pq.read_schema(io.BytesIO(read_s3_body(obj)))
+            logger.debug("pyarrow S3 schema read failed; falling back to ranged GetObject", exc_info=True)
+            schema = _s3_parquet_footer_schema(build_s3_client(options), bucket, key)
     raw = (schema.metadata or {}).get(b"PANDAS_ATTRS")
     return json.loads(raw) if raw else {}
+
+
+def _s3_parquet_footer_schema(client: Any, bucket: str, key: str):
+    import pyarrow.parquet as pq
+
+    # Parquet ends with <footer><4-byte footer length>PAR1; fetch only that tail, never the row groups.
+    tail = read_s3_body(client.get_object(Bucket=bucket, Key=key, Range="bytes=-8"))
+    footer_length = int.from_bytes(tail[:4], "little")
+    footer = read_s3_body(client.get_object(Bucket=bucket, Key=key, Range=f"bytes=-{footer_length + 8}"))
+    return pq.read_schema(io.BytesIO(b"PAR1" + footer))
 
 
 def _s3_filesystem(options: dict[str, Any]):

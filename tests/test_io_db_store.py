@@ -463,8 +463,11 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
 
-def test_applied_event_scope_tells_case_distinct_tables_apart() -> None:
-    assert DatabaseOutputSink._applied_scope("Recs") != DatabaseOutputSink._applied_scope("recs")
+def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    assert sink._applied_scope("Recs") == sink._applied_scope("recs")
+    monkeypatch.setattr(sink._engine.dialect, "name", "mysql")
+    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
 
 
 def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:
@@ -546,3 +549,18 @@ def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp
     rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
     assert sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"]) == 1
     assert sink.applied_event_keys(["k1"]) == {"k1"}
+
+
+def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+
+    def _insert_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("insert failed")
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _insert_fails)
+    with pytest.raises(OSError, match="insert failed"):
+        sink.write_recommendations(rows)
+    monkeypatch.undo()
+    assert sink.applied_event_keys(["k1"]) == set()

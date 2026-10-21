@@ -342,10 +342,14 @@ class DatabaseOutputSink:
             )
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
+            # Keys go first, in their own commit: MySQL's TRUNCATE commits implicitly, so a failed insert
+            # after it could otherwise roll the key delete back while the rows stay gone.
+            with self._engine.begin() as conn:
+                self._ensure_fence()
+                self._clear_applied_keys(conn, table)
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 _clear_table_for_replace(conn, table)
-                self._clear_applied_keys(conn, table)
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
                 self._ensure_fence()
@@ -405,10 +409,13 @@ class DatabaseOutputSink:
         )
         return table
 
-    @staticmethod
-    def _applied_scope(recommendations_table: str) -> str:
+    def _applied_scope(self, recommendations_table: str) -> str:
+        # Unquoted names ignore case on SQLite and Postgres; MySQL table-name case depends on the server.
+        name = (
+            recommendations_table if self._engine.dialect.name == "mysql" else recommendations_table.lower()
+        )
         # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
-        return hashlib.sha256(recommendations_table.encode()).hexdigest()
+        return hashlib.sha256(name.encode()).hexdigest()
 
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = sorted({str(key) for key in keys})
