@@ -49,8 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
   rejected as invalid instead of stopping the event worker.
 - The db event source logs and skips an invalid row instead of stopping
-  the worker, and moves its watermark past a run of invalid rows longer
-  than one fetch.
+  the worker. The log names the row by its identity columns only.
+- db source health no longer fails on a row with an unparseable
+  `occurred_at`.
 
 ## [0.8.5] - 2026-10-14
 

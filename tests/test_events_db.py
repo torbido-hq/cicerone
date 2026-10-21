@@ -928,15 +928,23 @@ def test_db_poll_skips_an_invalid_row_and_logs_it_once(tmp_path, caplog):
     assert caplog.text.count("Skipping invalid event row") == 1
 
 
-def test_db_poll_moves_past_more_invalid_rows_than_one_fetch(tmp_path):
+def test_db_invalid_row_log_leaves_out_user_and_item(tmp_path, caplog):
     url = _sqlite_url(tmp_path)
-    bad = [_event_row(f"bad{index:03d}", 0, quantity=0) for index in range(30)]
-    _seed_events(url, [*bad, _event_row("good", 1)])
+    _seed_events(url, [_event_row("bad", 0, user_id="alice@example.com", quantity=0)])
     source = DbEventSource({"database_url": url})
     source.connect()
-    polled: list = []
-    for _ in range(5):
-        polled = list(source.poll(1))
-        if polled:
-            break
-    assert [event.event_id for event in polled] == ["good"]
+    with caplog.at_level("WARNING", logger="cicerone.events.db"):
+        assert list(source.poll(10)) == []
+    assert "quantity must be >= 1" in caplog.text
+    assert '"event_id": "bad"' in caplog.text
+    assert "alice@example.com" not in caplog.text
+    assert "ibad" not in caplog.text
+
+
+def test_db_health_counts_lag_past_a_row_with_an_unparseable_occurred_at(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row("naive", 0, occurred_at="2026-08-13T12:00:00"), _event_row("e1", 1)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["e1"]
+    assert source.health().lag == 1
