@@ -16,7 +16,7 @@ from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for, quote_identifier, release_engine
+from cicerone.io.engines import engine_for, quote_identifier, release_engine, sql_source
 from cicerone.io.factory import build_input_source
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
@@ -226,6 +226,7 @@ def load_metric_events(
         try:
             engine = engine_for(url)
             try:
+                cleaned, table = None, ""
                 if query:
                     cleaned = readonly_select(str(query), option="input.options.events_query")
                     if _sql_has_page(cleaned):
@@ -235,13 +236,12 @@ def load_metric_events(
                         return _filter_events_since(
                             filter_events_by_types(_with_default_quantity(frame), types), since
                         )
-                    source = f"({cleaned}) AS _cicerone_metric_events"
                 else:
                     table = sql_identifier(
                         inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
                         option="events_table",
                     )
-                    source = quote_identifier(engine, table)
+                source = sql_source(engine, cleaned, table, "_cicerone_metric_events")
                 try:
                     stmt, params = _metric_event_sql(engine, source, types=types, floor=floor)
                     frame = pd.read_sql(stmt, engine, params=params)

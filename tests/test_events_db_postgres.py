@@ -148,3 +148,30 @@ def test_postgres_event_id_column_numeric_identity_does_not_skip_id_10():
     assert source.health().lag == 2
     rest = list(source.poll(10))
     assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_postgres_mixed_case_event_columns_poll_and_page():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f'CREATE TABLE "{_TABLE}" ("User_Id" TEXT, "Item_Id" TEXT, "Event_Type" TEXT, '
+                '"Occurred_At" TIMESTAMPTZ, "Event_Id" TEXT)'
+            )
+        )
+        conn.execute(
+            text(
+                f'INSERT INTO "{_TABLE}" ("User_Id", "Item_Id", "Event_Type", "Occurred_At", "Event_Id") '
+                "VALUES "
+                "('u1', 'i1', 'purchase', '2026-08-13T12:00:00Z', 'e1'), "
+                "('u2', 'i2', 'purchase', '2026-08-13T12:00:00Z', 'e2')"
+            )
+        )
+    source = _source()
+    source.connect()
+
+    first = list(source.poll(1))
+    source.ack(first)
+    second = list(source.poll(1))
+
+    assert [(event.event_id, event.user_id) for event in first + second] == [("e1", "u1"), ("e2", "u2")]

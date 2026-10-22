@@ -12,7 +12,7 @@ import pandas as pd
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
-from cicerone.io.engines import engine_for, quote_identifier
+from cicerone.io.engines import create_table_sql, engine_for, insert_sql, quote_identifier
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
@@ -28,6 +28,19 @@ from cicerone.track.store_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TRACK_TABLE = (
+    ("event_id", "TEXT PRIMARY KEY"),
+    ("kind", "TEXT NOT NULL"),
+    ("user_id", "TEXT NOT NULL"),
+    ("item_id", "TEXT NOT NULL"),
+    ("rank", "INTEGER"),
+    ("occurred_at", "TEXT NOT NULL"),
+    ("variant", "TEXT"),
+    ("experiment_id", "TEXT"),
+    ("generated_at", "TEXT"),
+)
+_EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
 
 class TrackDbBackend:
@@ -78,21 +91,7 @@ class TrackDbBackend:
             return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
-        conn.execute(
-            text(
-                f"CREATE TABLE IF NOT EXISTS {quote_identifier(conn, table)} ("
-                "event_id TEXT PRIMARY KEY, "
-                "kind TEXT NOT NULL, "
-                "user_id TEXT NOT NULL, "
-                "item_id TEXT NOT NULL, "
-                "rank INTEGER, "
-                "occurred_at TEXT NOT NULL, "
-                "variant TEXT, "
-                "experiment_id TEXT, "
-                "generated_at TEXT"
-                ")"
-            )
-        )
+        conn.execute(text(create_table_sql(conn, table, _TRACK_TABLE)))
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -100,13 +99,9 @@ class TrackDbBackend:
             option="track_table",
         )
         engine = self._db_engine()
-        quoted = quote_identifier(engine, table)
-        insert_sql = text(
-            f"INSERT INTO {quoted} (event_id, kind, user_id, item_id, rank, occurred_at, "
-            "variant, experiment_id, generated_at) "
-            "VALUES (:event_id, :kind, :user_id, :item_id, :rank, :occurred_at, "
-            ":variant, :experiment_id, :generated_at) "
-            "ON CONFLICT (event_id) DO NOTHING"
+        row_sql = text(
+            insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
+            + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
         )
         params: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -136,7 +131,7 @@ class TrackDbBackend:
             if not fresh:
                 return []
             self._ensure_fence()
-            conn.execute(insert_sql, fresh)
+            conn.execute(row_sql, fresh)
             self._ensure_fence()
             return fresh
 
@@ -174,13 +169,11 @@ class TrackDbBackend:
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         with engine.begin() as conn:
-            conn.execute(
-                text(f"CREATE TABLE IF NOT EXISTS {quoted} (payload TEXT NOT NULL, written_at TEXT NOT NULL)")
-            )
+            conn.execute(text(create_table_sql(conn, table, _EVAL_TABLE)))
             conn.execute(text(f"DELETE FROM {quoted}"))
             self._ensure_fence()
             conn.execute(
-                text(f"INSERT INTO {quoted} (payload, written_at) VALUES (:payload, :written_at)"),
+                text(insert_sql(conn, table, [name for name, _kind in _EVAL_TABLE])),
                 {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
             )
             self._ensure_fence()
@@ -193,7 +186,9 @@ class TrackDbBackend:
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         try:
-            frame = pd.read_sql(text(f"SELECT payload FROM {quoted} LIMIT 1"), engine)
+            frame = pd.read_sql(
+                text(f"SELECT {quote_identifier(engine, 'payload')} FROM {quoted} LIMIT 1"), engine
+            )
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
                 return None
@@ -248,7 +243,8 @@ def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[
     ids = [event_id for event_id in event_ids if event_id]
     if not ids:
         return set()
-    stmt = text(f"SELECT event_id FROM {quote_identifier(conn, table)} WHERE event_id IN :ids").bindparams(
+    event_id, quoted_table = quote_identifier(conn, "event_id"), quote_identifier(conn, table)
+    stmt = text(f"SELECT {event_id} FROM {quoted_table} WHERE {event_id} IN :ids").bindparams(
         bindparam("ids", expanding=True)
     )
     return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}

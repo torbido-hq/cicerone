@@ -49,7 +49,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SQL statements quote table and column names the way the database dialect
   does. A mixed-case `recommendations_table` on Postgres no longer keeps a
   user's old rows on incremental replace, and identifiers use backticks on
-  MySQL instead of double quotes.
+  MySQL instead of double quotes. A full recommendations write on MySQL
+  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there).
+- The db events source polls tables whose `occurred_at` / `event_id`
+  columns are mixed case on Postgres.
 
 ## [0.8.5] - 2026-10-14
 

@@ -44,7 +44,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
 from cicerone.io.db_errors import is_missing_column_error
-from cicerone.io.engines import engine_for, quote_identifier
+from cicerone.io.engines import engine_for, quote_identifier, sql_source
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
@@ -159,24 +159,19 @@ def _manifest_column_type(value: Any) -> Any:
 def _clear_table_for_replace(conn, table: str) -> None:
     """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
 
-    Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
-    savepoint and then appending would duplicate rows, so DELETE is tried next.
-    If the table does not exist yet, both fail and ``to_sql`` creates it.
+    SQLite lacks TRUNCATE, and MySQL commits it implicitly (ending the replace transaction), so
+    both use DELETE. Rolling back only a failed savepoint keeps the rewrite atomic; if the table
+    does not exist yet, every statement fails and ``to_sql`` creates it.
     """
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f"TRUNCATE TABLE {quote_identifier(conn, table)}"))
-        savepoint.commit()
-        return
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
-
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f"DELETE FROM {quote_identifier(conn, table)}"))
-        savepoint.commit()
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
+    verbs = ("DELETE FROM",) if conn.dialect.name == "mysql" else ("TRUNCATE TABLE", "DELETE FROM")
+    for verb in verbs:
+        savepoint = conn.begin_nested()
+        try:
+            conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
+            savepoint.commit()
+            return
+        except _MISSING_TABLE_ERRORS:
+            savepoint.rollback()
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
@@ -198,12 +193,6 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     raise RecommendationSchemaError(
         f"Recommendations table {table!r} is missing column(s) {missing}; {alters}"
     )
-
-
-def _sql_user_source(engine: Engine, query: str | None, table: str) -> str:
-    if not query:
-        return quote_identifier(engine, table)
-    return f"({query.strip().rstrip(';').strip()}) AS _cicerone_user_rows"
 
 
 class DatabaseInputSource:
@@ -266,7 +255,7 @@ class DatabaseInputSource:
         limit: int | None = None,
         order_occurred_at: bool = False,
     ) -> pd.DataFrame:
-        source = _sql_user_source(self._engine, query, table)
+        source = sql_source(self._engine, query, table, "_cicerone_user_rows")
         sql = f"SELECT * FROM {source} WHERE {quote_identifier(self._engine, 'user_id')} = :user_id"
         params: dict[str, Any] = {"user_id": user_id}
         if order_occurred_at:
@@ -665,12 +654,15 @@ class DatabaseOutputSink:
         )
         if not inspect(self._engine).has_table(table_name):
             return None
-        quoted_table = quote_identifier(self._engine, table_name)
+        quoted_table, payload = (
+            quote_identifier(self._engine, table_name),
+            quote_identifier(self._engine, "payload"),
+        )
         if self._engine.dialect.name == "sqlite":
-            sql = f"SELECT substr(payload, 1, :cap), length(payload) FROM {quoted_table} LIMIT 1"
+            sql = f"SELECT substr({payload}, 1, :cap), length({payload}) FROM {quoted_table} LIMIT 1"
         else:
             sql = (
-                "SELECT substring(payload from 1 for :cap), octet_length(payload) "
+                f"SELECT substring({payload} from 1 for :cap), octet_length({payload}) "
                 f"FROM {quoted_table} LIMIT 1"
             )
         with self._engine.connect() as conn:
@@ -693,7 +685,10 @@ class DatabaseOutputSink:
             return None
         with self._engine.connect() as conn:
             row = conn.execute(
-                text(f"SELECT written_at FROM {quote_identifier(self._engine, table_name)} LIMIT 1")
+                text(
+                    f"SELECT {quote_identifier(self._engine, 'written_at')} "
+                    f"FROM {quote_identifier(self._engine, table_name)} LIMIT 1"
+                )
             ).first()
         if row is None or row[0] is None:
             return None

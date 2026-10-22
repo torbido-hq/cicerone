@@ -589,3 +589,24 @@ def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch)
         sink.write_recommendations(rows)
     monkeypatch.undo()
     assert sink.applied_event_keys(["k1"]) == set()
+
+
+def test_clear_table_for_replace_uses_delete_on_mysql():
+    # MySQL commits TRUNCATE implicitly, which would end the replace transaction.
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import mysql
+
+    from cicerone.io.db_store import _clear_table_for_replace
+
+    executed: list[str] = []
+    savepoint = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+    conn = SimpleNamespace(
+        dialect=mysql.dialect(),
+        begin_nested=lambda: savepoint,
+        execute=lambda statement: executed.append(str(statement)),
+    )
+
+    _clear_table_for_replace(conn, "Recs")
+
+    assert executed == ["DELETE FROM `Recs`"]

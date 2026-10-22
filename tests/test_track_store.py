@@ -1343,3 +1343,23 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})
     assert not (tmp_path / "track_eval.json").exists()
+
+
+def test_track_table_quotes_its_columns_for_the_dialect():
+    # rank is reserved on MySQL.
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import mysql
+
+    from cicerone.locks import WriteFence
+    from cicerone.track.store_db import TrackDbBackend
+
+    executed: list[str] = []
+    conn = SimpleNamespace(dialect=mysql.dialect(), execute=lambda statement: executed.append(str(statement)))
+
+    TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))._ensure_track_table(
+        conn, "track"
+    )
+
+    assert "`rank` INTEGER" in executed[0]
+    assert executed[0].startswith("CREATE TABLE IF NOT EXISTS track (event_id TEXT PRIMARY KEY")
