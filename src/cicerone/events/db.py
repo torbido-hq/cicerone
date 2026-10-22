@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import Engine, text
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
+    ROW_IDENTITY_KEYS,
     cursor_key,
     cursor_key_from_payload,
     cursor_tuple,
@@ -25,6 +25,7 @@ from cicerone.events.db_identity import (
     identity_bind_sort_key,
     identity_sql_sort_expr,
     occurred_at_predicates,
+    payload_cursor,
     row_to_event,
 )
 from cicerone.events.normalize import EventNormalizeError
@@ -40,8 +41,7 @@ _EVENTS_QUERY_ALIAS = "cicerone_events_src"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
 # Invalid rows already logged; they are refetched until the watermark passes them.
-_SKIPPED_ROWS_CAP = 10_000
-_ROW_LOG_KEYS = ("event_id", "idempotency_key", "id", "rowid", "ctid", "occurred_at")
+_ROW_LOG_KEYS = ("event_id", "idempotency_key", *ROW_IDENTITY_KEYS, "occurred_at")
 # Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
@@ -55,8 +55,29 @@ _FETCH_COLUMNS = (
 )
 
 
+_T = TypeVar("_T")
+
+
 def _validate_events_query(query: str) -> str:
     return readonly_select(query, option="events.options.events_query")
+
+
+def _parsed_rows(
+    rows: Sequence[dict[str, Any]],
+    parse: Callable[[dict[str, Any]], _T],
+    on_invalid: Callable[[dict[str, Any], EventNormalizeError], None],
+) -> Iterator[_T]:
+    for payload in rows:
+        try:
+            yield parse(payload)
+        except EventNormalizeError as exc:
+            on_invalid(payload, exc)
+
+
+def _log_invalid_row(payload: dict[str, Any], exc: EventNormalizeError) -> None:
+    # Identity columns only: user and item ids stay out of the log.
+    identity = {name: payload[name] for name in _ROW_LOG_KEYS if payload.get(name) is not None}
+    logger.warning("Skipping invalid event row (%s): %.200s", exc, json.dumps(identity, default=str))
 
 
 class DbEventSource(EventSource):
@@ -85,7 +106,6 @@ class DbEventSource(EventSource):
         self._engine: Engine | None = None
         self._lock = threading.Lock()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
-        self._skipped_rows: OrderedDict[str, None] = OrderedDict()
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -137,7 +157,15 @@ class DbEventSource(EventSource):
             watermark_event_id,
             limit=max_events + in_flight_count + 8,
         )
-        candidates = sorted(self._valid_events(rows), key=cursor_key)
+        invalid: list[tuple[datetime, str, dict[str, Any], EventNormalizeError]] = []
+
+        def place_invalid(payload: dict[str, Any], exc: EventNormalizeError) -> None:
+            try:
+                invalid.append((*payload_cursor(payload), payload, exc))
+            except EventNormalizeError:
+                _log_invalid_row(payload, exc)  # no usable occurred_at: it can't be skipped past
+
+        candidates = sorted(_parsed_rows(rows, row_to_event, place_invalid), key=cursor_key)
 
         out: list[NormalizedEvent] = []
         with self._lock:
@@ -152,6 +180,7 @@ class DbEventSource(EventSource):
                 self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
                 out.append(event)
+            self._skip_invalid_unlocked(invalid, candidates)
         return out
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
@@ -160,26 +189,29 @@ class DbEventSource(EventSource):
                 self._in_flight.pop(event.event_id, None)
         return ()
 
-    def _valid_events(self, rows: Sequence[dict[str, Any]]) -> list[NormalizedEvent]:
-        # One invalid row must not stop the source: it is logged once and skipped.
-        events: list[NormalizedEvent] = []
-        for payload in rows:
-            try:
-                events.append(row_to_event(payload))
-            except EventNormalizeError as exc:
-                row = json.dumps(payload, default=str, sort_keys=True)
-                key = hashlib.sha256(row.encode()).hexdigest()
-                with self._lock:
-                    if key in self._skipped_rows:
-                        continue
-                    self._skipped_rows[key] = None
-                    if len(self._skipped_rows) > _SKIPPED_ROWS_CAP:
-                        self._skipped_rows.popitem(last=False)
-                # Identity columns only: user and item ids stay out of the log.
-                identity = {name: payload[name] for name in _ROW_LOG_KEYS if payload.get(name) is not None}
-                row_id = json.dumps(identity, default=str)
-                logger.warning("Skipping invalid event row (%s): %.200s", exc, row_id)
-        return events
+    def _skip_invalid_unlocked(
+        self,
+        invalid: list[tuple[datetime, str, dict[str, Any], EventNormalizeError]],
+        candidates: Sequence[NormalizedEvent],
+    ) -> None:
+        # Move the watermark past invalid rows that nothing earlier still waits on: no in-flight
+        # event and no unpolled valid row before them. Each is logged once, as it is passed.
+        pending = [cursor_key(event) for event in (*self._in_flight.values(), *candidates)]
+        first_pending = min(pending, default=None)
+        advanced = False
+        for occurred_at, event_id, payload, exc in sorted(
+            invalid, key=lambda row: cursor_tuple(row[0], row[1])
+        ):
+            key = cursor_tuple(occurred_at, event_id)
+            if key <= cursor_tuple(self._watermark_at, self._watermark_event_id):
+                continue
+            if first_pending is not None and key > first_pending:
+                break
+            self._watermark_at, self._watermark_event_id = occurred_at, event_id
+            advanced = True
+            _log_invalid_row(payload, exc)
+        if advanced:
+            self._persist_watermark_unlocked()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
@@ -354,12 +386,8 @@ class DbEventSource(EventSource):
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
-        count = 0
-        for payload in rows:
-            try:
-                count += cursor_key_from_payload(payload) > cursor
-            except EventNormalizeError:
-                continue
+        keys = _parsed_rows(rows, cursor_key_from_payload, lambda _payload, _exc: None)
+        count = sum(1 for key in keys if key > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None
         return count

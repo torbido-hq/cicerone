@@ -9,7 +9,7 @@ from typing import Any
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import normalize_event, parse_occurred_at
 
-_ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
+ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _IDENTITY_SORT_SEP = "\x1f"
 _SQLITE_OCCURRED_AT = "strftime('%Y-%m-%d %H:%M:%f', occurred_at)"
@@ -68,7 +68,7 @@ def db_occurred_at(value: Any) -> datetime:
 
 
 def _row_identity(payload: dict[str, Any]) -> str | None:
-    for key in _ROW_IDENTITY_KEYS:
+    for key in ROW_IDENTITY_KEYS:
         value = payload.get(key)
         if value in (None, ""):
             continue
@@ -164,10 +164,14 @@ def cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, 
     return cursor_tuple(event.occurred_at, event.event_id)
 
 
-def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
-    """Lag path: parse occurred_at + stable id without full normalize_event."""
+def payload_cursor(payload: dict[str, Any]) -> tuple[datetime, str]:
+    """``(occurred_at, event_id)`` of a raw row without full normalize_event."""
     occurred_at = db_occurred_at(payload.get("occurred_at"))
-    return cursor_tuple(occurred_at, _stable_event_id(payload, occurred_at))
+    return occurred_at, _stable_event_id(payload, occurred_at)
+
+
+def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[str, tuple[str, ...]]]:
+    return cursor_tuple(*payload_cursor(payload))
 
 
 def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
