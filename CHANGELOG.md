@@ -48,9 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   explicit `block_ms = 0` keeps that behaviour and logs a warning.
 - An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
   rejected as invalid instead of stopping the event worker.
-- The db event source skips an invalid row instead of stopping the worker:
-  once earlier events are acked the watermark moves past it, and it is
-  logged once by its identity columns only.
+- An invalid db event row no longer stops the worker: it is delivered in
+  order as a rejected event, logged once by its identity columns only, and
+  acked with its batch without being applied.
 - db source health no longer fails on a row with an unparseable
   `occurred_at`.
 
