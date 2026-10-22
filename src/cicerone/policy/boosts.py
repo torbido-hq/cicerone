@@ -131,13 +131,20 @@ def apply_boosts(
         out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
     if factor_by_item:
         out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
-        keys = [Columns.User, Columns.Score, Columns.Item]
         if keep_source_order and SOURCE_COLUMN in out.columns:
             # Priority lists are contiguous source blocks; a block's first rank orders it.
             out["_block"] = out.groupby([Columns.User, SOURCE_COLUMN])[Columns.Rank].transform("min")
-            keys.insert(1, "_block")
-        out = out.sort_values(keys, ascending=[key != Columns.Score for key in keys], kind="mergesort")
-        out = out.drop(columns=["_block"], errors="ignore")
+            out = out.sort_values(
+                [Columns.User, "_block", Columns.Score, Columns.Item],
+                ascending=[True, True, False, True],
+                kind="mergesort",
+            ).drop(columns=["_block"])
+        else:
+            out = out.sort_values(
+                [Columns.User, Columns.Score, Columns.Item],
+                ascending=[True, False, True],
+                kind="mergesort",
+            )
         out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
     return _truncate_recs(out, top_k)
 
