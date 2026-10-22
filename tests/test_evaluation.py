@@ -1733,6 +1733,44 @@ def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
     assert outcomes["alice"] == pytest.approx(1.0)
 
 
+def test_evaluate_tracking_blank_event_id_cannot_collide_with_explicit_id() -> None:
+    rows = _track(
+        *(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": item,
+                "rank": rank,
+                "variant": "control",
+                "occurred_at": "2026-08-28T12:00:00Z",
+                "event_id": event_id,
+            }
+            for item, rank, event_id in (("ipa", 1, "imp-1"), ("stout", 2, ""))
+        ),
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": item,
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+            for item in ("ipa", "stout")
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    for metrics in (report.overall, report.by_variant["control"]):
+        assert metrics.n_conversions_view == 2
+
+
+def test_distinct_priors_by_group_without_prior_key_is_empty() -> None:
+    from cicerone.evaluation.metrics import _distinct_priors_by_group
+
+    frame = pd.DataFrame({"__dimension": ["variant"], "__dimension_value": ["control"]})
+    assert _distinct_priors_by_group(frame).empty
+
+
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
     from cicerone.evaluation import annotate_impression_source
 

@@ -183,9 +183,9 @@ def _prepare_click_frames(
     if annotate_source:
         impressions = annotate_impression_source(impressions, recommendations)
         impressions = impressions.copy()
-    impressions = fill_blank_ids(impressions, "imp")
+    impressions = fill_blank_ids(impressions)
     if not clicks.empty:
-        clicks = fill_blank_ids(clicks, "clk")
+        clicks = fill_blank_ids(clicks)
     matched_clicks = merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     return _ClickFrames(impressions, clicks, matched_clicks, window)
 

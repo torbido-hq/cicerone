@@ -103,8 +103,9 @@ Missing bearer → **401**. Writer lock busy or lost → **503**.
   `[experiment].primary_metric` when that is an event type), attributed to a
   prior impression (view-through) or click (click-through) with the same
   window and `(user_id, item_id)` match.
-- **CVR** — attributed conversions / impressions (capped so conversions cannot
-  exceed impressions). Experiment `primary_metric = "conversion"` scores this
+- **CVR** — distinct converted impressions / impressions: repeat conversions
+  on one impression count once. Click-through attribution keys each
+  conversion to its matched click's impression. Experiment `primary_metric = "conversion"` scores this
   **rate** per user, not a conversion count.
 
 `min_impressions` (default **100**) gates experiment **Promote** /

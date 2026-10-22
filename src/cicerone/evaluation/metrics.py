@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, USER_COLUMN
+from cicerone.track.normalize import assign_missing_event_id
 
 OCCURRED_AT = "occurred_at"
 
@@ -66,19 +67,14 @@ def safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator)
 
 
-def fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+def fill_blank_ids(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.reset_index(drop=True).copy()
-    generated = [f"{prefix}-{i}" for i in range(len(frame))]
-    if "event_id" not in frame.columns:
-        frame["event_id"] = generated
-        return frame
-    ids = frame["event_id"].astype(str).str.strip()
-    frame["event_id"] = [
-        current if kept else fallback
-        for current, kept, fallback in zip(
-            frame["event_id"], ids.ne("") & frame["event_id"].notna(), generated, strict=True
-        )
-    ]
+    if "event_id" in frame.columns:
+        ids = frame["event_id"].astype(str).str.strip()
+        frame["event_id"] = frame["event_id"].where(ids.ne("") & frame["event_id"].notna(), None)
+    else:
+        frame["event_id"] = None
+    frame["event_id"] = [assign_missing_event_id(row)["event_id"] for row in frame.to_dict("records")]
     return frame
 
 
@@ -139,7 +135,7 @@ def merge_asof_events(
     if "event_id" in earlier.columns:
         keep.append("event_id")
     right = earlier.loc[:, [column for column in keep if column in earlier.columns]].copy()
-    right = fill_blank_ids(right, "prior")
+    right = fill_blank_ids(right)
     right = right.rename(columns={OCCURRED_AT: "prior_at", "event_id": "prior_event_id"})
     left = left.sort_values(OCCURRED_AT)
     right = right.sort_values("prior_at")
@@ -235,7 +231,7 @@ def _group_sizes(frame: pd.DataFrame) -> pd.Series:
 
 
 def _distinct_priors_by_group(attributed: pd.DataFrame) -> pd.Series:
-    if attributed.empty:
+    if attributed.empty or _PRIOR_EVENT_KEY not in attributed.columns:
         return pd.Series(dtype=int)
     return attributed.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
 
