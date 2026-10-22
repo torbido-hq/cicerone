@@ -37,6 +37,14 @@ class LockBackend(Protocol):
         """True when any process holds this key (probe; does not acquire)."""
         ...
 
+    def last_input_marker(self) -> str | None:
+        """Input change the last poll-triggered run started from (shared by every instance)."""
+        ...
+
+    def set_input_marker(self, marker: str) -> None:
+        """Record ``marker``; call only while holding the lock."""
+        ...
+
 
 def acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
     try_acquire = getattr(lock, "try_acquire", None)

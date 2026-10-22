@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import threading
+from functools import cache
+from typing import TYPE_CHECKING
 
 from cicerone.config.constants import DEFAULT_LOCK_KEY
 from cicerone.locks.keys import advisory_keys_from_lock_key
@@ -25,6 +27,23 @@ _PG_ADVISORY_HELD_SELF = (
 )
 
 
+if TYPE_CHECKING:
+    from sqlalchemy import Table
+
+
+@cache
+def _input_markers() -> Table:
+    """Input change each lock key's last poll-triggered run started from."""
+    from sqlalchemy import Column, MetaData, Table, Text
+
+    return Table(
+        "cicerone_input_markers",
+        MetaData(),
+        Column("lock_key", Text, primary_key=True),
+        Column("marker", Text, nullable=False),
+    )
+
+
 class PostgresAdvisoryLock:
     """``pg_try_advisory_lock`` on a connection held for the run duration."""
 
@@ -35,6 +54,7 @@ class PostgresAdvisoryLock:
 
         self._engine = engine_for(database_url)
         self._conn: Connection | None = None
+        self._lock_key = lock_key
         self._key1, self._key2 = advisory_keys_from_lock_key(lock_key)
         self._mutex = threading.Lock()
 
@@ -70,7 +90,7 @@ class PostgresAdvisoryLock:
                 return False
             conn = self._conn
             try:
-                return bool(
+                held = bool(
                     conn.execute(
                         text(_PG_ADVISORY_HELD_SELF),
                         {"k1": self._key1, "k2": self._key2},
@@ -81,7 +101,32 @@ class PostgresAdvisoryLock:
                     "Postgres advisory lock owned() probe failed; treating as lost",
                     exc_info=True,
                 )
-                return False
+                held = False
+            if not held:
+                # The session no longer holds the lock: drop it so acquire() can open a fresh one.
+                self._conn = None
+                conn.invalidate()
+                conn.close()
+            return held
+
+    def last_input_marker(self) -> str | None:
+        from sqlalchemy import select
+
+        markers = _input_markers()
+        with self._engine.connect() as conn:
+            markers.create(conn, checkfirst=True)
+            conn.commit()
+            return conn.execute(select(markers.c.marker).where(markers.c.lock_key == self._lock_key)).scalar()
+
+    def set_input_marker(self, marker: str) -> None:
+        from sqlalchemy.dialects.postgresql import insert
+
+        row = {"lock_key": self._lock_key, "marker": marker}
+        markers = _input_markers()
+        with self._engine.begin() as conn:
+            markers.create(conn, checkfirst=True)
+            upsert = insert(markers).values(row)
+            conn.execute(upsert.on_conflict_do_update(index_elements=["lock_key"], set_=row))
 
     def is_locked(self) -> bool:
         from sqlalchemy import text

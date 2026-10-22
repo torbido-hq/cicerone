@@ -373,8 +373,9 @@ serve-only image.
   `Settings.trigger_poll_input_bucket`) periodically fingerprints the input
   source (`_current_marker`: local file mtime, or S3 `head_object`'s
   `LastModified`) and calls `guard.trigger("s3-poll")` when it changes; a
-  rejected trigger keeps the change pending. With a distributed lock backend
-  only the replica holding the `<lock_key>:input-poller` lease polls. This
+  rejected trigger keeps the change pending. Holding the retrain lock, a
+  poll-triggered run checks the last change any replica ran (stored beside
+  the lock) and skips it if it is the same, so each change runs once. This
   is a deliberate substitute for real S3 event notifications, which require
   SNS/SQS/Lambda wiring and aren't portable across S3-compatible backends
   (R2, MinIO) — polling avoids adding that infra while still being

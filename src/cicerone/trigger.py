@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone import job
 from cicerone.config import IOSettings, Settings
+from cicerone.events.errors import RedisError
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
@@ -20,6 +22,9 @@ from cicerone.locks import LockBackend
 from cicerone.serve.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
+
+# What the lock backends raise when acquiring or reading the input marker.
+_LOCK_BACKEND_ERRORS = (SQLAlchemyError, RedisError)
 
 
 class _RunFn(Protocol):
@@ -42,6 +47,7 @@ class RunGuard:
         self._running = False
         self._last_started_at: float | None = None
         self._last_error: BaseException | None = None
+        self._input_marker: str | None = None
 
     @property
     def busy(self) -> bool:
@@ -53,7 +59,9 @@ class RunGuard:
         with self._lock:
             return self._last_error
 
-    def trigger(self, triggered_by: str) -> bool:
+    def trigger(self, triggered_by: str, *, input_marker: str | None = None) -> bool:
+        """Start a run. With ``input_marker`` (the input poller), a change some instance already ran is
+        skipped under the run lock and still reported as handled, so it runs once across replicas."""
         with self._lock:
             now = time.monotonic()
             if self._running:
@@ -68,6 +76,10 @@ class RunGuard:
                 logger.info("Ignoring %s trigger: distributed lock held by another instance", triggered_by)
                 record_retrain_trigger(triggered_by, accepted=False)
                 return False
+            if input_marker is not None and not self._claim_input_marker(input_marker):
+                logger.info("Ignoring %s trigger: input change %s already ran", triggered_by, input_marker)
+                record_retrain_trigger(triggered_by, accepted=False)
+                return True
             self._running = True
             self._last_started_at = now
             self._last_error = None
@@ -75,6 +87,22 @@ class RunGuard:
         record_retrain_trigger(triggered_by, accepted=True)
         threading.Thread(target=self._run, args=(triggered_by,), daemon=True).start()
         return True
+
+    def _claim_input_marker(self, marker: str) -> bool:
+        """Record ``marker`` as run, holding the run lock; False (lock released) when it already ran."""
+        if self._backend is None:
+            claimed = self._input_marker != marker
+            self._input_marker = marker
+            return claimed
+        claimed = False
+        try:
+            if self._backend.last_input_marker() != marker:
+                self._backend.set_input_marker(marker)
+                claimed = True
+        finally:
+            if not claimed:
+                self._backend.release()
+        return claimed
 
     def _run(self, triggered_by: str) -> None:
         try:
@@ -115,13 +143,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
         return None
 
 
-def poll_input_forever(
-    input_settings: IOSettings,
-    guard: RunGuard,
-    interval_seconds: float,
-    lease: LockBackend | None = None,
-) -> None:
-    """Retrain when the input changes. With ``lease`` (replicas) only the replica holding it polls."""
+def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_seconds: float) -> None:
     if input_settings.kind != "dataset":
         logger.warning(
             "trigger.poll_input_bucket is enabled but input.kind is %r; polling only "
@@ -133,11 +155,17 @@ def poll_input_forever(
     last_marker = _current_marker(input_settings)
     while True:
         time.sleep(interval_seconds)
-        if lease is not None and not (lease.owned() or lease.acquire()):
-            continue
         marker = _current_marker(input_settings)
-        # A rejected trigger (busy, debounced) keeps the change pending for the next poll.
-        if marker is not None and marker != last_marker and guard.trigger("s3-poll"):
+        if marker is None or marker == last_marker:
+            continue
+        # A rejected trigger (busy, debounced, lock held) keeps the change pending for the next poll;
+        # the run lock's shared marker makes every replica's poller run it once in total.
+        try:
+            handled = guard.trigger("s3-poll", input_marker=marker)
+        except _LOCK_BACKEND_ERRORS:
+            logger.warning("Input change trigger failed; retrying on the next poll", exc_info=True)
+            continue
+        if handled:
             last_marker = marker
 
 
