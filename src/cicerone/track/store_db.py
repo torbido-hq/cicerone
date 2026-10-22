@@ -6,12 +6,14 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
+from cicerone.io.db_store import add_missing_columns
 from cicerone.io.engines import engine_for
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
@@ -39,6 +41,7 @@ class TrackDbBackend:
         self._engine: Engine | None = None
         self._engine_lock = threading.Lock()
         self._append_lock = threading.Lock()
+        self._columns_checked = False
 
     def _ensure_fence(self) -> None:
         self._fence.ensure()
@@ -89,7 +92,8 @@ class TrackDbBackend:
                 "occurred_at TEXT NOT NULL, "
                 "variant TEXT, "
                 "experiment_id TEXT, "
-                "generated_at TEXT"
+                "generated_at TEXT, "
+                "received_at TEXT"
                 ")"
             )
         )
@@ -102,11 +106,12 @@ class TrackDbBackend:
         engine = self._db_engine()
         insert_sql = text(
             f'INSERT INTO "{table}" (event_id, kind, user_id, item_id, rank, occurred_at, '
-            "variant, experiment_id, generated_at) "
+            "variant, experiment_id, generated_at, received_at) "
             "VALUES (:event_id, :kind, :user_id, :item_id, :rank, :occurred_at, "
-            ":variant, :experiment_id, :generated_at) "
+            ":variant, :experiment_id, :generated_at, :received_at) "
             "ON CONFLICT (event_id) DO NOTHING"
         )
+        received_at = datetime.now(UTC).isoformat()
         params: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
@@ -126,8 +131,12 @@ class TrackDbBackend:
                     "variant": row.get("variant"),
                     "experiment_id": row.get("experiment_id"),
                     "generated_at": row.get("generated_at"),
+                    "received_at": received_at,
                 }
             )
+        if not self._columns_checked:
+            add_missing_columns(engine, table, {"received_at": received_at})
+            self._columns_checked = True
         with engine.begin() as conn:
             self._ensure_track_table(conn, table)
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])

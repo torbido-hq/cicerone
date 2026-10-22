@@ -28,7 +28,6 @@ from cicerone.evaluation.tracking import (
     conversion_events,
     evaluate_tracking,
     filter_events_by_types,
-    impression_conversions,
     user_track_outcomes,
 )
 
@@ -48,7 +47,6 @@ __all__ = [
     "filter_events_to_recommended",
     "filter_recs_to_assigned",
     "generated_ats_from_track",
-    "impression_conversions",
     "load_metric_events",
     "merge_asof_events",
     "recs_from_history",

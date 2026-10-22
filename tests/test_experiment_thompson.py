@@ -1,31 +1,36 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-import pandas as pd
 import pytest
 
 from cicerone.config import ConfigError
-from cicerone.evaluation import impression_conversions
+from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.thompson import (
     ArmCounts,
-    CountedEvents,
     _fit_mab,
     allocate_thompson,
+    last_received_at,
     p_best,
     parse_arm_counts,
-    parse_counted_events,
     pick_champion_name,
     require_bandits_extra,
     sample_arm,
     select_active_recipes,
     track_rows_since,
-    window_trials_from_outcomes,
+    window_trials_from_slices,
 )
 from cicerone.feature_config import BlendingConfig
 
 pytest.importorskip("mabwiser")
+
+
+def _slice(*, impressions: int, conversions: int) -> SliceMetrics:
+    n_imp = impressions
+    n_conv = min(conversions, impressions)
+    rate = n_conv / n_imp if n_imp else 0.0
+    return SliceMetrics(n_imp, 0, n_conv, n_conv, 0.0, rate, rate, 1)
 
 
 def test_require_bandits_extra_fail_closed(monkeypatch) -> None:
@@ -45,6 +50,20 @@ def test_fit_mab_sets_beta_counts_without_expanding_trials() -> None:
     assert policy.arm_to_fail_count["control"] == 3
     assert policy.arm_to_success_count["blend"] == 2
     assert policy.arm_to_fail_count["blend"] == 81
+
+
+def test_window_trials_from_slices_uses_click_conversions() -> None:
+    trials = window_trials_from_slices(
+        {
+            "control": _slice(impressions=10, conversions=4),
+            "parked": _slice(impressions=99, conversions=50),
+        },
+        attribution="click",
+        names=["control", "treatment"],
+    )
+    assert trials["control"] == ArmCounts(4, 6)
+    assert trials["treatment"] == ArmCounts(0, 0)
+    assert "parked" not in trials
 
 
 _WINDOW_END = datetime(2026, 9, 5, tzinfo=UTC)
@@ -70,116 +89,44 @@ def test_track_rows_since_excludes_rows_at_or_after_window_end(started_at: str |
     assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
 
 
-@pytest.mark.parametrize("started_at", [None, "2026-09-02T00:00:00Z"])
-def test_track_rows_since_drops_undated_rows(started_at: str | None) -> None:
-    rows = [
-        {"kind": "impression"},
-        {"occurred_at": None, "kind": "impression"},
-        {"occurred_at": "garbage", "kind": "impression"},
-        {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
-    ]
-    kept = track_rows_since(rows, started_at, until=_WINDOW_END)
-    assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
+def _received(event_id: str, received_at: str, occurred_at: str = "2026-09-01T00:00:00Z") -> dict:
+    return {"event_id": event_id, "occurred_at": occurred_at, "received_at": received_at}
 
 
-def test_track_rows_since_lookback_reads_back_and_assigns_stable_ids() -> None:
-    rows = [
-        {"occurred_at": "2026-09-01T12:00:00Z", "kind": "impression", "user_id": "u", "item_id": "i"},
-        {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression", "event_id": "kept"},
-    ]
-    kept = track_rows_since(rows, "2026-09-02T00:00:00Z", until=_WINDOW_END, lookback=timedelta(hours=24))
-    again = track_rows_since(rows, "2026-09-02T00:00:00Z", until=_WINDOW_END, lookback=timedelta(hours=24))
-    assert [row["occurred_at"] for row in kept] == ["2026-09-01T12:00:00Z", "2026-09-03T00:00:00Z"]
-    assert kept[0]["event_id"] and kept[0]["event_id"] == again[0]["event_id"]
-    assert kept[1]["event_id"] == "kept"
-    assert "event_id" not in rows[0]
+def test_track_rows_since_counts_each_row_once_in_arrival_order() -> None:
+    rows = [_received("a", "2026-09-04T10:00:00+00:00"), _received("b", "2026-09-04T11:00:00+00:00")]
+    first = track_rows_since(rows, None, until=_WINDOW_END)
+    through = last_received_at(first, None)
+    assert [row["event_id"] for row in first] == ["a", "b"]
+    assert through == "2026-09-04T11:00:00+00:00"
+    late = _received("late", "2026-09-04T12:00:00+00:00", occurred_at="2026-08-01T00:00:00Z")
+    rows.append(late)
+    second = track_rows_since(rows, "2026-09-04T11:30:00+00:00", until=_WINDOW_END, received_through=through)
+    assert [row["event_id"] for row in second] == ["late"]
+    through = last_received_at(second, through)
+    third = track_rows_since(rows, "2026-09-04T13:00:00+00:00", until=_WINDOW_END, received_through=through)
+    assert third == []
+    assert last_received_at([], through) == through
 
 
-def _imp(event_id: str, variant: str, user: str, at: str) -> dict[str, str]:
-    return {
-        "kind": "impression",
-        "event_id": event_id,
-        "variant": variant,
-        "user_id": user,
-        "item_id": "ipa",
-        "occurred_at": at,
-    }
-
-
-def _purchase(user: str, at: str, event_id: str | None = None) -> dict[str, str | None]:
-    return {
-        "user_id": user,
-        "item_id": "ipa",
-        "event_type": "purchase",
-        "occurred_at": at,
-        "event_id": event_id,
-    }
-
-
-def _trials(
-    rows: list[dict[str, str]],
-    conversions: list[dict[str, str | None]],
-    counted: CountedEvents,
-    *,
-    keep_since: str = "2026-09-01T00:00:00Z",
-    attribution: str = "impression",
-) -> tuple[dict[str, ArmCounts], CountedEvents]:
-    impressions, attributed = impression_conversions(
-        track_rows=rows,
-        conversions=pd.DataFrame(conversions),
-        window_hours=24.0,
-        attribution=attribution,
+def test_track_rows_since_ignores_rows_without_received_at_once_a_cutoff_exists() -> None:
+    rows = [{"event_id": "old", "kind": "impression", "occurred_at": "2026-09-04T12:00:00Z"}]
+    kept = track_rows_since(
+        rows, "2026-09-04T00:00:00Z", until=_WINDOW_END, received_through="2026-09-04T11:00:00+00:00"
     )
-    return window_trials_from_outcomes(
-        impressions,
-        attributed,
-        names=["control", "treatment"],
-        counted=counted,
-        keep_since=pd.Timestamp(keep_since).to_pydatetime(),
-    )
+    assert kept == []
 
 
-def test_window_trials_count_each_impression_and_conversion_once() -> None:
-    first_rows = [
-        _imp("a", "control", "u1", "2026-09-02T00:00:00Z"),
-        _imp("x", "treatment", "u2", "2026-09-02T00:00:00Z"),
-    ]
-    c1 = _purchase("u1", "2026-09-02T01:00:00Z", "c1")
-    trials, counted = _trials(first_rows, [c1], CountedEvents())
-    assert trials == {"control": ArmCounts(1, 0), "treatment": ArmCounts(0, 1)}
-    # Late impression b sits between a and c1; late conversion converts x.
-    rows = [*first_rows, _imp("b", "control", "u1", "2026-09-02T00:30:00Z")]
-    conversions = [c1, _purchase("u2", "2026-09-02T02:00:00Z")]
-    trials, counted = _trials(rows, conversions, counted)
-    assert trials == {"control": ArmCounts(0, 1), "treatment": ArmCounts(1, -1)}
-    trials, counted = _trials(rows, conversions, counted)
-    assert trials == {"control": ArmCounts(0, 0), "treatment": ArmCounts(0, 0)}
-    assert set(counted.impressions) == {"a", "b", "x"}
-    _, pruned = _trials(rows, conversions, counted, keep_since="2026-09-02T00:15:00Z")
-    assert set(pruned.impressions) == {"b"}
-    assert set(pruned.conversions) == set(counted.conversions)
-
-
-def test_window_trials_click_attribution_maps_conversion_to_impression() -> None:
+def test_track_rows_since_old_state_counts_received_since_start_and_old_rows_by_occurred_at() -> None:
     rows = [
-        _imp("a", "control", "u1", "2026-09-02T00:00:00Z"),
-        {**_imp("k", "control", "u1", "2026-09-02T00:10:00Z"), "kind": "click"},
+        _received("before", "2026-09-03T23:00:00+00:00"),
+        _received("after", "2026-09-04T01:00:00+00:00", occurred_at="2026-08-01T00:00:00Z"),
+        {"event_id": "old-in", "kind": "impression", "occurred_at": "2026-09-04T02:00:00Z"},
+        {"event_id": "old-out", "kind": "impression", "occurred_at": "2026-09-03T02:00:00Z"},
     ]
-    conversions = [_purchase("u1", "2026-09-02T01:00:00Z", "c1")]
-    trials, counted = _trials(rows, conversions, CountedEvents(), attribution="click")
-    assert trials["control"] == ArmCounts(1, 0)
-    assert counted.impressions["a"][1] is True
-
-
-def test_parse_counted_events_round_trips_and_treats_old_state_as_missing() -> None:
-    assert parse_counted_events(None) is None
-    assert parse_counted_events({"window_started_at": "2026-09-02T00:00:00Z"}) is None
-    counted = CountedEvents({"a": ("2026-09-02T00:00:00+00:00", True)}, {"c1": "2026-09-02T01:00:00+00:00"})
-    assert parse_counted_events(counted.as_state()) == counted
-    junk = parse_counted_events(
-        {"counted_impressions": {"a": "nope", "b": ["t", False]}, "counted_conversions": 3}
-    )
-    assert junk == CountedEvents({"b": ("t", False)}, {})
+    for through in (None, "not-a-time"):
+        kept = track_rows_since(rows, "2026-09-04T00:00:00Z", until=_WINDOW_END, received_through=through)
+        assert [row["event_id"] for row in kept] == ["after", "old-in"]
 
 
 def test_parse_arm_counts_ignores_junk() -> None:

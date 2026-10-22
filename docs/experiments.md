@@ -97,6 +97,13 @@ Config load is a `ConfigError` without the extra or with track off. At runtime
 the job fail-closes to `allocation = "fixed"` (writes every named recipe) if
 track is empty and there is no stored pair.
 
+Each run adds the impressions **received** since the previous allocation
+(track `received_at`, so a late row counts once, on the next run). An
+impression is a success when an attributed conversion is already in the
+events; a conversion that lands after its impression was counted is not
+added later. Rows stored before `received_at` existed, with state from
+before it, count once by `occurred_at` since the previous allocation.
+
 The pair stays sticky until `track.min_impressions` on that pair. Then if
 P(champion is best) is at least `rotate_min_prob` and catalog guardrails pass,
 the champion stays and MABWiser samples the next challenger from the remaining

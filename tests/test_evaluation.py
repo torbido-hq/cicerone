@@ -1986,16 +1986,6 @@ def test_filter_events_since_without_occurred_at_is_empty() -> None:
     assert filtered.empty
 
 
-def test_filter_events_since_until_is_exclusive_and_drops_undated() -> None:
-    from datetime import UTC, datetime
-
-    frame = pd.DataFrame(
-        {"occurred_at": ["2026-09-01T00:00:00Z", "2026-09-05T00:00:00Z", "2026-09-06T00:00:00Z", None]}
-    )
-    filtered = _filter_events_since(frame, None, until=datetime(2026, 9, 5, tzinfo=UTC))
-    assert list(filtered["occurred_at"]) == ["2026-09-01T00:00:00Z"]
-
-
 def test_load_metric_events_invalid_since_is_empty(tmp_path) -> None:
     from conftest import make_settings
 

@@ -232,42 +232,6 @@ def evaluate_tracking(
     )
 
 
-def _attributed_conversions(
-    prepared: _ClickFrames,
-    conversions: pd.DataFrame,
-    *,
-    attribution: str,
-) -> pd.DataFrame:
-    conv = with_join_keys(normalized_frame(conversions))
-    earlier = prepared.matched_clicks if attribution == "click" else prepared.impressions
-    return merge_asof_events(conv, earlier, window=prepared.window)
-
-
-def impression_conversions(
-    *,
-    track_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
-    conversions: pd.DataFrame,
-    recommendations: pd.DataFrame | None = None,
-    window_hours: float,
-    attribution: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Impressions, and conversions whose ``prior_event_id`` is the impression they convert."""
-    prepared = _prepare_click_frames(
-        track_rows,
-        window_hours=window_hours,
-        recommendations=recommendations,
-        annotate_source=True,
-    )
-    if prepared is None:
-        return pd.DataFrame(), pd.DataFrame()
-    attributed = _attributed_conversions(prepared, conversions, attribution=attribution)
-    if attribution == "click" and not attributed.empty:
-        clicks = prepared.matched_clicks.drop_duplicates(subset=["event_id"])
-        impression_of_click = clicks.set_index("event_id")["prior_event_id"]
-        attributed = attributed.assign(prior_event_id=attributed["prior_event_id"].map(impression_of_click))
-    return prepared.impressions, attributed
-
-
 def user_track_outcomes(
     *,
     track_rows: Sequence[Mapping[str, Any]] | pd.DataFrame,
@@ -283,7 +247,16 @@ def user_track_outcomes(
         return report_users
     impressions = prepared.impressions
     matched_clicks = prepared.matched_clicks
-    attributed = _attributed_conversions(prepared, conversions, attribution=attribution)
+    window = prepared.window
+    conv = with_join_keys(normalized_frame(conversions))
+    if attribution == "click":
+        attributed = (
+            merge_asof_events(conv, matched_clicks, window=window)
+            if not conv.empty and not matched_clicks.empty
+            else conv.iloc[0:0]
+        )
+    else:
+        attributed = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
     impression_counts = impressions.groupby(USER_COLUMN).size()
     click_counts = distinct_priors_by_user(matched_clicks)
     conversion_counts = distinct_priors_by_user(attributed)

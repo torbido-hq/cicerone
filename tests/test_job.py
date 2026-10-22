@@ -3674,13 +3674,15 @@ def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_pa
     assert selected.state is not None
 
 
-def _two_arm_thompson(tmp_path):
+def test_select_thompson_recipes_counts_track_rows_by_arrival(tmp_path, monkeypatch):
     from conftest import make_settings
 
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
+    from cicerone.experiment.thompson import ArmCounts
     from cicerone.feature_config import BlendingConfig
+    from cicerone.job import _select_thompson_recipes
 
     blending = BlendingConfig(enabled=False)
     recipes = (
@@ -3697,119 +3699,60 @@ def _two_arm_thompson(tmp_path):
                 VariantSettings(name="treatment", traffic=0.5),
             ),
         ),
-        track=TrackSettings(enabled=True, conversion_event_types=("purchase",)),
+        track=TrackSettings(enabled=True),
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    return settings, recipes
 
+    def _impression(event_id: str, occurred_at: str, received_at: str | None) -> dict[str, object]:
+        row: dict[str, object] = {
+            "event_id": event_id,
+            "user_id": f"u-{event_id}",
+            "item_id": "i-1",
+            "rank": 1,
+            "kind": "impression",
+            "variant": "control",
+            "experiment_id": "ranking-cvr",
+            "occurred_at": occurred_at,
+        }
+        if received_at is not None:
+            row["received_at"] = received_at
+        return row
 
-def _control_impression(event_id: str, occurred_at: str) -> dict[str, str]:
-    return {
-        "event_id": event_id,
-        "user_id": "u-1",
-        "item_id": "i-1",
-        "kind": "impression",
-        "variant": "control",
+    recent = pd.Timestamp.now(tz="UTC").floor("s") - pd.Timedelta(hours=1)
+    rows = [
+        _impression("old-before", "2026-09-03T00:00:00Z", None),
+        _impression("old-after", recent.isoformat(), None),
+        _impression("new", "2026-09-03T00:00:00Z", "2026-09-04T01:00:00+00:00"),
+    ]
+    state: dict[str, object] = {
         "experiment_id": "ranking-cvr",
-        "occurred_at": occurred_at,
+        "champion": "control",
+        "challenger": "treatment",
+        "window_started_at": "2026-09-04T00:00:00+00:00",
     }
-
-
-def test_select_thompson_recipes_drops_conversions_after_now(tmp_path, monkeypatch):
-    from datetime import UTC, datetime, timedelta
-
-    from cicerone.evaluation import impression_conversions as real_attribute
-    from cicerone.job import _select_thompson_recipes
-
-    settings, recipes = _two_arm_thompson(tmp_path)
-    started = datetime.now(UTC)
-    past = (started - timedelta(hours=1)).isoformat()
-    future = (started + timedelta(days=1)).isoformat()
-    events = pd.DataFrame(
-        [
-            {"user_id": "u-1", "item_id": "i-1", "event_type": "purchase", "occurred_at": past},
-            {"user_id": "u-1", "item_id": "i-1", "event_type": "purchase", "occurred_at": future},
-        ]
-    )
-    track = [_control_impression("imp-1", (started - timedelta(hours=2)).isoformat())]
-    seen: dict[str, pd.DataFrame] = {}
+    seen: list[object] = []
 
     def _capture(**kwargs):
-        seen["conversions"] = kwargs["conversions"]
-        return real_attribute(**kwargs)
+        from cicerone.experiment.thompson import allocate_thompson as _real
 
-    monkeypatch.setattr("cicerone.job.ExperimentStore.read_state", lambda self: None)
-    monkeypatch.setattr("cicerone.job.impression_conversions", _capture)
-    _select_thompson_recipes(settings, recipes, events, preloaded_track=track, preloaded_recs=pd.DataFrame())
-    assert list(seen["conversions"]["occurred_at"]) == [past]
+        seen.append(kwargs["window_trials"]["control"])
+        return _real(**kwargs)
 
-
-def test_select_thompson_recipes_counts_late_rows_once(tmp_path, monkeypatch):
-    from datetime import UTC, datetime, timedelta
-
-    from cicerone.job import _select_thompson_recipes
-
-    settings, recipes = _two_arm_thompson(tmp_path)
-    started = datetime.now(UTC)
-    state: dict[str, object] = {}
-    monkeypatch.setattr("cicerone.job.ExperimentStore.read_state", lambda self: dict(state) or None)
-    first = [_control_impression("imp-a", (started - timedelta(hours=2)).isoformat())]
-
-    def _allocate(track, events):
-        selected = _select_thompson_recipes(
-            settings, recipes, events, preloaded_track=track, preloaded_recs=pd.DataFrame()
-        )
-        assert selected.state is not None
-        state.clear()
-        state.update(selected.state)
-        return state["arms"]
-
-    assert _allocate(first, pd.DataFrame())["control"] == {"successes": 0, "failures": 1}
-    assert pd.Timestamp(state["window_started_at"]) > pd.Timestamp(started)
-    # Appended after that allocation, but occurred before its window end.
-    late = [*first, _control_impression("imp-b", (started - timedelta(hours=1)).isoformat())]
-    purchase = pd.DataFrame(
-        [
-            {
-                "user_id": "u-1",
-                "item_id": "i-1",
-                "event_type": "purchase",
-                "occurred_at": (started - timedelta(minutes=30)).isoformat(),
-            }
-        ]
-    )
-    assert _allocate(late, purchase)["control"] == {"successes": 1, "failures": 1}
-    assert _allocate(late, purchase)["control"] == {"successes": 1, "failures": 1}
-    assert set(state["counted_impressions"]) == {"imp-a", "imp-b"}
-
-
-def test_select_thompson_recipes_old_state_without_counted_ids_has_no_overlap(tmp_path, monkeypatch):
-    from datetime import UTC, datetime, timedelta
-
-    from cicerone.job import _select_thompson_recipes
-
-    settings, recipes = _two_arm_thompson(tmp_path)
-    started = datetime.now(UTC)
-    monkeypatch.setattr(
-        "cicerone.job.ExperimentStore.read_state",
-        lambda self: {
-            "experiment_id": "ranking-cvr",
-            "champion": "control",
-            "challenger": "treatment",
-            "arms": {"control": {"successes": 0, "failures": 1}},
-            "window_started_at": (started - timedelta(minutes=30)).isoformat(),
-        },
-    )
-    track = [
-        _control_impression("imp-old", (started - timedelta(hours=1)).isoformat()),
-        _control_impression("imp-new", (started - timedelta(minutes=10)).isoformat()),
-    ]
-    selected = _select_thompson_recipes(
-        settings, recipes, pd.DataFrame(), preloaded_track=track, preloaded_recs=pd.DataFrame()
-    )
-    assert selected.state is not None
-    assert selected.state["arms"]["control"] == {"successes": 0, "failures": 2}
-    assert set(selected.state["counted_impressions"]) == {"imp-new"}
+    monkeypatch.setattr("cicerone.job.ExperimentStore.read_state", lambda self: dict(state))
+    monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *args, **kwargs: list(rows))
+    monkeypatch.setattr("cicerone.job.allocate_thompson", _capture)
+    first = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert first.state is not None
+    assert first.state["received_through"] == "2026-09-04T01:00:00+00:00"
+    state = first.state
+    rows.append(_impression("late", "2026-09-01T00:00:00Z", "2026-09-04T02:00:00+00:00"))
+    second = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert second.state is not None
+    state = second.state
+    third = _select_thompson_recipes(settings, recipes, pd.DataFrame())
+    assert third.state is not None
+    assert third.state["received_through"] == "2026-09-04T02:00:00+00:00"
+    assert seen == [ArmCounts(0, 2), ArmCounts(0, 1), ArmCounts(0, 0)]
 
 
 def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):

@@ -193,6 +193,45 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_track_store_stamps_received_at_at_ingest(tmp_path, kind) -> None:
+    options = (
+        {"storage_backend": "local", "path": str(tmp_path)}
+        if kind == "dataset"
+        else {"database_url": f"sqlite+pysqlite:///{tmp_path / 'track.db'}"}
+    )
+    store = TrackStore(IOSettings(kind=kind, options=options))
+    before = pd.Timestamp.now(tz="UTC")
+    store.append_rows([{**_row(), "received_at": "2000-01-01T00:00:00+00:00"}])
+    (row,) = store.read_rows()
+    assert before <= pd.Timestamp(row["received_at"]) <= pd.Timestamp.now(tz="UTC")
+
+
+def test_track_db_adds_received_at_to_an_existing_table(tmp_path) -> None:
+    from sqlalchemy import create_engine, text
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    with create_engine(url).begin() as conn:
+        conn.execute(
+            text(
+                'CREATE TABLE "recommendation_track" (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, '
+                "user_id TEXT NOT NULL, item_id TEXT NOT NULL, rank INTEGER, occurred_at TEXT NOT NULL, "
+                "variant TEXT, experiment_id TEXT, generated_at TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO recommendation_track (event_id, kind, user_id, item_id, rank, occurred_at) "
+                "VALUES ('old-1', 'impression', 'alice', 'ipa-001', 1, '2026-08-28T12:00:00Z')"
+            )
+        )
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    assert store.append_rows([_row(event_id="new-1")]) == 1
+    received = {row["event_id"]: row["received_at"] for row in store.read_rows()}
+    assert received["old-1"] is None
+    assert pd.notna(pd.Timestamp(received["new-1"]))
+
+
 def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     from sqlalchemy import create_engine, text
 

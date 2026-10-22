@@ -119,7 +119,7 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
     return False
 
 
-def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> None:
+def add_missing_columns(engine: Any, table: str, values: dict) -> None:
     # The table takes its columns from the first manifest; an incremental one adds keys a job manifest lacks.
     # Each ALTER runs in its own transaction, before the insert: DDL commits implicitly on MySQL.
     inspector = inspect(engine)
@@ -127,12 +127,12 @@ def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> No
         return
     existing = {column["name"] for column in inspector.get_columns(table)}
     quote = engine.dialect.identifier_preparer.quote
-    for key, value in manifest.items():
+    for key, value in values.items():
         if key in existing:
             continue
-        column = sql_identifier(key, option="manifest key")
+        column = sql_identifier(key, option="column")
         column_type = _manifest_column_type(value).compile(dialect=engine.dialect)
-        logger.info("Adding column %r to manifest table %r", column, table)
+        logger.info("Adding column %r to table %r", column, table)
         try:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
@@ -586,7 +586,7 @@ class DatabaseOutputSink:
         logger.info("Appending run manifest to database table %r", table)
         with self.recommendations_write():
             self._ensure_fence()
-            _add_missing_manifest_columns(self._engine, table, manifest)
+            add_missing_columns(self._engine, table, manifest)
             with self._engine.begin() as conn:
                 if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                     return False
