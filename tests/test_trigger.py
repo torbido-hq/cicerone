@@ -11,7 +11,7 @@ from moto import mock_aws
 from support.prometheus_metrics import metric_value
 
 from cicerone.config import IOSettings, Settings
-from cicerone.trigger import RunGuard, create_app, poll_input_forever
+from cicerone.trigger import RunGuard, TriggerOutcome, create_app, poll_input_forever
 
 
 def _settings(**overrides) -> Settings:
@@ -19,11 +19,11 @@ def _settings(**overrides) -> Settings:
 
 
 class _FakeGuard:
-    def __init__(self, result: bool = True):
+    def __init__(self, result: TriggerOutcome = TriggerOutcome.STARTED):
         self.result = result
         self.calls: list[str] = []
 
-    def trigger(self, triggered_by: str) -> bool:
+    def trigger(self, triggered_by: str) -> TriggerOutcome:
         self.calls.append(triggered_by)
         return self.result
 
@@ -36,9 +36,9 @@ def test_run_guard_records_retrain_trigger_metrics():
         done.set()
 
     guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert done.wait(timeout=5)
-    assert guard.trigger("webhook") is False
+    assert guard.trigger("webhook") is TriggerOutcome.DEBOUNCED
 
     from prometheus_client import generate_latest
 
@@ -61,7 +61,7 @@ def test_run_guard_records_cron_retrain_source():
         done.set()
 
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
-    assert guard.trigger("cron") is True
+    assert guard.trigger("cron") is TriggerOutcome.STARTED
     assert done.wait(timeout=5)
 
     from prometheus_client import generate_latest
@@ -82,7 +82,7 @@ def test_run_guard_busy_property():
 
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
     assert guard.busy is False
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert started.wait(timeout=2)
     assert guard.busy is True
     release.set()
@@ -103,7 +103,7 @@ def test_run_guard_starts_a_run_when_idle():
 
     guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
 
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert done.wait(timeout=5)
     assert calls == ["webhook"]
 
@@ -118,9 +118,9 @@ def test_run_guard_ignores_trigger_while_running():
 
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run)
 
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert started.wait(timeout=5)
-    assert guard.trigger("s3-poll") is False
+    assert guard.trigger("s3-poll") is TriggerOutcome.BUSY
 
     release.set()
 
@@ -132,10 +132,10 @@ def test_run_guard_ignores_trigger_within_debounce_window():
         done.set()
 
     guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert done.wait(timeout=5)
 
-    assert guard.trigger("webhook") is False
+    assert guard.trigger("webhook") is TriggerOutcome.DEBOUNCED
 
 
 def test_run_guard_allows_trigger_after_debounce_window_elapses():
@@ -145,11 +145,11 @@ def test_run_guard_allows_trigger_after_debounce_window_elapses():
         done.set()
 
     guard = RunGuard(debounce_seconds=0.01, run_fn=fake_run)
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
     assert done.wait(timeout=5)
     time.sleep(0.05)
 
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
 
 
 def test_run_guard_recovers_after_run_fn_raises():
@@ -157,7 +157,7 @@ def test_run_guard_recovers_after_run_fn_raises():
         raise ValueError("boom")
 
     guard = RunGuard(debounce_seconds=0, run_fn=failing_run)
-    assert guard.trigger("webhook") is True
+    assert guard.trigger("webhook") is TriggerOutcome.STARTED
 
     for _ in range(50):
         with guard._lock:
@@ -189,7 +189,7 @@ def test_trigger_endpoint_rejects_wrong_token():
 
 
 def test_trigger_endpoint_starts_a_run():
-    guard = _FakeGuard(result=True)
+    guard = _FakeGuard(result=TriggerOutcome.STARTED)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -201,7 +201,7 @@ def test_trigger_endpoint_starts_a_run():
 
 
 def test_trigger_endpoint_returns_429_when_debounced():
-    guard = _FakeGuard(result=False)
+    guard = _FakeGuard(result=TriggerOutcome.BUSY)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -241,52 +241,53 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
     assert guard.calls == []
 
 
-def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
+def _run_poller(tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: None) -> None:
+    """Poll ``ticks`` times; the input marker is v1 at start and v2 on every poll after."""
     input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    guard = _FakeGuard()
-
-    markers = iter(["v1", "v2"])
+    markers = iter(["v1"])
     monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
-
-    sleep_calls = {"n": 0}
+    sleeps = {"n": 0}
 
     def fake_sleep(_seconds):
-        sleep_calls["n"] += 1
-        if sleep_calls["n"] >= 2:
-            raise SystemExit("stop after two ticks")
+        sleeps["n"] += 1
+        on_tick(sleeps["n"])
+        if sleeps["n"] > ticks:
+            raise SystemExit("stop")
 
     monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
-
     with pytest.raises(SystemExit):
         poll_input_forever(input_settings, guard, interval_seconds=0.01)
+
+
+def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
+    guard = _FakeGuard()
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=1)
 
     assert guard.calls == ["s3-poll"]
 
 
 def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    guard = _FakeGuard(result=False)
-    markers = iter(["v1"])
-    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
-    sleep_calls = {"n": 0}
+    guard = _FakeGuard(result=TriggerOutcome.BUSY)
 
-    def fake_sleep(_seconds):
-        sleep_calls["n"] += 1
-        if sleep_calls["n"] == 3:
-            guard.result = True
-        if sleep_calls["n"] >= 5:
-            raise SystemExit("stop after four ticks")
+    def start_on_third_tick(tick: int) -> None:
+        if tick == 3:
+            guard.result = TriggerOutcome.STARTED
 
-    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
-
-    with pytest.raises(SystemExit):
-        poll_input_forever(input_settings, guard, interval_seconds=0.01)
+    _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=start_on_third_tick)
 
     assert guard.calls == ["s3-poll", "s3-poll", "s3-poll"]
 
 
+def test_poll_input_forever_leaves_a_change_to_the_instance_holding_the_lock(tmp_path, monkeypatch):
+    guard = _FakeGuard(result=TriggerOutcome.HELD_ELSEWHERE)
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=3)
+
+    assert guard.calls == ["s3-poll"]
+
+
 def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp_path, monkeypatch):
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     release = threading.Event()
     runs: list[str] = []
 
@@ -296,29 +297,22 @@ def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp
             release.wait(timeout=5)
 
     guard = RunGuard(debounce_seconds=0, run_fn=blocking_run)
-    assert guard.trigger("cron") is True
-    markers = iter(["v1"])
-    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
-    sleeps = {"n": 0}
+    assert guard.trigger("cron") is TriggerOutcome.STARTED
     real_sleep = time.sleep
 
-    def fake_sleep(_seconds):
-        sleeps["n"] += 1
-        if sleeps["n"] == 3:
+    def wait_until_idle() -> None:
+        deadline = time.monotonic() + 5
+        while guard.busy and time.monotonic() < deadline:
+            real_sleep(0.01)
+
+    def end_the_cron_run_on_third_tick(tick: int) -> None:
+        if tick == 3:
             release.set()
-            deadline = time.monotonic() + 5
-            while guard.busy and time.monotonic() < deadline:
-                real_sleep(0.01)
-        if sleeps["n"] >= 5:
-            raise SystemExit("stop")
+            wait_until_idle()
 
-    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
-    with pytest.raises(SystemExit):
-        poll_input_forever(input_settings, guard, interval_seconds=0.01)
+    _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=end_the_cron_run_on_third_tick)
 
-    deadline = time.monotonic() + 5
-    while guard.busy and time.monotonic() < deadline:
-        real_sleep(0.01)
+    wait_until_idle()
     assert runs == ["cron", "s3-poll"]
 
 

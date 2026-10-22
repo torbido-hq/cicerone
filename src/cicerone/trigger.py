@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 class _RunFn(Protocol):
     def __call__(self, triggered_by: str, *, fence_check: Callable[[], bool] | None = None) -> None: ...
+
+
+class TriggerOutcome(Enum):
+    STARTED = "started"
+    BUSY = "a run is already in progress"
+    DEBOUNCED = "within debounce window"
+    HELD_ELSEWHERE = "distributed lock held by another instance"
 
 
 class RunGuard:
@@ -53,28 +61,27 @@ class RunGuard:
         with self._lock:
             return self._last_error
 
-    def trigger(self, triggered_by: str) -> bool:
+    def trigger(self, triggered_by: str) -> TriggerOutcome:
         with self._lock:
             now = time.monotonic()
             if self._running:
-                logger.info("Ignoring %s trigger: a run is already in progress", triggered_by)
-                record_retrain_trigger(triggered_by, accepted=False)
-                return False
-            if self._last_started_at is not None and now - self._last_started_at < self._debounce_seconds:
-                logger.info("Ignoring %s trigger: within debounce window", triggered_by)
-                record_retrain_trigger(triggered_by, accepted=False)
-                return False
-            if self._backend is not None and not self._backend.acquire():
-                logger.info("Ignoring %s trigger: distributed lock held by another instance", triggered_by)
-                record_retrain_trigger(triggered_by, accepted=False)
-                return False
-            self._running = True
-            self._last_started_at = now
-            self._last_error = None
+                outcome = TriggerOutcome.BUSY
+            elif self._last_started_at is not None and now - self._last_started_at < self._debounce_seconds:
+                outcome = TriggerOutcome.DEBOUNCED
+            elif self._backend is not None and not self._backend.acquire():
+                outcome = TriggerOutcome.HELD_ELSEWHERE
+            else:
+                outcome = TriggerOutcome.STARTED
+                self._running = True
+                self._last_started_at = now
+                self._last_error = None
 
-        record_retrain_trigger(triggered_by, accepted=True)
+        record_retrain_trigger(triggered_by, accepted=outcome is TriggerOutcome.STARTED)
+        if outcome is not TriggerOutcome.STARTED:
+            logger.info("Ignoring %s trigger: %s", triggered_by, outcome.value)
+            return outcome
         threading.Thread(target=self._run, args=(triggered_by,), daemon=True).start()
-        return True
+        return outcome
 
     def _run(self, triggered_by: str) -> None:
         try:
@@ -128,8 +135,11 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
     while True:
         time.sleep(interval_seconds)
         marker = _current_marker(input_settings)
-        # A rejected trigger (busy, debounced) keeps the change pending for the next poll.
-        if marker is not None and marker != last_marker and guard.trigger("s3-poll"):
+        if marker is None or marker == last_marker:
+            continue
+        # Busy or debounced here: keep the change pending. Held by another instance: that instance's
+        # poller sees the change too and runs it once its own run ends.
+        if guard.trigger("s3-poll") in (TriggerOutcome.STARTED, TriggerOutcome.HELD_ELSEWHERE):
             last_marker = marker
 
 
@@ -149,8 +159,7 @@ def create_app(settings: Settings, guard: RunGuard) -> FastAPI:
 
     @app.post("/trigger/retrain", dependencies=dependencies, status_code=202)
     def trigger_retrain() -> dict[str, Any]:
-        started = guard.trigger("webhook")
-        if not started:
+        if guard.trigger("webhook") is not TriggerOutcome.STARTED:
             raise HTTPException(status_code=429, detail="A run is already in progress or was just triggered")
         return {"status": "started"}
 
