@@ -16,7 +16,6 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.publish import PublishError, build_publisher, publish_recommendations, registered_publish_kinds
-from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
@@ -50,63 +49,10 @@ def test_user_recommendation_messages_empty():
     assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
 
 
-def test_publish_recommendations_skips_user_ids_for_legacy_publishers() -> None:
-    seen: list[object] = []
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            seen.append(df)
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2"])
-    assert seen == [frame]
-
-
-def test_publish_recommendations_rejects_legacy_when_tombstones_required() -> None:
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("legacy publish must not drop tombstones")
-
-        def close(self) -> None:
-            return None
-
-    with pytest.raises(PublishError, match="user_ids"):
-        publish_recommendations(_Legacy(), pd.DataFrame(), user_ids=["u1"])
-
-
-def test_publish_recommendations_publishes_nonempty_before_legacy_tombstone_error() -> None:
-    seen: list[pd.DataFrame] = []
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            seen.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    with pytest.raises(PublishError, match="user_ids"):
-        publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2", "u3"])
-    assert len(seen) == 1
-    assert set(seen[0]["user_id"].astype(str)) == {"u1", "u2"}
-
-
-def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypatch) -> None:
+def test_publish_recommendations_wraps_typeerror() -> None:
     calls: list[tuple[pd.DataFrame, object]] = []
 
-    class _Uninspectable:
+    class _RaisingPublisher:
         def connect(self) -> None:
             return None
 
@@ -117,60 +63,14 @@ def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypa
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.publish.base.inspect.signature", lambda _fn: None)
     frame = _recs_frame()
     with pytest.raises(PublishError, match="payload invalid after send") as raised:
-        publish_recommendations(_Uninspectable(), frame, user_ids=["u1", "u2"])
+        publish_recommendations(_RaisingPublisher(), frame, user_ids=["u1", "u2"])
     assert isinstance(raised.value.__cause__, TypeError)
     assert len(calls) == 1
     published, user_ids = calls[0]
     assert published is frame
     assert user_ids == ["u1", "u2"]
-
-
-def test_publish_recommendations_treats_positional_only_user_ids_as_legacy() -> None:
-    seen: list[pd.DataFrame] = []
-
-    class _Positional:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
-            seen.append(df)
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    publish_recommendations(_Positional(), frame, user_ids=["u1", "u2"])
-    assert seen == [frame]
-
-
-def test_incremental_updater_rejects_positional_only_user_ids(
-    tmp_path, feature_config: FeatureConfig
-) -> None:
-    class _Positional:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
-        top_k=5,
-    )
-    with pytest.raises(TypeError, match="user_ids"):
-        IncrementalUpdater(
-            sink=build_output_sink(settings.output),
-            output_settings=settings.output,
-            feature_config=feature_config,
-            top_k=5,
-            publisher=_Positional(),
-        )
 
 
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
@@ -402,7 +302,9 @@ def test_missing_kafka_extra(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", _import)
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
-        build_publisher_from_kind("kafka", {"bootstrap_servers": "h:9092", "topic": "t"})
+        build_publisher(
+            PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
+        )
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
@@ -417,7 +319,11 @@ def test_missing_rabbitmq_extra(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", _import)
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
-        build_publisher_from_kind("rabbitmq", {"amqp_url": "amqp://localhost/", "queue": "q"})
+        build_publisher(
+            PublishSettings(
+                enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
+            )
+        )
 
 
 def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig):
@@ -678,8 +584,6 @@ def test_rabbitmq_publisher_connect_close_failure_keeps_original_error(monkeypat
 
 
 def test_build_publisher_unknown_kind():
-    with pytest.raises(ConfigError, match="publish.kind"):
-        build_publisher_from_kind("sns", {})
     with pytest.raises(ConfigError, match="publish.kind"):
         build_publisher(PublishSettings(enabled=True, kind="sns"))
 

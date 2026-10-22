@@ -374,16 +374,3 @@ def test_record_events_flush_clamps_unknown_status(caplog):
         metrics_mod.record_events_flush(status="weird")
     assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
     assert any("Unknown events flush status" in rec.message for rec in caplog.records)
-
-
-def test_serve_metrics_path_aliases_cicerone_metrics(monkeypatch):
-    import cicerone.metrics as metrics_mod
-    import cicerone.serve.metrics as legacy
-    from cicerone.serve.metrics import REQUESTS_TOTAL, observe_cache_refresh
-
-    assert legacy is metrics_mod
-    assert REQUESTS_TOTAL is metrics_mod.REQUESTS_TOTAL
-    assert observe_cache_refresh is metrics_mod.observe_cache_refresh
-    monkeypatch.setattr(legacy, "_last_successful_refresh_at", None)
-    metrics_mod.update_cache_age_gauge()
-    assert metric_value(generate_latest().decode(), "cicerone_cache_age_seconds") == 0.0

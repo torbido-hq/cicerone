@@ -117,38 +117,8 @@ def test_read_s3_body_rejects_nonpositive_max_bytes():
     assert body.closed is True
 
 
-def test_read_parquet_s3_closes_body(mocker):
-    import pandas as pd
-
-    from cicerone.io.options import read_parquet
-
-    body = _FakeS3Body(b"parquet-bytes")
-    client = mocker.Mock()
-    client.get_object.return_value = {"Body": body}
-    arrow = mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow")
-    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
-    frame = read_parquet(
-        {
-            "storage_backend": "s3",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-            "bucket": "bucket",
-        },
-        "data.parquet",
-        s3_client=client,
-    )
-    assert list(frame.columns) == ["x"]
-    assert body.closed is True
-    arrow.assert_not_called()
-
-
 def test_validate_storage_options_resolves_from_options():
     assert validate_storage_options({"storage_backend": "local", "path": "/tmp"}) == "local"
-
-
-def test_validate_storage_options_rejects_explicit_backend_mismatch():
-    with pytest.raises(ConfigError, match="does not match"):
-        validate_storage_options({"storage_backend": "local", "path": "/tmp"}, backend="s3")
 
 
 def test_storage_backend_rejects_unknown():

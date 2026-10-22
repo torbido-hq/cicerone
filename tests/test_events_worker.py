@@ -16,7 +16,7 @@ from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.serve.metrics import update_events_leader
+from cicerone.metrics import update_events_leader
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -1579,7 +1579,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
     worker = EventWorker(
         _FailApplyAck(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2510,7 +2510,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
 
     worker = EventWorker(
         _Replay(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2575,7 +2575,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     source = _Redeliver()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2696,7 +2696,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
     source = _TwoShots()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2750,7 +2750,7 @@ def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
     assert event_fingerprint(held) == event_fingerprint(generated)
     worker = EventWorker(
         _Ephemeral(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2866,7 +2866,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
     source = _Ephemeral()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,

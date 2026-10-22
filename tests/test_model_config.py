@@ -21,8 +21,8 @@ from support.toml_config import write_toml
 
 from cicerone.artifact import (
     ARTIFACT_SCHEMA_VERSION,
-    load_rectools_model,
-    save_rectools_model,
+    _dump_rectools_model,
+    _load_rectools_model,
 )
 from cicerone.config import ConfigError, load_settings
 from cicerone.dataset import build_dataset
@@ -195,16 +195,14 @@ def test_example_cicerone_toml_has_no_active_model_section():
         )
 
 
-def test_rectools_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_rectools_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("popular")
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
 
-    path = tmp_path / "popular.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),
@@ -212,16 +210,14 @@ def test_rectools_save_load_model_recommend_round_trip(tmp_path, feature_config)
     )
 
 
-def test_collaborative_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_collaborative_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("collaborative", lightfm_num_threads=1)
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
 
-    path = tmp_path / "collaborative.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),
@@ -229,16 +225,14 @@ def test_collaborative_save_load_model_recommend_round_trip(tmp_path, feature_co
     )
 
 
-def test_item_based_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_item_based_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("item_based")
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=True)
 
-    path = tmp_path / "item_based.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=True)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),

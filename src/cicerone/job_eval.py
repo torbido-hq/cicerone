@@ -13,12 +13,7 @@ from cicerone import errors
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
-from cicerone.errors import (  # noqa: F401  re-exported for 0.8 callers
-    OPTIONAL_EVAL_ERRORS,
-    OPTIONAL_IO_ERRORS,
-    PUBLISH_ERRORS,
-    SINK_WRITE_ERRORS,
-)
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -35,7 +30,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
-from cicerone.locks import LockBackend, LockLostError, WriteFence, WriterLockBusyError
+from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
 
@@ -52,8 +47,6 @@ U = TypeVar("U")
 D = TypeVar("D")
 E = TypeVar("E")
 
-_JOB_CONTROL_ERRORS = (LockLostError, WriterLockBusyError)
-
 
 def try_load(
     label: str,
@@ -64,8 +57,6 @@ def try_load(
 ) -> T | D:
     try:
         return fn()
-    except _JOB_CONTROL_ERRORS:
-        raise
     except errors as exc:
         log_caught(f"Failed to {label}", exc, log=logger)
         return default
@@ -167,20 +158,17 @@ def persist_track_outputs(
         for label, fn in tasks:
             try_load(label, fn, None)
 
-    try:
-        if lock is not None:
-            with retrain_fence(lock, fence_check).hold():
-                _run_serial()
-            return
-        if kind == "db":
+    if lock is not None:
+        with retrain_fence(lock, fence_check).hold():
             _run_serial()
-            return
-        with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-            futures = [pool.submit(try_load, label, fn, None) for label, fn in tasks]
-            for future in futures:
-                future.result()
-    except _JOB_CONTROL_ERRORS:
-        raise
+        return
+    if kind == "db":
+        _run_serial()
+        return
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = [pool.submit(try_load, label, fn, None) for label, fn in tasks]
+        for future in futures:
+            future.result()
 
 
 def job_track_since(settings: Settings) -> str | None:

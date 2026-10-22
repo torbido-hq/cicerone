@@ -13,6 +13,8 @@ from pyarrow.lib import ArrowTypeError
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 from cicerone.io.replace_users import RecommendationSchemaError
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import WriteFence
 
 # --- local backend -----------------------------------------------------------
 
@@ -220,7 +222,7 @@ def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Busy(),
+        fence=WriteFence(_Busy()),
     )
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         sink.write_recommendations(
@@ -250,7 +252,7 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     started = threading.Event()
     release = threading.Event()
@@ -279,7 +281,7 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
 
 
 def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> None:
-    from cicerone.locks import held_writer_lock
+    from cicerone.locks import WriteFence
 
     acquires = {"n": 0}
 
@@ -300,12 +302,12 @@ def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> No
     lock = _Lock()
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=lock,
+        fence=WriteFence(lock),
     )
     frame = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
     )
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         sink.write_recommendations(frame)
         sink.write_model_artifact(b"artifact")
         sink.write_items_snapshot(frame)
@@ -332,7 +334,7 @@ def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -374,7 +376,7 @@ def test_write_recommendations_rechecks_owned_after_serialize(tmp_path, monkeypa
     monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         sink.write_recommendations(
@@ -413,7 +415,7 @@ def test_write_items_snapshot_rechecks_owned_after_serialize(tmp_path, monkeypat
     monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
@@ -440,7 +442,7 @@ def test_write_model_artifact_rechecks_owned_when_nested(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -477,7 +479,7 @@ def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -507,10 +509,7 @@ def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> Non
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
-        fence_check=lambda: held["v"],
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(_Lock(), lambda: held["v"]),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as captured:
         sink.write_recommendations(

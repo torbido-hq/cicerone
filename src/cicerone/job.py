@@ -310,8 +310,6 @@ def _select_thompson_recipes(
             allocation.rotated,
         )
         return ThompsonSelection(selected, pending)
-    except (LockLostError, WriterLockBusyError):
-        raise
     except _OPTIONAL_EVAL_ERRORS as exc:
         _log_caught("Thompson allocation fail closed", exc, log=logger)
         return ThompsonSelection(recipes)
@@ -656,8 +654,6 @@ def _publish_job_sidecar(run: JobRun) -> None:
             publisher.publish(run.recommendations)
         else:
             log_sidecar_generation_skip(current)
-    except LockLostError:
-        raise
     except _PUBLISH_ERRORS as exc:
         _log_caught("Publish failed after successful write", exc, log=logger)
 
