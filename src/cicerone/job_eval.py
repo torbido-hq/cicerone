@@ -139,7 +139,6 @@ def persist_track_outputs(
     eval_report: Mapping[str, Any],
     recommendations: pd.DataFrame | None,
     generated_at: str,
-    fence_check: Callable[[], bool] | None = None,
 ) -> None:
     tasks: list[tuple[str, Callable[[], Any]]] = [
         ("write track eval", lambda: store.write_eval(eval_report)),
@@ -152,14 +151,13 @@ def persist_track_outputs(
             )
         )
     fence = getattr(store, "fence", None)
-    lock = fence.lock if fence is not None else None
 
     def _run_serial() -> None:
         for label, fn in tasks:
             try_load(label, fn, None)
 
-    if lock is not None:
-        with retrain_fence(lock, fence_check).hold():
+    if fence is not None and fence.lock is not None:
+        with fence.hold():
             _run_serial()
         return
     if kind == "db":
