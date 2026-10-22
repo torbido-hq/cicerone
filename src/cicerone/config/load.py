@@ -86,6 +86,7 @@ _TRIGGER_FLAT_KEYS = (
     ("trigger_auth_token", "auth_token"),
     ("trigger_debounce_seconds", "debounce_seconds"),
     ("trigger_poll_input_bucket", "poll_input_bucket"),
+    ("trigger_poll_input_single_replica", "poll_input_single_replica"),
     ("trigger_poll_interval_seconds", "poll_interval_seconds"),
     ("trigger_lock_backend", "lock_backend"),
     ("trigger_postgres_url", "postgres_url"),

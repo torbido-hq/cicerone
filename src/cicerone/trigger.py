@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone import job
 from cicerone.config import IOSettings, Settings
@@ -17,9 +18,12 @@ from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
+from cicerone.locks.redis import RedisError
 from cicerone.serve.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
+
+_LOCK_BACKEND_ERRORS = (SQLAlchemyError, RedisError)
 
 
 class _RunFn(Protocol):
@@ -128,8 +132,15 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
     while True:
         time.sleep(interval_seconds)
         marker = _current_marker(input_settings)
-        # A rejected trigger (busy, debounced) keeps the change pending for the next poll.
-        if marker is not None and marker != last_marker and guard.trigger("s3-poll"):
+        if marker is None or marker == last_marker:
+            continue
+        try:
+            accepted = guard.trigger("s3-poll")
+        except _LOCK_BACKEND_ERRORS:
+            logger.warning("Input poll trigger failed on the lock backend; retrying next poll", exc_info=True)
+            continue
+        # A rejected trigger (busy, debounced, lock outage) keeps the change pending for the next poll.
+        if accepted:
             last_marker = marker
 
 

@@ -39,3 +39,9 @@ def test_deprecation_warnings_point_at_the_caller():
     with pytest.warns(FutureWarning) as kwarg_warning:
         make_settings(serve_port=9000)
     assert [w.filename for w in (*property_warning, *kwarg_warning)] == [__file__, __file__]
+
+
+def test_flat_make_settings_kwarg_sets_poll_input_single_replica():
+    with pytest.warns(FutureWarning, match=re.escape("make_settings(trigger_poll_input_single_replica=...)")):
+        settings = make_settings(trigger_poll_input_single_replica=True)
+    assert settings.trigger.poll_input_single_replica is True

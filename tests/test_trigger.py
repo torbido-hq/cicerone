@@ -279,6 +279,26 @@ def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
     assert guard.calls == ["s3-poll", "s3-poll", "s3-poll"]
 
 
+def test_poll_input_forever_survives_a_lock_backend_outage(tmp_path, monkeypatch):
+    from cicerone.locks.redis import RedisError
+
+    guard = _FakeGuard()
+    outage = {"left": 1}
+    real_trigger = guard.trigger
+
+    def trigger(triggered_by: str) -> bool:
+        if outage["left"]:
+            outage["left"] -= 1
+            raise RedisError("lock backend down")
+        return real_trigger(triggered_by)
+
+    guard.trigger = trigger  # type: ignore[method-assign]
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=3)
+
+    assert guard.calls == ["s3-poll"]
+
+
 def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp_path, monkeypatch):
     release = threading.Event()
     runs: list[str] = []
