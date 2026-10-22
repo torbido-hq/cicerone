@@ -904,7 +904,7 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
     assert released == [url]
 
 
-def _event_row(event_id: str | None, minute: int, **overrides) -> dict:
+def _event_row(event_id: str, minute: int, **overrides) -> dict:
     defaults = {
         "item_id": f"i{event_id}",
         "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
@@ -997,25 +997,6 @@ def test_db_nack_redelivers_events_acked_after_it(tmp_path):
     assert [event.event_id for event in source.poll(10)] == ["e1", "e2"]
     source.ack(["e1", "e2"])
     assert source.health().lag == 0
-
-
-def test_db_pages_rows_without_event_id_by_their_cursor_identity(tmp_path):
-    url = _sqlite_url(tmp_path)
-    _seed_events(
-        url,
-        [
-            _event_row(None, 0, item_id="i1", id=1),
-            _event_row("b", 0, id=2),
-            _event_row("c", 0, id=3),
-            _event_row("", 0, item_id="i4", id=4),
-        ],
-    )
-    source = DbEventSource({"database_url": url})
-    source.connect()
-    assert [event.event_id for event in source.poll(1)] == ["b"]
-    source.ack(["b"])
-
-    assert [event.event_id for event in source.poll(10)] == ["c", "id:1", "id:4"]
 
 
 def test_db_garbage_occurred_at_never_stalls_a_source_without_event_id(tmp_path):

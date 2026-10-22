@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
-_CURSOR_ROWS_ALIAS = "cicerone_events_cursor"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
 # Columns an invalid row is reported by; user and item ids stay out of the log.
@@ -73,19 +72,6 @@ def _parsed_rows(
             yield parse(payload)
         except EventNormalizeError as exc:
             on_invalid(payload, exc)
-
-
-def _cursor_event_id(by_lower: dict[str, str]) -> str:
-    # SQL twin of _stable_event_id, so paging on event_id agrees with the ack cursor.
-    column = f'"{by_lower["event_id"]}"'
-    fallbacks = [
-        f"NULLIF(CAST(\"{by_lower[name]}\" AS TEXT), '')" for name in ("idempotency_key",) if name in by_lower
-    ]
-    if "id" in by_lower:
-        fallbacks.append(f"'id:' || NULLIF(CAST(\"{by_lower['id']}\" AS TEXT), '')")
-    if not fallbacks:
-        return column
-    return f"COALESCE(NULLIF(CAST({column} AS TEXT), ''), {', '.join(fallbacks)}) AS {column}"
 
 
 def _rejection(payload: dict[str, Any], exc: EventNormalizeError) -> str:
@@ -296,10 +282,7 @@ class DbEventSource(EventSource):
                 extra = "ctid"
             if extra is not None:
                 selected.append(extra)
-        select_clause = ", ".join(
-            _cursor_event_id(by_lower) if has_event_id and name == by_lower["event_id"] else f'"{name}"'
-            for name in selected
-        )
+        select_clause = ", ".join(f'"{name}"' for name in selected)
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns
@@ -308,9 +291,6 @@ class DbEventSource(EventSource):
             cached_select = self._select_clause
             cached_has_event_id = self._has_event_id_column
         return cached_select, cached_has_event_id
-
-    def _cursor_rows(self, select_clause: str) -> str:
-        return f"(SELECT {select_clause} FROM {self._from_clause()}) AS {_CURSOR_ROWS_ALIAS}"
 
     def _fetch_rows(
         self,
@@ -326,7 +306,7 @@ class DbEventSource(EventSource):
         if identity_sort is not None:
             later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
-                f"SELECT * FROM {self._cursor_rows(select_clause)} WHERE "
+                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort) "
                 f"ORDER BY {occurred_order}, ({identity_sort}) ASC "
@@ -340,7 +320,7 @@ class DbEventSource(EventSource):
         elif has_event_id:
             # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
             sql = text(
-                f"SELECT * FROM {self._cursor_rows(select_clause)} WHERE "
+                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id) "
                 "ORDER BY occurred_at ASC, event_id ASC "
@@ -376,13 +356,12 @@ class DbEventSource(EventSource):
         return self._count_after_rows(engine, watermark_at, watermark_event_id)
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
-        select_clause, _has_event_id = self._ensure_source_schema(engine)
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
         identity_sort = identity_sql_sort_expr(engine.dialect.name)
         if identity_sort is not None:
             later, same, _occurred_order = occurred_at_predicates(engine.dialect.name)
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._cursor_rows(select_clause)} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort)"
             )
@@ -392,7 +371,7 @@ class DbEventSource(EventSource):
             }
         else:
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._cursor_rows(select_clause)} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
             )

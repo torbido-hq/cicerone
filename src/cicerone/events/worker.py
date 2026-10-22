@@ -608,7 +608,6 @@ class EventWorker:
             ready = self._ack_replayed(ready, replayed)
             valid = [event for event in ready if event.rejected is None]
         if not valid:
-            self._remember_applied(ready)
             self._log_rejected(ready)
             self._ack_unbuffered(ready)
             return 0
@@ -690,7 +689,7 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
-        self._remember_applied(ready)
+        self._remember_applied(valid)
         self._log_rejected(ready)
         try:
             live_ids = self._ack_live_ids([event.event_id for event in ready])

@@ -3586,7 +3586,7 @@ def test_event_worker_acks_rejected_events_with_their_batch_without_applying(
     assert '(bad row): {"event_id": "r1"}' in caplog.text
 
 
-def test_event_worker_acks_a_rejected_only_batch_and_logs_it_once(
+def test_event_worker_acks_a_rejected_only_batch_and_logs_each_delivery(
     tmp_path, feature_config: FeatureConfig, caplog
 ):
     rejected = _rejected_event("r1")
@@ -3599,4 +3599,23 @@ def test_event_worker_acks_a_rejected_only_batch_and_logs_it_once(
         assert worker.tick() == 0
     assert applies == []
     assert source.acks == [["r1"], ["r1"]]
-    assert caplog.text.count("Skipping invalid event row") == 1
+    assert caplog.text.count("Skipping invalid event row") == 2
+
+
+@pytest.mark.parametrize("with_valid", [False, True])
+def test_event_worker_applies_a_valid_event_after_a_rejected_one_with_its_id(
+    tmp_path, feature_config: FeatureConfig, with_valid: bool
+):
+    first = [normalize_event(event_payload(event_id="w1", item_id="i1"))] if with_valid else []
+    source = _ListSource([*first, _rejected_event("r1")])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=len(first) + 1)
+    assert worker.tick() == len(first)
+
+    retry = [normalize_event(event_payload(event_id="r1", item_id="i2"))]
+    if with_valid:
+        retry.append(normalize_event(event_payload(event_id="w2", item_id="i3")))
+    source.pending = retry
+    assert worker.tick() == len(retry)
+    assert "r1" in applies
+    assert source.acks[-1] == [event.event_id for event in retry]
