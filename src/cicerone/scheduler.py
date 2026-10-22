@@ -14,7 +14,7 @@ from croniter import croniter
 from cicerone import job
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
-from cicerone.locks import LockBackend, build_lock_backend
+from cicerone.locks import LockBackend, build_lock_backend, input_poller_lock_key
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -80,9 +80,15 @@ def _run_with_trigger(settings: Settings, schedule: str) -> None:
     threading.Thread(target=_cron_loop, args=(schedule, lambda: guard.trigger("cron")), daemon=True).start()
 
     if settings.trigger.poll_input_bucket:
+        # One poller across replicas, so a change runs once; a lease that frees on death hands it over.
+        lease = (
+            None
+            if lock_backend is None
+            else build_lock_backend(settings, lock_key=input_poller_lock_key(settings.trigger.lock_key))
+        )
         threading.Thread(
             target=poll_input_forever,
-            args=(settings.input, guard, settings.trigger.poll_interval_seconds),
+            args=(settings.input, guard, settings.trigger.poll_interval_seconds, lease),
             daemon=True,
         ).start()
 

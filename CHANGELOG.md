@@ -132,8 +132,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 - The input poller retries a change on the next poll when its trigger is
   rejected (run in progress, debounce), instead of dropping it until cron.
-  When another replica holds the retrain lock, that replica's poller runs
-  the change, so it runs once.
+  With a `postgres` / `redis` lock backend only one replica polls, holding
+  the `<lock_key>:input-poller` lease, so a change runs once; another replica
+  takes over when it stops.
 
 ## [0.8.5] - 2026-10-14
 

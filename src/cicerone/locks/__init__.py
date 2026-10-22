@@ -30,6 +30,7 @@ from cicerone.locks.keys import (
     advisory_keys_from_lock_key,
     dataset_append_lock_key,
     events_apply_lock_key,
+    input_poller_lock_key,
 )
 from cicerone.locks.postgres import PostgresAdvisoryLock
 from cicerone.locks.redis import RedisLock
@@ -52,6 +53,7 @@ __all__ = [
     "build_lock_backend",
     "dataset_append_lock_key",
     "events_apply_lock_key",
+    "input_poller_lock_key",
     "has_distributed_lock",
     "ensure_writer_owned",
     "held_writer_lock",

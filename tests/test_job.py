@@ -3066,7 +3066,7 @@ def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, input_dir, output_dir)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    from cicerone.trigger import RunGuard, TriggerOutcome
+    from cicerone.trigger import RunGuard
 
     released = threading.Event()
 
@@ -3081,7 +3081,7 @@ def test_run_guard_skips_job_writes_when_owned_is_false(tmp_path, monkeypatch):
             return False
 
     guard = RunGuard(debounce_seconds=0, run_fn=job.run, lock_backend=DeadLock())
-    assert guard.trigger("webhook") is TriggerOutcome.STARTED
+    assert guard.trigger("webhook") is True
     assert released.wait(timeout=30)
     assert not (output_dir / "recommendations.parquet").exists()
     assert not (output_dir / "manifest.json").exists()

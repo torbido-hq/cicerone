@@ -36,7 +36,7 @@ from cicerone.locks import (
 )
 from cicerone.locks import hold as lock_hold
 from cicerone.locks.redis import RedisError
-from cicerone.trigger import RunGuard, TriggerOutcome
+from cicerone.trigger import RunGuard
 
 
 def _mock_redis_module(monkeypatch, *, client: MagicMock | None = None) -> MagicMock:
@@ -191,9 +191,9 @@ def test_run_guard_without_backend_uses_local_exclusion_only():
 
     guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
     assert guard._backend is None
-    assert guard.trigger("webhook") is TriggerOutcome.STARTED
+    assert guard.trigger("webhook") is True
     assert done.wait(timeout=5)
-    assert guard.trigger("webhook") is TriggerOutcome.DEBOUNCED
+    assert guard.trigger("webhook") is False
     assert calls == ["webhook"]
 
 
@@ -211,7 +211,7 @@ def test_run_guard_respects_distributed_lock_failure():
         run_fn=lambda triggered_by: calls.append(triggered_by),
         lock_backend=HeldLock(),
     )
-    assert guard.trigger("webhook") is TriggerOutcome.HELD_ELSEWHERE
+    assert guard.trigger("webhook") is False
     assert calls == []
 
 
@@ -243,9 +243,9 @@ def test_run_guard_debounce_with_distributed_lock_backend():
         run_fn=fake_run,
         lock_backend=lock_backend,
     )
-    assert guard.trigger("first") is TriggerOutcome.STARTED
+    assert guard.trigger("first") is True
     assert done.wait(timeout=5)
-    assert guard.trigger("second") is TriggerOutcome.DEBOUNCED
+    assert guard.trigger("second") is False
     assert calls == ["first"]
     assert lock_backend.acquires == 1
 
@@ -271,7 +271,7 @@ def test_run_guard_releases_backend_after_run():
         done.set()
 
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=TrackingLock())
-    assert guard.trigger("cron") is TriggerOutcome.STARTED
+    assert guard.trigger("cron") is True
     assert done.wait(timeout=5)
     for _ in range(50):
         if events[-1:] == ["release"]:
@@ -306,7 +306,7 @@ def test_run_guard_passes_owned_as_fence_check():
         done.set()
 
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=lock)
-    assert guard.trigger("webhook") is TriggerOutcome.STARTED
+    assert guard.trigger("webhook") is True
     _wait_for_event(done)
     assert received["triggered_by"] == "webhook"
     assert received["fence_check"] == lock.owned

@@ -231,7 +231,19 @@ def test_main_with_trigger_in_process_skips_build_lock_backend(tmp_path, monkeyp
     scheduler.main()
 
 
-def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("lock_toml", "poller_lease_keys"),
+    [
+        ("", []),
+        (
+            'lock_backend = "redis"\n        redis_url = "redis://localhost:6379/0"',
+            ["cicerone:scheduler:run_guard:input-poller"],
+        ),
+    ],
+)
+def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(
+    tmp_path, monkeypatch, lock_toml, poller_lease_keys
+):
     config_path = tmp_path / "cicerone.toml"
     config_path.write_text(
         f"""
@@ -242,6 +254,7 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
         enabled = true
         auth_token = "secret"
         poll_input_bucket = true
+        {lock_toml}
 
         [input]
         kind = "dataset"
@@ -275,6 +288,13 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
     monkeypatch.setattr(scheduler.threading.Thread, "__init__", fake_thread_init)
     monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
     monkeypatch.setattr(scheduler, "uvicorn", type("_U", (), {"run": staticmethod(fake_uvicorn_run)}))
+    lock_keys: list[str | None] = []
+
+    def fake_lock_backend(_settings, lock_key=None):
+        lock_keys.append(lock_key)
+        return object()
+
+    monkeypatch.setattr(scheduler, "build_lock_backend", fake_lock_backend)
 
     from cicerone.trigger import poll_input_forever
 
@@ -282,5 +302,6 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
 
     assert scheduler._cron_loop in started_threads
     assert poll_input_forever in started_threads
+    assert [key for key in lock_keys if key is not None] == poller_lease_keys
     assert uvicorn_calls["host"] == "127.0.0.1"
     assert uvicorn_calls["port"] == 8080

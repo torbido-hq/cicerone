@@ -15,6 +15,11 @@ def events_apply_lock_key(run_guard_key: str) -> str:
     return f"{run_guard_key}:events:apply"
 
 
+def input_poller_lock_key(run_guard_key: str) -> str:
+    """Lease for the single input poller among replicas."""
+    return f"{run_guard_key}:input-poller"
+
+
 def dataset_append_lock_key(run_guard_key: str) -> str:
     """Lease key for local dataset JSONL / parquet writers."""
     return f"{run_guard_key}:dataset:append"
