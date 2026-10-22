@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import event_payload
 
 from cicerone.events.db import (
     DbEventSource,
@@ -903,28 +904,27 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
 
 
 def _event_row(event_id: str, minute: int, **overrides) -> dict:
-    row = {
-        "user_id": "u1",
+    defaults = {
         "item_id": f"i{event_id}",
-        "event_type": "view",
-        "quantity": 1,
         "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
         "event_id": event_id,
     }
-    row.update(overrides)
-    return row
+    return event_payload(**{**defaults, **overrides})
 
 
-def test_db_poll_skips_an_invalid_row_and_logs_it_once(tmp_path, caplog):
+def test_db_poll_skips_an_invalid_row_once_earlier_events_are_acked(tmp_path, caplog):
     url = _sqlite_url(tmp_path)
     _seed_events(url, [_event_row("e1", 0), _event_row("bad", 1, quantity=0), _event_row("e2", 2)])
     source = DbEventSource({"database_url": url})
     source.connect()
     with caplog.at_level("WARNING", logger="cicerone.events.db"):
-        polled = list(source.poll(10))
-        source.nack(polled)
-        list(source.poll(10))
-    assert [event.event_id for event in polled] == ["e1", "e2"]
+        first = list(source.poll(1))
+        assert "Skipping invalid event row" not in caplog.text
+        source.ack([event.event_id for event in first])
+        second = list(source.poll(10))
+        source.ack([event.event_id for event in second])
+        assert list(source.poll(10)) == []
+    assert [event.event_id for event in first + second] == ["e1", "e2"]
     assert caplog.text.count("Skipping invalid event row") == 1
 
 
