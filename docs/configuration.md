@@ -47,7 +47,9 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `events_query` / `users_query` / `items_query` (trusted deploy-time
 `SELECT` only) read an existing schema instead of `events` / `users` /
 `items` tables. Default write tables: `recommendations`,
-`recommendation_runs`, `model_artifacts`, `recommendation_items`.
+`recommendation_runs`, `model_artifacts`, `recommendation_items`, and
+`incremental_applied_events` (incremental event keys, see
+[incremental events](incremental-events.md)).
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still

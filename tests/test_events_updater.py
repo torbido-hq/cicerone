@@ -977,9 +977,9 @@ def test_incremental_updater_preserves_untouched_via_scoped_write(tmp_path, feat
     replace_calls: list[tuple[list[str], set[str]]] = []
     real_replace = sink.replace_recommendations_for_users
 
-    def tracking_replace(df, *, user_ids):  # type: ignore[no-untyped-def]
+    def tracking_replace(df, *, user_ids, **kwargs):  # type: ignore[no-untyped-def]
         replace_calls.append((sorted(user_ids), set(df["user_id"].astype(str)) if not df.empty else set()))
-        return real_replace(df, user_ids=user_ids)
+        return real_replace(df, user_ids=user_ids, **kwargs)
 
     monkeypatch.setattr(sink, "replace_recommendations_for_users", tracking_replace)
     updater = IncrementalUpdater(
@@ -1360,6 +1360,7 @@ def test_incremental_updater_raises_when_fence_lost_after_connect(tmp_path, feat
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     with pytest.raises(LockLostError, match="events apply lock lost before write"):
         updater.apply(events)
+    assert updater.last_apply_written
     assert published == []
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
@@ -1478,6 +1479,7 @@ def test_incremental_updater_reraises_unexpected_sidecar_generation_error(
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     with pytest.raises(RuntimeError, match="generation check bug"):
         updater.apply(events)
+    assert updater.last_apply_written
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -1519,8 +1521,46 @@ def test_incremental_updater_reraises_writer_lock_busy_from_generation_check(
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         updater.apply(events)
+    assert updater.last_apply_written
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_incremental_updater_refreshes_cache_and_reader_when_the_manifest_fails(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=5,
+    )
+    sink = build_output_sink(settings.output)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    refreshed: list[int] = []
+    updater = IncrementalUpdater(
+        sink=sink,
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=5,
+        on_success=lambda: refreshed.append(1),
+    )
+    events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
+    with pytest.raises(OSError, match="disk full"):
+        updater.apply(events)
+    assert updater.last_apply_written
+    assert refreshed == [1]
+    assert updater.events_applied == 1
+    frame = load_recommendations_frame(settings.output)
+    assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
+    assert "i9" in set(updater._cached_by_user["u1"]["item_id"].astype(str))
 
 
 def test_incremental_allowlists_filters_unavailable_items(feature_config: FeatureConfig) -> None:

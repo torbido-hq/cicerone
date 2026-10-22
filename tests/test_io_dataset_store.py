@@ -718,6 +718,19 @@ def test_s3_backend_round_trip(s3_options):
     assert list(events["user_id"]) == ["u1"]
 
 
+def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options, monkeypatch):
+    sink = DatasetOutputSink(s3_options)
+    assert sink.applied_event_keys(["k1"]) == set()
+    df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5, "source": "personalized"}])
+    sink.replace_recommendations_for_users(df, user_ids=["u1"], applied_keys=["k1"])
+
+    def _rows_read(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("applied_event_keys read the recommendation rows")
+
+    monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _rows_read)
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+
+
 def test_s3_read_model_artifact_round_trip_and_missing(s3_options):
     sink = DatasetOutputSink(s3_options)
     assert sink.read_model_artifact() is None
@@ -810,3 +823,34 @@ def test_s3_backend_no_prefix_writes_flat_key(s3_options):
     client = boto3.client("s3", region_name="us-east-1")
     body = client.get_object(Bucket=flat_options["bucket"], Key="manifest.json")["Body"].read()
     assert json.loads(body) == {"ok": True}
+
+
+def test_s3_applied_event_keys_fallback_reads_only_the_footer(s3_options, monkeypatch):
+    from cicerone.io import options as io_options
+
+    sink = DatasetOutputSink(s3_options)
+    df = pd.DataFrame({"user_id": [f"u{i}" for i in range(5000)], "item_id": "i1", "rank": 1, "score": 0.5})
+    df["source"] = "personalized"
+    sink.replace_recommendations_for_users(df, user_ids=list(df["user_id"]), applied_keys=["k1"])
+
+    def _pyarrow_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("pyarrow S3 unavailable")
+
+    ranges: list[str] = []
+    real_client = io_options.build_s3_client
+
+    def _client(options):  # type: ignore[no-untyped-def]
+        client = real_client(options)
+        get_object = client.get_object
+
+        def _get_object(**kwargs):  # type: ignore[no-untyped-def]
+            ranges.append(kwargs.get("Range", "full"))
+            return get_object(**kwargs)
+
+        client.get_object = _get_object
+        return client
+
+    monkeypatch.setattr(io_options, "_s3_filesystem", _pyarrow_fails)
+    monkeypatch.setattr(io_options, "build_s3_client", _client)
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+    assert ranges and "full" not in ranges

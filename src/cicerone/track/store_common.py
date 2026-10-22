@@ -174,6 +174,28 @@ def row_matches(
     return not (start is None or stamp is None or bool(pd.isna(stamp)) or stamp < start)
 
 
+def unique_matching_rows(
+    rows: list[dict[str, Any]],
+    *,
+    kind: str | None,
+    experiment_id: str | None,
+    since: str | None,
+) -> list[dict[str, Any]]:
+    """First row per ``event_id`` that matches the filters."""
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for row in rows:
+        event_id = str(row.get("event_id") or "")
+        if event_id and event_id in seen:
+            continue
+        if event_id:
+            seen.add(event_id)
+        if not row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
+            continue
+        unique.append(row)
+    return unique
+
+
 def track_row_sql_filter(
     *,
     kind: str | None,

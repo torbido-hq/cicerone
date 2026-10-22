@@ -28,6 +28,12 @@ def sidecar_generation_current(output: IOSettings, generated_at: str) -> bool | 
     return str(current) == generated_at
 
 
+def latest_manifest_generated_at(output: IOSettings) -> str | None:
+    latest = build_manifest_reader(output).read_latest()
+    value = (latest or {}).get("generated_at")
+    return None if value is None else str(value)
+
+
 def log_sidecar_generation_skip(current: bool | None, *, incremental: bool = False) -> None:
     prefix = "Skipping incremental publish" if incremental else "Skipping publish"
     if current is False:

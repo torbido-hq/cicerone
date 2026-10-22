@@ -11,6 +11,7 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -19,13 +20,20 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Column,
     DateTime,
     Engine,
+    Float,
+    Index,
     LargeBinary,
     MetaData,
+    String,
     Table,
+    Text,
     bindparam,
+    delete,
     insert,
     inspect,
     select,
@@ -34,6 +42,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
+from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.engines import engine_for
 from cicerone.io.options import readonly_select, require_option, sql_identifier
@@ -83,6 +92,7 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_TRACK_TABLE,
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
+        DEFAULT_APPLIED_EVENTS_TABLE,
     }
 )
 
@@ -107,6 +117,39 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
         if stamp > started_at:
             return True
     return False
+
+
+def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> None:
+    # The table takes its columns from the first manifest; an incremental one adds keys a job manifest lacks.
+    # Each ALTER runs in its own transaction, before the insert: DDL commits implicitly on MySQL.
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
+        return
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    quote = engine.dialect.identifier_preparer.quote
+    for key, value in manifest.items():
+        if key in existing:
+            continue
+        column = sql_identifier(key, option="manifest key")
+        column_type = _manifest_column_type(value).compile(dialect=engine.dialect)
+        logger.info("Adding column %r to manifest table %r", column, table)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
+        except _MISSING_TABLE_ERRORS:
+            # A concurrent writer may have added the same column first.
+            if column not in {column_info["name"] for column_info in inspect(engine).get_columns(table)}:
+                raise
+
+
+def _manifest_column_type(value: Any) -> Any:
+    if isinstance(value, bool):
+        return Boolean()
+    if isinstance(value, int):
+        return BigInteger()
+    if isinstance(value, float):
+        return Float()
+    return Text()
 
 
 def _clear_table_for_replace(conn, table: str) -> None:
@@ -278,6 +321,9 @@ class DatabaseOutputSink:
             fence_lost=fence_lost,
             fence_kind=fence_kind,
         )
+        self._applied_table_seen = False
+        self._applied_table_checked = False
+        self._check_applied_events_table_name()
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
@@ -297,6 +343,11 @@ class DatabaseOutputSink:
             )
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
+            # Keys go first, in their own commit: MySQL's TRUNCATE commits implicitly, so a failed insert
+            # after it could otherwise roll the key delete back while the rows stay gone.
+            with self._engine.begin() as conn:
+                self._ensure_fence()
+                self._clear_applied_keys(conn, table)
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 _clear_table_for_replace(conn, table)
@@ -304,14 +355,161 @@ class DatabaseOutputSink:
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
                 self._ensure_fence()
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
         with self.recommendations_write():
-            return self._replace_recommendations_for_users_unlocked(df, ids)
+            return self._replace_recommendations_for_users_unlocked(df, ids, applied_keys)
 
-    def _replace_recommendations_for_users_unlocked(self, df: pd.DataFrame, ids: list[str]) -> int:
+    def _applied_events_table(self) -> Table:
+        name = sql_identifier(
+            self._options.get("applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE),
+            option="applied_events_table",
+        )
+        # Keys are scoped to the recommendations table (see _applied_scope), so outputs sharing a database
+        # don't see each other's.
+        return Table(
+            name,
+            MetaData(),
+            # 64 chars: a SQL identifier and a sha256 hex key; the composite key fits a 767-byte index.
+            Column("recommendations_table", String(64), primary_key=True),
+            Column("event_key", String(64), primary_key=True),
+            Column("applied_at", String(64), nullable=False),
+            # Hashed so a long table name still gives an index name within MySQL's 64 characters.
+            Index(f"ix_applied_at_{hashlib.sha256(name.encode()).hexdigest()[:16]}", "applied_at"),
+        )
+
+    def _create_applied_events_table(self) -> None:
+        table = self._applied_events_table()
+        # CREATE TABLE commits implicitly on MySQL, so never inside the rows' transaction.
+        try:
+            with self._engine.begin() as ddl:
+                table.create(ddl, checkfirst=True)
+        except _MISSING_TABLE_ERRORS:
+            # Another output sharing the database may have created it first.
+            if not inspect(self._engine).has_table(table.name):
+                raise
+        self._applied_table_seen = True
+
+    def _check_applied_events_table_name(self) -> None:
+        name = self._applied_events_table().name
+        others = {
+            str(value)
+            for key, value in self._options.items()
+            if key.endswith("_table") and key != "applied_events_table"
+        }
+        others |= DEFAULT_DB_TABLES - {DEFAULT_APPLIED_EVENTS_TABLE}
+        if name.lower() in {other.lower() for other in others}:
+            raise ValueError(f"applied_events_table {name!r} is already used by another output table")
+
+    def _recommendations_table_name(self) -> str:
+        table, _columns, _user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
+        )
+        return table
+
+    def _applied_scope(self, recommendations_table: str) -> str:
+        # Unquoted names ignore case on SQLite and Postgres; MySQL table-name case depends on the server.
+        name = (
+            recommendations_table if self._engine.dialect.name == "mysql" else recommendations_table.lower()
+        )
+        # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
+        return hashlib.sha256(name.encode()).hexdigest()
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
+        wanted = sorted({str(key) for key in keys})
+        table = self._applied_events_table()
+        if not wanted:
+            return set()
+        if not self._applied_table_seen:
+            if not inspect(self._engine).has_table(table.name):
+                return set()
+            self._applied_table_seen = True
+        scope = self._applied_scope(self._recommendations_table_name())
+        cutoff = applied_cutoff(datetime.now(UTC))
+        found: dict[str, str] = {}
+        try:
+            with self._engine.connect() as conn:
+                for part in chunked(wanted):
+                    query = select(table.c.event_key, table.c.applied_at).where(
+                        table.c.recommendations_table == scope,
+                        table.c.event_key.in_(part),
+                        table.c.applied_at >= cutoff,
+                    )
+                    found.update((str(key), str(applied_at)) for key, applied_at in conn.execute(query))
+        except _MISSING_TABLE_ERRORS:
+            # The table may have been dropped; check again on the next lookup.
+            self._applied_table_seen = False
+            raise
+        if not found:
+            return set()
+        # A full write by a version without the key table leaves keys behind; its manifest supersedes them.
+        # Checked only when keys match, which is rare (a redelivery), so most flushes skip the manifest query.
+        full_write_at = self._latest_full_write_at()
+        if full_write_at is None:
+            return set(found)
+        return {key for key, applied_at in found.items() if applied_at >= full_write_at}
+
+    def _latest_full_write_at(self) -> str | None:
+        table = sql_identifier(
+            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
+            option="manifest_table",
+        )
+        quote = self._engine.dialect.identifier_preparer.quote
+        query = text(
+            f"SELECT MAX({quote('generated_at')}) FROM {quote(table)} "
+            f"WHERE {quote('triggered_by')} IS NULL OR {quote('triggered_by')} <> 'incremental'"
+        )
+        try:
+            with self._engine.connect() as conn:
+                value = conn.execute(query).scalar()
+        except _MISSING_TABLE_ERRORS:
+            # No manifest table (or no such columns) yet: no full write to supersede the keys.
+            return None
+        if value is None:
+            return None
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    def _applied_events_table_exists(self) -> bool:
+        if not self._applied_table_seen and not self._applied_table_checked:
+            self._applied_table_checked = True
+            self._applied_table_seen = inspect(self._engine).has_table(self._applied_events_table().name)
+        return self._applied_table_seen
+
+    def _prune_applied_keys(self, conn: Any, now: datetime) -> None:
+        table = self._applied_events_table()
+        conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
+
+    def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
+        wanted = sorted({str(key) for key in keys})
+        now = datetime.now(UTC)
+        table = self._applied_events_table()
+        scope = self._applied_scope(self._recommendations_table_name())
+        self._prune_applied_keys(conn, now)
+        for part in chunked(wanted):
+            conn.execute(
+                delete(table).where(table.c.recommendations_table == scope, table.c.event_key.in_(part))
+            )
+        stamp = now.isoformat()
+        # executemany: SQLAlchemy batches these within the dialect's parameter limit.
+        conn.execute(
+            insert(table),
+            [{"recommendations_table": scope, "event_key": key, "applied_at": stamp} for key in wanted],
+        )
+
+    def _clear_applied_keys(self, conn: Any, recommendations_table: str) -> None:
+        # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
+        table = self._applied_events_table()
+        if inspect(conn).has_table(table.name):
+            scope = self._applied_scope(recommendations_table)
+            conn.execute(delete(table).where(table.c.recommendations_table == scope))
+
+    def _replace_recommendations_for_users_unlocked(
+        self, df: pd.DataFrame, ids: list[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         table, _columns, user_col = recommendations_sql_names(
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
@@ -327,6 +525,8 @@ class DatabaseOutputSink:
             bindparam("user_ids", expanding=True)
         )
         count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
+        if applied_keys:
+            self._create_applied_events_table()
         with self._engine.begin() as conn:
             self._ensure_fence()
             savepoint = conn.begin_nested()
@@ -348,6 +548,21 @@ class DatabaseOutputSink:
             if not df.empty:
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+            if applied_keys:
+                # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
+                self._ensure_fence()
+                self._record_applied_keys(conn, applied_keys)
+            elif self._applied_events_table_exists():
+                # Batches without durable keys still prune, so expired rows never pile up.
+                self._ensure_fence()
+                prune = conn.begin_nested()
+                try:
+                    self._prune_applied_keys(conn, datetime.now(UTC))
+                    prune.commit()
+                except _MISSING_TABLE_ERRORS:
+                    # The table was dropped: skip pruning, never the rows write; check again later.
+                    prune.rollback()
+                    self._applied_table_seen = self._applied_table_checked = False
             self._ensure_fence()
             count_savepoint = conn.begin_nested()
             try:
@@ -369,12 +584,15 @@ class DatabaseOutputSink:
             option="manifest_table",
         )
         logger.info("Appending run manifest to database table %r", table)
-        with self.recommendations_write(), self._engine.begin() as conn:
-            if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
-                return False
+        with self.recommendations_write():
             self._ensure_fence()
-            pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
-            self._ensure_fence()
+            _add_missing_manifest_columns(self._engine, table, manifest)
+            with self._engine.begin() as conn:
+                if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
+                    return False
+                self._ensure_fence()
+                pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
+                self._ensure_fence()
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:

@@ -64,7 +64,8 @@ Same columns as batch input:
 
 Optional transport fields:
 
-- `event_id` — idempotency / ack key (generated if omitted)
+- `event_id` — idempotency / ack key (generated if omitted); must be unique
+  across every producer feeding one output
 - `idempotency_key` — alias accepted by the webhook JSON body
 
 ## Enable the webhook
@@ -169,8 +170,9 @@ OpenAPI documents the route when webhook events are enabled (`/docs`,
 `kind = "webhook"` keeps `_pending` and `_in_flight` **in process
 memory**. A `202` is not a durable write. A hard restart drops accepted
 events that have not flushed. Graceful stop tries to drain the buffer;
-if the apply lock is busy or the fence is lost, those events are nacked
-back into memory and still die with the process.
+if the apply lock is busy or the fence is lost before the write, those
+events are nacked back into memory and still die with the process. Once
+their recommendations are written they are acked.
 
 That is different from:
 
@@ -285,7 +287,35 @@ Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score
 source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
 (also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
 after a successful write are logged and do not fail the job or incremental
-flush. A lost apply/retrain fence after the write still fails the run. A
+flush. A lost retrain fence after the write still fails the job. In an
+incremental flush, any failure after the recommendations write (a manifest
+error, a lost apply fence, a busy writer lock or unexpected error while
+publishing, a failed heartbeat) is logged with
+its traceback, counted in `cicerone_events_tick_errors_total` and as a
+flush `error`, and the batch is acked so it is not applied twice; a lost
+apply fence also drops leadership and the pending online fit. The cache
+and serve reader are refreshed before those steps. The steps that failed
+(reader refresh, manifest, sidecar publish, including a handled publish
+error) are retried by the apply-lock holder on later ticks, at most every
+30 seconds, until they succeed: the manifest is written unless a newer one
+exists, and the sidecar gets the affected users' rows as storage holds
+them then. These retries live in process memory and are lost on restart.
+A redelivery after a crash or interrupt between the write and the ack is
+not applied again (an id the source generated, e.g. RabbitMQ without `event_id`,
+stays at-least-once): a hash of each event's id is saved in the same write as
+the recommendations — the
+`incremental_applied_events` table on db output
+(`[output].applied_events_table`, a name no other output table uses; keyed
+by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
+metadata on dataset output — and an event already recorded is acked
+instead of applied (`cicerone_events_replayed_total`). The key covers the id
+and the payload, so a different event reusing a recorded id is applied. A key counts for 7 days; older ones are ignored and
+pruned on the next write. Dataset output keeps at most the newest 100,000
+keys (dropping unexpired ones logs a warning). A full write clears the keys
+on both outputs; on db output a key older than the latest full-write manifest
+is also ignored, so a full write by an older version supersedes it too. On db output the role needs `CREATE TABLE` for the first
+incremental write, or create the table beforehand. This relies on one
+writer: run several replicas with the apply lock described below. A
 newer manifest `generated_at` skips publish so a stale snapshot cannot
 land after a later write.
 Requires the matching extra.
@@ -357,10 +387,11 @@ Serve `/metrics` (when events are enabled):
 | --- | --- |
 | `cicerone_events_source_lag` | Source backlog (`-1` if unknown / events off). Webhook/S3-list: pending + in-flight. S3-SQS: that plus approximate visible queue depth. Redis Streams: `XPENDING` + group `lag`. DB: rows after watermark. |
 | `cicerone_events_source_connected` | `1` when the source reports connected |
-| `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` |
+| `cicerone_events_flush_total{status=}` | `success` / `busy` / `error` (including failures after a committed write) |
 | `cicerone_events_flush_events_total` | Events applied on successful flushes |
 | `cicerone_events_last_success_timestamp_seconds` | Last successful flush (Unix seconds) |
-| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths |
+| `cicerone_events_replayed_total` | Redelivered events already applied by an earlier write, acked without applying |
+| `cicerone_events_tick_errors_total` | Unexpected exceptions outside handled flush paths, and flush failures after a committed write |
 | `cicerone_events_lock_total{status=}` | Apply-lease `acquired` / `skip` |
 | `cicerone_events_leader` | `1` while this replica owns the apply lock |
 | `cicerone_events_apply_busy_total{reason=}` | Skip due to `lock` or `retrain` |

@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.filenames import MANIFEST_FILENAME
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
@@ -37,13 +38,13 @@ class DatasetManifestReader:
 
     def _read(self) -> dict[str, Any] | None:
         if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / "manifest.json"
+            path = Path(require_option(self._options, "path", "local")) / MANIFEST_FILENAME
             if not path.exists():
                 return None
             return json.loads(path.read_text())
 
         bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, "manifest.json")
+        key = object_key(self._options, MANIFEST_FILENAME)
         client = build_s3_client(self._options)
         try:
             obj = client.get_object(Bucket=bucket, Key=key)

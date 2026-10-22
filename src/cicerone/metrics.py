@@ -78,7 +78,11 @@ EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
 )
 EVENTS_TICK_ERRORS_TOTAL = Counter(
     "cicerone_events_tick_errors_total",
-    "Unhandled exceptions in the event worker tick loop",
+    "Unhandled exceptions in the event worker tick loop, and flush failures after a committed write",
+)
+EVENTS_REPLAYED_TOTAL = Counter(
+    "cicerone_events_replayed_total",
+    "Redelivered events already applied by an earlier write, acked without applying",
 )
 EVENTS_LOCK_TOTAL = Counter(
     "cicerone_events_lock_total",
@@ -190,6 +194,10 @@ def record_events_flush(*, status: str, events: int = 0) -> None:
 
 def record_events_tick_error() -> None:
     EVENTS_TICK_ERRORS_TOTAL.inc()
+
+
+def record_events_replayed(count: int) -> None:
+    EVENTS_REPLAYED_TOTAL.inc(count)
 
 
 def record_events_lock(*, status: str) -> None:
