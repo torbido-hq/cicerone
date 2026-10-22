@@ -11,7 +11,8 @@ from rectools import Columns
 from cicerone.feature_config import BoostRule
 from cicerone.ids import items_id_column
 from cicerone.policy.eligibility import warn_missing_column
-from cicerone.reasons import BOOST_HITS_COLUMN
+from cicerone.ranking import keep_top_k, rerank_by_score
+from cicerone.reasons import BOOST_HITS_COLUMN, PRIORITY_BLOCK_COLUMN
 from cicerone.values import is_missing as _is_missing
 from cicerone.values import item_true_mask
 
@@ -112,11 +113,14 @@ def apply_boosts(
     *,
     record_hits: bool = True,
 ) -> pd.DataFrame:
-    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set."""
+    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set.
+
+    A priority-combined list re-ranks within each strategy's block: its models' scores aren't comparable.
+    """
     if recs.empty:
         return recs
     if not boosts:
-        return _truncate_recs(recs, top_k) if top_k is not None else recs
+        return keep_top_k(recs, top_k).reset_index(drop=True) if top_k is not None else recs
 
     factor_by_item, hits_by_item = item_boost_details(items, boosts, record_hits=record_hits)
     out = recs.copy()
@@ -125,16 +129,6 @@ def apply_boosts(
         out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
     if factor_by_item:
         out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
-        out = out.sort_values(
-            [Columns.User, Columns.Score, Columns.Item],
-            ascending=[True, False, True],
-            kind="mergesort",
-        )
-        out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
-    return _truncate_recs(out, top_k)
-
-
-def _truncate_recs(recs: pd.DataFrame, top_k: int | None) -> pd.DataFrame:
-    if top_k is None:
-        return recs.reset_index(drop=True)
-    return recs.groupby(Columns.User, as_index=False).head(top_k).reset_index(drop=True)
+        blocks = [PRIORITY_BLOCK_COLUMN] if PRIORITY_BLOCK_COLUMN in out.columns else []
+        out = rerank_by_score(out, first=blocks)
+    return keep_top_k(out, top_k).reset_index(drop=True)

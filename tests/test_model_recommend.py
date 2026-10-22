@@ -11,6 +11,7 @@ from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.model.recommend_cache import dataset_fingerprint, items_fingerprint, recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
+from cicerone.reasons import PRIORITY_BLOCK_COLUMN
 
 
 def test_availability_filters_via_policy_allowlist(sample_items, feature_config):
@@ -610,6 +611,72 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     ghost = recommendations[recommendations[Columns.User] == "ghost"].sort_values(Columns.Rank)
     assert list(ghost[Columns.Item])[0] == "i2"
     assert not ghost[Columns.Item].isin(["i3", "i4"]).any()
+
+
+class _FixedScoresModel:
+    def __init__(self, scored: list[tuple[str, float]]):
+        self._scored = scored
+
+    def fit(self, dataset):
+        return self
+
+    def recommend(self, *, users, dataset, k, filter_viewed, items_to_recommend=None):
+        return pd.DataFrame(
+            [
+                {Columns.User: user, Columns.Item: item, Columns.Score: score, Columns.Rank: rank}
+                for user in users
+                for rank, (item, score) in enumerate(self._scored[:k], start=1)
+            ]
+        )
+
+
+def test_recommend_with_models_boosts_keep_priority_strategy_blocks(feature_config):
+    from dataclasses import replace
+
+    from cicerone.feature_config import BoostRule
+    from cicerone.model.fit import ModelRunPlan
+    from cicerone.model.recommend import recommend_with_models
+
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "seen", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame(
+        [
+            {
+                "item_id": item_id,
+                "category": "beer",
+                "producer_id": "p1",
+                "published": True,
+                "in_stock": True,
+                "is_paying_producer": item_id in {"als_2", "pop_2"},
+            }
+            for item_id in ("seen", "als_1", "als_2", "pop_1", "pop_2")
+        ]
+    )
+    config = replace(
+        feature_config,
+        boosts=[BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)],
+    )
+    built = build_dataset(events, None, items, config, half_life_days=90)
+    models = {
+        "als": _FixedScoresModel([("als_1", 0.9), ("als_2", 0.8)]),
+        "popular": _FixedScoresModel([("pop_1", 1200.0), ("pop_2", 1100.0)]),
+    }
+
+    recs = recommend_with_models(
+        models,
+        built,
+        ["u1"],
+        config,
+        top_k=4,
+        enabled_models=["als", "popular"],
+        run_plan=ModelRunPlan(enabled_models=("als", "popular"), recommend_models=("als", "popular")),
+    ).sort_values(Columns.Rank)
+
+    assert list(recs[Columns.Item]) == ["als_2", "als_1", "pop_2", "pop_1"]
+    assert list(recs[Columns.Rank]) == [1, 2, 3, 4]
+    assert PRIORITY_BLOCK_COLUMN not in recs.columns
 
 
 def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):

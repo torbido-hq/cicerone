@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - An incremental manifest on db output adds the columns the job manifest
   table lacks (`last_incremental_at`, `incremental_events_applied`,
   `online_*`) instead of failing the insert.
+- `[[boost]]` rules on a priority-combined list re-rank within each
+  strategy's block instead of across them, so a model with large raw scores
+  (popularity counts) no longer jumps ahead of an earlier strategy. Weighted
+  RRF and blending are unchanged.
 
 ## [0.8.5] - 2026-10-14
 

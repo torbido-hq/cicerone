@@ -6,7 +6,8 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
-from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
+from cicerone.ranking import keep_top_k, renumber_ranks, rerank_by_score
+from cicerone.reasons import PRIORITY_BLOCK_COLUMN, SOURCE_CONTRIBS_COLUMN
 
 
 def _as_rank(value: object) -> int:
@@ -41,19 +42,17 @@ def combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
     tagged = []
     for priority, frame in enumerate(frames):
         part = frame.copy()
-        part["_priority"] = priority
+        part[PRIORITY_BLOCK_COLUMN] = priority
         tagged.append(part)
     combined = pd.concat(tagged, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
-    combined = combined.sort_values([Columns.User, "_priority", Columns.Rank], kind="mergesort")
-    combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+    combined = combined.sort_values([Columns.User, PRIORITY_BLOCK_COLUMN, Columns.Rank], kind="mergesort")
+    combined = keep_top_k(combined, top_k)
     combined[SOURCE_CONTRIBS_COLUMN] = [
         _priority_contrib(label, rank)
         for label, rank in zip(combined[SOURCE_COLUMN], combined[Columns.Rank], strict=True)
     ]
-    combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
-    drop = [column for column in (WEIGHT_COLUMN, "_priority") if column in combined.columns]
-    return combined.drop(columns=drop)
+    return renumber_ranks(combined).drop(columns=[WEIGHT_COLUMN], errors="ignore")
 
 
 def combine_by_weighted_fusion(
@@ -99,13 +98,7 @@ def combine_by_weighted_fusion(
         }
     )
     fused[SOURCE_CONTRIBS_COLUMN] = fused[SOURCE_CONTRIBS_COLUMN].map(_sort_contribs)
-    fused = fused.sort_values(
-        [Columns.User, Columns.Score, Columns.Item],
-        ascending=[True, False, True],
-        kind="mergesort",
-    )
-    fused[Columns.Rank] = fused.groupby(Columns.User).cumcount() + 1
-    fused = fused.groupby(Columns.User, as_index=False).head(top_k)
+    fused = rerank_by_score(fused, top_k)
     return fused[
         [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
     ]
