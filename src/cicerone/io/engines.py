@@ -6,6 +6,7 @@ import threading
 
 import sqlalchemy
 from sqlalchemy import Connection, Engine, Insert, String, Table, Text
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -41,7 +42,10 @@ def insert_ignoring_duplicates(bind: Engine | Connection, table: Table) -> Inser
         return postgresql_insert(table).on_conflict_do_nothing()
     if dialect == "sqlite":
         return sqlite_insert(table).on_conflict_do_nothing()
-    return table.insert().prefix_with("IGNORE", dialect="mysql")
+    # Not INSERT IGNORE: that also turns truncation and other errors into warnings.
+    statement = mysql_insert(table)
+    key = next(iter(table.primary_key)).name
+    return statement.on_duplicate_key_update({key: statement.inserted[key]})
 
 
 def sql_source(bind: Engine | Connection, query: str | None, table: str, alias: str) -> str:

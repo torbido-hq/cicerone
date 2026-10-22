@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import Column, Engine, Integer, MetaData, Table, Text, bindparam, text
+from sqlalchemy.schema import CreateTable
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import TEXT_KEY, engine_for, insert_ignoring_duplicates, quote_identifier
@@ -100,7 +101,7 @@ class TrackDbBackend:
             return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
-        track_table(table).create(conn, checkfirst=True)
+        conn.execute(CreateTable(track_table(table), if_not_exists=True))
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -174,7 +175,7 @@ class TrackDbBackend:
         engine = self._db_engine()
         eval_table = _eval_table(table)
         with engine.begin() as conn:
-            eval_table.create(conn, checkfirst=True)
+            conn.execute(CreateTable(eval_table, if_not_exists=True))
             conn.execute(eval_table.delete())
             self._ensure_fence()
             written_at = pd.Timestamp.now(tz="UTC").isoformat()

@@ -87,7 +87,7 @@ def test_quote_identifier_follows_the_dialect():
     [
         ("postgresql", "ON CONFLICT DO NOTHING"),
         ("sqlite", "ON CONFLICT DO NOTHING"),
-        ("mysql", "INSERT IGNORE"),
+        ("mysql", "ON DUPLICATE KEY UPDATE event_id = VALUES(event_id)"),
     ],
 )
 def test_insert_ignoring_duplicates_uses_the_dialect_syntax(dialect, clause):

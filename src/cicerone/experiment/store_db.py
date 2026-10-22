@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import Column, Engine, MetaData, Table, Text, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
+from sqlalchemy.schema import CreateTable
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.engines import TEXT_KEY, engine_for, quote_identifier
@@ -170,7 +171,7 @@ class ExperimentDbBackend:
             try:
                 with engine.begin() as conn:
                     _fence()
-                    state_table.create(conn, checkfirst=True)
+                    conn.execute(CreateTable(state_table, if_not_exists=True))
                     _replace_row(conn)
             except SQLAlchemyError as exc:
                 if not is_missing_column_error(exc):

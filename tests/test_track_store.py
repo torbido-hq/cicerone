@@ -193,6 +193,25 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
+def test_track_and_eval_tables_are_created_in_one_statement(tmp_path) -> None:
+    from sqlalchemy import event
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    statements: list[str] = []
+    engine = store.backend._db_engine()
+    event.listen(engine, "before_cursor_execute", lambda *args: statements.append(args[2]))
+
+    store.append_rows([_row()])
+    store.write_eval({"ok": True})
+
+    creates = [sql.strip() for sql in statements if "CREATE TABLE" in sql]
+    assert len(creates) == 2
+    # IF NOT EXISTS, not a separate existence check that a concurrent writer can race.
+    assert all(sql.startswith("CREATE TABLE IF NOT EXISTS") for sql in creates)
+    assert not any("PRAGMA" in sql for sql in statements)
+
+
 def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     from sqlalchemy import create_engine, text
 
