@@ -46,6 +46,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The Thompson window ends at the allocation time: track rows with a future
+  `occurred_at` are no longer counted (and counted again next run).
+- Tracking conversion counts and CVR count each converted impression once,
+  as CTR does, so repeat conversions on one recommendation no longer
+  inflate them (overall, per rank/source/variant, experiment outcomes and
+  Thompson arms).
 
 ## [0.8.5] - 2026-10-14
 

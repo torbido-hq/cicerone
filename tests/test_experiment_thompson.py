@@ -65,12 +65,26 @@ def test_window_trials_from_slices_uses_click_conversions() -> None:
     assert "parked" not in trials
 
 
+_WINDOW_END = datetime(2026, 9, 5, tzinfo=UTC)
+
+
 def test_track_rows_since_filters_occurred_at() -> None:
     rows = [
         {"occurred_at": "2026-09-01T00:00:00Z", "kind": "impression"},
         {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
     ]
-    kept = track_rows_since(rows, "2026-09-02T00:00:00Z")
+    kept = track_rows_since(rows, "2026-09-02T00:00:00Z", until=_WINDOW_END)
+    assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
+
+
+@pytest.mark.parametrize("started_at", [None, "2026-09-02T00:00:00Z"])
+def test_track_rows_since_excludes_rows_at_or_after_window_end(started_at: str | None) -> None:
+    rows = [
+        {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
+        {"occurred_at": "2026-09-05T00:00:00Z", "kind": "impression"},
+        {"occurred_at": "2027-01-01T00:00:00Z", "kind": "impression"},
+    ]
+    kept = track_rows_since(rows, started_at, until=_WINDOW_END)
     assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
 
 
@@ -213,11 +227,12 @@ def test_pick_champion_and_helpers() -> None:
     solo = select_active_recipes(recipes, champion="control", challenger="control", explore_traffic=0.5)
     assert [item.name for item in solo] == ["control"]
     assert solo[0].traffic == pytest.approx(1.0)
-    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time")
+    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time", until=_WINDOW_END)
     assert kept == []
     undated = track_rows_since(
         [{"occurred_at": None, "kind": "impression"}, {"occurred_at": "2026-09-03T00:00:00Z"}],
         "2026-09-02T00:00:00Z",
+        until=_WINDOW_END,
     )
     assert [row["occurred_at"] for row in undated] == ["2026-09-03T00:00:00Z"]
     with pytest.raises(ValueError, match="at least two"):

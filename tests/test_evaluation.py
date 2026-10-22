@@ -1642,6 +1642,51 @@ def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
     assert outcomes["alice"] == pytest.approx(0.5)
 
 
+def test_evaluate_tracking_counts_unique_converted_impressions() -> None:
+    rows = _track(
+        *(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": item,
+                "variant": "control",
+                "rank": rank,
+                "occurred_at": "2026-08-28T12:00:00Z",
+                "event_id": f"imp-{rank}",
+            }
+            for rank, item in ((1, "ipa"), (2, "stout"))
+        ),
+        {
+            "kind": "click",
+            "user_id": "alice",
+            "item_id": "ipa",
+            "occurred_at": "2026-08-28T12:01:00Z",
+            "event_id": "clk-1",
+        },
+    )
+    conversions = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "event_type": "purchase", "occurred_at": at}
+            for at in ("2026-08-28T12:10:00Z", "2026-08-28T12:20:00Z")
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    for metrics in (report.overall, report.by_variant["control"]):
+        assert metrics.n_impressions == 2
+        assert metrics.n_conversions_view == 1
+        assert metrics.n_conversions_click == 1
+        assert metrics.cvr_view == pytest.approx(0.5)
+    for attribution in ("impression", "click"):
+        outcomes = user_track_outcomes(
+            track_rows=rows,
+            conversions=conversions,
+            primary_metric="conversion",
+            attribution=attribution,
+            window_hours=24.0,
+        )
+        assert outcomes["alice"] == pytest.approx(0.5)
+
+
 def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
     rows = _track(
         {

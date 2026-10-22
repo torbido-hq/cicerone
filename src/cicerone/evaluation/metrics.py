@@ -82,23 +82,23 @@ def fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return frame
 
 
-def _clicked_impression_count(matched_clicks: pd.DataFrame) -> int:
-    if matched_clicks.empty:
+def _distinct_prior_count(matched: pd.DataFrame) -> int:
+    if matched.empty:
         return 0
-    if "prior_event_id" in matched_clicks.columns:
-        return int(matched_clicks["prior_event_id"].dropna().astype(str).nunique())
-    return int(len(matched_clicks))
+    if "prior_event_id" in matched.columns:
+        return int(matched["prior_event_id"].dropna().astype(str).nunique())
+    return int(len(matched))
 
 
-def clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
-    if matched_clicks.empty or USER_COLUMN not in matched_clicks.columns:
+def distinct_priors_by_user(matched: pd.DataFrame) -> pd.Series:
+    if matched.empty or USER_COLUMN not in matched.columns:
         return pd.Series(dtype=int)
-    if "prior_event_id" in matched_clicks.columns:
-        keyed = matched_clicks.dropna(subset=["prior_event_id"])
+    if "prior_event_id" in matched.columns:
+        keyed = matched.dropna(subset=["prior_event_id"])
         if keyed.empty:
             return pd.Series(dtype=int)
         return keyed.groupby(USER_COLUMN)["prior_event_id"].nunique()
-    return matched_clicks.groupby(USER_COLUMN).size()
+    return matched.groupby(USER_COLUMN).size()
 
 
 def _slice_metrics(
@@ -108,9 +108,9 @@ def _slice_metrics(
     click_conversions: pd.DataFrame,
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
-    n_clicks = min(_clicked_impression_count(matched_clicks), n_impressions)
-    n_view = min(int(len(view_conversions)), n_impressions)
-    n_click = min(int(len(click_conversions)), n_impressions)
+    n_clicks = min(_distinct_prior_count(matched_clicks), n_impressions)
+    n_view = min(_distinct_prior_count(view_conversions), n_impressions)
+    n_click = min(_distinct_prior_count(click_conversions), n_impressions)
     users = set()
     if not impressions.empty and USER_COLUMN in impressions.columns:
         users.update(impressions[USER_COLUMN].astype(str))
@@ -234,6 +234,12 @@ def _group_sizes(frame: pd.DataFrame) -> pd.Series:
     return frame.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True).size()
 
 
+def _distinct_priors_by_group(attributed: pd.DataFrame) -> pd.Series:
+    if attributed.empty:
+        return pd.Series(dtype=int)
+    return attributed.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
+
+
 def _dimension_value_key(dimension: str, value: Any) -> str:
     if dimension == RANK_COLUMN:
         number = pd.to_numeric(value, errors="coerce")
@@ -277,12 +283,8 @@ def metrics_by_impression_dimensions(
         attribution_memberships,
         event_column="prior_event_id",
     )
-    click_counts = (
-        clicks.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
-        if not clicks.empty
-        else pd.Series(dtype=int)
-    )
-    view_counts = _group_sizes(
+    click_counts = _distinct_priors_by_group(clicks)
+    view_counts = _distinct_priors_by_group(
         _event_memberships(
             view_conv,
             attribution_memberships,
@@ -299,7 +301,7 @@ def metrics_by_impression_dimensions(
         click_memberships = click_memberships[[_EVENT_KEY, _DIMENSION, _DIMENSION_VALUE]].drop_duplicates()
     else:
         click_memberships = attribution_memberships.iloc[0:0]
-    click_conversion_counts = _group_sizes(
+    click_conversion_counts = _distinct_priors_by_group(
         _event_memberships(
             click_conv,
             click_memberships,
