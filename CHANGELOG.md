@@ -50,7 +50,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   does. A mixed-case `recommendations_table` on Postgres no longer keeps a
   user's old rows on incremental replace, and identifiers use backticks on
   MySQL instead of double quotes. A full recommendations write on MySQL
-  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there).
+  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there),
+  and the track, eval and experiment-state tables can be created and
+  written on MySQL (bounded key columns, `INSERT IGNORE`).
 - The db events source polls tables whose `occurred_at` / `event_id`
   columns are mixed case on Postgres.
 

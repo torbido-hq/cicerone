@@ -9,10 +9,10 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, bindparam, text
+from sqlalchemy import Column, Engine, Integer, MetaData, Table, Text, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
-from cicerone.io.engines import create_table_sql, engine_for, insert_sql, quote_identifier
+from cicerone.io.engines import TEXT_KEY, engine_for, insert_ignoring_duplicates, quote_identifier
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
@@ -29,18 +29,27 @@ from cicerone.track.store_common import (
 
 logger = logging.getLogger(__name__)
 
-_TRACK_TABLE = (
-    ("event_id", "TEXT PRIMARY KEY"),
-    ("kind", "TEXT NOT NULL"),
-    ("user_id", "TEXT NOT NULL"),
-    ("item_id", "TEXT NOT NULL"),
-    ("rank", "INTEGER"),
-    ("occurred_at", "TEXT NOT NULL"),
-    ("variant", "TEXT"),
-    ("experiment_id", "TEXT"),
-    ("generated_at", "TEXT"),
-)
-_EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
+
+def track_table(name: str) -> Table:
+    return Table(
+        name,
+        MetaData(),
+        Column("event_id", TEXT_KEY, primary_key=True),
+        Column("kind", Text, nullable=False),
+        Column("user_id", Text, nullable=False),
+        Column("item_id", Text, nullable=False),
+        Column("rank", Integer),
+        Column("occurred_at", Text, nullable=False),
+        Column("variant", Text),
+        Column("experiment_id", Text),
+        Column("generated_at", Text),
+    )
+
+
+def _eval_table(name: str) -> Table:
+    return Table(
+        name, MetaData(), Column("payload", Text, nullable=False), Column("written_at", Text, nullable=False)
+    )
 
 
 class TrackDbBackend:
@@ -91,7 +100,7 @@ class TrackDbBackend:
             return self._engine
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
-        conn.execute(text(create_table_sql(conn, table, _TRACK_TABLE)))
+        track_table(table).create(conn, checkfirst=True)
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = sql_identifier(
@@ -99,10 +108,6 @@ class TrackDbBackend:
             option="track_table",
         )
         engine = self._db_engine()
-        row_sql = text(
-            insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
-            + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
-        )
         params: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
@@ -131,7 +136,7 @@ class TrackDbBackend:
             if not fresh:
                 return []
             self._ensure_fence()
-            conn.execute(row_sql, fresh)
+            conn.execute(insert_ignoring_duplicates(conn, track_table(table)), fresh)
             self._ensure_fence()
             return fresh
 
@@ -167,15 +172,13 @@ class TrackDbBackend:
             option="eval_table",
         )
         engine = self._db_engine()
-        quoted = quote_identifier(engine, table)
+        eval_table = _eval_table(table)
         with engine.begin() as conn:
-            conn.execute(text(create_table_sql(conn, table, _EVAL_TABLE)))
-            conn.execute(text(f"DELETE FROM {quoted}"))
+            eval_table.create(conn, checkfirst=True)
+            conn.execute(eval_table.delete())
             self._ensure_fence()
-            conn.execute(
-                text(insert_sql(conn, table, [name for name, _kind in _EVAL_TABLE])),
-                {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
-            )
+            written_at = pd.Timestamp.now(tz="UTC").isoformat()
+            conn.execute(eval_table.insert(), {"payload": encoded, "written_at": written_at})
             self._ensure_fence()
 
     def _read_eval_db(self) -> dict[str, Any] | None:

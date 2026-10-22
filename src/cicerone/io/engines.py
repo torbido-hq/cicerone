@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
 
 import sqlalchemy
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, Insert, String, Table, Text
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -29,17 +30,18 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
     return bind.dialect.identifier_preparer.quote(name)
 
 
-def create_table_sql(bind: Engine | Connection, table: str, columns: Sequence[tuple[str, str]]) -> str:
-    """``CREATE TABLE IF NOT EXISTS`` for ``(name, type)`` columns, every identifier quoted."""
-    spec = ", ".join(f"{quote_identifier(bind, name)} {kind}" for name, kind in columns)
-    return f"CREATE TABLE IF NOT EXISTS {quote_identifier(bind, table)} ({spec})"
+# MySQL can't index TEXT without a length; other dialects keep TEXT.
+TEXT_KEY = Text().with_variant(String(255), "mysql")
 
 
-def insert_sql(bind: Engine | Connection, table: str, names: Sequence[str]) -> str:
-    """``INSERT`` of one row bound by column name (``:name``), every identifier quoted."""
-    columns = ", ".join(quote_identifier(bind, name) for name in names)
-    values = ", ".join(f":{name}" for name in names)
-    return f"INSERT INTO {quote_identifier(bind, table)} ({columns}) VALUES ({values})"
+def insert_ignoring_duplicates(bind: Engine | Connection, table: Table) -> Insert:
+    """INSERT that skips rows whose primary key already exists, in the dialect's own syntax."""
+    dialect = bind.dialect.name
+    if dialect == "postgresql":
+        return postgresql_insert(table).on_conflict_do_nothing()
+    if dialect == "sqlite":
+        return sqlite_insert(table).on_conflict_do_nothing()
+    return table.insert().prefix_with("IGNORE", dialect="mysql")
 
 
 def sql_source(bind: Engine | Connection, query: str | None, table: str, alias: str) -> str:

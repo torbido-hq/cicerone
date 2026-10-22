@@ -8,11 +8,11 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Column, Engine, MetaData, Table, Text, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import create_table_sql, engine_for, insert_sql, quote_identifier
+from cicerone.io.engines import TEXT_KEY, engine_for, quote_identifier
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 
@@ -30,12 +30,15 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
 )
 
 
-_STATE_TABLE = (
-    ("experiment_id", "TEXT PRIMARY KEY"),
-    ("promoted_variant", "TEXT"),
-    ("promoted_at", "TEXT"),
-    ("payload", "TEXT"),
-)
+def _state_schema(name: str) -> Table:
+    return Table(
+        name,
+        MetaData(),
+        Column("experiment_id", TEXT_KEY, primary_key=True),
+        Column("promoted_variant", Text),
+        Column("promoted_at", Text),
+        Column("payload", Text),
+    )
 
 
 def _state_payload_json(state: Mapping[str, Any]) -> str:
@@ -145,30 +148,29 @@ class ExperimentDbBackend:
             promoted_variant = str(promoted_variant)
         if promoted_at is not None:
             promoted_at = str(promoted_at)
-        create_sql = text(create_table_sql(engine, table, _STATE_TABLE))
+        state_table = _state_schema(table)
         params = {
             "experiment_id": experiment_id,
             "promoted_variant": promoted_variant,
             "promoted_at": promoted_at,
             "payload": _state_payload_json(state),
         }
-        row_sql = text(insert_sql(engine, table, list(params)))
 
         def _fence() -> None:
             self._fence.ensure()
 
         def _replace_row(conn: Any) -> None:
             _fence()
-            conn.execute(text(f"DELETE FROM {quoted_table}"))
+            conn.execute(state_table.delete())
             _fence()
-            conn.execute(row_sql, params)
+            conn.execute(state_table.insert(), params)
             _fence()
 
         def _write() -> None:
             try:
                 with engine.begin() as conn:
                     _fence()
-                    conn.execute(create_sql)
+                    state_table.create(conn, checkfirst=True)
                     _replace_row(conn)
             except SQLAlchemyError as exc:
                 if not is_missing_column_error(exc):
