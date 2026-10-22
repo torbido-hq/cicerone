@@ -1738,6 +1738,20 @@ def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
     assert outcomes["alice"] == pytest.approx(1.0)
 
 
+def test_evaluate_tracking_leaves_out_future_events() -> None:
+    future = (pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=1)).isoformat()
+    rows = _track(
+        {"kind": "impression", "user_id": "alice", "item_id": "ipa", "occurred_at": "2026-08-28T12:00:00Z"},
+        {"kind": "impression", "user_id": "bob", "item_id": "ipa", "occurred_at": future},
+    )
+    conversions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "event_type": "purchase", "occurred_at": future}]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24 * 365 * 10)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_conversions_view == 0
+
+
 def test_evaluate_tracking_blank_event_id_cannot_collide_with_explicit_id() -> None:
     rows = _track(
         *(

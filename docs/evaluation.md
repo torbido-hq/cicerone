@@ -53,8 +53,7 @@ max_body_bytes = 2097152 # 2 MiB
 ```
 
 Storage is next to `[output]`: local `track.jsonl`, or a
-`recommendation_track` db table. Each stored row gets `received_at`, the
-server's UTC time at ingest. Enabling `[track]` with object-store output
+`recommendation_track` db table. Enabling `[track]` with object-store output
 is rejected at config load because JSONL append is not atomic. `events.ha =
 true` requires db output.
 
@@ -104,10 +103,12 @@ Missing bearer → **401**. Writer lock busy or lost → **503**.
   `[experiment].primary_metric` when that is an event type), attributed to a
   prior impression (view-through) or click (click-through) with the same
   window and `(user_id, item_id)` match.
-- **CVR** — distinct converted impressions (clicks, for click-through) /
-  impressions: repeat conversions on one count once. Experiment
-  `primary_metric = "conversion"` scores this **rate** per user, not a
-  conversion count.
+- **CVR** — distinct converted impressions / impressions: repeat
+  conversions (or converting clicks) on one impression count once.
+  Experiment `primary_metric = "conversion"` scores this **rate** per user,
+  not a conversion count.
+- Impressions, clicks and conversions with a future `occurred_at` are left
+  out until that time has passed.
 
 `min_impressions` (default **100**) gates experiment **Promote** /
 Thompson volume when `primary_metric` is `ctr` or `conversion`. It does

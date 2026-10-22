@@ -44,7 +44,6 @@ TRACK_COLUMNS: tuple[str, ...] = (
     VARIANT_COLUMN,
     "experiment_id",
     "generated_at",
-    "received_at",
 )
 HISTORY_COLUMNS: tuple[str, ...] = (
     USER_COLUMN,

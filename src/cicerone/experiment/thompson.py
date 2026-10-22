@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -20,7 +21,6 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
-from cicerone.track.store_common import utc_stamp
 
 _EMPTY = np.array([], dtype=object)
 _EMPTY_REWARDS = np.array([], dtype=float)
@@ -114,35 +114,18 @@ def track_rows_since(
     started_at: str | None,
     *,
     until: datetime,
-    received_through: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Rows received after ``received_through``.
-
-    State without it predates ``received_at``: rows received since ``started_at``, and
-    rows without ``received_at`` by ``occurred_at`` in ``[started_at, until)``.
-    """
-    through = utc_stamp(received_through) if received_through else None
-    start = utc_stamp(started_at) if started_at else None
-    if through is None and started_at and start is None:
+    """Rows with ``occurred_at`` in ``[started_at, until)``; ``until`` starts the next window."""
+    stamp = pd.to_datetime(started_at, utc=True, errors="coerce") if started_at else None
+    if started_at and pd.isna(stamp):
         return []
     out: list[dict[str, Any]] = []
     for row in rows:
-        received = utc_stamp(row.get("received_at"))
-        if through is not None:
-            keep = received is not None and received > through
-        elif received is not None:
-            keep = start is None or received >= start
-        else:
-            when = utc_stamp(row.get("occurred_at"))
-            keep = when is not None and when < until and (start is None or when >= start)
-        if keep:
-            out.append(dict(row))
+        when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
+        if pd.isna(when) or when >= until or (stamp is not None and when < stamp):
+            continue
+        out.append(dict(row))
     return out
-
-
-def last_received_at(rows: Sequence[Mapping[str, Any]], previous: str | None) -> str | None:
-    stamps = [stamp for stamp in (utc_stamp(row.get("received_at")) for row in rows) if stamp is not None]
-    return max(stamps).isoformat() if stamps else previous
 
 
 def add_counts(base: ArmCounts, extra: ArmCounts) -> ArmCounts:

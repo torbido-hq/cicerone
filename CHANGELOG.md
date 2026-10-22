@@ -12,9 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`max_workers`, `epoch_metrics`, `item_based_k_neighbors`,
   `model_configs`, `content_fallback_max_neighbors`). `fit_strategies` and
   `train_and_recommend` accept `fit=`; the individual keywords still work.
-- Track rows carry `received_at`, the server's UTC time at ingest
-  (`track.jsonl` field, nullable `recommendation_track` column added to an
-  existing table on the next write).
 
 ### Changed
 
@@ -49,16 +46,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
-- Thompson counts the track rows received since its previous allocation
-  (by `received_at`), so a row that arrives late is counted once on the
-  next run instead of never, and a future `occurred_at` is not counted
-  twice. The state keeps the last counted `received_at` as
-  `received_through`; older state, and rows written before `received_at`,
-  fall back once to `occurred_at` in `[window_started_at, now)`.
 - Tracking conversion counts and CVR count each converted impression once,
-  as CTR does, so repeat conversions on one recommendation no longer
-  inflate them (overall, per rank/source/variant, experiment outcomes and
-  Thompson arms).
+  as CTR does, so repeat conversions or several converting clicks on one
+  recommendation no longer inflate them (overall, per rank/source/variant,
+  experiment outcomes and Thompson arms).
+- Tracking metrics, experiment outcomes and Thompson arms leave out
+  impressions, clicks and conversions with a future `occurred_at` until
+  that time has passed, so Thompson no longer counts them twice.
 
 ## [0.8.5] - 2026-10-14
 

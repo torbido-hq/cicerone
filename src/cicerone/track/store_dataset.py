@@ -8,7 +8,6 @@ import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -75,14 +74,13 @@ class TrackDatasetBackend:
         require_appendable_track_log(self._output)
         with self._dataset_append_lock(), self._fence.lease():
             known = self._refresh_known_ids()
-            received_at = datetime.now(UTC).isoformat()
             fresh: list[dict[str, Any]] = []
             seen: set[str] = set()
             for row in rows:
                 event_id = str(row.get("event_id") or "")
                 if event_id and (event_id in known or event_id in seen):
                     continue
-                fresh.append({**row, "received_at": received_at})
+                fresh.append(row)
                 if event_id:
                     seen.add(event_id)
             if not fresh:

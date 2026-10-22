@@ -11,7 +11,6 @@ from cicerone.experiment.thompson import (
     ArmCounts,
     _fit_mab,
     allocate_thompson,
-    last_received_at,
     p_best,
     parse_arm_counts,
     pick_champion_name,
@@ -66,67 +65,18 @@ def test_window_trials_from_slices_uses_click_conversions() -> None:
     assert "parked" not in trials
 
 
-_WINDOW_END = datetime(2026, 9, 5, tzinfo=UTC)
-
-
 def test_track_rows_since_filters_occurred_at() -> None:
     rows = [
         {"occurred_at": "2026-09-01T00:00:00Z", "kind": "impression"},
         {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
+        {"occurred_at": "2026-09-04T00:00:00Z", "kind": "impression"},
     ]
-    kept = track_rows_since(rows, "2026-09-02T00:00:00Z", until=_WINDOW_END)
+    until = datetime(2026, 9, 4, tzinfo=UTC)
+    kept = track_rows_since(rows, "2026-09-02T00:00:00Z", until=until)
     assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
-
-
-@pytest.mark.parametrize("started_at", [None, "2026-09-02T00:00:00Z"])
-def test_track_rows_since_excludes_rows_at_or_after_window_end(started_at: str | None) -> None:
-    rows = [
-        {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
-        {"occurred_at": "2026-09-05T00:00:00Z", "kind": "impression"},
-        {"occurred_at": "2027-01-01T00:00:00Z", "kind": "impression"},
-    ]
-    kept = track_rows_since(rows, started_at, until=_WINDOW_END)
-    assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
-
-
-def _received(event_id: str, received_at: str, occurred_at: str = "2026-09-01T00:00:00Z") -> dict:
-    return {"event_id": event_id, "occurred_at": occurred_at, "received_at": received_at}
-
-
-def test_track_rows_since_counts_each_row_once_in_arrival_order() -> None:
-    rows = [_received("a", "2026-09-04T10:00:00+00:00"), _received("b", "2026-09-04T11:00:00+00:00")]
-    first = track_rows_since(rows, None, until=_WINDOW_END)
-    through = last_received_at(first, None)
-    assert [row["event_id"] for row in first] == ["a", "b"]
-    assert through == "2026-09-04T11:00:00+00:00"
-    late = _received("late", "2026-09-04T12:00:00+00:00", occurred_at="2026-08-01T00:00:00Z")
-    rows.append(late)
-    second = track_rows_since(rows, "2026-09-04T11:30:00+00:00", until=_WINDOW_END, received_through=through)
-    assert [row["event_id"] for row in second] == ["late"]
-    through = last_received_at(second, through)
-    third = track_rows_since(rows, "2026-09-04T13:00:00+00:00", until=_WINDOW_END, received_through=through)
-    assert third == []
-    assert last_received_at([], through) == through
-
-
-def test_track_rows_since_ignores_rows_without_received_at_once_a_cutoff_exists() -> None:
-    rows = [{"event_id": "old", "kind": "impression", "occurred_at": "2026-09-04T12:00:00Z"}]
-    kept = track_rows_since(
-        rows, "2026-09-04T00:00:00Z", until=_WINDOW_END, received_through="2026-09-04T11:00:00+00:00"
-    )
-    assert kept == []
-
-
-def test_track_rows_since_old_state_counts_received_since_start_and_old_rows_by_occurred_at() -> None:
-    rows = [
-        _received("before", "2026-09-03T23:00:00+00:00"),
-        _received("after", "2026-09-04T01:00:00+00:00", occurred_at="2026-08-01T00:00:00Z"),
-        {"event_id": "old-in", "kind": "impression", "occurred_at": "2026-09-04T02:00:00Z"},
-        {"event_id": "old-out", "kind": "impression", "occurred_at": "2026-09-03T02:00:00Z"},
-    ]
-    for through in (None, "not-a-time"):
-        kept = track_rows_since(rows, "2026-09-04T00:00:00Z", until=_WINDOW_END, received_through=through)
-        assert [row["event_id"] for row in kept] == ["after", "old-in"]
+    # The row at ``until`` belongs to the next window, which starts there.
+    following = track_rows_since(rows, until.isoformat(), until=until.replace(day=5))
+    assert [row["occurred_at"] for row in following] == ["2026-09-04T00:00:00Z"]
 
 
 def test_parse_arm_counts_ignores_junk() -> None:
@@ -268,12 +218,13 @@ def test_pick_champion_and_helpers() -> None:
     solo = select_active_recipes(recipes, champion="control", challenger="control", explore_traffic=0.5)
     assert [item.name for item in solo] == ["control"]
     assert solo[0].traffic == pytest.approx(1.0)
-    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time", until=_WINDOW_END)
+    until = datetime(2026, 9, 4, tzinfo=UTC)
+    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time", until=until)
     assert kept == []
     undated = track_rows_since(
         [{"occurred_at": None, "kind": "impression"}, {"occurred_at": "2026-09-03T00:00:00Z"}],
         "2026-09-02T00:00:00Z",
-        until=_WINDOW_END,
+        until=until,
     )
     assert [row["occurred_at"] for row in undated] == ["2026-09-03T00:00:00Z"]
     with pytest.raises(ValueError, match="at least two"):

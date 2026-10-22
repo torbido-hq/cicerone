@@ -58,7 +58,9 @@ _JOIN_KEYS = (OCCURRED_AT, USER_COLUMN, ITEM_COLUMN)
 def with_join_keys(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or any(column not in frame.columns for column in _JOIN_KEYS):
         return frame.iloc[0:0]
-    return frame.dropna(subset=list(_JOIN_KEYS))
+    frame = frame.dropna(subset=list(_JOIN_KEYS))
+    # Future-dated events have not happened yet; they count once their time has passed.
+    return frame.loc[frame[OCCURRED_AT] <= pd.Timestamp.now(tz="UTC")]
 
 
 def safe_ratio(numerator: int, denominator: int) -> float:

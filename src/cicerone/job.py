@@ -35,7 +35,6 @@ from cicerone.experiment.guardrails import evaluate_guardrails
 from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import (
     allocate_thompson,
-    last_received_at,
     select_active_recipes,
     track_rows_since,
     window_trials_from_slices,
@@ -230,16 +229,13 @@ def _select_thompson_recipes(
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
     now = datetime.now(UTC)
-    window_started = received_through = ""
+    window_started = ""
     if previous is not None and has_pair:
         window_started = str(previous.get("window_started_at") or "").strip()
-        received_through = str(previous.get("received_through") or "").strip()
-    if has_pair and not (window_started or received_through):
+    if has_pair and not window_started:
         window_rows = []
     else:
-        window_rows = track_rows_since(
-            track_rows, window_started or None, until=now, received_through=received_through or None
-        )
+        window_rows = track_rows_since(track_rows, window_started or None, until=now)
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
@@ -308,7 +304,6 @@ def _select_thompson_recipes(
             promoted_variant=promoted,
             promoted_at=(str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None),
             **allocation.as_state(),
-            received_through=last_received_at(window_rows, received_through or None),
         )
         logger.info(
             "Thompson allocation: champion=%s challenger=%s rotated=%s",

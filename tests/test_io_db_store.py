@@ -459,7 +459,7 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
 
     engine = _Engine()
     monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
-    db_store.add_missing_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
+    db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
 
@@ -528,7 +528,9 @@ def test_a_manifest_column_added_concurrently_does_not_fail_the_write(tmp_path, 
         return _StaleInspector(inner) if calls["n"] == 1 else inner
 
     monkeypatch.setattr(db_store, "inspect", _inspect)
-    db_store.add_missing_columns(sink._engine, "recommendation_runs", {"generated_at": "x", "n_events": 1})
+    db_store._add_missing_manifest_columns(
+        sink._engine, "recommendation_runs", {"generated_at": "x", "n_events": 1}
+    )
     assert calls["n"] == 2
 
 
