@@ -175,7 +175,8 @@ def test_request_metrics_bound_unmatched_paths_and_unknown_methods():
     samples = metric_samples(after, "cicerone_requests_total")
     assert not any(labels["endpoint"] == "/no-such-route-7f3a" for labels, _ in samples)
     assert not any(labels["method"] == "PROPFIND" for labels, _ in samples)
-    assert metric_value(after, "cicerone_request_latency_seconds_count", {"endpoint": "unmatched"}) >= 1
+    latency = ("cicerone_request_latency_seconds_count", {"endpoint": "unmatched"})
+    assert metric_value(after, *latency) == metric_value(before, *latency) + 1
 
 
 def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
