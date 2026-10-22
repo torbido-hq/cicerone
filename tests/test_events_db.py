@@ -904,7 +904,7 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
     assert released == [url]
 
 
-def _event_row(event_id: str, minute: int, **overrides) -> dict:
+def _event_row(event_id: str | None, minute: int, **overrides) -> dict:
     defaults = {
         "item_id": f"i{event_id}",
         "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
@@ -942,12 +942,88 @@ def test_db_poll_keeps_an_unacked_rejected_row_in_flight(tmp_path):
     assert source.health().lag == 0
 
 
-def test_db_health_counts_lag_past_a_row_with_an_unparseable_occurred_at(tmp_path, caplog):
+def test_db_poll_reads_naive_timestamp_text_as_utc(tmp_path):
     url = _sqlite_url(tmp_path)
     _seed_events(url, [_event_row("naive", 0, occurred_at="2026-08-13T12:00:00"), _event_row("e1", 1)])
     source = DbEventSource({"database_url": url})
     source.connect()
-    with caplog.at_level("WARNING", logger="cicerone.events.db"):
-        assert [event.event_id for event in source.poll(10)] == ["e1"]
-    assert '"event_id": "naive"' in caplog.text
+
+    polled = list(source.poll(10))
+
+    assert [event.event_id for event in polled] == ["naive", "e1"]
+    assert polled[0].occurred_at == datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+
+
+def test_db_rows_with_a_garbage_occurred_at_never_stall_the_source(tmp_path):
+    url = _sqlite_url(tmp_path)
+    junk = [_event_row(f"junk{n}", 0, occurred_at="not a time") for n in range(5)]
+    _seed_events(url, [*junk, _event_row("e1", 1)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+
+    assert [event.event_id for event in source.poll(2)] == ["e1"]
     assert source.health().lag == 1
+
+
+def test_db_ack_holds_the_watermark_before_an_unacked_event(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row("e1", 0), _event_row("e2", 1), _event_row("e3", 2)])
+    options = {"database_url": url, "watermark_path": str(tmp_path / "wm.json")}
+    source = DbEventSource(options)
+    source.connect()
+    assert [event.event_id for event in source.poll(2)] == ["e1", "e2"]
+
+    assert source.ack(["e2"]) == ("e2",)
+    assert [event.event_id for event in source.poll(10)] == ["e3"]
+    first_restart = DbEventSource(options)
+    first_restart.connect()
+    assert [event.event_id for event in first_restart.poll(10)] == ["e1", "e2", "e3"]
+
+    source.ack(["e1"])
+    second_restart = DbEventSource(options)
+    second_restart.connect()
+    assert [event.event_id for event in second_restart.poll(10)] == ["e3"]
+
+
+def test_db_nack_redelivers_events_acked_after_it(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row("e1", 0), _event_row("e2", 1)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    first, second = source.poll(10)
+    source.ack([second.event_id])
+    source.nack([first])
+
+    assert [event.event_id for event in source.poll(10)] == ["e1", "e2"]
+    source.ack(["e1", "e2"])
+    assert source.health().lag == 0
+
+
+def test_db_pages_rows_without_event_id_by_their_cursor_identity(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(
+        url,
+        [
+            _event_row(None, 0, item_id="i1", id=1),
+            _event_row("b", 0, id=2),
+            _event_row("c", 0, id=3),
+            _event_row("", 0, item_id="i4", id=4),
+        ],
+    )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert [event.event_id for event in source.poll(1)] == ["b"]
+    source.ack(["b"])
+
+    assert [event.event_id for event in source.poll(10)] == ["c", "id:1", "id:4"]
+
+
+def test_db_garbage_occurred_at_never_stalls_a_source_without_event_id(tmp_path):
+    url = _sqlite_url(tmp_path)
+    junk = [_event_row(f"junk{n}", 0, occurred_at="2026-08-13T12:00:00Zjunk") for n in range(10)]
+    rows = [*junk, _event_row("e1", 1)]
+    _seed_events(url, [{key: value for key, value in row.items() if key != "event_id"} for row in rows])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+
+    assert [event.item_id for event in source.poll(1)] == ["ie1"]

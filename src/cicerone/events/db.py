@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
+_CURSOR_ROWS_ALIAS = "cicerone_events_cursor"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
 # Columns an invalid row is reported by; user and item ids stay out of the log.
@@ -72,6 +73,19 @@ def _parsed_rows(
             yield parse(payload)
         except EventNormalizeError as exc:
             on_invalid(payload, exc)
+
+
+def _cursor_event_id(by_lower: dict[str, str]) -> str:
+    # SQL twin of _stable_event_id, so paging on event_id agrees with the ack cursor.
+    column = f'"{by_lower["event_id"]}"'
+    fallbacks = [
+        f"NULLIF(CAST(\"{by_lower[name]}\" AS TEXT), '')" for name in ("idempotency_key",) if name in by_lower
+    ]
+    if "id" in by_lower:
+        fallbacks.append(f"'id:' || NULLIF(CAST(\"{by_lower['id']}\" AS TEXT), '')")
+    if not fallbacks:
+        return column
+    return f"COALESCE(NULLIF(CAST({column} AS TEXT), ''), {', '.join(fallbacks)}) AS {column}"
 
 
 def _rejection(payload: dict[str, Any], exc: EventNormalizeError) -> str:
@@ -119,6 +133,8 @@ class DbEventSource(EventSource):
         self._engine: Engine | None = None
         self._lock = threading.Lock()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
+        # Acked past an event still in flight; the watermark waits for it.
+        self._acked_ahead: dict[str, NormalizedEvent] = {}
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -162,7 +178,7 @@ class DbEventSource(EventSource):
                 raise EventSourceError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
             watermark_event_id = self._watermark_event_id
-            in_flight_count = len(self._in_flight)
+            in_flight_count = len(self._in_flight) + len(self._acked_ahead)
             engine = self._engine
         rows = self._fetch_rows(
             engine,
@@ -180,7 +196,7 @@ class DbEventSource(EventSource):
                     break
                 if cursor_key(event) <= cursor:
                     continue
-                if event.event_id in self._in_flight:
+                if event.event_id in self._in_flight or event.event_id in self._acked_ahead:
                     continue
                 self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
@@ -189,28 +205,44 @@ class DbEventSource(EventSource):
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
-            for event in events:
-                self._in_flight.pop(event.event_id, None)
+            returned = [
+                cursor_key(event) for event in events if self._in_flight.pop(event.event_id, None) is not None
+            ]
+            if returned:
+                # Redelivered events go back before anything acked after them.
+                floor = min(returned)
+                self._acked_ahead = {
+                    eid: event for eid, event in self._acked_ahead.items() if cursor_key(event) < floor
+                }
         return ()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
         with self._lock:
-            advanced = False
             for event_id in event_ids:
                 eid = str(event_id)
                 event = self._in_flight.pop(eid, None)
                 if event is None:
                     continue
                 confirmed.append(eid)
-                key = cursor_key(event)
-                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
-                    self._watermark_at = event.occurred_at
-                    self._watermark_event_id = event.event_id
-                    advanced = True
-            if advanced:
-                self._persist_watermark_unlocked()
+                self._acked_ahead[eid] = event
+            if confirmed:
+                self._advance_watermark_unlocked()
         return tuple(confirmed)
+
+    def _advance_watermark_unlocked(self) -> None:
+        # Only through the acked prefix: a restart re-polls from the watermark.
+        pending = min((cursor_key(event) for event in self._in_flight.values()), default=None)
+        done = [e for e in self._acked_ahead.values() if pending is None or cursor_key(e) < pending]
+        if not done:
+            return
+        for event in done:
+            del self._acked_ahead[event.event_id]
+        last = max(done, key=cursor_key)
+        if cursor_key(last) > cursor_tuple(self._watermark_at, self._watermark_event_id):
+            self._watermark_at = last.occurred_at
+            self._watermark_event_id = last.event_id
+            self._persist_watermark_unlocked()
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -264,7 +296,10 @@ class DbEventSource(EventSource):
                 extra = "ctid"
             if extra is not None:
                 selected.append(extra)
-        select_clause = ", ".join(f'"{name}"' for name in selected)
+        select_clause = ", ".join(
+            _cursor_event_id(by_lower) if has_event_id and name == by_lower["event_id"] else f'"{name}"'
+            for name in selected
+        )
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns
@@ -273,6 +308,9 @@ class DbEventSource(EventSource):
             cached_select = self._select_clause
             cached_has_event_id = self._has_event_id_column
         return cached_select, cached_has_event_id
+
+    def _cursor_rows(self, select_clause: str) -> str:
+        return f"(SELECT {select_clause} FROM {self._from_clause()}) AS {_CURSOR_ROWS_ALIAS}"
 
     def _fetch_rows(
         self,
@@ -288,7 +326,7 @@ class DbEventSource(EventSource):
         if identity_sort is not None:
             later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                f"SELECT * FROM {self._cursor_rows(select_clause)} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort) "
                 f"ORDER BY {occurred_order}, ({identity_sort}) ASC "
@@ -302,7 +340,7 @@ class DbEventSource(EventSource):
         elif has_event_id:
             # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
             sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                f"SELECT * FROM {self._cursor_rows(select_clause)} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id) "
                 "ORDER BY occurred_at ASC, event_id ASC "
@@ -314,13 +352,14 @@ class DbEventSource(EventSource):
                 "limit": max(limit, 1),
             }
         else:
+            later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
                 f"SELECT {select_clause} FROM {self._from_clause()} "
-                "WHERE occurred_at >= :watermark "
-                "ORDER BY occurred_at ASC "
+                f"WHERE {later} OR {same} "
+                f"ORDER BY {occurred_order} "
                 "LIMIT :limit"
             )
-            params = {"watermark": watermark_at, "limit": max(limit, 1)}
+            params = {"watermark_at": watermark_at, "limit": max(limit, 1)}
         with engine.connect() as conn:
             result = conn.execute(sql, params)
             return [dict(row) for row in result.mappings()]
@@ -337,12 +376,13 @@ class DbEventSource(EventSource):
         return self._count_after_rows(engine, watermark_at, watermark_event_id)
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
+        select_clause, _has_event_id = self._ensure_source_schema(engine)
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
         identity_sort = identity_sql_sort_expr(engine.dialect.name)
         if identity_sort is not None:
             later, same, _occurred_order = occurred_at_predicates(engine.dialect.name)
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._cursor_rows(select_clause)} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort)"
             )
@@ -352,7 +392,7 @@ class DbEventSource(EventSource):
             }
         else:
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._cursor_rows(select_clause)} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
             )
