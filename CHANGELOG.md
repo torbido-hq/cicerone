@@ -57,8 +57,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as UTC, as it already did for timestamp columns, instead of rejecting it.
 - The db watermark advances only past acked events with nothing earlier
   still in flight, so a restart no longer skips an unacked earlier event.
-- db rows with a blank `event_id` page by the `idempotency_key` / `id`
-  they are acked by, so same-timestamp pages no longer skip them.
 - A db source without an `event_id` column no longer stalls behind SQLite
   rows whose `occurred_at` text is not a timestamp.
 
