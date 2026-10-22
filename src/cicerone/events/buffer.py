@@ -41,6 +41,8 @@ class MicroBatchBuffer:
         cap = batch_size if max_events is None else max_events
         if cap < batch_size:
             raise ValueError("max_events must be >= batch_size")
+        if fingerprint_dedupe and not dedupe:
+            raise ValueError("fingerprint_dedupe requires dedupe")
         self._batch_size = batch_size
         self._max_events = cap
         self._batch_window_seconds = batch_window_seconds

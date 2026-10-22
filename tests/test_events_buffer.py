@@ -104,3 +104,8 @@ def test_buffer_fingerprint_dedupe_generated_only():
     result = buffer.extend([generated, explicit, generated_dup])
     assert [event.event_id for event in result.kept] == [generated.event_id, "explicit"]
     assert [event.event_id for event in result.duplicates] == [generated_dup.event_id]
+
+
+def test_micro_batch_buffer_rejects_fingerprint_dedupe_without_dedupe():
+    with pytest.raises(ValueError, match="fingerprint_dedupe requires dedupe"):
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=1.0, dedupe=False, fingerprint_dedupe=True)
