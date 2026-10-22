@@ -132,6 +132,8 @@ def write_system_config(
     feature_config_path: Path | str = REPO_FEATURES_CONFIG,
     serve_token: str = SYSTEM_SERVE_TOKEN,
     events_webhook: bool = False,
+    models: Sequence[str] = ("collaborative", "popular"),
+    extra_toml: str = "",
 ) -> Path:
     """Write the shared system-spec TOML. ``input_kind`` / ``output_kind`` override ``kind``."""
     io_blocks = _io_toml(
@@ -163,7 +165,7 @@ def write_system_config(
         [job]
         top_k = 3
         feature_config_path = "{feature_config_path}"
-        models = ["collaborative", "popular"]
+        models = {json.dumps(list(models))}
         save_model_artifact = true
 
         [job.eval]
@@ -182,6 +184,7 @@ def write_system_config(
         [track]
         enabled = true
         {events_block}
+        {extra_toml}
         """
     )
     return path
