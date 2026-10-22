@@ -37,6 +37,7 @@ def _dataset_outputs(output_dir: Path) -> dict[str, Any]:
         name = str(path.relative_to(output_dir))
         if path.parent.name == "recommendation_history":
             name = "recommendation_history/<generated_at>.parquet"
+        assert name not in files, f"{path} collides with another output under {name}"
         dtypes = None
         if path.suffix == ".parquet":
             dtypes = {column: str(dtype) for column, dtype in pd.read_parquet(path).dtypes.items()}
