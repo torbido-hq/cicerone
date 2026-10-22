@@ -8,6 +8,7 @@ from typing import Any
 
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import normalize_event, parse_occurred_at
+from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
@@ -75,7 +76,7 @@ def _row_identity(payload: dict[str, Any]) -> str | None:
         if key == "rowid":
             try:
                 return f"{key}:{int(value):020d}"
-            except (TypeError, ValueError):
+            except NUMBER_PARSE_ERRORS:
                 return f"{key}:{value}"
         return f"{key}:{value}"
     return None

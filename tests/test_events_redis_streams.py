@@ -559,8 +559,11 @@ def test_whitespace_required_options_rejected():
         validate_redis_stream_options({"redis_url": "  ", "stream": "s", "consumer_group": "g"})
 
 
-@pytest.mark.parametrize(("block_ms", "expected"), [(None, None), (0, 0), (250, 250)])
-def test_read_sends_block_only_when_configured(monkeypatch, block_ms, expected):
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [({}, None), ({"block_ms": None}, None), ({"block_ms": 0}, 0), ({"block_ms": 250}, 250)],
+)
+def test_read_sends_block_only_when_configured(monkeypatch, options, expected):
     # Redis treats BLOCK 0 as "wait forever"; unset must not send it.
     client = _install_fake_redis(monkeypatch, FakeRedis())
     seen: list[int | None] = []
@@ -571,8 +574,7 @@ def test_read_sends_block_only_when_configured(monkeypatch, block_ms, expected):
         return real_read(*args, **kwargs)
 
     client.xreadgroup = _recording_read  # type: ignore[method-assign]
-    options = _options() if block_ms is None else _options(block_ms=block_ms)
-    source = RedisStreamsEventSource(options)
+    source = RedisStreamsEventSource(_options(**options))
     source.connect()
     assert list(source.poll(1)) == []
     assert seen == [expected]
