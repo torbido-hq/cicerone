@@ -281,6 +281,8 @@ boosts (it can still filter the items snapshot with `?category=` and
   skipped (no silent fallback to the full catalog).
 - **Boosts** — multiply scores after over-fetching
   (`boost_overfetch_factor` × `top_k`, default 3), re-rank, truncate.
+  With the priority combine, items re-rank only within their strategy's
+  block: raw scores from different models are not comparable.
   Commercial overlay; `source` stays a strategy name.
 
 Recipes: `config/features.toml` and

@@ -612,6 +612,41 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     assert not ghost[Columns.Item].isin(["i3", "i4"]).any()
 
 
+@pytest.mark.parametrize(("weights", "keeps_source_order"), [(None, True), ({"popular": 1.0}, False)])
+def test_train_and_recommend_boosts_keep_source_order_only_for_priority(
+    feature_config, monkeypatch, weights, keeps_source_order
+):
+    from dataclasses import replace
+
+    from cicerone.feature_config import BoostRule
+    from cicerone.model import recommend as recommend_module
+
+    seen: list[bool] = []
+    real_apply_boosts = recommend_module.apply_boosts
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["keep_source_order"])
+        return real_apply_boosts(*args, **kwargs)
+
+    monkeypatch.setattr(recommend_module, "apply_boosts", spy)
+    now = pd.Timestamp.now(tz="UTC")
+    events = pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    )
+    items = pd.DataFrame([{"item_id": "i1", "is_paying_producer": True}])
+    config = replace(
+        feature_config,
+        boosts=[BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)],
+    )
+    built = build_dataset(events, None, items, config, half_life_days=90)
+
+    train_and_recommend(
+        built, target_users=["ghost"], config=config, top_k=1, enabled_models=["popular"], weights=weights
+    )
+
+    assert seen == [keeps_source_order]
+
+
 def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     """Boosted item ranked just below top_k by popularity must enter final top_k
     via boost over-fetch + apply_boosts, not only by reordering within top_k.

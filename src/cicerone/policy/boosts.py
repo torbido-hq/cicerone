@@ -10,6 +10,7 @@ from rectools import Columns
 
 from cicerone.feature_config import BoostRule
 from cicerone.ids import items_id_column
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.policy.eligibility import warn_missing_column
 from cicerone.reasons import BOOST_HITS_COLUMN
 from cicerone.values import is_missing as _is_missing
@@ -111,8 +112,13 @@ def apply_boosts(
     top_k: int | None = None,
     *,
     record_hits: bool = True,
+    keep_source_order: bool = False,
 ) -> pd.DataFrame:
-    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set."""
+    """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set.
+
+    ``keep_source_order`` re-ranks only within each source's block, for priority-combined lists
+    whose scores come from different models and are not comparable.
+    """
     if recs.empty:
         return recs
     if not boosts:
@@ -125,11 +131,13 @@ def apply_boosts(
         out[BOOST_HITS_COLUMN] = [hits_by_item.get(str(item_id), []) for item_id in item_ids]
     if factor_by_item:
         out[Columns.Score] = out[Columns.Score] * item_ids.map(factor_by_item).fillna(1.0)
-        out = out.sort_values(
-            [Columns.User, Columns.Score, Columns.Item],
-            ascending=[True, False, True],
-            kind="mergesort",
-        )
+        keys = [Columns.User, Columns.Score, Columns.Item]
+        if keep_source_order and SOURCE_COLUMN in out.columns:
+            # Priority lists are contiguous source blocks; a block's first rank orders it.
+            out["_block"] = out.groupby([Columns.User, SOURCE_COLUMN])[Columns.Rank].transform("min")
+            keys.insert(1, "_block")
+        out = out.sort_values(keys, ascending=[key != Columns.Score for key in keys], kind="mergesort")
+        out = out.drop(columns=["_block"], errors="ignore")
         out[Columns.Rank] = out.groupby(Columns.User).cumcount() + 1
     return _truncate_recs(out, top_k)
 
