@@ -265,6 +265,6 @@ def test_build_output_sink_type_hints_resolve_at_runtime():
     import typing
 
     from cicerone.io.factory import build_output_sink
-    from cicerone.locks import LockBackend
+    from cicerone.locks import WriteFence
 
-    assert typing.get_type_hints(build_output_sink)["writer_lock"] == LockBackend | None
+    assert typing.get_type_hints(build_output_sink)["fence"] == WriteFence | None

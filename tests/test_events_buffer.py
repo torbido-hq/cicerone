@@ -8,10 +8,11 @@ from cicerone.events.normalize import event_fingerprint, normalize_event
 
 
 def test_micro_batch_buffer_count_and_dedupe():
-    buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0)
-    e1 = normalize_event(event_payload(event_id="1"))
-    e2 = normalize_event(event_payload(event_id="dup"))  # same fingerprint as e1
-    e3 = normalize_event(event_payload(event_id="3", item_id="i2"))
+    # Fingerprints dedupe only generated ids (sources without stable ids), as the worker configures it.
+    buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0, fingerprint_dedupe=True)
+    e1 = normalize_event(event_payload(event_id=None))
+    e2 = normalize_event(event_payload(event_id=None))  # same fingerprint as e1
+    e3 = normalize_event(event_payload(event_id=None, item_id="i2"))
     first = buffer.extend([e1, e2])
     assert first.kept_count == 1
     assert len(first.duplicates) == 1
