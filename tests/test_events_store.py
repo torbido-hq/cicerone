@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from pyarrow.lib import ArrowTypeError
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import postgresql
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
@@ -530,6 +531,8 @@ def test_count_recommendation_users_pandas_missing_table(tmp_path, monkeypatch):
             raise DatabaseError("no such table: recommendations")
 
     class _Engine:
+        dialect = postgresql.dialect()
+
         def connect(self):
             return _Conn()
 
@@ -555,6 +558,8 @@ def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
             raise DatabaseError("connection refused")
 
     class _Engine:
+        dialect = postgresql.dialect()
+
         def connect(self):
             return _Conn()
 
@@ -718,6 +723,8 @@ def test_load_items_catalog_size_sqlite_generic_error(tmp_path, monkeypatch):
     output = IOSettings(kind="db", options={"database_url": url})
 
     class _Engine:
+        dialect = postgresql.dialect()
+
         def connect(self):
             raise RuntimeError("engine")
 
@@ -754,6 +761,8 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     output = IOSettings(kind="db", options={"database_url": url})
 
     class _Engine:
+        dialect = postgresql.dialect()
+
         def connect(self):
             raise SQLAlchemyError("engine")
 

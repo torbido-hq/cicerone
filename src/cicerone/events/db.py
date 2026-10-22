@@ -28,7 +28,7 @@ from cicerone.events.db_identity import (
 )
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for, release_engine
+from cicerone.io.engines import engine_for, quote_identifier, release_engine
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 
 logger = logging.getLogger(__name__)
@@ -196,23 +196,23 @@ class DbEventSource(EventSource):
             detail=detail,
         )
 
-    def _from_clause(self) -> str:
+    def _from_clause(self, engine: Engine) -> str:
         if self._events_query:
             return f"({self._events_query}) AS {_EVENTS_QUERY_ALIAS}"
-        return self._events_table
+        return quote_identifier(engine, self._events_table)
 
     def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool]:
         with self._lock:
             if self._select_clause is not None and self._has_event_id_column is not None:
                 return self._select_clause, self._has_event_id_column
         with engine.connect() as conn:
-            result = conn.execute(text(f"SELECT * FROM {self._from_clause()} LIMIT 0"))
+            result = conn.execute(text(f"SELECT * FROM {self._from_clause(engine)} LIMIT 0"))
             columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
         by_lower = {name.lower(): name for name in columns}
         if "occurred_at" not in by_lower:
             raise ConfigError(
                 "events DB source must expose an occurred_at column for watermark polling "
-                f"(from {self._from_clause()})"
+                f"(from {self._from_clause(engine)})"
             )
         selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
         has_event_id = "event_id" in by_lower
@@ -225,7 +225,7 @@ class DbEventSource(EventSource):
                 extra = "ctid"
             if extra is not None:
                 selected.append(extra)
-        select_clause = ", ".join(f'"{name}"' for name in selected)
+        select_clause = ", ".join(quote_identifier(engine, name) for name in selected)
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns
@@ -249,7 +249,7 @@ class DbEventSource(EventSource):
         if identity_sort is not None:
             later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                f"SELECT {select_clause} FROM {self._from_clause(engine)} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort) "
                 f"ORDER BY {occurred_order}, ({identity_sort}) ASC "
@@ -263,7 +263,7 @@ class DbEventSource(EventSource):
         elif has_event_id:
             # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
             sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
+                f"SELECT {select_clause} FROM {self._from_clause(engine)} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id) "
                 "ORDER BY occurred_at ASC, event_id ASC "
@@ -276,7 +276,7 @@ class DbEventSource(EventSource):
             }
         else:
             sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} "
+                f"SELECT {select_clause} FROM {self._from_clause(engine)} "
                 "WHERE occurred_at >= :watermark "
                 "ORDER BY occurred_at ASC "
                 "LIMIT :limit"
@@ -303,7 +303,7 @@ class DbEventSource(EventSource):
         if identity_sort is not None:
             later, same, _occurred_order = occurred_at_predicates(engine.dialect.name)
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._from_clause(engine)} WHERE "
                 f"{later} OR "
                 f"({same} AND ({identity_sort}) > :watermark_sort)"
             )
@@ -313,7 +313,7 @@ class DbEventSource(EventSource):
             }
         else:
             sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
+                f"SELECT COUNT(*) AS n FROM {self._from_clause(engine)} WHERE "
                 "occurred_at > :watermark_at OR "
                 "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
             )

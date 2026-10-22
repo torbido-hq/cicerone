@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 
 import sqlalchemy
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -21,6 +21,11 @@ def engine_for(database_url: str) -> Engine:
             _checkouts[database_url] = 0
         _checkouts[database_url] += 1
         return engine
+
+
+def quote_identifier(bind: Engine | Connection, name: str) -> str:
+    """``name`` quoted the way the dialect (and pandas/SQLAlchemy table creation) quotes it."""
+    return bind.dialect.identifier_preparer.quote(name)
 
 
 def release_engine(database_url: str) -> None:

@@ -46,6 +46,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- SQL statements quote table and column names the way the database dialect
+  does. A mixed-case `recommendations_table` on Postgres no longer keeps a
+  user's old rows on incremental replace, and identifiers use backticks on
+  MySQL instead of double quotes.
 
 ## [0.8.5] - 2026-10-14
 
