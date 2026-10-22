@@ -16,6 +16,19 @@ from support.system_spec import (
     write_system_config,
 )
 
+# Generic SQLAlchemy types pandas.to_sql creates for these dtypes; its columns are nullable.
+TO_SQL_TYPES = {"object": "Text", "bool": "Boolean", "int64": "BigInteger", "float32": "Float"}
+
+
+def _to_sql_columns(dtypes: dict[str, str]) -> dict[str, list[Any]]:
+    return {column: [TO_SQL_TYPES[dtype], True] for column, dtype in dtypes.items()}
+
+
+def _to_sql_value_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "Boolean"
+    return "BigInteger" if isinstance(value, int) else "Text"
+
 
 def _run_dataset_job(tmp_path: Path, **config: Any) -> Path:
     input_dir = tmp_path / "in"
@@ -60,16 +73,23 @@ def test_db_job_tables(tmp_path, db_engine):
 
     inspector = inspect(db_engine)
     created = set(inspector.get_table_names()) - before
-    columns = {table: sorted(col["name"] for col in inspector.get_columns(table)) for table in created}
+    schema = {
+        table: {
+            col["name"]: [type(col["type"].as_generic()).__name__, col["nullable"]]
+            for col in inspector.get_columns(table)
+        }
+        for table in created
+    }
     expected = load_contract("job_dataset_outputs.json")
     files = expected["files"]
-    assert columns == {
-        "model_artifacts": ["payload", "written_at"],
-        "recommendation_eval": ["payload", "written_at"],
-        "recommendation_history": sorted(files["recommendation_history/<generated_at>.parquet"]),
-        "recommendation_items": sorted(files["items_snapshot.parquet"]),
-        "recommendation_runs": sorted([*expected["manifest"], "generated_at"]),
-        "recommendations": sorted(files["recommendations.parquet"]),
+    manifest = {**expected["manifest"], "generated_at": "<iso timestamp>"}
+    assert schema == {
+        "model_artifacts": {"payload": ["LargeBinary", False], "written_at": ["DateTime", False]},
+        "recommendation_eval": {"payload": ["Text", False], "written_at": ["Text", False]},
+        "recommendation_history": _to_sql_columns(files["recommendation_history/<generated_at>.parquet"]),
+        "recommendation_items": _to_sql_columns(files["items_snapshot.parquet"]),
+        "recommendation_runs": {name: [_to_sql_value_type(value), True] for name, value in manifest.items()},
+        "recommendations": _to_sql_columns(files["recommendations.parquet"]),
     }
 
 
