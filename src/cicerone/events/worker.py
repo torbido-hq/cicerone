@@ -590,8 +590,10 @@ class EventWorker:
                 self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
+        # Rejected events are never applied; they ride along with the batch to its ack.
+        valid = [event for event in ready if event.rejected is None]
         try:
-            replayed = self._updater.applied_before(ready)
+            replayed = self._updater.applied_before(valid)
         except EVENT_APPLY_ERRORS:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
@@ -604,8 +606,12 @@ class EventWorker:
             raise
         if replayed:
             ready = self._ack_replayed(ready, replayed)
-            if not ready:
-                return 0
+            valid = [event for event in ready if event.rejected is None]
+        if not valid:
+            self._remember_applied(ready)
+            self._log_rejected(ready)
+            self._ack_unbuffered(ready)
+            return 0
         applied: int | None = None
         post_write_failed = False
         # Re-raised after the ack; it is logged first, so an online-persist error may take precedence.
@@ -615,7 +621,7 @@ class EventWorker:
             try:
                 with inflight_heartbeat(self._source, ready, self._heartbeat_interval_seconds):
                     apply_started = True
-                    applied = self._updater.apply(ready, persist_online=False)
+                    applied = self._updater.apply(valid, persist_online=False)
             except Exception as exc:
                 # Once the rows are written any error must still ack them (nacking applies the events
                 # twice), so this cannot be narrowed; an unexpected one is re-raised after the ack.
@@ -629,7 +635,7 @@ class EventWorker:
                 self._log_post_write_failure(ready, exc, count=not counted_by_loop)
                 if isinstance(exc, LockLostError) and exc.kind == "apply":
                     update_events_leader(False)
-                applied = applied or len(ready)
+                applied = applied or len(valid)
                 post_write_failed = True
         except HeartbeatError:
             record_events_flush(status="error")
@@ -674,17 +680,18 @@ class EventWorker:
             self._updater.abort_online()
             self._return_events(ready)
             return 0
-        if applied != len(ready):
+        if applied != len(valid):
             record_events_flush(status="error")
             logger.error(
                 "Incremental apply returned %d for %d ready event(s); nacking batch",
                 applied,
-                len(ready),
+                len(valid),
             )
             self._updater.abort_online()
             self._return_events(ready)
             return 0
         self._remember_applied(ready)
+        self._log_rejected(ready)
         try:
             live_ids = self._ack_live_ids([event.event_id for event in ready])
         except TimeoutError:
@@ -744,6 +751,11 @@ class EventWorker:
             self._return_events(fresh)
             raise
         return fresh
+
+    def _log_rejected(self, events: Sequence[NormalizedEvent]) -> None:
+        for event in events:
+            if event.rejected is not None:
+                logger.warning("Skipping invalid event row %s", event.rejected)
 
     def _log_post_write_failure(
         self, ready: list[NormalizedEvent], exc: BaseException, *, count: bool = True

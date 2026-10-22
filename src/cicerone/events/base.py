@@ -21,6 +21,8 @@ class NormalizedEvent:
     occurred_at: datetime
     event_id: str
     generated_event_id: bool = False
+    # Set by a source for a row it cannot normalize: the worker acks it without applying.
+    rejected: str | None = None
 
 
 @dataclass(frozen=True)

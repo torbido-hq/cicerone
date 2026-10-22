@@ -913,39 +913,41 @@ def _event_row(event_id: str, minute: int, **overrides) -> dict:
     return event_payload(**{**defaults, **overrides})
 
 
-def test_db_poll_skips_an_invalid_row_once_earlier_events_are_acked(tmp_path, caplog):
+def test_db_poll_delivers_an_invalid_row_as_rejected_in_cursor_order(tmp_path):
     url = _sqlite_url(tmp_path)
-    _seed_events(url, [_event_row("e1", 0), _event_row("bad", 1, quantity=0), _event_row("e2", 2)])
+    bad = _event_row("bad", 1, user_id="alice@example.com", quantity=0)
+    _seed_events(url, [_event_row("e1", 0), bad, _event_row("e2", 2)])
     source = DbEventSource({"database_url": url})
     source.connect()
-    with caplog.at_level("WARNING", logger="cicerone.events.db"):
-        first = list(source.poll(1))
-        assert "Skipping invalid event row" not in caplog.text
-        source.ack([event.event_id for event in first])
-        second = list(source.poll(10))
-        source.ack([event.event_id for event in second])
-        assert list(source.poll(10)) == []
-    assert [event.event_id for event in first + second] == ["e1", "e2"]
-    assert caplog.text.count("Skipping invalid event row") == 1
+    first = list(source.poll(2))
+    assert [(event.event_id, event.rejected is None) for event in first] == [("e1", True), ("bad", False)]
+    reason = first[1].rejected or ""
+    assert "quantity must be >= 1" in reason
+    assert '"event_id": "bad"' in reason
+    assert "alice@example.com" not in reason
+    assert "ibad" not in reason
+    assert source.ack([event.event_id for event in first]) == ("e1", "bad")
+    assert [event.event_id for event in source.poll(10)] == ["e2"]
 
 
-def test_db_invalid_row_log_leaves_out_user_and_item(tmp_path, caplog):
+def test_db_poll_keeps_an_unacked_rejected_row_in_flight(tmp_path):
     url = _sqlite_url(tmp_path)
-    _seed_events(url, [_event_row("bad", 0, user_id="alice@example.com", quantity=0)])
+    _seed_events(url, [_event_row("bad", 0, quantity=0)])
     source = DbEventSource({"database_url": url})
     source.connect()
-    with caplog.at_level("WARNING", logger="cicerone.events.db"):
-        assert list(source.poll(10)) == []
-    assert "quantity must be >= 1" in caplog.text
-    assert '"event_id": "bad"' in caplog.text
-    assert "alice@example.com" not in caplog.text
-    assert "ibad" not in caplog.text
+    assert [event.event_id for event in source.poll(10)] == ["bad"]
+    assert list(source.poll(10)) == []
+    source.ack(["bad"])
+    assert list(source.poll(10)) == []
+    assert source.health().lag == 0
 
 
-def test_db_health_counts_lag_past_a_row_with_an_unparseable_occurred_at(tmp_path):
+def test_db_health_counts_lag_past_a_row_with_an_unparseable_occurred_at(tmp_path, caplog):
     url = _sqlite_url(tmp_path)
     _seed_events(url, [_event_row("naive", 0, occurred_at="2026-08-13T12:00:00"), _event_row("e1", 1)])
     source = DbEventSource({"database_url": url})
     source.connect()
-    assert [event.event_id for event in source.poll(10)] == ["e1"]
+    with caplog.at_level("WARNING", logger="cicerone.events.db"):
+        assert [event.event_id for event in source.poll(10)] == ["e1"]
+    assert '"event_id": "naive"' in caplog.text
     assert source.health().lag == 1

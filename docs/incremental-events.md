@@ -206,8 +206,9 @@ Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
 share a cursor. An invalid row (e.g. no `user_id`, `quantity` below 1) is
-skipped: once every earlier event is acked, the watermark moves past it and it
-is logged once, by its identity columns only. Fixing it in place later does not
+delivered in cursor order as a rejected event: the worker does not apply it,
+logs it once by its identity columns only, and acks it with its batch, so the
+watermark moves past it like any other row. Fixing it in place later does not
 replay it. A row whose own `occurred_at` can't be parsed can't be placed on the
 cursor; it is logged each time it is fetched.
 
