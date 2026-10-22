@@ -30,10 +30,9 @@ from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
 from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
-    REQUEST_LATENCY_SECONDS,
-    REQUESTS_TOTAL,
     record_experiment_served,
     record_recommendations_served,
+    record_request,
     update_cache_age_gauge,
     update_events_source_health,
 )
@@ -176,13 +175,6 @@ class _GeneratedAtCache:
             return self._value
 
 
-def _route_endpoint(request: Request) -> str:
-    route = request.scope.get("route")
-    if route is not None:
-        return route.path
-    return request.url.path
-
-
 class _AssignmentOverlayCache:
     """Last successful promote/pair overlay; refresh with the recommendations loop."""
 
@@ -269,13 +261,13 @@ def create_app(
             return await call_next(request)
         start = time.perf_counter()
         response = await call_next(request)
-        endpoint = _route_endpoint(request)
-        REQUESTS_TOTAL.labels(
-            endpoint=endpoint,
+        route = request.scope.get("route")
+        record_request(
+            route_path=route.path if route is not None else None,
             method=request.method,
-            status=str(response.status_code),
-        ).inc()
-        REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(time.perf_counter() - start)
+            status=response.status_code,
+            duration_seconds=time.perf_counter() - start,
+        )
         return response
 
     @app.get(

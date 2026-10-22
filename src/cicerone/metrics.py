@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from http import HTTPMethod
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -114,6 +115,7 @@ _EVENTS_LOCK_STATUSES = frozenset({"acquired", "skip"})
 _EVENTS_APPLY_BUSY_REASONS = frozenset({"lock", "retrain"})
 _TRACK_KINDS = frozenset({"impression", "click", "other"})
 _TRACK_STATUSES = frozenset({"accepted", "error"})
+_HTTP_METHODS = frozenset(HTTPMethod)
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
@@ -135,6 +137,13 @@ EVENTS_SOURCE_CONNECTED.set(0)
 EVENTS_SOURCE_LAG.set(-1)
 EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(0)
 EVENTS_LEADER.set(0)
+
+
+def record_request(*, route_path: str | None, method: str, status: int, duration_seconds: float) -> None:
+    endpoint = route_path if route_path is not None else "unmatched"
+    label_method = method if method in _HTTP_METHODS else "other"
+    REQUESTS_TOTAL.labels(endpoint=endpoint, method=label_method, status=str(status)).inc()
+    REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(duration_seconds)
 
 
 def record_cache_hit() -> None:
