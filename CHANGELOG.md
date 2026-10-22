@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   strategy's block instead of across them, so a model with large raw scores
   (popularity counts) no longer jumps ahead of an earlier strategy. Weighted
   RRF and blending are unchanged.
+- Serve request metrics label paths with no matching route as `unmatched`
+  and unknown HTTP methods as `other`, so random paths and methods no
+  longer create unbounded Prometheus series.
 
 ## [0.8.5] - 2026-10-14
 

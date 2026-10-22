@@ -155,6 +155,29 @@ def test_recommend_request_increments_request_and_source_metrics():
     )
 
 
+def test_request_metrics_bound_unmatched_paths_and_unknown_methods():
+    app = create_app(_settings(), _FakeReader(_recs_df()))
+    client = TestClient(app)
+    unmatched = {"endpoint": "unmatched", "method": "GET", "status": "404"}
+    other_method = {"endpoint": "/health", "method": "other", "status": "405"}
+    matched = {"endpoint": "/health", "method": "GET", "status": "200"}
+    before = client.get("/metrics", headers=_metrics_headers()).text
+
+    assert client.get("/no-such-route-7f3a").status_code == 404
+    assert client.request("PROPFIND", "/health").status_code == 405
+    assert client.get("/health").status_code == 200
+
+    after = client.get("/metrics", headers=_metrics_headers()).text
+    for labels in (unmatched, other_method, matched):
+        assert metric_value(after, "cicerone_requests_total", labels) == (
+            metric_value(before, "cicerone_requests_total", labels) + 1
+        )
+    samples = metric_samples(after, "cicerone_requests_total")
+    assert not any(labels["endpoint"] == "/no-such-route-7f3a" for labels, _ in samples)
+    assert not any(labels["method"] == "PROPFIND" for labels, _ in samples)
+    assert metric_value(after, "cicerone_request_latency_seconds_count", {"endpoint": "unmatched"}) >= 1
+
+
 def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
     recs = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
