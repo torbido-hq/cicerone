@@ -198,9 +198,8 @@ are a separate cheap path between those runs.
 Watermark poll over `events_table` / `events_query`. No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
-flush `ack`, and never past an earlier event still in flight. When an
-`event_id` column exists, poll orders by `(occurred_at, event_id)` so
-same-timestamp pages cannot skip rows.
+flush `ack`. When an `event_id` column exists, poll orders by
+`(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from

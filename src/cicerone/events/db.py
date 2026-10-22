@@ -119,8 +119,6 @@ class DbEventSource(EventSource):
         self._engine: Engine | None = None
         self._lock = threading.Lock()
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
-        # Acked past an event still in flight; the watermark waits for it.
-        self._acked_ahead: dict[str, NormalizedEvent] = {}
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -164,7 +162,7 @@ class DbEventSource(EventSource):
                 raise EventSourceError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
             watermark_event_id = self._watermark_event_id
-            in_flight_count = len(self._in_flight) + len(self._acked_ahead)
+            in_flight_count = len(self._in_flight)
             engine = self._engine
         rows = self._fetch_rows(
             engine,
@@ -182,7 +180,7 @@ class DbEventSource(EventSource):
                     break
                 if cursor_key(event) <= cursor:
                     continue
-                if event.event_id in self._in_flight or event.event_id in self._acked_ahead:
+                if event.event_id in self._in_flight:
                     continue
                 self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
@@ -191,44 +189,28 @@ class DbEventSource(EventSource):
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
-            returned = [
-                cursor_key(event) for event in events if self._in_flight.pop(event.event_id, None) is not None
-            ]
-            if returned:
-                # Redelivered events go back before anything acked after them.
-                floor = min(returned)
-                self._acked_ahead = {
-                    eid: event for eid, event in self._acked_ahead.items() if cursor_key(event) < floor
-                }
+            for event in events:
+                self._in_flight.pop(event.event_id, None)
         return ()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
         with self._lock:
+            advanced = False
             for event_id in event_ids:
                 eid = str(event_id)
                 event = self._in_flight.pop(eid, None)
                 if event is None:
                     continue
                 confirmed.append(eid)
-                self._acked_ahead[eid] = event
-            if confirmed:
-                self._advance_watermark_unlocked()
+                key = cursor_key(event)
+                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
+                    self._watermark_at = event.occurred_at
+                    self._watermark_event_id = event.event_id
+                    advanced = True
+            if advanced:
+                self._persist_watermark_unlocked()
         return tuple(confirmed)
-
-    def _advance_watermark_unlocked(self) -> None:
-        # Only through the acked prefix: a restart re-polls from the watermark.
-        pending = min((cursor_key(event) for event in self._in_flight.values()), default=None)
-        done = [e for e in self._acked_ahead.values() if pending is None or cursor_key(e) < pending]
-        if not done:
-            return
-        for event in done:
-            del self._acked_ahead[event.event_id]
-        last = max(done, key=cursor_key)
-        if cursor_key(last) > cursor_tuple(self._watermark_at, self._watermark_event_id):
-            self._watermark_at = last.occurred_at
-            self._watermark_event_id = last.event_id
-            self._persist_watermark_unlocked()
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -332,14 +314,13 @@ class DbEventSource(EventSource):
                 "limit": max(limit, 1),
             }
         else:
-            later, same, occurred_order = occurred_at_predicates(dialect)
             sql = text(
                 f"SELECT {select_clause} FROM {self._from_clause()} "
-                f"WHERE {later} OR {same} "
-                f"ORDER BY {occurred_order} "
+                "WHERE occurred_at >= :watermark "
+                "ORDER BY occurred_at ASC "
                 "LIMIT :limit"
             )
-            params = {"watermark_at": watermark_at, "limit": max(limit, 1)}
+            params = {"watermark": watermark_at, "limit": max(limit, 1)}
         with engine.connect() as conn:
             result = conn.execute(sql, params)
             return [dict(row) for row in result.mappings()]
