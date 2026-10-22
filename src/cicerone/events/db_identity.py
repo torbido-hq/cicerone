@@ -68,6 +68,18 @@ def db_occurred_at(value: Any) -> datetime:
     return parse_occurred_at(value)
 
 
+def _row_occurred_at(value: Any) -> datetime:
+    # SQLite stores timestamps as text; SQL already orders offset-less text as UTC, so the cursor must too.
+    if isinstance(value, str):
+        try:
+            naive = datetime.fromisoformat(value.strip())
+        except ValueError:
+            naive = None
+        if naive is not None and naive.tzinfo is None:
+            value = naive
+    return db_occurred_at(value)
+
+
 def _row_identity(payload: dict[str, Any]) -> str | None:
     for key in ROW_IDENTITY_KEYS:
         value = payload.get(key)
@@ -167,7 +179,7 @@ def cursor_key(event: NormalizedEvent) -> tuple[datetime, tuple[str, tuple[str, 
 
 def payload_cursor(payload: dict[str, Any]) -> tuple[datetime, str]:
     """``(occurred_at, event_id)`` of a raw row without full normalize_event."""
-    occurred_at = db_occurred_at(payload.get("occurred_at"))
+    occurred_at = _row_occurred_at(payload.get("occurred_at"))
     return occurred_at, _stable_event_id(payload, occurred_at)
 
 
@@ -176,7 +188,7 @@ def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[st
 
 
 def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
-    occurred_at = db_occurred_at(payload.get("occurred_at"))
+    occurred_at = _row_occurred_at(payload.get("occurred_at"))
     return normalize_event(
         {
             **payload,
