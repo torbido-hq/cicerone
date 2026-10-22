@@ -212,10 +212,7 @@ def evaluate_tracking(
     conv = normalized_frame(conversions)
     conv = with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
     view_conv = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
-    if not conv.empty and not matched_clicks.empty:
-        click_conv = merge_asof_events(conv, matched_clicks, window=window)
-    else:
-        click_conv = conv.iloc[0:0]
+    click_conv = _click_conversions(conv, matched_clicks, window)
     overall = metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
     sliced = metrics_by_impression_dimensions(
         impressions,
@@ -230,6 +227,14 @@ def evaluate_tracking(
         by_source=sliced.get(SOURCE_COLUMN, {}),
         by_variant=sliced.get(VARIANT_COLUMN, {}),
     )
+
+
+def _click_conversions(conv: pd.DataFrame, matched_clicks: pd.DataFrame, window: timedelta) -> pd.DataFrame:
+    """Conversions after a click, keyed to the clicked impression so one impression counts once."""
+    if conv.empty or matched_clicks.empty:
+        return conv.iloc[0:0]
+    by_impression = matched_clicks.assign(event_id=matched_clicks["prior_event_id"])
+    return merge_asof_events(conv, by_impression, window=window)
 
 
 def user_track_outcomes(
@@ -250,11 +255,7 @@ def user_track_outcomes(
     window = prepared.window
     conv = with_join_keys(normalized_frame(conversions))
     if attribution == "click":
-        attributed = (
-            merge_asof_events(conv, matched_clicks, window=window)
-            if not conv.empty and not matched_clicks.empty
-            else conv.iloc[0:0]
-        )
+        attributed = _click_conversions(conv, matched_clicks, window)
     else:
         attributed = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
     impression_counts = impressions.groupby(USER_COLUMN).size()

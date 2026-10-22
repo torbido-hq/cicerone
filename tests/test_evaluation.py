@@ -1642,7 +1642,9 @@ def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
     assert outcomes["alice"] == pytest.approx(0.5)
 
 
-def test_evaluate_tracking_counts_unique_converted_impressions() -> None:
+# A second click before the later conversion: one impression, two converting clicks.
+@pytest.mark.parametrize("click_times", [("12:01",), ("12:01", "12:15")])
+def test_evaluate_tracking_counts_unique_converted_impressions(click_times) -> None:
     rows = _track(
         *(
             {
@@ -1656,13 +1658,16 @@ def test_evaluate_tracking_counts_unique_converted_impressions() -> None:
             }
             for rank, item in ((1, "ipa"), (2, "stout"))
         ),
-        {
-            "kind": "click",
-            "user_id": "alice",
-            "item_id": "ipa",
-            "occurred_at": "2026-08-28T12:01:00Z",
-            "event_id": "clk-1",
-        },
+        *(
+            {
+                "kind": "click",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "occurred_at": f"2026-08-28T{at}:00Z",
+                "event_id": f"clk-{at}",
+            }
+            for at in click_times
+        ),
     )
     conversions = pd.DataFrame(
         [

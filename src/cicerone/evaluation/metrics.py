@@ -196,7 +196,7 @@ def metrics_for_impression_slice(
     impression_ids = _column_ids(impressions, "event_id")
     clicks = _slice_later_events(matched_clicks, impressions, impression_ids)
     views = _slice_later_events(view_conv, impressions, impression_ids)
-    attributed = _slice_later_events(click_conv, clicks, _column_ids(clicks, "event_id"))
+    attributed = _slice_later_events(click_conv, impressions, impression_ids)
     return _slice_metrics(impressions, clicks, views, attributed)
 
 
@@ -288,19 +288,10 @@ def metrics_by_impression_dimensions(
         )
     )
 
-    if not clicks.empty and "event_id" in clicks.columns:
-        click_memberships = clicks.loc[
-            :,
-            ["event_id", _DIMENSION, _DIMENSION_VALUE],
-        ].copy()
-        click_memberships[_EVENT_KEY] = click_memberships["event_id"].astype(str)
-        click_memberships = click_memberships[[_EVENT_KEY, _DIMENSION, _DIMENSION_VALUE]].drop_duplicates()
-    else:
-        click_memberships = attribution_memberships.iloc[0:0]
     click_conversion_counts = _distinct_priors_by_group(
         _event_memberships(
             click_conv,
-            click_memberships,
+            attribution_memberships,
             event_column="prior_event_id",
         )
     )
