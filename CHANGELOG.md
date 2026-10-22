@@ -132,11 +132,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 - The input poller retries a change on the next poll when its trigger is
   rejected (run in progress, debounce), instead of dropping it until cron.
-  A poll-triggered run records the change it ran next to the retrain lock
-  (Redis key `<lock_key>:input-marker`, Postgres table
-  `cicerone_input_markers`), so with several replicas each change runs once.
-- A Postgres advisory lock whose session lost the lock is dropped, so the
-  next acquire opens a fresh session instead of failing until restart.
 
 ## [0.8.5] - 2026-10-14
 

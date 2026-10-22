@@ -61,7 +61,6 @@ class RedisLock:
                 "install with: pip install 'cicerone-recommender[redis]'"
             ) from exc
         self._key = key
-        self._marker_key = f"{key}:input-marker"
         self._ttl_ms = ttl_ms
         self._refresh_interval_ms = (
             max(ttl_ms // 2, 1) if refresh_interval_ms is None else max(refresh_interval_ms, 1)
@@ -193,13 +192,6 @@ class RedisLock:
         if isinstance(value, bytes):
             value = value.decode("utf-8")
         return value == token
-
-    def last_input_marker(self) -> str | None:
-        value = self._client.get(self._marker_key)
-        return value.decode("utf-8") if isinstance(value, bytes) else value
-
-    def set_input_marker(self, marker: str) -> None:
-        self._client.set(self._marker_key, marker)
 
     def is_locked(self) -> bool:
         try:

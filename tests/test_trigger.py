@@ -23,10 +23,8 @@ class _FakeGuard:
         self.result = result
         self.calls: list[str] = []
 
-    def trigger(self, triggered_by: str, *, input_marker: str | None = None) -> bool:
+    def trigger(self, triggered_by: str) -> bool:
         self.calls.append(triggered_by)
-        if isinstance(self.result, Exception):
-            raise self.result
         return self.result
 
 
@@ -243,13 +241,11 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
     assert guard.calls == []
 
 
-def _run_poller(
-    tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: None, markers=("v1", "v2")
-) -> None:
-    """Poll ``ticks`` times; the marker walks ``markers`` (the first at start), then stays on the last."""
+def _run_poller(tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: None) -> None:
+    """Poll ``ticks`` times; the input marker is v1 at start and v2 on every poll after."""
     input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    sequence = iter(markers)
-    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(sequence, markers[-1]))
+    markers = iter(["v1"])
+    monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
     sleeps = {"n": 0}
 
     def fake_sleep(_seconds):
@@ -260,7 +256,7 @@ def _run_poller(
 
     monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
     with pytest.raises(SystemExit):
-        poll_input_forever(input_settings, guard, 0.01)
+        poll_input_forever(input_settings, guard, interval_seconds=0.01)
 
 
 def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
@@ -310,105 +306,6 @@ def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp
 
     wait_until_idle()
     assert runs == ["cron", "s3-poll"]
-
-
-def test_poll_input_forever_survives_lock_backend_errors(tmp_path, monkeypatch, caplog):
-    from sqlalchemy.exc import OperationalError
-
-    guard = _FakeGuard(result=OperationalError("connect", None, Exception("postgres down")))
-
-    def recover_on_third_tick(tick: int) -> None:
-        if tick == 3:
-            guard.result = True
-
-    _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=recover_on_third_tick)
-
-    assert guard.calls == ["s3-poll", "s3-poll", "s3-poll"]
-    assert "Input change trigger failed" in caplog.text
-
-
-class _SharedMarkerLock:
-    """A distributed lock whose input marker every replica sees (one shared store)."""
-
-    def __init__(self, store: dict[str, str | None]):
-        self.store = store
-        self.held = False
-        self.releases = 0
-
-    def acquire(self) -> bool:
-        if self.store.get("holder"):
-            return False
-        self.store["holder"] = "x"
-        self.held = True
-        return True
-
-    def release(self) -> None:
-        self.store["holder"] = None
-        self.held = False
-        self.releases += 1
-
-    def owned(self, generation: int | None = None) -> bool:
-        return self.held
-
-    def last_input_marker(self) -> str | None:
-        if isinstance(self.store.get("error"), Exception):
-            raise self.store["error"]
-        return self.store.get("marker")
-
-    def set_input_marker(self, marker: str) -> None:
-        self.store["marker"] = marker
-
-
-def _wait_idle(guard: RunGuard) -> None:
-    deadline = time.monotonic() + 5
-    while guard.busy and time.monotonic() < deadline:
-        time.sleep(0.01)
-
-
-def test_run_guard_runs_an_input_change_once_across_replicas():
-    store: dict[str, str | None] = {}
-    runs: list[str] = []
-
-    def run(**_kwargs) -> None:
-        runs.append("run")
-
-    replicas = [RunGuard(0, run_fn=run, lock_backend=_SharedMarkerLock(store)) for _ in range(2)]
-
-    assert replicas[0].trigger("s3-poll", input_marker="v2") is True
-    _wait_idle(replicas[0])
-    assert replicas[1].trigger("s3-poll", input_marker="v2") is True
-    _wait_idle(replicas[1])
-    assert replicas[1].trigger("s3-poll", input_marker="v3") is True
-    _wait_idle(replicas[1])
-
-    assert runs == ["run", "run"]
-    assert store["marker"] == "v3"
-    assert store["holder"] is None
-
-
-def test_run_guard_runs_an_input_change_once_in_process():
-    runs: list[str] = []
-    guard = RunGuard(debounce_seconds=0, run_fn=lambda triggered_by: runs.append(triggered_by))
-
-    assert guard.trigger("s3-poll", input_marker="v2") is True
-    _wait_idle(guard)
-    assert guard.trigger("s3-poll", input_marker="v2") is True
-    _wait_idle(guard)
-
-    assert runs == ["s3-poll"]
-
-
-def test_run_guard_releases_the_lock_when_the_marker_read_fails():
-    from sqlalchemy.exc import OperationalError
-
-    lock = _SharedMarkerLock({"error": OperationalError("select", None, Exception("down"))})
-    guard = RunGuard(debounce_seconds=0, run_fn=lambda **kwargs: None, lock_backend=lock)
-
-    with pytest.raises(OperationalError):
-        guard.trigger("s3-poll", input_marker="v2")
-
-    assert lock.releases == 1
-    assert guard.busy is False
 
 
 def test_current_marker_local_backend_reflects_mtime(tmp_path):

@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.exc import OperationalError
-from support.postgres_defaults import resolve_test_database_url
 from support.settings import make_settings
 
 from cicerone import locks as locks_mod
@@ -715,31 +714,14 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
     lock.release()
 
 
-def _mocked_pg_lock(monkeypatch, *, held: bool = True):
+def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
     conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = held
+    conn.execute.return_value.scalar.return_value = True
     engine = MagicMock()
     engine.connect.return_value = conn
     monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
-    return PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db"), engine, conn
 
-
-def test_postgres_advisory_lock_reacquires_after_its_session_lost_the_lock(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch)
-    assert lock.acquire() is True
-    conn.execute.return_value.scalar.return_value = False
-
-    assert lock.owned() is False
-    conn.invalidate.assert_called_once()
-    fresh = MagicMock()
-    fresh.execute.return_value.scalar.return_value = True
-    engine.connect.return_value = fresh
-    assert lock.acquire() is True
-    lock.release()
-
-
-def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch)
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     results: list[bool] = []
     barrier = threading.Barrier(2)
 
@@ -757,7 +739,13 @@ def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
 
 
 def test_postgres_advisory_lock_mocked(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch)
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     assert lock.acquire() is True
     assert lock.acquire() is False
     lock.release()
@@ -767,7 +755,13 @@ def test_postgres_advisory_lock_mocked(monkeypatch):
 
 
 def test_postgres_advisory_lock_contention_mocked(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch, held=False)
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = False
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     assert lock.acquire() is False
     conn.close.assert_called()
 
@@ -786,7 +780,13 @@ def test_postgres_advisory_lock_acquire_error_closes(monkeypatch):
 
 
 def test_postgres_advisory_lock_release_error(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch)
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     assert lock.acquire() is True
     conn.execute.side_effect = OperationalError("unlock failed", None, None)
     lock.release()
@@ -794,7 +794,13 @@ def test_postgres_advisory_lock_release_error(monkeypatch):
 
 
 def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
-    lock, engine, conn = _mocked_pg_lock(monkeypatch)
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = True
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+
+    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
     assert lock.acquire() is True
     conn.execute.side_effect = RuntimeError("unlock failed")
     with pytest.raises(RuntimeError, match="unlock failed"):
@@ -1345,30 +1351,3 @@ def test_write_fence_ensure_raises_when_fence_lost():
         fence.ensure()
     with pytest.raises(LockLostError, match="retrain lock lost"), fence.lease():
         pass
-
-
-def test_redis_lock_shares_the_input_marker_under_its_own_key(monkeypatch):
-    client = _mock_redis_module(monkeypatch)
-    client.get.return_value = b"v2"
-    lock = RedisLock("redis://localhost:6379/0", key="cicerone:run")
-
-    lock.set_input_marker("v3")
-
-    client.set.assert_called_with("cicerone:run:input-marker", "v3")
-    assert lock.last_input_marker() == "v2"
-    client.get.assert_called_with("cicerone:run:input-marker")
-
-
-@pytest.mark.skipif(not resolve_test_database_url(), reason="needs the CI Postgres (TEST_DATABASE_URL)")
-def test_postgres_lock_shares_the_input_marker_across_instances():
-    url = resolve_test_database_url()
-    first = PostgresAdvisoryLock(url, lock_key="test:input-marker")
-    second = PostgresAdvisoryLock(url, lock_key="test:input-marker")
-    assert first.acquire() is True
-    try:
-        first.set_input_marker("v1")
-        first.set_input_marker("v2")
-        assert second.last_input_marker() == "v2"
-        assert PostgresAdvisoryLock(url, lock_key="test:other-key").last_input_marker() is None
-    finally:
-        first.release()
