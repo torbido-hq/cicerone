@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ def _dataset_outputs(output_dir: Path) -> dict[str, Any]:
             dtypes = {column: str(dtype) for column, dtype in pd.read_parquet(path).dtypes.items()}
         files[name] = dtypes
     manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest.pop("generated_at")
+    datetime.fromisoformat(manifest.pop("generated_at"))
     return {"files": files, "manifest": manifest}
 
 
@@ -65,11 +66,13 @@ def test_dataset_job_outputs(tmp_path):
 
 
 @pytest.mark.usefixtures("clean_schema")
-def test_db_job_tables(tmp_path, db_engine):
+def test_db_job_tables(tmp_path, db_engine, monkeypatch):
     seed_catalog(db_engine, *sample_system_catalog())
     before = set(inspect(db_engine).get_table_names())
-    url = db_engine.url.render_as_string(hide_password=False)
-    run_system_job(write_system_config(tmp_path / "cicerone.toml", database_url=url), triggered_by="contract")
+    # The config names an env placeholder, so the database password is never written to disk.
+    monkeypatch.setenv("CONTRACT_DATABASE_URL", db_engine.url.render_as_string(hide_password=False))
+    config = write_system_config(tmp_path / "cicerone.toml", database_url="${CONTRACT_DATABASE_URL}")
+    run_system_job(config, triggered_by="contract")
 
     inspector = inspect(db_engine)
     created = set(inspector.get_table_names()) - before
