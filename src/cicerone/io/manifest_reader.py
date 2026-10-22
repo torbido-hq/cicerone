@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any
-
-import pandas as pd
 
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.filenames import MANIFEST_FILENAME
@@ -86,6 +85,11 @@ class DbManifestReader:
             return []
         table = Table(self._table, MetaData(), autoload_with=self._engine)
         stmt = select(table).order_by(table.c.generated_at.desc()).limit(limit)
-        df = pd.read_sql(stmt, self._engine)
-        df = df.astype(object).where(df.notna(), None)
-        return df.to_dict(orient="records")
+        # Driver rows, not read_sql: pandas turns an integer column with a NULL into float64 (5 -> 5.0).
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [{key: None if _is_nan(value) else value for key, value in row.items()} for row in rows]
+
+
+def _is_nan(value: Any) -> bool:
+    return isinstance(value, float) and math.isnan(value)
