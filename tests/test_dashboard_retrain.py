@@ -187,3 +187,27 @@ def test_a_connection_dropped_after_the_post_is_reported_as_ambiguous(caplog):
         worker.join(timeout=5)
         listener.close()
     assert "dropped the connection" in caplog.text
+
+
+def test_config_and_the_derived_url_agree_on_loopback_hosts():
+    from cicerone.config import ConfigError
+    from cicerone.config.load import _load_dashboard_trigger_url
+
+    def url_host(host: str) -> str:
+        return f"[{host}]" if ":" in host else host
+
+    for host in ("localhost", "LOCALHOST", "127.0.0.1", "127.0.0.2", "::1"):
+        url = f"http://{url_host(host)}:8080"
+        assert _load_dashboard_trigger_url(f"{url}/", allow_http=False) == url
+        assert (
+            trigger_base_url(make_settings(trigger_host=host, trigger_port=9)) == f"http://{url_host(host)}:9"
+        )
+    for host in ("recommender", "10.0.0.5", "loopback.example"):
+        with pytest.raises(ConfigError, match="trigger_allow_http"):
+            _load_dashboard_trigger_url(f"http://{host}:8080", allow_http=False)
+        with pytest.raises(RetrainError):
+            trigger_base_url(make_settings(trigger_host=host, trigger_port=9))
+    # A wildcard bind derives a loopback URL, but is never a loopback target itself.
+    for host in ("0.0.0.0", "::"):
+        with pytest.raises(ConfigError, match="trigger_allow_http"):
+            _load_dashboard_trigger_url(f"http://{url_host(host)}:8080", allow_http=False)

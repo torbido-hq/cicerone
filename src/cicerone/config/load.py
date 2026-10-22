@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import re
@@ -52,6 +51,7 @@ from cicerone.config.settings import (
 from cicerone.config.track import load_eval_settings, load_track_settings
 from cicerone.config.unknown_keys import warn_unknown_keys
 from cicerone.config.validation import (
+    is_loopback_host,
     require_non_negative_int,
     require_positive_float,
     require_positive_int,
@@ -126,15 +126,6 @@ _EVAL_FLAT_KEYS = (
 )
 
 
-def _is_loopback_host(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
 def _load_dashboard_trigger_url(raw: object, *, allow_http: bool) -> str | None:
     if raw is None:
         return None
@@ -152,7 +143,7 @@ def _load_dashboard_trigger_url(raw: object, *, allow_http: bool) -> str | None:
     if parsed.query or parsed.fragment or url.endswith(("?", "#")):
         # /trigger/retrain is appended to the path, and the URL is logged.
         raise ConfigError("dashboard.trigger_url must not contain a query or fragment")
-    if parsed.scheme == "http" and not allow_http and not _is_loopback_host(parsed.hostname):
+    if parsed.scheme == "http" and not allow_http and not is_loopback_host(parsed.hostname):
         raise ConfigError(
             "dashboard.trigger_url over http sends the bearer token in clear to a non-loopback host; "
             "use https, or set dashboard.trigger_allow_http = true on a private network"

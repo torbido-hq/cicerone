@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Sequence
 from typing import Any
 
@@ -15,6 +16,16 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.config.settings import EpochMetricsSettings
+
+
+def is_loopback_host(host: str) -> bool:
+    """``localhost`` or a loopback IP literal; names are not resolved."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def resolve_max_workers(raw: Any | None = None) -> int:
