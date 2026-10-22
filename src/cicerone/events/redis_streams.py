@@ -43,7 +43,7 @@ def _as_int(options: dict[str, Any], key: str, default: int) -> int:
 
 def _block_ms(options: dict[str, Any]) -> int | None:
     # Unset sends no BLOCK (non-blocking read). An explicit 0 keeps Redis's "wait forever".
-    return _as_int(options, "block_ms", 0) if "block_ms" in options else None
+    return None if options.get("block_ms") is None else _as_int(options, "block_ms", 0)
 
 
 def _require_str(options: dict[str, Any], key: str) -> str:

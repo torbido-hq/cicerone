@@ -595,6 +595,7 @@ def test_row_identity_prefers_id_then_rowid_then_ctid():
     assert _row_identity({"id": 7, "rowid": 1, "ctid": "(0,1)"}) == "id:7"
     assert _row_identity({"rowid": 2}) == "rowid:00000000000000000002"
     assert _row_identity({"rowid": "not-an-int"}) == "rowid:not-an-int"
+    assert _row_identity({"rowid": float("inf")}) == "rowid:inf"
     assert _row_identity({"ctid": "(0,1)"}) == "ctid:(0,1)"
     assert _stable_event_id({"idempotency_key": "ik", "id": 1}, occurred) == "ik"
     assert _stable_event_id({"id": 9}, occurred) == "id:9"
