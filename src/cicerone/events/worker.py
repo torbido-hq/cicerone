@@ -82,6 +82,10 @@ class EventWorker:
         poll_without_lock: bool = False,
         heartbeat_interval_seconds: float = DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     ):
+        if has_ephemeral_event_ids(source) and not buffer.fingerprint_dedupe:
+            raise ValueError(
+                "source has ephemeral event ids; build its MicroBatchBuffer with fingerprint_dedupe=True"
+            )
         self._source = source
         self._buffer = buffer
         self._updater = updater

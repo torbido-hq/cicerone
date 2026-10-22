@@ -51,6 +51,10 @@ class MicroBatchBuffer:
         self._fingerprints: set[str] = set()
         self._window_started_at: float | None = None
 
+    @property
+    def fingerprint_dedupe(self) -> bool:
+        return self._fingerprint_dedupe
+
     def _tracks_fingerprint(self, event: NormalizedEvent) -> bool:
         return self._fingerprint_dedupe and event.generated_event_id
 

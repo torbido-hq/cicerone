@@ -3509,3 +3509,29 @@ def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
     with pytest.raises(KeyboardInterrupt):
         worker.tick()
     assert source.health().lag == 1
+
+
+def test_event_worker_rejects_ephemeral_source_without_fingerprint_dedupe(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _EphemeralWebhook(WebhookEventSource):
+        ephemeral_event_ids = True
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    with pytest.raises(ValueError, match="fingerprint_dedupe=True"):
+        EventWorker(_EphemeralWebhook({}), MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    EventWorker(
+        _EphemeralWebhook({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
+        updater,
+    )

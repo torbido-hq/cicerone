@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 
 import pandas as pd
@@ -288,6 +289,24 @@ def test_build_publisher_kafka(monkeypatch):
     publisher = build_publisher(settings)
     assert publisher is not None
     publisher.close()
+
+
+_PUBLISH_OPTIONS = {
+    "kafka": {"bootstrap_servers": "localhost:9092", "topic": "recs"},
+    "rabbitmq": {"amqp_url": "amqp://localhost/", "queue": "recs"},
+}
+
+
+@pytest.mark.parametrize("kind", registered_publish_kinds())
+def test_every_built_publisher_accepts_user_ids(kind):
+    assert set(_PUBLISH_OPTIONS) == set(registered_publish_kinds())
+    publisher = build_publisher(
+        PublishSettings(enabled=True, kind=kind, options=_PUBLISH_OPTIONS[kind]), connect=False
+    )
+    assert publisher is not None
+    param = inspect.signature(publisher.publish).parameters["user_ids"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is None
 
 
 def test_missing_kafka_extra(monkeypatch):
