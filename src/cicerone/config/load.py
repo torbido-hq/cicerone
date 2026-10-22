@@ -550,6 +550,15 @@ def load_settings(config_path: str | None = None) -> Settings:
     )
     if lock_backend == "redis" and not trigger_redis_url:
         raise ConfigError('job.trigger.redis_url is required when lock_backend = "redis"')
+    trigger_poll_input_bucket = bool(trigger_raw.get("poll_input_bucket", TriggerSettings.poll_input_bucket))
+    trigger_poll_input_single_replica = bool(
+        trigger_raw.get("poll_input_single_replica", TriggerSettings.poll_input_single_replica)
+    )
+    if trigger_poll_input_bucket and lock_backend != "in_process" and not trigger_poll_input_single_replica:
+        raise ConfigError(
+            f'job.trigger.poll_input_bucket with lock_backend = "{lock_backend}" must be enabled on exactly '
+            "one scheduler replica; set job.trigger.poll_input_single_replica = true on that replica only"
+        )
 
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
@@ -694,7 +703,8 @@ def load_settings(config_path: str | None = None) -> Settings:
                 float(trigger_raw.get("debounce_seconds", TriggerSettings.debounce_seconds)),
                 name="job.trigger.debounce_seconds",
             ),
-            poll_input_bucket=bool(trigger_raw.get("poll_input_bucket", TriggerSettings.poll_input_bucket)),
+            poll_input_bucket=trigger_poll_input_bucket,
+            poll_input_single_replica=trigger_poll_input_single_replica,
             poll_interval_seconds=require_positive_float(
                 float(trigger_raw.get("poll_interval_seconds", TriggerSettings.poll_interval_seconds)),
                 name="job.trigger.poll_interval_seconds",

@@ -74,6 +74,7 @@ class TriggerSettings:
     auth_token: str | None = None
     debounce_seconds: float = 60.0
     poll_input_bucket: bool = False
+    poll_input_single_replica: bool = False
     poll_interval_seconds: float = 300.0
     lock_backend: str = "in_process"
     postgres_url: str | None = None

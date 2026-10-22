@@ -91,6 +91,7 @@ Optional retrain webhook **in addition to** cron. Runs inside
 | `port` | `8080` | `POST /trigger/retrain` |
 | `debounce_seconds` | `60` | In-flight or recent runs are skipped, not queued |
 | `poll_input_bucket` | `false` | Dataset input mtime / S3 `LastModified` |
+| `poll_input_single_replica` | `false` | **Required** with `poll_input_bucket` and a `postgres` / `redis` lock; enable polling on one replica only |
 | `poll_interval_seconds` | `300` | — |
 | `lock_backend` | `"in_process"` | `"postgres"` or `"redis"` for multi-replica |
 

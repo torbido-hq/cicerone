@@ -66,6 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard user lookup applies the same item availability filters as serve.
 - Job-time Thompson samples Beta(1+s, 1+f) in-process instead of writing MABWiser's private `_imp` counts.
 - Online refresh still rewrites LightFM / popular lists when the sequential extra is missing. Only the sequential model is skipped.
+- `poll_input_bucket` with a `postgres` / `redis` lock requires `[job.trigger] poll_input_single_replica = true`; enable polling on one replica only.
 
 ### Fixed
 
