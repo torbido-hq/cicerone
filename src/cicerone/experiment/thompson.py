@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -14,16 +15,19 @@ import pandas as pd
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
-    ATTRIBUTION_CLICK,
     BANDITS_EXTRA_HINT,
     THOMPSON_P_BEST_DRAWS,
     ConfigError,
 )
-from cicerone.evaluation.metrics import SliceMetrics
+from cicerone.evaluation.metrics import OCCURRED_AT
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
+from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN, VARIANT_COLUMN
+from cicerone.track.normalize import assign_missing_event_id
 
 _EMPTY = np.array([], dtype=object)
 _EMPTY_REWARDS = np.array([], dtype=float)
+COUNTED_IMPRESSIONS = "counted_impressions"
+COUNTED_CONVERSIONS = "counted_conversions"
 
 
 def bandits_extra_available() -> bool:
@@ -86,27 +90,114 @@ def parse_arm_counts(raw: object) -> dict[str, ArmCounts]:
     return out
 
 
-def window_trials_from_slices(
-    by_variant: Mapping[str, SliceMetrics],
+@dataclass(frozen=True)
+class CountedEvents:
+    """Event ids already in the arm counts, kept for the overlap lookback."""
+
+    impressions: dict[str, tuple[str, bool]] = field(default_factory=dict)
+    conversions: dict[str, str] = field(default_factory=dict)
+
+    def as_state(self) -> dict[str, Any]:
+        return {
+            COUNTED_IMPRESSIONS: {key: [at, converted] for key, (at, converted) in self.impressions.items()},
+            COUNTED_CONVERSIONS: dict(self.conversions),
+        }
+
+
+def parse_counted_events(state: Mapping[str, Any] | None) -> CountedEvents | None:
+    if not state or not isinstance(state.get(COUNTED_IMPRESSIONS), Mapping):
+        return None
+    impressions: dict[str, tuple[str, bool]] = {}
+    for key, value in state[COUNTED_IMPRESSIONS].items():
+        if isinstance(value, Sequence) and not isinstance(value, str) and len(value) == 2:
+            impressions[str(key)] = (str(value[0]), bool(value[1]))
+    raw = state.get(COUNTED_CONVERSIONS)
+    conversions = {str(key): str(value) for key, value in raw.items()} if isinstance(raw, Mapping) else {}
+    return CountedEvents(impressions, conversions)
+
+
+def _column(frame: pd.DataFrame, name: str) -> list[Any]:
+    return list(frame[name]) if name in frame.columns else [None] * len(frame)
+
+
+def _conversion_keys(frame: pd.DataFrame) -> list[str]:
+    keys: list[str] = []
+    for event_id, user, item, when, kind in zip(
+        _column(frame, "event_id"),
+        _column(frame, USER_COLUMN),
+        _column(frame, ITEM_COLUMN),
+        _column(frame, OCCURRED_AT),
+        _column(frame, "event_type"),
+        strict=True,
+    ):
+        if event_id is not None and not pd.isna(event_id) and str(event_id).strip():
+            keys.append(str(event_id))
+        else:
+            keys.append(json.dumps([str(user), str(item), pd.Timestamp(when).isoformat(), str(kind)]))
+    return keys
+
+
+def window_trials_from_outcomes(
+    impressions: pd.DataFrame,
+    attributed: pd.DataFrame,
     *,
-    attribution: str,
     names: Sequence[str],
-) -> dict[str, ArmCounts]:
+    counted: CountedEvents,
+    keep_since: datetime,
+) -> tuple[dict[str, ArmCounts], CountedEvents]:
+    """New trials per arm, counting each impression and each conversion once.
+
+    An impression already counted as a failure that now has an uncounted
+    conversion turns into a success (+1 success, -1 failure).
+    """
+    seen = dict(counted.impressions)
+    used = dict(counted.conversions)
+    first: dict[str, tuple[str, str]] = {}
+    if not attributed.empty:
+        ordered = attributed.sort_values(OCCURRED_AT, kind="mergesort")
+        for prior, key, when in zip(
+            ordered["prior_event_id"], _conversion_keys(ordered), ordered[OCCURRED_AT], strict=True
+        ):
+            if not pd.isna(prior) and key not in used:
+                first.setdefault(str(prior), (key, pd.Timestamp(when).isoformat()))
     wanted = set(names)
-    use_click = attribution == ATTRIBUTION_CLICK
-    out: dict[str, ArmCounts] = {}
-    for name in wanted:
-        slice_metrics = by_variant.get(name)
-        if slice_metrics is None:
-            out[name] = ArmCounts(0, 0)
+    successes = dict.fromkeys(wanted, 0)
+    failures = dict.fromkeys(wanted, 0)
+    for event_id, variant, when in zip(
+        _column(impressions, "event_id"),
+        _column(impressions, VARIANT_COLUMN),
+        _column(impressions, OCCURRED_AT),
+        strict=True,
+    ):
+        ident = str(event_id)
+        hit = first.get(ident)
+        before = seen.get(ident)
+        if before is not None and (before[1] or hit is None):
             continue
-        impressions = int(slice_metrics.n_impressions)
-        conversions = int(
-            slice_metrics.n_conversions_click if use_click else slice_metrics.n_conversions_view
-        )
-        conversions = min(conversions, impressions)
-        out[name] = ArmCounts(successes=conversions, failures=max(0, impressions - conversions))
-    return out
+        seen[ident] = (pd.Timestamp(when).isoformat(), hit is not None)
+        if hit is not None:
+            used[hit[0]] = hit[1]
+        name = str(variant)
+        if name not in wanted:
+            continue
+        if hit is not None:
+            successes[name] += 1
+        if before is not None:
+            failures[name] -= 1
+        elif hit is None:
+            failures[name] += 1
+    cutoff = pd.Timestamp(keep_since)
+
+    def recent(at: str) -> bool:
+        stamp = pd.to_datetime(at, utc=True, errors="coerce")
+        return not pd.isna(stamp) and stamp >= cutoff
+
+    kept = CountedEvents(
+        {key: value for key, value in seen.items() if recent(value[0])},
+        {key: at for key, at in used.items() if recent(at)},
+    )
+    trials = {name: ArmCounts(successes=successes[name], failures=failures[name]) for name in wanted}
+    return trials, kept
 
 
 def track_rows_since(
@@ -114,24 +205,29 @@ def track_rows_since(
     started_at: str | None,
     *,
     until: datetime,
+    lookback: timedelta = timedelta(0),
 ) -> list[dict[str, Any]]:
     end = pd.Timestamp(until)
     stamp = pd.to_datetime(started_at, utc=True, errors="coerce") if started_at else None
     if stamp is not None and pd.isna(stamp):
         return []
+    if stamp is not None:
+        stamp -= lookback
     out: list[dict[str, Any]] = []
     for row in rows:
         when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if stamp is None:
-            if pd.isna(when) or when < end:
-                out.append(dict(row))
-        elif not pd.isna(when) and stamp <= when < end:
-            out.append(dict(row))
+        if pd.isna(when) or when >= end:
+            continue
+        if stamp is None or when >= stamp:
+            out.append(assign_missing_event_id(row))
     return out
 
 
 def add_counts(base: ArmCounts, extra: ArmCounts) -> ArmCounts:
-    return ArmCounts(successes=base.successes + extra.successes, failures=base.failures + extra.failures)
+    return ArmCounts(
+        successes=base.successes + extra.successes,
+        failures=max(0, base.failures + extra.failures),
+    )
 
 
 def pick_champion_name(names: Sequence[str], promoted_variant: str | None = None) -> str:

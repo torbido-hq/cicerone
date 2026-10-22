@@ -48,6 +48,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   longer create unbounded Prometheus series.
 - The Thompson window ends at the allocation time: track rows with a future
   `occurred_at` are no longer counted (and counted again next run).
+- The Thompson window ends at the allocation time: track rows and
+  conversions with a future `occurred_at` are no longer counted (and
+  counted again next run), and track rows without a valid `occurred_at`
+  are skipped on the first allocation too.
+- Thompson arms count each impression and conversion once by id: each run
+  re-reads one attribution window back, so track rows and conversions that
+  arrive late are counted, and a late conversion turns its impression into
+  a success. Counted ids are kept in the experiment state for that window;
+  older state without them still loads.
 - Tracking conversion counts and CVR count each converted impression once,
   as CTR does, so repeat conversions on one recommendation no longer
   inflate them (overall, per rank/source/variant, experiment outcomes and

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -80,24 +81,40 @@ def prefer_history(history: pd.DataFrame | None, recs: pd.DataFrame | None) -> p
     return recs
 
 
-def conversion_events_for_settings(events: pd.DataFrame, settings: Settings) -> pd.DataFrame:
-    return conversion_events(
+def conversion_events_for_settings(
+    events: pd.DataFrame,
+    settings: Settings,
+    *,
+    until: datetime | None = None,
+) -> pd.DataFrame:
+    conversions = conversion_events(
         events,
         settings.track.conversion_event_types,
         primary_metric=settings.experiment.primary_metric,
     )
+    return _filter_events_since(conversions, None, until=until)
 
 
-def _filter_events_since(frame: pd.DataFrame, since: str | None) -> pd.DataFrame:
-    if not since or frame.empty:
+def _filter_events_since(
+    frame: pd.DataFrame,
+    since: str | None,
+    *,
+    until: datetime | None = None,
+) -> pd.DataFrame:
+    if (not since and until is None) or frame.empty:
         return frame
     if "occurred_at" not in frame.columns:
         return frame.iloc[0:0]
-    start = pd.to_datetime(since, utc=True, errors="coerce")
-    if pd.isna(start):
-        return frame.iloc[0:0]
     stamps = pd.to_datetime(frame["occurred_at"], utc=True, errors="coerce")
-    return frame.loc[stamps.notna() & (stamps >= start)].copy()
+    keep = stamps.notna()
+    if since:
+        start = pd.to_datetime(since, utc=True, errors="coerce")
+        if pd.isna(start):
+            return frame.iloc[0:0]
+        keep &= stamps >= start
+    if until is not None:
+        keep &= stamps < pd.Timestamp(until)
+    return frame.loc[keep].copy()
 
 
 def _with_default_quantity(frame: pd.DataFrame) -> pd.DataFrame:

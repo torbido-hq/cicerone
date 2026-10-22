@@ -7,7 +7,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -22,7 +22,7 @@ from cicerone.errors import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
 from cicerone.errors import PUBLISH_ERRORS as _PUBLISH_ERRORS
 from cicerone.errors import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
 from cicerone.errors import log_caught as _log_caught
-from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
+from cicerone.evaluation import conversion_events_for_settings, impression_conversions
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
     ResolvedRecipe,
@@ -34,10 +34,12 @@ from cicerone.experiment import (
 from cicerone.experiment.guardrails import evaluate_guardrails
 from cicerone.experiment.store import ExperimentStore, merge_experiment_state
 from cicerone.experiment.thompson import (
+    CountedEvents,
     allocate_thompson,
+    parse_counted_events,
     select_active_recipes,
     track_rows_since,
-    window_trials_from_slices,
+    window_trials_from_outcomes,
 )
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import OutputSink, recommendations_write_guard
@@ -230,15 +232,24 @@ def _select_thompson_recipes(
         return ThompsonSelection(recipes)
     now = datetime.now(UTC)
     window_started = ""
+    counted: CountedEvents | None = CountedEvents()
     if previous is not None and has_pair:
         window_started = str(previous.get("window_started_at") or "").strip()
+        counted = parse_counted_events(previous)
+    # Re-read one attribution window back for late rows; state without counted ids has no overlap.
+    lookback = timedelta(hours=settings.track.attribution_window_hours)
     if has_pair and not window_started:
         window_rows = []
     else:
-        window_rows = track_rows_since(track_rows, window_started or None, until=now)
+        window_rows = track_rows_since(
+            track_rows,
+            window_started or None,
+            until=now,
+            lookback=lookback if counted is not None else timedelta(0),
+        )
     names = [recipe.name for recipe in recipes]
     try:
-        conversions = conversion_events_for_settings(events, settings)
+        conversions = conversion_events_for_settings(events, settings, until=now)
         if preloaded_recs is not None:
             recs = preloaded_recs
             catalog_size = _try_load(
@@ -256,14 +267,19 @@ def _select_thompson_recipes(
                 None,
                 parallel=settings.output.kind != "db",
             )
-        report = evaluate_tracking(
+        impressions, attributed = impression_conversions(
             track_rows=window_rows,
             conversions=conversions,
             recommendations=recs,
             window_hours=settings.track.attribution_window_hours,
+            attribution=experiment.attribution,
         )
-        window_trials = window_trials_from_slices(
-            report.by_variant, attribution=experiment.attribution, names=names
+        window_trials, now_counted = window_trials_from_outcomes(
+            impressions,
+            attributed,
+            names=names,
+            counted=counted or CountedEvents(),
+            keep_since=now - lookback,
         )
         if not has_pair and not any(item.impressions for item in window_trials.values()):
             logger.warning("Thompson allocation fail closed: no variant signal")
@@ -304,6 +320,7 @@ def _select_thompson_recipes(
             promoted_variant=promoted,
             promoted_at=(str(previous["promoted_at"]) if previous and previous.get("promoted_at") else None),
             **allocation.as_state(),
+            **now_counted.as_state(),
         )
         logger.info(
             "Thompson allocation: champion=%s challenger=%s rotated=%s",
