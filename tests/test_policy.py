@@ -16,7 +16,7 @@ from cicerone.policy import (
     item_boost_factors,
     resolve_eligibility,
 )
-from cicerone.reasons import BOOST_HITS_COLUMN
+from cicerone.reasons import BOOST_HITS_COLUMN, PRIORITY_BLOCK_COLUMN
 
 
 def _items() -> pd.DataFrame:
@@ -562,22 +562,24 @@ def test_apply_boosts_keeps_priority_source_blocks_in_order():
         ]
     )
     recs = pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "als_1", "rank": 1, "score": 0.9, "source": "personalized"},
-            {"user_id": "u1", "item_id": "als_2", "rank": 2, "score": 0.8, "source": "personalized"},
-            {"user_id": "u1", "item_id": "pop_1", "rank": 3, "score": 1200.0, "source": "popular"},
-            {"user_id": "u1", "item_id": "pop_2", "rank": 4, "score": 1100.0, "source": "popular"},
-        ]
+        {
+            "user_id": ["u1"] * 4,
+            "item_id": ["als_1", "als_2", "pop_1", "pop_2"],
+            "rank": [1, 2, 3, 4],
+            "score": [0.9, 0.8, 1200.0, 1100.0],
+            "source": ["personalized", "personalized", "popular", "popular"],
+            PRIORITY_BLOCK_COLUMN: [0, 0, 1, 1],
+        }
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
 
-    out = apply_boosts(recs, items, boosts, top_k=4, keep_source_order=True)
+    out = apply_boosts(recs, items, boosts, top_k=4)
 
     assert list(out[Columns.Item]) == ["als_2", "als_1", "pop_2", "pop_1"]
     assert list(out[Columns.Rank]) == [1, 2, 3, 4]
     assert list(out[Columns.Score]) == pytest.approx([1.6, 0.9, 2200.0, 1200.0])
-    # Without source blocks the same frame sorts by raw scale across models.
-    mixed = apply_boosts(recs, items, boosts, top_k=4)
+    # Without strategy blocks the same frame sorts by raw scale across models.
+    mixed = apply_boosts(recs.drop(columns=[PRIORITY_BLOCK_COLUMN]), items, boosts, top_k=4)
     assert list(mixed[Columns.Item]) == ["pop_2", "pop_1", "als_2", "als_1"]
 
 

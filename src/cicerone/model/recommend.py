@@ -114,7 +114,6 @@ def recommend_with_models(
             config.boosts,
             top_k=top_k,
             record_hits=explain_settings.enabled,
-            keep_source_order=not blending_enabled and weights is None,
         )
 
     return attach_reasons(

@@ -11,6 +11,7 @@ from cicerone.dataset import build_dataset
 from cicerone.model import DEFAULT_MODELS, train_and_recommend
 from cicerone.model.recommend_cache import dataset_fingerprint, items_fingerprint, recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
+from cicerone.reasons import PRIORITY_BLOCK_COLUMN
 
 
 def test_availability_filters_via_policy_allowlist(sample_items, feature_config):
@@ -612,41 +613,6 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     assert not ghost[Columns.Item].isin(["i3", "i4"]).any()
 
 
-@pytest.mark.parametrize(("weights", "keeps_source_order"), [(None, True), ({"popular": 1.0}, False)])
-def test_train_and_recommend_boosts_keep_source_order_only_for_priority(
-    feature_config, monkeypatch, weights, keeps_source_order
-):
-    from dataclasses import replace
-
-    from cicerone.feature_config import BoostRule
-    from cicerone.model import recommend as recommend_module
-
-    seen: list[bool] = []
-    real_apply_boosts = recommend_module.apply_boosts
-
-    def spy(*args, **kwargs):
-        seen.append(kwargs["keep_source_order"])
-        return real_apply_boosts(*args, **kwargs)
-
-    monkeypatch.setattr(recommend_module, "apply_boosts", spy)
-    now = pd.Timestamp.now(tz="UTC")
-    events = pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    )
-    items = pd.DataFrame([{"item_id": "i1", "is_paying_producer": True}])
-    config = replace(
-        feature_config,
-        boosts=[BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)],
-    )
-    built = build_dataset(events, None, items, config, half_life_days=90)
-
-    train_and_recommend(
-        built, target_users=["ghost"], config=config, top_k=1, enabled_models=["popular"], weights=weights
-    )
-
-    assert seen == [keeps_source_order]
-
-
 class _FixedScoresModel:
     def __init__(self, scored: list[tuple[str, float]]):
         self._scored = scored
@@ -710,6 +676,7 @@ def test_recommend_with_models_boosts_keep_priority_strategy_blocks(feature_conf
 
     assert list(recs[Columns.Item]) == ["als_2", "als_1", "pop_2", "pop_1"]
     assert list(recs[Columns.Rank]) == [1, 2, 3, 4]
+    assert PRIORITY_BLOCK_COLUMN not in recs.columns
 
 
 def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):

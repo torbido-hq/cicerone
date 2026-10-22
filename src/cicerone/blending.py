@@ -14,6 +14,7 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BlendingConfig
+from cicerone.ranking import rerank_by_score
 from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 SOURCE_COLUMN = "source"
@@ -353,13 +354,7 @@ def blend_for_users(
     )
     combined[SOURCE_CONTRIBS_COLUMN] = combined[SOURCE_CONTRIBS_COLUMN].map(_ordered_contribs)
 
-    combined = combined.sort_values(
-        [Columns.User, Columns.Score, Columns.Item],
-        ascending=[True, False, True],
-        kind="mergesort",
-    )
-    combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
-    combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+    combined = rerank_by_score(combined, top_k)
     return combined[
         [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
     ].reset_index(drop=True)

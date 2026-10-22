@@ -15,12 +15,13 @@ from cicerone.ids import interactions_item_column, interactions_user_column, ite
 from cicerone.io.recommendation_schema import REASONS_COLUMN, SOURCE_COLUMN
 from cicerone.reasons import (
     BOOST_HITS_COLUMN,
+    PRIORITY_BLOCK_COLUMN,
     SOURCE_CONTRIBS_COLUMN,
     dump_reasons,
 )
 
 _MAX_HISTORY_ITEMS = 50
-_INTERNAL_COLUMNS = (SOURCE_CONTRIBS_COLUMN, BOOST_HITS_COLUMN)
+_INTERNAL_COLUMNS = (SOURCE_CONTRIBS_COLUMN, BOOST_HITS_COLUMN, PRIORITY_BLOCK_COLUMN)
 
 
 def _drop_internal(frame: pd.DataFrame) -> pd.DataFrame:

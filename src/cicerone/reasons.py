@@ -13,6 +13,8 @@ from cicerone.values import is_missing
 
 SOURCE_CONTRIBS_COLUMN = "_source_contribs"
 BOOST_HITS_COLUMN = "_boost_hits"
+# Strategy index from the priority combine; boosts re-rank within it.
+PRIORITY_BLOCK_COLUMN = "_priority_block"
 
 
 def dump_reasons(payload: dict[str, Any]) -> str:

@@ -41,6 +41,7 @@ from cicerone.model_config import (
     popular_in_category_feature,
     sequential_extra_available,
 )
+from cicerone.ranking import keep_top_k, renumber_ranks
 
 logger = logging.getLogger(__name__)
 
@@ -265,9 +266,9 @@ def drop_seen_recommendations(reco: pd.DataFrame, train: pd.DataFrame, top_k: in
         return filtered
     if Columns.Rank in filtered.columns:
         filtered = filtered.sort_values([Columns.User, Columns.Rank], kind="mergesort")
-    trimmed = filtered.groupby(Columns.User, as_index=False).head(top_k).copy()
+    trimmed = keep_top_k(filtered, top_k).copy()
     if Columns.Rank in trimmed.columns:
-        trimmed[Columns.Rank] = trimmed.groupby(Columns.User).cumcount() + 1
+        renumber_ranks(trimmed)
     return trimmed.reset_index(drop=True)
 
 
