@@ -7,18 +7,18 @@ from collections.abc import Collection, Sequence
 
 import pandas as pd
 from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError, ArrowTypeError
-from sqlalchemy import Engine, bindparam, text
+from sqlalchemy import bindparam, text
 
 from cicerone.config import IOSettings
-from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.blob import STORAGE_READ_ERRORS, is_storage_not_found, read_parquet_if_exists
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
 )
-from cicerone.io.engines import dispose_engines, engine_for, release_engine
+from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
-from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
+from cicerone.io.options import read_parquet, require_option, table_option
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -40,14 +40,6 @@ GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, V
 
 def empty_recommendations_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
-
-
-def dispose_recommendation_engines() -> None:
-    dispose_engines()
-
-
-def _engine_for(database_url: str) -> Engine:
-    return engine_for(database_url)
 
 
 def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -80,8 +72,6 @@ def _is_parquet_projection_error(exc: BaseException, columns: Sequence[str]) -> 
 def _read_parquet_columns(output: IOSettings, filename: str, columns: Sequence[str]) -> pd.DataFrame:
     try:
         return read_parquet(output.options, filename, columns=list(columns))
-    except FileNotFoundError:
-        raise
     except _PARQUET_PROJECTION_ERRORS as exc:
         if _is_parquet_projection_error(exc, columns):
             return read_parquet(output.options, filename)
@@ -102,10 +92,8 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
     if output.kind == "dataset":
         try:
             frame = _read_parquet_columns(output, ITEMS_SNAPSHOT_FILENAME, (ITEM_COLUMN,))
-        except FileNotFoundError:
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return None
             raise
         except _CATALOG_SOFT_ERRORS:
@@ -115,12 +103,9 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
             return None
         return int(frame[ITEM_COLUMN].astype(str).nunique())
     if output.kind == "db":
-        table = sql_identifier(
-            output.options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
-        )
+        table = table_option(output.options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
@@ -139,10 +124,8 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     if output.kind == "dataset":
         try:
             frame = _read_parquet_columns(output, RECOMMENDATIONS_FILENAME, GUARDRAIL_COLUMNS)
-        except FileNotFoundError:
-            return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
             raise
         if frame.empty:
@@ -151,7 +134,7 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     if output.kind == "db":
         table, _required, _user = _db_table_and_columns(output)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         column_sets = (GUARDRAIL_COLUMNS, (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN))
         loaded: pd.DataFrame | None = None
         last_exc: BaseException | None = None
@@ -204,15 +187,8 @@ def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
 
 
 def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
-    try:
-        frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME)
-    except FileNotFoundError:
-        return empty_recommendations_frame()
-    except S3_READ_ERRORS as exc:
-        if is_s3_not_found(exc):
-            return empty_recommendations_frame()
-        raise
-    if frame.empty:
+    frame = read_parquet_if_exists(output.options, RECOMMENDATIONS_FILENAME)
+    if frame is None or frame.empty:
         return empty_recommendations_frame()
     return _empty_on_schema_mismatch(frame)
 
@@ -225,10 +201,8 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
             RECOMMENDATIONS_FILENAME,
             filters=[(USER_COLUMN, "in", user_ids)],
         )
-    except FileNotFoundError:
-        return empty_recommendations_frame()
-    except S3_READ_ERRORS as exc:
-        if is_s3_not_found(exc):
+    except STORAGE_READ_ERRORS as exc:
+        if is_storage_not_found(exc):
             return empty_recommendations_frame()
         raise
     except _PARQUET_PROJECTION_ERRORS as exc:
@@ -257,7 +231,7 @@ def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[s
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, _required_columns, user_col = _db_table_and_columns(output)
     url = require_option(output.options, "database_url", "db")
-    engine = _engine_for(url)
+    engine = engine_for(url)
     try:
         if user_ids is None:
             frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
@@ -310,10 +284,8 @@ def count_recommendation_users(output: IOSettings) -> int:
         try:
             # Project only user_id — avoids materializing the full recommendations frame.
             frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME, columns=[USER_COLUMN])
-        except FileNotFoundError:
-            return 0
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return 0
             raise
         except _PARQUET_PROJECTION_ERRORS as exc:
@@ -339,7 +311,7 @@ def count_recommendation_users(output: IOSettings) -> int:
     if output.kind == "db":
         table, _columns, user_col = _db_table_and_columns(output)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()

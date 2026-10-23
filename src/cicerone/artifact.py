@@ -29,6 +29,7 @@ from cicerone.config.constants import ARTIFACT_HMAC_KEY_MIN_BYTES, DEFAULT_MAX_A
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
+from cicerone.io.options import require_max_bytes
 from cicerone.model import (
     RecommenderModel,
     recommend_with_models,
@@ -268,8 +269,7 @@ def loads_artifact(
     max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> ModelArtifact:
     """Deserialize a trusted v3 ModelArtifact zip. Legacy bare pickle is refused."""
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
+    require_max_bytes(max_bytes)
     if len(payload) > max_bytes:
         raise ValueError(f"Artifact payload exceeds {max_bytes} bytes")
     try:
@@ -331,8 +331,7 @@ def load_artifact(
 ) -> ModelArtifact:
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
+    require_max_bytes(max_bytes)
     with path.open("rb") as handle:
         payload = handle.read(max_bytes + 1)
     return loads_artifact(payload, hmac_key=hmac_key, max_bytes=max_bytes)

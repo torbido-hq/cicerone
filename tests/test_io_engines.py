@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
+
 from sqlalchemy import text
 
+from cicerone.io import engines as io_engines
 from cicerone.io.db_store import DatabaseInputSource
 from cicerone.io.engines import dispose_engines, engine_for, release_engine
 from cicerone.locks.postgres import PostgresAdvisoryLock
@@ -67,3 +70,13 @@ def test_events_runtime_stop_keeps_shared_engine(tmp_path):
     assert EventsRuntime(webhook_source=None, worker=None).stop() is True
     assert engine_for(url) is first
     dispose_engines()
+
+
+def test_engine_cache_keeps_all_urls(tmp_path):
+    engines = []
+    for i in range(10):
+        path = tmp_path / f"e{i}.db"
+        sqlite3.connect(path).close()
+        engines.append(engine_for(f"sqlite+pysqlite:///{path}"))
+    assert len(io_engines._engines) == 10
+    assert engine_for(f"sqlite+pysqlite:///{tmp_path / 'e0.db'}") is engines[0]

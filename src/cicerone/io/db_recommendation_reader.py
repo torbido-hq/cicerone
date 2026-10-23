@@ -14,14 +14,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.db_errors import SQL_READ_ERRORS, db_error_message, is_missing_column_error
-from cicerone.io.db_store import (
-    DEFAULT_RECOMMENDATION_ITEMS_TABLE,
-    DEFAULT_RECOMMENDATIONS_TABLE,
+from cicerone.io.db_errors import (
     MISSING_TABLE_ERRORS,
+    SQL_READ_ERRORS,
+    db_error_message,
+    is_missing_column_error,
 )
+from cicerone.io.db_store import DEFAULT_RECOMMENDATION_ITEMS_TABLE, DEFAULT_RECOMMENDATIONS_TABLE
 from cicerone.io.engines import engine_for
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.recommendation_reader_common import (
     RANK_COLUMN,
     SOURCE_COLUMN,
@@ -39,13 +40,9 @@ logger = logging.getLogger(__name__)
 class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._table = sql_identifier(
-            options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
-        )
-        self._items_table = sql_identifier(
-            options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
+        self._table = table_option(options, "recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE)
+        self._items_table = table_option(
+            options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE
         )
         self._engine = engine_for(require_option(options, "database_url", "db"))
         self._variant_supported: bool | None = None
