@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 
 import pandas as pd
@@ -189,6 +190,13 @@ def test_experiment_store_raises_on_invalid_dataset_state(tmp_path) -> None:
     (tmp_path / "experiment_state.json").write_text("[]", encoding="utf-8")
     with pytest.raises(ValueError, match="not an object"):
         store.read_state()
+
+
+def test_experiment_store_warns_on_invalid_dataset_state_json(tmp_path, caplog) -> None:
+    (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING), pytest.raises(json.JSONDecodeError):
+        ExperimentStore(local_output(tmp_path)).read_state()
+    assert "Invalid experiment_state.json" in caplog.text
 
 
 def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:

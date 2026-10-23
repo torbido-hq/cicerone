@@ -1154,7 +1154,7 @@
                 }
               }
             },
-            "description": "Writer lock busy or lost"
+            "description": "Writer lock busy or lost, or store unavailable"
           }
         },
         "security": [

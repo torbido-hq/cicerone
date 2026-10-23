@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
+from support.fakes import raising
 from support.settings import make_settings
 from test_serve import _FakeReader, _recs_df
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.serve import create_app
 from cicerone.serve_schemas import ValidationErrorDetail
 from cicerone.track.store import TrackStore
@@ -240,13 +244,22 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
     assert after == before + 1
 
 
-def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.locks import WriterLockBusyError
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        (WriterLockBusyError("dataset writer lock busy"), "Writer lock is busy"),
+        (LockLostError("dataset writer lock lost before write", kind="writer"), "Writer lock was lost"),
+        (OSError("disk full"), "Track store unavailable"),
+        (OperationalError("INSERT", {}, Exception("db down")), "Track store unavailable"),
+    ],
+)
+def test_post_track_returns_503_when_store_unavailable(tmp_path, monkeypatch, error, detail):
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
 
-    monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_accepted_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
-    )
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", raising(error))
+    labels = {"kind": "other", "status": "error"}
+    before = metric_value(generate_latest().decode(), "cicerone_track_ingest_total", labels)
     app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
     response = TestClient(app, raise_server_exceptions=False).post(
         "/track",
@@ -254,7 +267,8 @@ def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
         json=_impression(),
     )
     assert response.status_code == 503
-    assert response.json()["detail"] == "Writer lock is busy"
+    assert response.json()["detail"] == detail
+    assert metric_value(generate_latest().decode(), "cicerone_track_ingest_total", labels) == before + 1
 
 
 def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
@@ -287,25 +301,6 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
             assert track_response.status_code == 202
 
     asyncio.run(_run())
-
-
-def test_post_track_returns_503_when_writer_lock_lost(tmp_path, monkeypatch):
-    from cicerone.locks import LockLostError
-
-    monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_accepted_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            LockLostError("dataset writer lock lost before write", kind="writer")
-        ),
-    )
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
-    response = TestClient(app, raise_server_exceptions=False).post(
-        "/track",
-        headers={"Authorization": "Bearer secret"},
-        json=_impression(),
-    )
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Writer lock was lost"
 
 
 def test_track_route_absent_when_disabled(tmp_path):
@@ -429,7 +424,6 @@ def test_get_log_impressions_when_enabled(tmp_path):
 
 
 def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.locks import WriterLockBusyError
     from cicerone.serve import app as serve_app
 
     calls = {"n": 0}

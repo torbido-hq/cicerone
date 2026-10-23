@@ -162,6 +162,7 @@ def evaluate_experiment(
                 control,
                 variant_metric(name, values_by_variant[name]),
                 alpha=alpha,
+                min_users=min_impressions,
             )
         )
     guardrails: list[GuardrailReport] = []

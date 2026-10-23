@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,8 @@ from cicerone.io.blob import (
 )
 from cicerone.io.options import exclusive_file_lock, require_option
 from cicerone.locks import WriteFence
+
+logger = logging.getLogger(__name__)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
@@ -36,7 +40,11 @@ class ExperimentDatasetBackend:
         self._fence = fence
 
     def read_state(self) -> dict[str, Any] | None:
-        return read_json_object(self._options, STATE_FILENAME)
+        try:
+            return read_json_object(self._options, STATE_FILENAME)
+        except json.JSONDecodeError:
+            logger.warning("Invalid experiment_state.json")
+            raise
 
     def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
         return json_file_writer(self._options, STATE_FILENAME, state)
