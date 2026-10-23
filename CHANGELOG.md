@@ -56,7 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The dashboard config page drops a hint for `serve.enabled`, which is not
   a setting.
 - `cicerone users --help` and `cicerone export-openapi --help` show the
-  `cicerone` subcommand in their usage line.
+  `cicerone` subcommand in their usage line, and `cicerone users --help`
+  no longer needs a config with dashboard users.
 - `POST /track` counts a body that is not an event, list or `{"events": [...]}`
   as an `error` in `cicerone_track_ingest_total`.
 - The missing feature column warning names `user_features` or
