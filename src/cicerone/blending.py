@@ -18,6 +18,7 @@ from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.ranking import rerank_by_score
 from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
+WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 BLENDED_SOURCE = "blended"
 PERSONALIZED_SOURCE = "personalized"
 POPULAR_SOURCE = "popular_fallback"
@@ -193,16 +194,15 @@ def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFr
 
 def fuse_weighted_rrf(
     frame: pd.DataFrame,
-    weights: pd.Series,
     *,
     rrf_k: float,
     top_k: int,
     source_label: Callable[[pd.Series], str],
     source_order: Sequence[str],
 ) -> pd.DataFrame:
-    """Sum ``weight / (rrf_k + rank)`` per (user, item), then rerank to ``top_k``."""
+    """Sum ``weight / (rrf_k + rank)`` per (user, item) from each row's ``WEIGHT_COLUMN``, then rerank."""
     ranks = frame[Columns.Rank].to_numpy(dtype=float)
-    weight_vals = weights.to_numpy(dtype=float)
+    weight_vals = frame[WEIGHT_COLUMN].to_numpy(dtype=float)
     contributions = weight_vals / (rrf_k + ranks)
     parts = frame[[Columns.User, Columns.Item, SOURCE_COLUMN]].assign(
         **{
@@ -237,10 +237,10 @@ def fuse_weighted_rrf(
     ].reset_index(drop=True)
 
 
-def _weighted_rows(frame: pd.DataFrame, user_weights: Mapping[str, float]) -> tuple[pd.DataFrame, pd.Series]:
+def _weighted_rows(frame: pd.DataFrame, user_weights: Mapping[str, float]) -> pd.DataFrame:
     weights = frame[Columns.User].astype(str).map(user_weights)
     keep = weights.notna() & (weights > _WEIGHT_EPS)
-    return frame.loc[keep], weights.loc[keep]
+    return frame.loc[keep].assign(**{WEIGHT_COLUMN: weights.loc[keep]})
 
 
 def _source_label_from_parts(labels: pd.Series) -> str:
@@ -325,13 +325,11 @@ def blend_for_users(
         _weighted_rows(frames[label], {user_id: w.get(label, 0.0) for user_id, w in weight_map.items()})
         for label in _SOURCE_ORDER
     ]
-    weighted = [(rows, weights) for rows, weights in weighted if not rows.empty]
+    weighted = [rows for rows in weighted if not rows.empty]
     if not weighted:
         return _empty_recs()
-    rows, weights = zip(*weighted, strict=True)
     return fuse_weighted_rrf(
-        pd.concat(rows, ignore_index=True),
-        pd.concat(weights, ignore_index=True),
+        pd.concat(weighted, ignore_index=True),
         rrf_k=config.rrf_k,
         top_k=top_k,
         source_label=_source_label_from_parts,

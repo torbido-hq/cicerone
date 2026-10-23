@@ -60,7 +60,6 @@ def combine_by_weighted_fusion(
 
     return fuse_weighted_rrf(
         combined,
-        combined[WEIGHT_COLUMN],
         rrf_k=rrf_k,
         top_k=top_k,
         source_label=_join_labels_in_order,
