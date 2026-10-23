@@ -5,8 +5,9 @@ from __future__ import annotations
 import pandas as pd
 from rectools import Columns
 
+from cicerone.blending import fuse_weighted_rrf
 from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
-from cicerone.ranking import keep_top_k, renumber_ranks, rerank_by_score
+from cicerone.ranking import keep_top_k, renumber_ranks
 from cicerone.reasons import PRIORITY_BLOCK_COLUMN, SOURCE_CONTRIBS_COLUMN
 
 
@@ -16,14 +17,6 @@ def _as_rank(value: object) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     return int(float(str(value)))
-
-
-def _as_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    return float(str(value))
 
 
 def _priority_contrib(label: object, rank: object) -> list[dict[str, object]]:
@@ -60,45 +53,15 @@ def combine_by_weighted_fusion(
 ) -> pd.DataFrame:
     """Weighted RRF: ``weight / (rrf_k + rank)``, sources joined in order."""
     combined = pd.concat(frames, ignore_index=True)
-    combined["contribution"] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
-    combined[Columns.Score] = combined["contribution"]
-    combined["_contrib"] = [
-        {
-            "label": str(label),
-            "rank": _as_rank(rank),
-            "weight": _as_float(weight),
-            "contribution": _as_float(contribution),
-        }
-        for label, rank, weight, contribution in zip(
-            combined[SOURCE_COLUMN],
-            combined[Columns.Rank],
-            combined[WEIGHT_COLUMN],
-            combined["contribution"],
-            strict=True,
-        )
-    ]
 
-    # O(groups) Python agg; label order is source_label_order, not group appearance.
     def _join_labels_in_order(labels: pd.Series) -> str:
         present = set(labels)
         return "+".join(label for label in source_label_order if label in present)
 
-    order = {label: index for index, label in enumerate(source_label_order)}
-
-    def _sort_contribs(items: object) -> list[dict[str, object]]:
-        contribs = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-        contribs.sort(key=lambda item: order.get(str(item.get("label")), len(order)))
-        return contribs
-
-    fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
-        **{
-            Columns.Score: (Columns.Score, "sum"),
-            SOURCE_COLUMN: (SOURCE_COLUMN, _join_labels_in_order),
-            SOURCE_CONTRIBS_COLUMN: ("_contrib", list),
-        }
+    return fuse_weighted_rrf(
+        combined,
+        rrf_k=rrf_k,
+        top_k=top_k,
+        source_label=_join_labels_in_order,
+        source_order=source_label_order,
     )
-    fused[SOURCE_CONTRIBS_COLUMN] = fused[SOURCE_CONTRIBS_COLUMN].map(_sort_contribs)
-    fused = rerank_by_score(fused, top_k)
-    return fused[
-        [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
-    ]
