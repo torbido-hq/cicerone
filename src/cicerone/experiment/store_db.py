@@ -12,7 +12,7 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import LazyEngine
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 
@@ -71,12 +71,10 @@ class ExperimentDbBackend:
     def __init__(self, options: dict[str, Any], fence: WriteFence):
         self._options = options
         self._fence = fence
-        self._engine: Engine | None = None
+        self._engine = LazyEngine(lambda: require_option(options, "database_url", "db"))
 
     def engine(self) -> Engine:
-        if self._engine is None:
-            self._engine = engine_for(require_option(self._options, "database_url", "db"))
-        return self._engine
+        return self._engine.get()
 
     def _state_table(self) -> str:
         return sql_identifier(

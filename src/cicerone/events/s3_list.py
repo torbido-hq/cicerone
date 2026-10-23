@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
@@ -13,6 +12,7 @@ from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import Batch
+from cicerone.events.state_file import write_json_durably
 from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
@@ -106,19 +106,4 @@ class S3ListPoll:
     def _persist_marker_unlocked(self) -> None:
         if self._marker_path is None:
             return
-        self._marker_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"key": self._marker_key}
-        tmp = self._marker_path.with_name(f".{self._marker_path.name}.tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp.replace(self._marker_path)
-        try:
-            dir_fd = os.open(str(self._marker_path.parent), os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        write_json_durably(self._marker_path, {"key": self._marker_key})
