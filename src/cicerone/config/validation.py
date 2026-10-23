@@ -1,4 +1,4 @@
-"""Config validation helpers and epoch/worker resolvers."""
+"""Config validation helpers, number fields and the epoch-metrics resolver."""
 
 from __future__ import annotations
 
