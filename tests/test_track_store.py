@@ -6,13 +6,14 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
-from support.fakes import FakeS3Body, FakeS3Client
+from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, raising
+from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.job_eval import retrain_fence
 from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
-from cicerone.track.store import TrackStore, require_appendable_track_log
+from cicerone.track.store import TrackStore
 
 
 def test_lookback_since_uses_floor() -> None:
@@ -137,7 +138,7 @@ def test_stable_event_id_does_not_collide_on_pipe_in_ids() -> None:
 
 
 def test_track_store_roundtrip_dataset(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     assert store.read_rows() == []
     assert store.append_rows([]) == 0
@@ -175,8 +176,7 @@ def test_track_store_roundtrip_dataset(tmp_path) -> None:
 
 
 def test_track_store_roundtrip_sqlite(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     assert store.read_rows() == []
     assert store.read_eval() is None
@@ -190,19 +190,18 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
     assert len(store.read_history()) == 1
-    engine = store.backend._db_engine()
+    engine = store.backend.engine()
     store.append_rows([_row(event_id="imp-2", item_id="ipa-002")])
-    assert store.backend._db_engine() is engine
+    assert store.backend.engine() is engine
     assert len(store.read_rows()) == 2
 
 
 def test_track_and_eval_tables_are_created_in_one_statement(tmp_path) -> None:
     from sqlalchemy import event
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
     statements: list[str] = []
-    engine = store.backend._db_engine()
+    engine = store.backend.engine()
     event.listen(engine, "before_cursor_execute", lambda *args: statements.append(args[2]))
 
     store.append_rows([_row()])
@@ -219,7 +218,7 @@ def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     from sqlalchemy import create_engine, text
 
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     assert store.read_rows() == []
     assert store.append_rows([_row()]) == 1
@@ -231,8 +230,7 @@ def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
 
 
 def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
     row = _row()
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _: store.append_accepted_rows([row]), range(8)))
@@ -241,18 +239,16 @@ def test_track_store_sqlite_concurrent_same_event_accepts_once(tmp_path) -> None
 
 
 def test_track_store_sqlite_concurrent_engine_init_reuses_one(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
     with ThreadPoolExecutor(max_workers=8) as pool:
-        engines = list(pool.map(lambda _: store.backend._db_engine(), range(8)))
+        engines = list(pool.map(lambda _: store.backend.engine(), range(8)))
     assert len({id(engine) for engine in engines}) == 1
 
 
 def test_track_store_sqlite_unknown_rowcount_does_not_over_accept(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
-    engine = store.backend._db_engine()
+    engine = store.backend.engine()
     real_begin = engine.begin
 
     class _HideRowcount:
@@ -290,7 +286,7 @@ def test_track_store_sqlite_unknown_rowcount_does_not_over_accept(tmp_path) -> N
 
 
 def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     (tmp_path / "track_eval.json").write_text("not-json", encoding="utf-8")
     assert TrackStore(output).read_eval() is None
 
@@ -301,24 +297,8 @@ def test_append_track_rejects_object_store(s3_options) -> None:
         TrackStore(output).append_rows([_row()])
 
 
-def test_require_appendable_track_log_allows_db_and_local(tmp_path) -> None:
-    require_appendable_track_log(IOSettings(kind="db", options={"database_url": "sqlite://"}))
-    require_appendable_track_log(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
-
-
-def test_jsonish_numpy_scalar_and_na() -> None:
-    import numpy as np
-
-    from cicerone.track.store import jsonish
-
-    assert jsonish(np.int64(3)) == 3
-    assert jsonish(pd.NA) is None
-
-
 def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     path = tmp_path / "track.jsonl"
     path.write_text("not-json\n" + json.dumps(_row()) + "\n\n", encoding="utf-8")
     rows = TrackStore(output).read_rows()
@@ -344,8 +324,7 @@ def test_track_eval_roundtrip_s3(s3_options) -> None:
 
 
 def test_track_store_sqlite_missing_tables(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'empty.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "empty.db")
     store = TrackStore(output)
     assert store.read_rows() == []
     assert store.read_eval() is None
@@ -353,7 +332,7 @@ def test_track_store_sqlite_missing_tables(tmp_path) -> None:
 
 
 def test_track_history_reads_legacy_single_file(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized", "variant": None}]
     )
@@ -369,7 +348,7 @@ def test_track_history_reads_legacy_single_file(tmp_path) -> None:
 
 
 def test_track_read_history_generated_ats_skips_legacy_without_stamp(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
     store = TrackStore(output)
@@ -381,7 +360,7 @@ def test_track_read_history_generated_ats_skips_legacy_without_stamp(tmp_path) -
 
 
 def test_track_read_history_since_skips_legacy_without_stamp(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     recs.to_parquet(tmp_path / "recommendation_history.parquet", index=False)
     store = TrackStore(output)
@@ -392,7 +371,7 @@ def test_track_read_history_since_skips_legacy_without_stamp(tmp_path) -> None:
 
 
 def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     (tmp_path / "recommendation_history.parquet").write_bytes(b"not parquet")
     store = TrackStore(output)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
@@ -424,19 +403,8 @@ def test_history_part_name_sanitizes_timestamp() -> None:
     assert list(frame.columns) == ["user_id", "item_id", "rank", "source", "variant", "generated_at"]
 
 
-def test_jsonish_item_raises() -> None:
-    from cicerone.track.store import jsonish
-
-    class _Boom:
-        def item(self):
-            raise ValueError("nope")
-
-    boom = _Boom()
-    assert jsonish(boom) is boom
-
-
 def test_track_eval_ignores_non_object_json(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     (tmp_path / "track_eval.json").write_text("[1]", encoding="utf-8")
     assert TrackStore(output).read_eval() is None
 
@@ -444,12 +412,11 @@ def test_track_eval_ignores_non_object_json(tmp_path) -> None:
 def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     from sqlalchemy import text
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows([_row()])
     store.write_eval({"ok": True})
-    engine = store.backend._db_engine()
+    engine = store.backend.engine()
     with engine.begin() as conn:
         conn.execute(
             text('UPDATE "recommendation_eval" SET payload = :payload'),
@@ -468,10 +435,7 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     assert store.read_rows() == []
     assert store.read_eval() is None
 
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(pd, "read_sql", _boom)
+    monkeypatch.setattr(pd, "read_sql", raising(RuntimeError("db down")))
     with pytest.raises(RuntimeError, match="db down"):
         store.read_rows()
     with pytest.raises(RuntimeError, match="db down"):
@@ -483,15 +447,13 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
 def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import OperationalError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows([_row()])
 
-    def _boom(*_args, **_kwargs):
-        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
-
-    monkeypatch.setattr(pd, "read_sql", _boom)
+    monkeypatch.setattr(
+        pd, "read_sql", raising(OperationalError("SELECT 1", {}, Exception("connection refused")))
+    )
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_rows()
     with pytest.raises(OperationalError, match="connection refused"):
@@ -501,46 +463,33 @@ def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) ->
 
 
 def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     assert store.append_rows([_row(), _row()]) == 1
     assert len(store.read_rows()) == 1
 
 
 def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     assert store.append_rows([_row()]) == 1
     reads = {"n": 0}
-    original = store.backend._read_bytes
+    original = store.backend._iter_track_lines
 
-    def _count(filename: str) -> bytes | None:
+    def _count():
         reads["n"] += 1
-        return original(filename)
+        return original()
 
-    monkeypatch.setattr(store.backend, "_read_bytes", _count)
+    monkeypatch.setattr(store.backend, "_iter_track_lines", _count)
     assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
     assert reads["n"] == 0
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
 def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
     monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, fence=WriteFence(_Busy()))
+    output = local_output(tmp_path)
+    store = TrackStore(output, fence=WriteFence(FakeLock(acquire=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_rows([_row()])
 
@@ -548,24 +497,8 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
 def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    calls = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            calls["n"] += 1
-            return calls["n"] < 2
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, fence=WriteFence(_Lock()))
+    output = local_output(tmp_path)
+    store = TrackStore(output, fence=WriteFence(FakeLock(owned=FenceCheck(2))))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_rows([_row()])
     assert store.read_rows() == []
@@ -574,7 +507,7 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
 def test_track_jsonl_append_honors_caller_fence(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(
         output,
         fence=retrain_fence(None, lambda: False),
@@ -588,9 +521,8 @@ def test_track_jsonl_append_honors_caller_fence(tmp_path) -> None:
 def test_track_db_append_honors_caller_fence(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(
-        IOSettings(kind="db", options={"database_url": url}),
+        sqlite_output(tmp_path / "track.db"),
         fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
@@ -602,8 +534,7 @@ def test_track_db_append_honors_caller_fence(tmp_path) -> None:
 def test_write_eval_db_honors_fence(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(
         output,
         fence=retrain_fence(None, lambda: False),
@@ -617,28 +548,22 @@ def test_write_eval_db_honors_fence(tmp_path) -> None:
 def test_write_eval_db_rechecks_fence_after_delete(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'eval.db'}"
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 2
+    fence = FenceCheck(2)
 
     store = TrackStore(
-        IOSettings(kind="db", options={"database_url": url}),
+        sqlite_output(tmp_path / "eval.db"),
         fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_eval({"ok": True})
     assert exc.value.kind == "retrain"
     assert store.read_eval() is None
-    assert checks["n"] >= 2
+    assert fence.calls >= 2
 
 
 def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, monkeypatch) -> None:
     from cicerone.locks import LockLostError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'hist.db'}"
     held = {"ok": True}
 
     def fence() -> bool:
@@ -652,7 +577,7 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
 
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     store = TrackStore(
-        IOSettings(kind="db", options={"database_url": url}),
+        sqlite_output(tmp_path / "hist.db"),
         fence=retrain_fence(None, fence),
     )
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
@@ -665,31 +590,15 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
 def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
     from cicerone.locks import WriteFence
 
-    acquires = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            acquires["n"] += 1
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    lock = _Lock()
+    output = local_output(tmp_path)
+    lock = FakeLock()
     store = TrackStore(output, fence=WriteFence(lock))
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     with WriteFence(lock).hold():
         store.write_eval({"ok": True})
         store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
         store.append_accepted_rows([_row(event_id="held-1")])
-    assert acquires["n"] == 1
+    assert lock.acquires == 1
     assert store.read_eval() == {"ok": True}
     assert len(store.read_history()) == 1
     assert any(row["event_id"] == "held-1" for row in store.read_rows())
@@ -698,21 +607,8 @@ def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
 def test_write_eval_takes_writer_lock(tmp_path) -> None:
     from cicerone.locks import LockLostError
 
-    class _Lost:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, fence=WriteFence(_Lost()))
+    output = local_output(tmp_path)
+    store = TrackStore(output, fence=WriteFence(FakeLock(owned=False)))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.write_eval({"ok": True})
     assert store.read_eval() is None
@@ -720,7 +616,7 @@ def test_write_eval_takes_writer_lock(tmp_path) -> None:
 
 def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.io.options.fcntl", None)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     assert store.append_rows([_row()]) == 1
     assert store.append_rows([_row()]) == 0
@@ -728,7 +624,7 @@ def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
 
 
 def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     row = {
         "kind": "impression",
         "user_id": "alice",
@@ -761,13 +657,13 @@ def test_assign_missing_event_id_hashes_raw_occurred_at() -> None:
 
 
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     assert TrackStore(output).append_rows([_row()]) == 1
     assert TrackStore(output).append_rows([_row()]) == 0
 
 
 def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     path = tmp_path / "track.jsonl"
     path.write_text(json.dumps(_row()) + "\n" + json.dumps(_row()) + "\n", encoding="utf-8")
     rows = TrackStore(output).read_rows()
@@ -778,16 +674,15 @@ def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
 def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows([_row()])
     monkeypatch.setattr(
         pd,
         "read_sql",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(SQLAlchemyError("x")),
+        raising(SQLAlchemyError("x")),
     )
-    monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
+    monkeypatch.setattr("cicerone.io.sql_rows.is_missing_table_error", lambda _exc: True)
     assert store.read_rows() == []
     assert store.read_eval() is None
     assert store.read_history().empty
@@ -796,13 +691,12 @@ def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) ->
 def test_track_store_sqlite_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
     from pandas.errors import DatabaseError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
     store.append_rows([_row()])
     monkeypatch.setattr(
         pd,
         "read_sql",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("no such table: track")),
+        raising(DatabaseError("no such table: track")),
     )
     assert store.read_rows() == []
     assert store.read_eval() is None
@@ -812,25 +706,23 @@ def test_track_store_sqlite_pandas_database_error_is_empty(tmp_path, monkeypatch
 def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, monkeypatch) -> None:
     from pandas.errors import DatabaseError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
     store.append_rows([_row()])
     monkeypatch.setattr(
         pd,
         "read_sql",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(DatabaseError("connection refused")),
+        raising(DatabaseError("connection refused")),
     )
     with pytest.raises(DatabaseError, match="connection refused"):
         store.read_rows()
 
 
 def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows([_row()])
-    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("x")))
-    monkeypatch.setattr("cicerone.track.store_db.is_missing_table_error", lambda _exc: True)
+    monkeypatch.setattr(pd, "read_sql", raising(RuntimeError("x")))
+    monkeypatch.setattr("cicerone.io.sql_rows.is_missing_table_error", lambda _exc: True)
     with pytest.raises(RuntimeError, match="x"):
         store.read_rows()
 
@@ -839,7 +731,7 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch, s3_options) 
     output = IOSettings(kind="dataset", options=s3_options)
     monkeypatch.setattr(
         "cicerone.io.blob.read_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt")),
+        raising(RuntimeError("corrupt")),
     )
     monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: False)
     with pytest.raises(RuntimeError, match="corrupt"):
@@ -875,10 +767,7 @@ def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch,
         def list_objects_v2(self, **_kwargs):
             raise RuntimeError("list failed")
 
-    def _legacy(*_args, **_kwargs):
-        raise FileNotFoundError("legacy")
-
-    monkeypatch.setattr("cicerone.io.blob.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", raising(FileNotFoundError("legacy")))
     monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
     monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
     with pytest.raises(RuntimeError, match="list failed"):
@@ -894,10 +783,7 @@ def test_track_history_s3_access_denied_reraises(monkeypatch, s3_options) -> Non
         def list_objects_v2(self, **_kwargs):
             raise denied
 
-    def _legacy(*_args, **_kwargs):
-        raise FileNotFoundError("legacy")
-
-    monkeypatch.setattr("cicerone.io.blob.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", raising(FileNotFoundError("legacy")))
     monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Denied())
     with pytest.raises(ClientError, match="AccessDenied"):
         TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history()
@@ -941,7 +827,7 @@ def test_track_read_eval_s3_access_denied_reraises(monkeypatch, s3_options) -> N
 
 
 def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     store.append_rows(
         [
@@ -957,7 +843,7 @@ def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
 
 
 def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     store.append_rows(
         [
@@ -973,7 +859,7 @@ def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
 
 
 def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
     store.append_rows([_row(event_id="timed", occurred_at="2026-08-28T13:00:00Z")])
     path = tmp_path / "track.jsonl"
@@ -995,8 +881,7 @@ def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
 
 
 def test_track_read_rows_filters_sqlite(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows(
         [
@@ -1012,8 +897,7 @@ def test_track_read_rows_filters_sqlite(tmp_path) -> None:
 
 
 def test_track_read_rows_sqlite_since_uses_instant(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     offset = {
         "kind": "impression",
@@ -1032,7 +916,7 @@ def test_track_read_rows_sqlite_since_uses_instant(tmp_path) -> None:
 
 
 def test_track_read_history_generated_ats_skips_other_parts(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
@@ -1045,7 +929,7 @@ def test_track_read_history_generated_ats_skips_other_parts(tmp_path) -> None:
 
 
 def test_track_read_history_since_skips_older_part_files(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
@@ -1077,8 +961,7 @@ def test_track_read_history_s3_since_skips_older_parts(s3_options) -> None:
 
 
 def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "track.db")
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
@@ -1090,24 +973,19 @@ def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
 
 
 def test_jsonl_append_retries_after_write_failure(tmp_path, monkeypatch) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = TrackStore(output)
-    original = store.backend._append_bytes
-
-    def _boom(filename: str, payload: bytes) -> None:
-        raise OSError("disk full")
-
-    monkeypatch.setattr(store.backend, "_append_bytes", _boom)
-    with pytest.raises(OSError, match="disk full"):
-        store.append_accepted_rows([_row(event_id="retry-1")])
-    monkeypatch.setattr(store.backend, "_append_bytes", original)
+    with monkeypatch.context() as patched:
+        patched.setattr("cicerone.track.store_dataset.append_storage_bytes", raising(OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            store.append_accepted_rows([_row(event_id="retry-1")])
     accepted = store.append_accepted_rows([_row(event_id="retry-1")])
     assert [row["event_id"] for row in accepted] == ["retry-1"]
     assert [row["event_id"] for row in store.read_rows()] == ["retry-1"]
 
 
 def test_track_read_history_generated_ats_matches_z_and_offset(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
@@ -1118,7 +996,7 @@ def test_track_read_history_generated_ats_matches_z_and_offset(tmp_path) -> None
 def test_track_read_history_generated_ats_skips_glob_when_exact_name_exists(tmp_path, monkeypatch) -> None:
     from pathlib import Path
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
@@ -1153,10 +1031,11 @@ def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch, s3_option
     )
     output = IOSettings(kind="dataset", options=s3_options)
 
-    def _no_list(*_args, **_kwargs):
-        raise AssertionError("list should not run when the exact history key exists")
-
-    monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+    monkeypatch.setattr(
+        store_dataset,
+        "_list_s3_parquet_keys",
+        raising(AssertionError("list should not run when the exact history key exists")),
+    )
     history = TrackStore(output).read_history(generated_ats=[stamp])
     assert history.empty
 
@@ -1172,10 +1051,11 @@ def test_track_read_history_s3_generated_ats_skips_list_when_exact_key_exists(
     store = TrackStore(output)
     store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
 
-    def _no_list(*_args, **_kwargs):
-        raise AssertionError("list should not run when exact history keys exist")
-
-    monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+    monkeypatch.setattr(
+        store_dataset,
+        "_list_s3_parquet_keys",
+        raising(AssertionError("list should not run when exact history keys exist")),
+    )
     history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
     assert len(history) == 1
 
@@ -1189,18 +1069,9 @@ def test_track_read_history_s3_generated_ats_matches_z_and_offset(s3_options) ->
     assert len(history) == 1
 
 
-def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
-    from cicerone.locks import LockLostError
-    from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
+def test_track_db_existing_ids_skip_empty_ids() -> None:
+    from cicerone.track.store_db import _existing_event_ids
 
-    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())
-    assert backend._ensure_fence() is None
-    lost = TrackDbBackend(
-        {"database_url": "sqlite+pysqlite://"},
-        WriteFence(None, lambda: False, "track fence lost"),
-    )
-    with pytest.raises(LockLostError, match="track fence lost"):
-        lost._ensure_fence()
     assert _existing_event_ids(None, "recommendation_track", ["", ""]) == set()
 
 
@@ -1209,8 +1080,8 @@ def test_build_track_backend_picks_the_output_kind(tmp_path) -> None:
     from cicerone.track.store_dataset import TrackDatasetBackend
     from cicerone.track.store_db import TrackDbBackend
 
-    db = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'track.db'}"})
-    dataset = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    db = sqlite_output(tmp_path / "track.db")
+    dataset = local_output(tmp_path)
     store = TrackStore(db)
     assert isinstance(store.backend, TrackDbBackend)
     assert isinstance(TrackStore(dataset).backend, TrackDatasetBackend)
@@ -1219,24 +1090,16 @@ def test_build_track_backend_picks_the_output_kind(tmp_path) -> None:
 
 @pytest.mark.parametrize("kind", ["dataset", "db"])
 def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> None:
-    class _NeverAcquire:
-        def acquire(self) -> bool:
-            raise AssertionError("encoding must fail before the writer lease is taken")
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return False
-
-    if kind == "dataset":
-        output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    else:
-        output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    store = TrackStore(output, fence=WriteFence(_NeverAcquire()))
+    output = local_output(tmp_path) if kind == "dataset" else sqlite_output(tmp_path / "out.db")
+    store = TrackStore(
+        output,
+        fence=WriteFence(
+            FakeLock(
+                acquire=raising(AssertionError("encoding must fail before the writer lease is taken")),
+                owned=False,
+            )
+        ),
+    )
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})
     assert not (tmp_path / "track_eval.json").exists()

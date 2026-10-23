@@ -24,6 +24,7 @@ from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.values import utc_stamp
 
 
 @dataclass(frozen=True)
@@ -200,17 +201,8 @@ def evaluate_experiment(
 def _parse_cutoff(value: object) -> tuple[pd.Timestamp | None, bool]:
     if value is None or value == "":
         return None, False
-    stamp = _as_timestamp(value)
+    stamp = utc_stamp(value)
     return stamp, stamp is None
-
-
-def _as_timestamp(value: object) -> pd.Timestamp | None:
-    if value is None or value == "":
-        return None
-    stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(stamp):
-        return None
-    return stamp
 
 
 def _first_exposures(
@@ -228,7 +220,7 @@ def _first_exposures(
         variant = str(row.get("variant") or "")
         if not user_id or variant not in names:
             continue
-        when = _as_timestamp(row.get("exposed_at"))
+        when = utc_stamp(row.get("exposed_at"))
         previous = starts.get(user_id)
         if user_id not in assigned:
             assigned[user_id] = variant

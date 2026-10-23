@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-import json
-import logging
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
-from cicerone.io.options import exclusive_file_lock, require_option, storage_backend
+from cicerone.io.blob import (
+    append_storage_bytes,
+    encode_jsonl,
+    iter_jsonl_objects,
+    json_file_writer,
+    read_json_object,
+    read_storage_bytes,
+    require_db_or_local_dataset,
+)
+from cicerone.io.options import exclusive_file_lock, require_option
 from cicerone.locks import WriteFence
-
-logger = logging.getLogger(__name__)
 
 STATE_FILENAME = "experiment_state.json"
 EXPOSURES_FILENAME = "exposures.jsonl"
@@ -22,15 +25,6 @@ EXPOSURE_LOG_BACKEND_ERROR = (
     'experiment.log_exposures requires output kind = "db" or a local dataset path; '
     "object-store JSONL append is not atomic"
 )
-
-
-def require_appendable_exposure_log(output: IOSettings) -> None:
-    """Reject object-store JSONL append (read-modify-write is racy)."""
-    if output.kind == "db":
-        return
-    if output.kind == "dataset" and storage_backend(output.options) == "local":
-        return
-    raise ConfigError(EXPOSURE_LOG_BACKEND_ERROR)
 
 
 class ExperimentDatasetBackend:
@@ -42,25 +36,14 @@ class ExperimentDatasetBackend:
         self._fence = fence
 
     def read_state(self) -> dict[str, Any] | None:
-        raw = read_storage_bytes(self._options, STATE_FILENAME)
-        if raw is None:
-            return None
-        try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            logger.warning("Invalid experiment_state.json")
-            raise
-        if not isinstance(parsed, dict):
-            raise ValueError("experiment_state.json is not an object")
-        return parsed
+        return read_json_object(self._options, STATE_FILENAME)
 
     def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
-        encoded = json.dumps(state, indent=2).encode("utf-8")
-        return lambda: write_storage_bytes(self._options, STATE_FILENAME, encoded, "application/json")
+        return json_file_writer(self._options, STATE_FILENAME, state)
 
     def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
-        require_appendable_exposure_log(self._output)
-        encoded = "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
+        require_db_or_local_dataset(self._output, EXPOSURE_LOG_BACKEND_ERROR)
+        encoded = encode_jsonl(rows)
         path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
 
         def _append() -> None:
@@ -74,17 +57,8 @@ class ExperimentDatasetBackend:
         raw = read_storage_bytes(self._options, EXPOSURES_FILENAME)
         if raw is None:
             return []
-        rows: list[dict[str, Any]] = []
-        for line in raw.decode("utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict) and (
-                not experiment_id or str(parsed.get("experiment_id") or "") == experiment_id
-            ):
-                rows.append(parsed)
-        return rows
+        return [
+            row
+            for row in iter_jsonl_objects(raw.splitlines())
+            if not experiment_id or str(row.get("experiment_id") or "") == experiment_id
+        ]

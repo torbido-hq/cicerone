@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
