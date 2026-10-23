@@ -5,7 +5,10 @@ from __future__ import annotations
 import threading
 
 import sqlalchemy
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine, Insert, String, Table, Text
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -21,6 +24,35 @@ def engine_for(database_url: str) -> Engine:
             _checkouts[database_url] = 0
         _checkouts[database_url] += 1
         return engine
+
+
+def quote_identifier(bind: Engine | Connection, name: str) -> str:
+    """``name`` quoted the way the dialect (and pandas/SQLAlchemy table creation) quotes it."""
+    return bind.dialect.identifier_preparer.quote(name)
+
+
+# MySQL can't index TEXT without a length; binary collation keeps keys case-sensitive as elsewhere.
+TEXT_KEY = Text().with_variant(String(255, collation="utf8mb4_bin"), "mysql")
+
+
+def insert_ignoring_duplicates(bind: Engine | Connection, table: Table) -> Insert:
+    """INSERT that skips rows whose primary key already exists, in the dialect's own syntax."""
+    dialect = bind.dialect.name
+    if dialect == "postgresql":
+        return postgresql_insert(table).on_conflict_do_nothing()
+    if dialect == "sqlite":
+        return sqlite_insert(table).on_conflict_do_nothing()
+    # Not INSERT IGNORE: that also turns truncation and other errors into warnings.
+    statement = mysql_insert(table)
+    key = next(iter(table.primary_key)).name
+    return statement.on_duplicate_key_update({key: statement.inserted[key]})
+
+
+def sql_source(bind: Engine | Connection, query: str | None, table: str, alias: str) -> str:
+    """A configured read-only SELECT as an aliased subquery, else the quoted table."""
+    if query:
+        return f"({query.strip().rstrip(';').strip()}) AS {alias}"
+    return quote_identifier(bind, table)
 
 
 def release_engine(database_url: str) -> None:

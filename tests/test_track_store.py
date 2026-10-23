@@ -196,6 +196,25 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     assert len(store.read_rows()) == 2
 
 
+def test_track_and_eval_tables_are_created_in_one_statement(tmp_path) -> None:
+    from sqlalchemy import event
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
+    store = TrackStore(IOSettings(kind="db", options={"database_url": url}))
+    statements: list[str] = []
+    engine = store.backend._db_engine()
+    event.listen(engine, "before_cursor_execute", lambda *args: statements.append(args[2]))
+
+    store.append_rows([_row()])
+    store.write_eval({"ok": True})
+
+    creates = [sql.strip() for sql in statements if "CREATE TABLE" in sql]
+    assert len(creates) == 2
+    # IF NOT EXISTS, not a separate existence check that a concurrent writer can race.
+    assert all(sql.startswith("CREATE TABLE IF NOT EXISTS") for sql in creates)
+    assert not any("PRAGMA" in sql for sql in statements)
+
+
 def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     from sqlalchemy import create_engine, text
 
@@ -1221,3 +1240,17 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})
     assert not (tmp_path / "track_eval.json").exists()
+
+
+def test_track_table_creates_on_mysql():
+    # MySQL needs a bounded, case-sensitive key column and backticks for the reserved word rank.
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.schema import CreateTable
+
+    from cicerone.track.store_db import track_table
+
+    ddl = str(CreateTable(track_table("track")).compile(dialect=mysql.dialect()))
+
+    assert "event_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL" in ddl
+    assert "`rank` INTEGER" in ddl
+    assert "PRIMARY KEY (event_id)" in ddl

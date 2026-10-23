@@ -50,6 +50,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stored as an integer column instead of failing the filtered read.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
+- SQL statements quote table and column names the way the database dialect
+  does. A mixed-case `recommendations_table` on Postgres no longer keeps a
+  user's old rows on incremental replace, and identifiers use backticks on
+  MySQL instead of double quotes. A full recommendations write on MySQL
+  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there),
+  and the track, eval and experiment-state tables can be created and
+  written on MySQL (key columns of up to 255 characters; a longer key is
+  rejected, not truncated).
+- The db events source polls tables whose `occurred_at` / `event_id`
+  columns are mixed case on Postgres.
 
 ## [0.8.5] - 2026-10-14
 
