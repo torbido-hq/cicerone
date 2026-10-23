@@ -341,7 +341,7 @@ prefix = "recommendations/latest"
 # consumer_group = "cicerone"
 # # consumer_name = "serve-1"       # default: hostname
 # # group_start_id = "0-0"
-# # block_ms = 0
+# # block_ms = 1000              # unset = non-blocking; 0 = wait forever
 # # claim_idle_ms = 300000
 
 # Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'

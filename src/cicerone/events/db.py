@@ -6,16 +6,17 @@ import json
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import Engine, text
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
+    ROW_IDENTITY_KEYS,
     cursor_key,
     cursor_key_from_payload,
     cursor_tuple,
@@ -23,8 +24,10 @@ from cicerone.events.db_identity import (
     identity_bind_sort_key,
     identity_sql_sort_expr,
     occurred_at_predicates,
+    payload_cursor,
     row_to_event,
 )
+from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.state_file import write_json_durably
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
@@ -37,6 +40,8 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
+# Columns an invalid row is reported by; user and item ids stay out of the log.
+_ROW_LOG_KEYS = ("event_id", "idempotency_key", *ROW_IDENTITY_KEYS, "occurred_at")
 # Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
@@ -50,8 +55,42 @@ _FETCH_COLUMNS = (
 )
 
 
+_T = TypeVar("_T")
+
+
 def _validate_events_query(query: str) -> str:
     return readonly_select(query, option="events.options.events_query")
+
+
+def _parsed_rows(
+    rows: Sequence[dict[str, Any]],
+    parse: Callable[[dict[str, Any]], _T],
+    on_invalid: Callable[[dict[str, Any], EventNormalizeError], None],
+) -> Iterator[_T]:
+    for payload in rows:
+        try:
+            yield parse(payload)
+        except EventNormalizeError as exc:
+            on_invalid(payload, exc)
+
+
+def _rejection(payload: dict[str, Any], exc: EventNormalizeError) -> str:
+    identity = {name: payload[name] for name in _ROW_LOG_KEYS if payload.get(name) is not None}
+    return f"({exc}): {json.dumps(identity, default=str):.200}"
+
+
+def _row_event(payload: dict[str, Any]) -> NormalizedEvent:
+    try:
+        return row_to_event(payload)
+    except EventNormalizeError as exc:
+        reason = _rejection(payload, exc)
+    # Placed on the cursor so the worker acks it in order; raises when occurred_at is unusable.
+    occurred_at, event_id = payload_cursor(payload)
+    return NormalizedEvent("", "", "", 0, occurred_at, event_id, rejected=reason)
+
+
+def _log_unplaceable_row(payload: dict[str, Any], exc: EventNormalizeError) -> None:
+    logger.warning("Skipping invalid event row %s", _rejection(payload, exc))
 
 
 class DbEventSource(EventSource):
@@ -128,7 +167,7 @@ class DbEventSource(EventSource):
             watermark_event_id,
             limit=max_events + in_flight_count + 8,
         )
-        candidates = sorted((row_to_event(payload) for payload in rows), key=cursor_key)
+        candidates = sorted(_parsed_rows(rows, _row_event, _log_unplaceable_row), key=cursor_key)
 
         out: list[NormalizedEvent] = []
         with self._lock:
@@ -310,7 +349,8 @@ class DbEventSource(EventSource):
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
-        count = sum(1 for payload in rows if cursor_key_from_payload(payload) > cursor)
+        keys = _parsed_rows(rows, cursor_key_from_payload, lambda _payload, _exc: None)
+        count = sum(1 for key in keys if key > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None
         return count

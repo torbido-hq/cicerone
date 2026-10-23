@@ -205,7 +205,12 @@ Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
-share a cursor.
+share a cursor. An invalid row (e.g. no `user_id`, `quantity` below 1) is
+delivered in cursor order as a rejected event: the worker does not apply it,
+logs it once by its identity columns only, and acks it with its batch, so the
+watermark moves past it like any other row. Fixing it in place later does not
+replay it. A row whose own `occurred_at` can't be parsed can't be placed on the
+cursor; it is logged each time it is fetched.
 
 ### `s3`
 
@@ -223,7 +228,9 @@ replica can retry without waiting out the visibility timeout.
 
 Consumer group (`XREADGROUP` / `XACK` / `XAUTOCLAIM` for idle PEL
 recovery). Required: `redis_url`, `stream`, `consumer_group`. Optional
-`consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`,
+`consumer_name` (default hostname), `group_start_id` (`0-0`), `block_ms`
+(how long one read waits for new entries; unset does not wait, `0` waits
+until an entry arrives and so holds buffered events on a quiet stream),
 `claim_idle_ms`. Flat hash fields match the event contract; missing
 `event_id` uses the stream entry id. Requires
 `pip install 'cicerone-recommender[redis]'` or
