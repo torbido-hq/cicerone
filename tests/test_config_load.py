@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 import pytest
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import (
     ConfigError,
@@ -551,17 +551,8 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """
         [job]
         max_workers = 4
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     assert load_settings(good).max_workers == 4
 
@@ -571,17 +562,8 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         omitted_dir,
         """
         [job]
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     assert load_settings(omitted).max_workers == 1
 
@@ -592,17 +574,8 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """
         [job]
         max_workers = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="max_workers"):
         load_settings(bad)
@@ -655,17 +628,8 @@ def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_pat
         [job]
         log_epoch_metrics = false
         epoch_metrics_every = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     settings = load_settings(config_path)
     assert settings.epoch_metrics is None
@@ -678,17 +642,8 @@ def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp
         [job]
         log_epoch_metrics = true
         epoch_metrics_every = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="epoch_metrics_every"):
         load_settings(config_path)
@@ -700,17 +655,8 @@ def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
         """
         [job]
         half_life_days = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="half_life_days"):
         load_settings(config_path)

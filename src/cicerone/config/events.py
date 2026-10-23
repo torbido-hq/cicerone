@@ -1,8 +1,7 @@
-"""``[events]`` settings coercion and TOML load helpers."""
+"""``[events]`` settings TOML load helpers."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from cicerone.config.constants import (
@@ -18,30 +17,16 @@ from cicerone.config.settings import EventsIncrementalSettings, EventsOnlineSett
 from cicerone.config.validation import (
     float_field,
     int_field,
+    load_kind_section,
     require_non_negative_int,
     require_positive_float,
     require_positive_int,
+    resolve_env_placeholders,
 )
 from cicerone.events.registry import registered_event_source_kinds
 
-ResolveEnv = Callable[[Any, str], Any]
 
-
-def _incremental_settings(
-    raw: dict[str, Any] | EventsIncrementalSettings | None,
-) -> EventsIncrementalSettings:
-    if isinstance(raw, EventsIncrementalSettings):
-        data = {
-            "batch_size": raw.batch_size,
-            "batch_window_seconds": raw.batch_window_seconds,
-            "poll_interval_seconds": raw.poll_interval_seconds,
-        }
-    elif raw is None:
-        data = {}
-    elif isinstance(raw, dict):
-        data = raw
-    else:
-        raise TypeError(f"Expected EventsIncrementalSettings, dict, or None; got {type(raw).__name__}")
+def _incremental_settings(data: dict[str, Any]) -> EventsIncrementalSettings:
     return EventsIncrementalSettings(
         batch_size=int_field(
             data, "events.incremental.batch_size", DEFAULT_EVENTS_BATCH_SIZE, require_positive_int
@@ -61,20 +46,7 @@ def _incremental_settings(
     )
 
 
-def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> EventsOnlineSettings:
-    if isinstance(raw, EventsOnlineSettings):
-        data = {
-            "enabled": raw.enabled,
-            "fit_partial_epochs": raw.fit_partial_epochs,
-            "fit_min_events": raw.fit_min_events,
-            "max_extra_interactions": raw.max_extra_interactions,
-        }
-    elif raw is None:
-        data = {}
-    elif isinstance(raw, dict):
-        data = raw
-    else:
-        raise TypeError(f"Expected EventsOnlineSettings, dict, or None; got {type(raw).__name__}")
+def _online_settings(data: dict[str, Any]) -> EventsOnlineSettings:
     return EventsOnlineSettings(
         enabled=bool(data.get("enabled", False)),
         fit_partial_epochs=int_field(
@@ -95,55 +67,19 @@ def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> Event
     )
 
 
-def _require_events_for_online(enabled: bool, online: EventsOnlineSettings) -> None:
-    if online.enabled and not enabled:
-        raise ConfigError("events.online.enabled requires events.enabled = true")
-
-
-def coerce_events_settings(value: Any | None) -> EventsSettings:
-    if isinstance(value, EventsSettings):
-        incremental = _incremental_settings(value.incremental)
-        online = _online_settings(value.online)
-        _require_events_for_online(value.enabled, online)
-        return EventsSettings(
-            enabled=value.enabled,
-            kind=value.kind,
-            options=dict(value.options),
-            incremental=incremental,
-            ha=value.ha,
-            online=online,
-        )
-    if value is None:
-        return EventsSettings()
-    if not isinstance(value, dict):
-        raise TypeError(f"Expected EventsSettings, dict, or None; got {type(value).__name__}")
-    raw = dict(value)
-    incremental = _incremental_settings(raw.pop("incremental", None))
-    online = _online_settings(raw.pop("online", None))
-    enabled = bool(raw.get("enabled", False))
-    _require_events_for_online(enabled, online)
-    return EventsSettings(incremental=incremental, online=online, **raw)
-
-
 def load_events_settings(
     events_raw: dict[str, Any],
     *,
     mode: str,
     serve_auth_token: str | None,
-    resolve_env: ResolveEnv,
 ) -> EventsSettings:
-    """Parse ``[events]`` from TOML; ``resolve_env`` is ``load._resolve_env_placeholders``."""
-    enabled = bool(events_raw.get("enabled", False))
-    kind = str(events_raw.get("kind", "webhook")).lower()
-    allowed_kinds = registered_event_source_kinds()
-    if enabled and kind not in allowed_kinds:
-        raise ConfigError(f"events.kind must be one of {list(allowed_kinds)}, got {kind!r}")
-
-    options = resolve_env(events_raw.get("options", {}), "events.options")
-    if not isinstance(options, dict):
-        raise ConfigError("events.options must be a table")
+    enabled, kind, options = load_kind_section(
+        events_raw, "events", "webhook", registered_event_source_kinds()
+    )
     auth_token = (
-        resolve_env(options["auth_token"], "events.options.auth_token") if "auth_token" in options else None
+        resolve_env_placeholders(options["auth_token"], "events.options.auth_token")
+        if "auth_token" in options
+        else None
     )
     if auth_token is not None:
         options = {**options, "auth_token": auth_token}
@@ -163,7 +99,8 @@ def load_events_settings(
         online_raw = {}
     online = _online_settings(online_raw)
     ha = bool(events_raw.get("ha", False))
-    _require_events_for_online(enabled, online)
+    if online.enabled and not enabled:
+        raise ConfigError("events.online.enabled requires events.enabled = true")
 
     if enabled and kind == "webhook" and mode == "serve":
         webhook_token = auth_token or serve_auth_token
