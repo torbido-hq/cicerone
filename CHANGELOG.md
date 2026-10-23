@@ -98,6 +98,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   re-read rows when the server zone was not UTC.
 - The Kafka publisher serves delivery callbacks after each message, so a
   large publish no longer fills the producer queue.
+- A RabbitMQ publish that fails after some messages were confirmed raises
+  `PublishError`, like Kafka, instead of logging and reporting success.
+  The incremental sidecar retry then republishes every affected user with
+  the same `message_id`, which consumers dedupe on.
 
 ## [0.8.5] - 2026-10-14
 

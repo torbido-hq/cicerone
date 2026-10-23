@@ -912,7 +912,7 @@ def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkey
     assert users == ["u1", "u2"]
 
 
-def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -926,12 +926,13 @@ def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
         raise RuntimeError("publish bug")
 
     monkeypatch.setattr(FakeChannel, "basic_publish", boom)
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="publish bug"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
 
 
-def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_recover_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -948,13 +949,14 @@ def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypa
         raise AMQPError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="unreachable or setup failed"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert publisher._channel is None
 
 
-def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -974,7 +976,8 @@ def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_rais
 
     channel.basic_publish = boom  # type: ignore[method-assign]
     channel.close = boom_close  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="close bug"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert broker.connection.closed is True

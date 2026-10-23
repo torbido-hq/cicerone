@@ -117,28 +117,12 @@ class RabbitMQPublisher:
     def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         try:
             self._recover()
-        except ConfigError as exc:
-            self._fail_unless_sent(progress, exc)
-            return
-        except Exception:
-            if not progress.sent:
-                raise
-            # Accepted records must not be raised back to a caller that would republish them.
-            logger.exception("RabbitMQ publisher recover failed after confirm")
-            return
-        try:
             self._publish_from(messages, progress)
         except Exception as exc:
-            if isinstance(exc, _rabbitmq_publish_errors()) or progress.sent:
-                self._fail_unless_sent(progress, exc)
-                return
-            raise
-
-    def _fail_unless_sent(self, progress: _Progress, exc: BaseException) -> None:
-        if progress.sent:
-            logger.exception("RabbitMQ publish stopped after confirm; accepted records are not retried")
-            return
-        raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            if not isinstance(exc, (ConfigError, *_rabbitmq_publish_errors())) and not progress.sent:
+                raise
+            # Callers republish every user; consumers dedupe on the stable message_id.
+            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
     def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         channel = self._require()
