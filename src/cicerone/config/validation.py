@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, TypeVar
 
 from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_EVERY,
@@ -12,54 +12,45 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_PLATEAU_EPS,
     DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
-    DEFAULT_MAX_WORKERS,
     ConfigError,
 )
 from cicerone.config.settings import EpochMetricsSettings
 
-
-def resolve_max_workers(raw: Any | None = None) -> int:
-    """Process-pool size; omit/None → sequential (1)."""
-    if raw is None:
-        return DEFAULT_MAX_WORKERS
-    workers = int(raw)
-    if workers < 1:
-        raise ConfigError(f"job.max_workers must be >= 1, got {workers}")
-    return workers
+_T = TypeVar("_T")
 
 
-def resolve_epoch_metrics(
-    *,
-    log_epoch_metrics: bool,
-    every: Any | None = None,
-    max_users: Any | None = None,
-    regression_drop: Any | None = None,
-    plateau_eps: Any | None = None,
-    plateau_window: Any | None = None,
-) -> EpochMetricsSettings | None:
+def int_field(raw: Mapping[str, Any], name: str, default: int, require: Callable[..., int]) -> int:
+    """Coerce ``raw[key]`` (``key`` = last dotted segment of ``name``) and check it with ``require``."""
+    return require(int(raw.get(name.rpartition(".")[2], default)), name=name)
+
+
+def float_field(raw: Mapping[str, Any], name: str, default: float, require: Callable[..., float]) -> float:
+    return require(float(raw.get(name.rpartition(".")[2], default)), name=name)
+
+
+def resolve_epoch_metrics(job: Mapping[str, Any]) -> EpochMetricsSettings | None:
     """Epoch-metric settings, or ``None`` when logging is off."""
-    if not log_epoch_metrics:
+    if not bool(job.get("log_epoch_metrics", False)):
         return None
     return EpochMetricsSettings(
-        every=require_positive_int(
-            DEFAULT_EPOCH_METRICS_EVERY if every is None else int(every),
-            name="job.epoch_metrics_every",
+        every=int_field(job, "job.epoch_metrics_every", DEFAULT_EPOCH_METRICS_EVERY, require_positive_int),
+        max_users=int_field(
+            job, "job.epoch_metrics_max_users", DEFAULT_EPOCH_METRICS_MAX_USERS, require_positive_int
         ),
-        max_users=require_positive_int(
-            DEFAULT_EPOCH_METRICS_MAX_USERS if max_users is None else int(max_users),
-            name="job.epoch_metrics_max_users",
+        regression_drop=float_field(
+            job,
+            "job.epoch_metrics_regression_drop",
+            DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
+            require_unit_interval,
         ),
-        regression_drop=require_unit_interval(
-            DEFAULT_EPOCH_METRICS_REGRESSION_DROP if regression_drop is None else float(regression_drop),
-            name="job.epoch_metrics_regression_drop",
+        plateau_eps=float_field(
+            job, "job.epoch_metrics_plateau_eps", DEFAULT_EPOCH_METRICS_PLATEAU_EPS, require_unit_interval
         ),
-        plateau_eps=require_unit_interval(
-            DEFAULT_EPOCH_METRICS_PLATEAU_EPS if plateau_eps is None else float(plateau_eps),
-            name="job.epoch_metrics_plateau_eps",
-        ),
-        plateau_window=require_positive_int(
-            DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW if plateau_window is None else int(plateau_window),
-            name="job.epoch_metrics_plateau_window",
+        plateau_window=int_field(
+            job,
+            "job.epoch_metrics_plateau_window",
+            DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
+            require_positive_int,
         ),
     )
 
@@ -135,3 +126,17 @@ def unique_policy_names(names: Sequence[object], *, label: str) -> tuple[str, ..
         seen.add(name)
         out.append(name)
     return tuple(out)
+
+
+def parse_policy_rules(
+    items: Sequence[Mapping[str, Any]],
+    parse: Callable[[Sequence[Mapping[str, Any]]], Sequence[_T]],
+    *,
+    label: str,
+) -> tuple[_T, ...]:
+    try:
+        rules = tuple(parse([dict(item) for item in items]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConfigError(f"{label}: {exc}") from exc
+    unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
+    return rules

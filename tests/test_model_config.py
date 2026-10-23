@@ -17,7 +17,7 @@ from rectools.models import (
     RandomModel,
     model_from_config,
 )
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.artifact import (
     ARTIFACT_SCHEMA_VERSION,
@@ -37,22 +37,6 @@ from cicerone.model_config import (
     item_based_k_from_config,
     resolve_model_configs,
 )
-
-
-def _minimal_io_toml() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-    """
 
 
 def _tiny_dataset(feature_config):
@@ -139,7 +123,7 @@ def test_native_model_item_based_K_from_toml(tmp_path):
         [model.item_based.model]
         cls = "TFIDFRecommender"
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -158,7 +142,7 @@ def test_legacy_and_native_k_conflict_raises(tmp_path):
         k_neighbors = 9
         [model.item_based.model]
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     with pytest.raises(ConfigError, match="Conflicting item_based neighbor"):
@@ -172,7 +156,7 @@ def test_legacy_k_neighbors_still_loads(tmp_path):
         [job]
         [job.item_based]
         k_neighbors = 13
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -255,7 +239,7 @@ def test_legacy_and_native_k_same_value_ok(tmp_path):
         k_neighbors = 11
         [model.item_based.model]
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -319,7 +303,7 @@ def test_unknown_model_table_raises(tmp_path):
         [job]
         [model.not_a_strategy]
         cls = "PopularModel"
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     with pytest.raises(ConfigError, match="unknown strategy"):
