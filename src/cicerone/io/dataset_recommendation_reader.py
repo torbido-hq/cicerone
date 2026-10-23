@@ -71,18 +71,6 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         self._init_item_filter_state()
         self.refresh()
 
-    def configure_item_filters(
-        self,
-        *,
-        category_column: str | None = None,
-        availability_filters: Sequence[str] = (),
-    ) -> None:
-        super().configure_item_filters(
-            category_column=category_column,
-            availability_filters=availability_filters,
-        )
-        self._replace_items_snapshot()
-
     def _items_columns(
         self,
         *,
@@ -138,7 +126,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                 return None
             raise
 
-    def _replace_items_snapshot(self) -> None:
+    def _reload_items(self) -> None:
         staged = self._load_items_snapshot()
         with self._lock:
             self._publish_items_locked(staged)
@@ -175,7 +163,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
             if not self._recommendations_loaded:
                 # No recommendations yet, so there is no generation to mix with.
-                self._replace_items_snapshot()
+                self._reload_items()
             observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=False)
             return False
         fallback_user_id = None

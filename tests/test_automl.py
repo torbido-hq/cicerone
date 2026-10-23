@@ -399,8 +399,16 @@ def test_evaluate_candidates_passes_content_fallback_flag(sample_items, feature_
     assert seen == [False] * len(seen)
 
 
-def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config):
+def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, feature_config, monkeypatch):
     # Deterministic strategies: parallel fold scoring must match sequential.
+    start_methods: list[str] = []
+    real_pool = automl.ProcessPoolExecutor
+
+    def spy_pool(**kwargs):
+        start_methods.append(kwargs["mp_context"].get_start_method())
+        return real_pool(**kwargs)
+
+    monkeypatch.setattr(automl, "ProcessPoolExecutor", spy_pool)
     events = _spread_events(n_days=35)
     candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
     kwargs = dict(
@@ -419,6 +427,7 @@ def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, featu
     # max_workers > fold count must be capped, not raise.
     parallel = evaluate_candidates(**kwargs, max_workers=10)
 
+    assert start_methods == ["spawn"]
     assert len(sequential) == len(parallel) == 2
     for seq_result, par_result in zip(sequential, parallel, strict=True):
         assert seq_result.candidate == par_result.candidate

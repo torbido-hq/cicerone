@@ -7,6 +7,7 @@ and runs train_and_recommend.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -431,6 +432,8 @@ def evaluate_candidates(
         )
         with ProcessPoolExecutor(
             max_workers=min(max_workers, len(folds)),
+            # Forking a threaded scheduler (OpenMP, logging locks) can deadlock the workers.
+            mp_context=multiprocessing.get_context("spawn"),
             initializer=_init_eval_worker,
             initargs=(worker_context,),
         ) as executor:

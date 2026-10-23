@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from sqlalchemy.exc import OperationalError
+from support.fakes import FakeLock
 from support.settings import make_settings
 
 from cicerone import locks as locks_mod
@@ -23,7 +24,7 @@ from cicerone.locks import (
     PostgresAdvisoryLock,
     RedisLock,
     WriteFence,
-    acquire_blocking,
+    acquire_until,
     advisory_keys_from_lock_key,
     build_dataset_writer_lock,
     build_lock_backend,
@@ -49,6 +50,18 @@ def _mock_redis_module(monkeypatch, *, client: MagicMock | None = None) -> Magic
     fake_redis.Redis.from_url.return_value = client
     monkeypatch.setitem(__import__("sys").modules, "redis", fake_redis)
     return client
+
+
+_PG_URL = "postgresql+psycopg://u:p@h/db"
+
+
+def _mock_postgres_engine(monkeypatch, *, held: bool = True) -> tuple[MagicMock, MagicMock]:
+    conn = MagicMock()
+    conn.execute.return_value.scalar.return_value = held
+    engine = MagicMock()
+    engine.connect.return_value = conn
+    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    return engine, conn
 
 
 def _wait_for_event(event: threading.Event, *, timeout: float = 5.0) -> None:
@@ -132,11 +145,10 @@ def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
 def test_build_postgres_lock_uses_configured_lock_key(monkeypatch):
     settings = make_settings(
         trigger_lock_backend="postgres",
-        trigger_postgres_url="postgresql+psycopg://u:p@h/db",
+        trigger_postgres_url=_PG_URL,
         trigger_lock_key="job-a",
     )
-    fake_engine = MagicMock()
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: fake_engine)
+    _mock_postgres_engine(monkeypatch)
     backend = build_lock_backend(settings)
     assert isinstance(backend, PostgresAdvisoryLock)
     assert (backend._key1, backend._key2) == advisory_keys_from_lock_key("job-a")
@@ -196,40 +208,19 @@ def test_run_guard_without_backend_uses_local_exclusion_only():
 
 
 def test_run_guard_respects_distributed_lock_failure():
-    class HeldLock:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
     calls: list[str] = []
     guard = RunGuard(
         debounce_seconds=0,
         run_fn=lambda triggered_by: calls.append(triggered_by),
-        lock_backend=HeldLock(),
+        lock_backend=FakeLock(acquires=False),
     )
     assert guard.trigger("webhook") is False
     assert calls == []
 
 
 def test_run_guard_debounce_with_distributed_lock_backend():
-    class AlwaysAcquiringLock:
-        def __init__(self) -> None:
-            self.acquires = 0
-
-        def acquire(self) -> bool:
-            self.acquires += 1
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
     calls: list[str] = []
-    lock_backend = AlwaysAcquiringLock()
+    lock_backend = FakeLock()
     done = threading.Event()
 
     def fake_run(triggered_by: str, **_kwargs) -> None:
@@ -245,30 +236,19 @@ def test_run_guard_debounce_with_distributed_lock_backend():
     assert done.wait(timeout=5)
     assert guard.trigger("second") is False
     assert calls == ["first"]
-    assert lock_backend.acquires == 1
+    assert lock_backend.events.count("acquire") == 1
 
 
 def test_run_guard_releases_backend_after_run():
-    events: list[str] = []
-
-    class TrackingLock:
-        def acquire(self) -> bool:
-            events.append("acquire")
-            return True
-
-        def release(self) -> None:
-            events.append("release")
-
-        def owned(self) -> bool:
-            return True
-
+    lock = FakeLock()
+    events = lock.events
     done = threading.Event()
 
     def fake_run(triggered_by: str, **_kwargs) -> None:
         events.append(f"run:{triggered_by}")
         done.set()
 
-    guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=TrackingLock())
+    guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=lock)
     assert guard.trigger("cron") is True
     assert done.wait(timeout=5)
     for _ in range(50):
@@ -279,22 +259,9 @@ def test_run_guard_releases_backend_after_run():
 
 
 def test_run_guard_passes_owned_as_fence_check():
-    owned_calls: list[bool] = []
     received: dict[str, object] = {}
     done = threading.Event()
-
-    class Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            owned_calls.append(True)
-            return True
-
-    lock = Lock()
+    lock = FakeLock()
 
     def fake_run(triggered_by: str, *, fence_check=None) -> None:
         received["triggered_by"] = triggered_by
@@ -308,7 +275,7 @@ def test_run_guard_passes_owned_as_fence_check():
     _wait_for_event(done)
     assert received["triggered_by"] == "webhook"
     assert received["fence_check"] == lock.owned
-    assert owned_calls == [True]
+    assert lock.events.count("owned") == 1
 
 
 def test_build_redis_lock_backend(monkeypatch):
@@ -321,10 +288,9 @@ def test_build_redis_lock_backend(monkeypatch):
 def test_build_postgres_lock_backend(monkeypatch):
     settings = make_settings(
         trigger_lock_backend="postgres",
-        trigger_postgres_url="postgresql+psycopg://u:p@h/db",
+        trigger_postgres_url=_PG_URL,
     )
-    fake_engine = MagicMock()
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: fake_engine)
+    _mock_postgres_engine(monkeypatch)
     backend = build_lock_backend(settings)
     assert isinstance(backend, PostgresAdvisoryLock)
 
@@ -713,13 +679,9 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
 
 
 def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
-    conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     results: list[bool] = []
     barrier = threading.Barrier(2)
 
@@ -737,68 +699,53 @@ def test_postgres_advisory_lock_is_thread_safe(monkeypatch):
 
 
 def test_postgres_advisory_lock_mocked(monkeypatch):
-    conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, conn = _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is True
+    assert conn.mock_calls[0] == call.execution_options(isolation_level="AUTOCOMMIT")
     assert lock.acquire() is False
     lock.release()
+    conn.invalidate.assert_not_called()
     conn.close.assert_called()
     assert lock._conn is None
     lock.release()
 
 
 def test_postgres_advisory_lock_contention_mocked(monkeypatch):
-    conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = False
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, conn = _mock_postgres_engine(monkeypatch, held=False)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is False
     conn.close.assert_called()
 
 
 def test_postgres_advisory_lock_acquire_error_closes(monkeypatch):
-    conn = MagicMock()
+    _, conn = _mock_postgres_engine(monkeypatch)
     conn.execute.side_effect = RuntimeError("db down")
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     with pytest.raises(RuntimeError, match="db down"):
         lock.acquire()
     conn.close.assert_called()
 
 
 def test_postgres_advisory_lock_release_error(monkeypatch):
-    conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, conn = _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is True
     conn.execute.side_effect = OperationalError("unlock failed", None, None)
     lock.release()
+    conn.invalidate.assert_called_once()
+    conn.close.assert_called()
     assert lock._conn is None
 
 
 def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
-    conn = MagicMock()
-    conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, conn = _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is True
     conn.execute.side_effect = RuntimeError("unlock failed")
     with pytest.raises(RuntimeError, match="unlock failed"):
@@ -809,37 +756,20 @@ def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
 def test_cron_run_with_lock_skips_when_held(monkeypatch):
     from cicerone import scheduler
 
-    class Held:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            raise AssertionError("should not release")
-
+    lock = FakeLock(acquires=False)
     runs = []
     monkeypatch.setattr(scheduler.job, "run", lambda **kwargs: runs.append(kwargs))
-    scheduler._cron_run_with_lock(Held())
+    scheduler._cron_run_with_lock(lock)
     assert runs == []
+    assert lock.events == ["acquire"]
 
 
 def test_cron_run_with_lock_runs_and_releases(monkeypatch):
     from cicerone import scheduler
 
-    events: list[str] = []
     captured: dict[str, object] = {}
-
-    class Ok:
-        def acquire(self) -> bool:
-            events.append("acquire")
-            return True
-
-        def release(self) -> None:
-            events.append("release")
-
-        def owned(self) -> bool:
-            return True
-
-    lock = Ok()
+    lock = FakeLock()
+    events = lock.events
 
     def fake_run(**kwargs):
         captured.update(kwargs)
@@ -940,29 +870,15 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
 def test_write_fence_hold_owned_after_nested_wait():
     from contextlib import contextmanager
 
-    events: list[str] = []
-
-    class Lock:
-        def acquire(self) -> bool:
-            events.append("acquire")
-            return True
-
-        def release(self) -> None:
-            events.append("release")
-
-        def owned(self) -> bool:
-            events.append("owned")
-            return True
-
-        def is_locked(self) -> bool:
-            return True
+    lock = FakeLock()
+    events = lock.events
 
     @contextmanager
     def nested():
         events.append("nested")
         yield
 
-    with nested(), WriteFence(Lock()).hold():
+    with nested(), WriteFence(lock).hold():
         events.append("write")
     assert events == ["nested", "acquire", "owned", "write", "release"]
 
@@ -999,20 +915,7 @@ def test_write_fence_hold_binds_try_acquire_generation():
 
 
 def test_writer_lock_held_here_without_hold_generation():
-    class Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    lock = Lock()
+    lock = FakeLock()
     assert not locks_mod.writer_lock_held_here(lock)
     with WriteFence(lock).hold():
         assert locks_mod.writer_lock_held_here(lock)
@@ -1020,32 +923,19 @@ def test_writer_lock_held_here_without_hold_generation():
 
 
 def test_write_fence_hold_rechecks_caller_fence_after_acquire():
-    events: list[str] = []
-    held = {"v": True}
+    lock = FakeLock()
 
-    class Lock:
-        def acquire(self) -> bool:
-            events.append("acquire")
-            held["v"] = False
-            return True
-
-        def release(self) -> None:
-            events.append("release")
-
-        def owned(self) -> bool:
-            events.append("owned")
-            return True
-
-        def is_locked(self) -> bool:
-            return True
+    def fence_held() -> bool:
+        # The caller's fence is lost once the writer lock is acquired.
+        return "acquire" not in lock.events
 
     with (
         pytest.raises(LockLostError, match="retrain lock lost before write") as captured,
-        WriteFence(Lock(), lambda: held["v"], "retrain lock lost before write", "retrain").hold(),
+        WriteFence(lock, fence_held, "retrain lock lost before write", "retrain").hold(),
     ):
-        events.append("write")
+        lock.events.append("write")
     assert captured.value.kind == "retrain"
-    assert events == ["acquire", "owned", "release"]
+    assert lock.events == ["acquire", "owned", "release"]
 
 
 def test_write_fence_hold_fence_without_writer_lock():
@@ -1109,11 +999,8 @@ def test_lock_owned_falls_back_when_owned_rejects_generation():
 
 
 def test_bound_writer_generation_ignores_other_lock():
-    class _Lock:
-        pass
-
-    held = _Lock()
-    other = _Lock()
+    held = FakeLock()
+    other = FakeLock()
     lock_hold.bind_writer_generation(held, 4)
     try:
         assert lock_hold.bound_writer_generation(other) is None
@@ -1122,47 +1009,18 @@ def test_bound_writer_generation_ignores_other_lock():
 
 
 def test_write_fence_hold_raises_when_lease_lost():
-    events: list[str] = []
-
-    class Lock:
-        def acquire(self) -> bool:
-            events.append("acquire")
-            return True
-
-        def release(self) -> None:
-            events.append("release")
-
-        def owned(self) -> bool:
-            events.append("owned")
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
+    lock = FakeLock(owned=False)
     with (
         pytest.raises(LockLostError, match="dataset writer lock lost before write") as captured,
-        WriteFence(Lock()).hold(),
+        WriteFence(lock).hold(),
     ):
-        events.append("write")
-    assert events == ["acquire", "owned", "release"]
+        lock.events.append("write")
+    assert lock.events == ["acquire", "owned", "release"]
     assert captured.value.kind == "writer"
 
 
-def test_acquire_blocking_times_out():
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    assert acquire_blocking(_Busy(), timeout_seconds=0.0) is False
+def test_acquire_until_times_out(no_lock_wait):
+    assert acquire_until(FakeLock(acquires=False, owned=False)) == (False, None)
 
 
 def test_events_apply_lock_key_and_build_override(monkeypatch):
@@ -1205,18 +1063,15 @@ def test_build_lock_backend_ttl_seconds_override(monkeypatch):
 
 
 def test_postgres_owned_and_is_locked(monkeypatch):
-    held_conn = MagicMock()
-    held_conn.execute.return_value.scalar.return_value = True
+    engine, held_conn = _mock_postgres_engine(monkeypatch)
     probe_conn = MagicMock()
     probe_conn.execute.return_value.scalar.return_value = True
     probe_cm = MagicMock()
     probe_cm.__enter__.return_value = probe_conn
     probe_cm.__exit__.return_value = None
-    engine = MagicMock()
     engine.connect.return_value = probe_cm
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.owned() is False
     assert lock.is_locked() is True
 
@@ -1236,13 +1091,9 @@ def test_postgres_owned_and_is_locked(monkeypatch):
 
 
 def test_postgres_owned_raises_unexpected(monkeypatch):
-    held_conn = MagicMock()
-    held_conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = held_conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, held_conn = _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is True
     held_conn.execute.side_effect = RuntimeError("session dead")
     with pytest.raises(RuntimeError, match="session dead"):
@@ -1252,31 +1103,25 @@ def test_postgres_owned_raises_unexpected(monkeypatch):
 
 
 def test_postgres_is_locked_raises_on_probe_failure(monkeypatch):
-    engine = MagicMock()
+    engine, _ = _mock_postgres_engine(monkeypatch)
     engine.connect.side_effect = RuntimeError("db down")
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     with pytest.raises(RuntimeError, match="db down"):
         lock.is_locked()
 
 
 def test_postgres_is_locked_logs_sql_probe_failure(monkeypatch):
-    engine = MagicMock()
+    engine, _ = _mock_postgres_engine(monkeypatch)
     engine.connect.side_effect = OperationalError("probe failed", {}, Exception("down"))
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     with pytest.raises(OperationalError, match="probe failed"):
         lock.is_locked()
 
 
 def test_postgres_is_locked_held_conn_raises_unexpected(monkeypatch):
-    held_conn = MagicMock()
-    held_conn.execute.return_value.scalar.return_value = True
-    engine = MagicMock()
-    engine.connect.return_value = held_conn
-    monkeypatch.setattr("sqlalchemy.create_engine", lambda *a, **k: engine)
+    _, held_conn = _mock_postgres_engine(monkeypatch)
 
-    lock = PostgresAdvisoryLock("postgresql+psycopg://u:p@h/db")
+    lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is True
     held_conn.execute.side_effect = RuntimeError("session dead")
     with pytest.raises(RuntimeError, match="session dead"):
@@ -1285,26 +1130,8 @@ def test_postgres_is_locked_held_conn_raises_unexpected(monkeypatch):
     lock.release()
 
 
-class _CountingLock:
-    def __init__(self) -> None:
-        self.acquires = 0
-
-    def acquire(self) -> bool:
-        self.acquires += 1
-        return True
-
-    def release(self) -> None:
-        return None
-
-    def owned(self) -> bool:
-        return True
-
-    def is_locked(self) -> bool:
-        return True
-
-
 def test_write_fence_lease_is_reentrant_and_rechecks_fence():
-    lock = _CountingLock()
+    lock = FakeLock()
     checks: list[bool] = []
     fence = WriteFence(lock, lambda: checks.append(True) or True, "lost", "retrain")
     with fence.lease():
@@ -1312,7 +1139,7 @@ def test_write_fence_lease_is_reentrant_and_rechecks_fence():
         before = len(checks)
         with fence.lease():
             assert len(checks) == before + 1
-    assert lock.acquires == 1
+    assert lock.events.count("acquire") == 1
     assert not fence.held_here()
 
 

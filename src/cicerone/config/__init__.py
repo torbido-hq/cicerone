@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 from cicerone.config.constants import (
@@ -83,6 +82,7 @@ from cicerone.config.validation import (
     validate_model_weights,
     validate_rrf_k,
 )
+from cicerone.lazy import lazy_attribute
 
 __all__ = [
     "ALLOCATION_FIXED",
@@ -165,22 +165,16 @@ __all__ = [
     "validate_rrf_k",
 ]
 
-_LAZY: dict[str, tuple[str, str]] = {
-    "coerce_events_settings": ("cicerone.config.events", "coerce_events_settings"),
-    "load_events_settings": ("cicerone.config.events", "load_events_settings"),
-    "load_eval_settings": ("cicerone.config.track", "load_eval_settings"),
-    "load_experiment_settings": ("cicerone.config.experiment", "load_experiment_settings"),
-    "load_settings": ("cicerone.config.load", "load_settings"),
-    "load_track_settings": ("cicerone.config.track", "load_track_settings"),
-    "make_settings": ("cicerone.config.load", "make_settings"),
+_LAZY = {
+    "coerce_events_settings": "cicerone.config.events",
+    "load_events_settings": "cicerone.config.events",
+    "load_eval_settings": "cicerone.config.track",
+    "load_experiment_settings": "cicerone.config.experiment",
+    "load_settings": "cicerone.config.load",
+    "load_track_settings": "cicerone.config.track",
+    "make_settings": "cicerone.config.load",
 }
 
 
 def __getattr__(name: str) -> Any:
-    spec = _LAZY.get(name)
-    if spec is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attr = spec
-    value = getattr(importlib.import_module(module_name), attr)
-    globals()[name] = value
-    return value
+    return lazy_attribute(__name__, _LAZY, name)
