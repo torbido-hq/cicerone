@@ -200,7 +200,7 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
-| `lookup_k` | `20` | Inspector recs, capped by `job.top_k` |
+| `lookup_k` | `20` | Deprecated, no effect (removed in 0.9.0); Inspect shows `serve.default_k` rows |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
 

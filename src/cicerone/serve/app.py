@@ -6,7 +6,6 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -23,7 +22,7 @@ from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
-from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -47,8 +46,8 @@ from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
-from cicerone.serve.recommendations import RecommendationService
+from cicerone.serve.item_filters import build_items_cache, prepare_reader_item_filters
+from cicerone.serve.recommendations import RecommendationService, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
@@ -163,12 +162,6 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     return str(value) if value is not None else None
 
 
-def _assignment_overlay(settings: Settings, store: ExperimentStore | None) -> AssignmentOverlay:
-    if store is None or not settings.experiment.enabled:
-        return None, None
-    return store.assignment_overlay(settings.experiment.id)
-
-
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -185,12 +178,6 @@ def create_app(
     )
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    items_cache = ItemsFilterCache(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
     generated_at_cache = RefreshedValue(lambda: _read_generated_at(manifest_reader))
     generated_at_cache.refresh()
     app.state.generated_at_cache = generated_at_cache
@@ -201,7 +188,7 @@ def create_app(
         else None
     )
     overlay_cache: RefreshedValue[AssignmentOverlay] = RefreshedValue(
-        lambda: _assignment_overlay(settings, experiment_store), initial=(None, None)
+        lambda: read_assignment_overlay(settings, experiment_store), initial=(None, None)
     )
     _refresh_step(overlay_cache)
     app.state.assignment_overlay_cache = overlay_cache
@@ -213,7 +200,7 @@ def create_app(
     recommendation_service = RecommendationService(
         settings,
         reader,
-        items_cache=items_cache,
+        items_cache=build_items_cache(settings, reader, feature_config),
         assignment_overlay=overlay_cache.get,
     )
 
@@ -407,23 +394,7 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    if feature_path.is_file():
-        feature_config = load_feature_config(feature_path)
-    else:
-        logger.warning(
-            "feature config missing at %s; serve continuing without features.toml",
-            feature_path,
-        )
-        feature_config = None
-
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-
+    feature_config = prepare_reader_item_filters(settings, reader)
     events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
     app = create_app(
         settings,

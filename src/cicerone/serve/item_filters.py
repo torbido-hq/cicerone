@@ -2,27 +2,49 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import pandas as pd
 
+from cicerone.config import Settings
+from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_reader import ITEM_COLUMN, normalize_items_snapshot
 from cicerone.values import item_true_mask
 
+logger = logging.getLogger(__name__)
+
 _FILTER_CACHE_REBUILDS = 8
 
 
-def configure_reader_item_filters(
-    reader: RecommendationReader,
-    *,
-    category_column: str | None,
-    availability_filters: Sequence[str],
-) -> None:
+def _availability_filters(feature_config: FeatureConfig | None) -> list[str]:
+    return list(feature_config.item_availability_filters) if feature_config else []
+
+
+def prepare_reader_item_filters(settings: Settings, reader: RecommendationReader) -> FeatureConfig | None:
+    feature_path = Path(settings.feature_config_path)
+    if feature_path.is_file():
+        feature_config = load_feature_config(feature_path)
+    else:
+        logger.warning("feature config missing at %s; continuing without features.toml", feature_path)
+        feature_config = None
     reader.configure_item_filters(
-        category_column=category_column,
-        availability_filters=availability_filters,
+        category_column=settings.serve.category_column,
+        availability_filters=_availability_filters(feature_config),
+    )
+    return feature_config
+
+
+def build_items_cache(
+    settings: Settings, reader: RecommendationReader, feature_config: FeatureConfig | None
+) -> ItemsFilterCache:
+    return ItemsFilterCache(
+        reader,
+        category_column=settings.serve.category_column,
+        availability_filters=_availability_filters(feature_config),
     )
 
 

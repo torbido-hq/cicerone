@@ -4,7 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 from conftest import make_settings
+from support.fakes import FakeReader
 
+from cicerone.config import Settings
 from cicerone.dashboard_lookup import (
     HISTORY_FAILED,
     HISTORY_UNAVAILABLE,
@@ -14,48 +16,37 @@ from cicerone.dashboard_lookup import (
     format_recommendation_rows,
     format_user_attrs,
     lookup_inspector,
-    lookup_k,
     lookup_recommendations,
 )
+from cicerone.serve.item_filters import build_items_cache
+from cicerone.serve.recommendations import RecommendationService
 
 
-class _BoomReader:
-    def refresh(self) -> None:
-        return
+class _BoomReader(FakeReader):
+    def __init__(self) -> None:
+        super().__init__(pd.DataFrame())
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         raise OSError("dsn=postgres://secret@host/db")
 
-    def get_items(self) -> pd.DataFrame | None:
-        return None
 
-    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return pd.DataFrame()
+def _k_recs() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": f"i{i}", "rank": i, "score": 1.0, "source": "personalized"}
+            for i in range(1, 26)
+        ]
+    )
 
 
-class _KReader:
-    def refresh(self) -> None:
-        return
-
-    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return pd.DataFrame(
-            [
-                {
-                    "user_id": user_id,
-                    "item_id": f"i{i}",
-                    "rank": i,
-                    "score": 1.0,
-                    "source": "personalized",
-                }
-                for i in range(1, k + 1)
-            ]
-        )
-
-    def get_items(self) -> pd.DataFrame | None:
-        return None
-
-    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return pd.DataFrame()
+def _service(reader: FakeReader, settings: Settings | None = None) -> RecommendationService:
+    settings = settings or make_settings(dashboard_enabled=True)
+    return RecommendationService(
+        settings,
+        reader,
+        items_cache=build_items_cache(settings, reader, None),
+        assignment_overlay=lambda: (None, None),
+    )
 
 
 class _History:
@@ -90,12 +81,6 @@ class _History:
         return self._user
 
 
-def test_lookup_k_is_min_of_top_k_and_cap():
-    assert lookup_k(50, 20) == 20
-    assert lookup_k(10, 20) == 10
-    assert lookup_k(50, 5) == 5
-
-
 def test_lookup_recommendations_empty_user_id_is_not_queried():
     result = lookup_recommendations(make_settings(dashboard_enabled=True), None, "  ")
 
@@ -113,11 +98,11 @@ def test_lookup_recommendations_propagates_unexpected_errors():
             raise Boom("bug")
 
     with pytest.raises(Boom, match="bug"):
-        lookup_recommendations(make_settings(dashboard_enabled=True), _BugReader(), "u1")
+        lookup_recommendations(make_settings(dashboard_enabled=True), _service(_BugReader()), "u1")
 
 
 def test_lookup_recommendations_hides_exception_details():
-    result = lookup_recommendations(make_settings(dashboard_enabled=True), _BoomReader(), "u1")
+    result = lookup_recommendations(make_settings(dashboard_enabled=True), _service(_BoomReader()), "u1")
 
     assert result["error"] == LOOKUP_FAILED
     assert "postgres" not in result["error"]
@@ -127,8 +112,9 @@ def test_lookup_recommendations_hides_exception_details():
 def test_lookup_recommendations_skips_snapshot_names_when_not_thompson():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
-    class _CountingReader(_KReader):
+    class _CountingReader(FakeReader):
         def __init__(self):
+            super().__init__(_k_recs())
             self.present_calls = 0
 
         def present_variant_names(self):
@@ -147,16 +133,16 @@ def test_lookup_recommendations_skips_snapshot_names_when_not_thompson():
         ),
     )
     reader = _CountingReader()
-    result = lookup_recommendations(settings, reader, "u1")
+    result = lookup_recommendations(settings, _service(reader, settings), "u1")
     assert result["items"]
     assert reader.present_calls == 0
 
 
-def test_lookup_recommendations_uses_dashboard_lookup_k():
-    settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=5)
-    result = lookup_recommendations(settings, _KReader(), "u1")
+def test_lookup_recommendations_shows_serve_default_k_rows():
+    settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=5, serve_default_k=3)
+    result = lookup_recommendations(settings, _service(FakeReader(_k_recs()), settings), "u1")
 
-    assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3", "i4", "i5"]
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3"]
 
 
 def test_format_recommendation_rows_uses_placeholders():
@@ -274,7 +260,7 @@ def test_lookup_inspector_keeps_recommendations_when_user_attrs_are_sequences():
             dashboard_enabled=True,
             dashboard_lookup_user_attrs=("favorite_styles", "tags", "tag_ids"),
         ),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(
             events,
             {
@@ -322,12 +308,12 @@ def test_lookup_inspector_keeps_recommendation_lookup_on_caller_thread():
 
     seen: dict[str, threading.Thread] = {}
 
-    class _ThreadReader(_KReader):
+    class _ThreadReader(FakeReader):
         def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
             seen["thread"] = threading.current_thread()
             return super().get_recommendations(user_id, k, variant=variant)
 
-    lookup_inspector(make_settings(dashboard_enabled=True), _ThreadReader(), None, "u1")
+    lookup_inspector(make_settings(dashboard_enabled=True), _service(_ThreadReader(_k_recs())), None, "u1")
     assert seen["thread"] is threading.current_thread()
 
 
@@ -345,7 +331,9 @@ def test_lookup_inspector_memory_sqlite_history_stays_on_caller_thread():
             )
         )
         conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
-    result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), source, "u1")
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True), _service(FakeReader(_k_recs())), source, "u1"
+    )
     assert result["queried"] is True
     assert [row["item_id"] for row in result["events"]] == ["i1"]
     assert result["events_error"] is None
@@ -353,7 +341,7 @@ def test_lookup_inspector_memory_sqlite_history_stays_on_caller_thread():
 
 def test_lookup_inspector_empty_user_id_skips_history():
     result = lookup_inspector(
-        make_settings(dashboard_enabled=True), _KReader(), _History(pd.DataFrame()), "  "
+        make_settings(dashboard_enabled=True), _service(FakeReader(_k_recs())), _History(pd.DataFrame()), "  "
     )
 
     assert result["queried"] is False
@@ -383,10 +371,10 @@ def test_lookup_inspector_marks_overlap_and_source_mix():
         make_settings(
             dashboard_enabled=True,
             top_k=50,
-            dashboard_lookup_k=2,
+            serve_default_k=2,
             dashboard_lookup_user_attrs=("region_slug",),
         ),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(events, {"user_id": "u1", "region_slug": "lazio"}),
         "u1",
     )
@@ -400,7 +388,9 @@ def test_lookup_inspector_marks_overlap_and_source_mix():
 
 
 def test_lookup_inspector_history_unavailable_keeps_recommendations():
-    result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), None, "u1")
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True), _service(FakeReader(_k_recs())), None, "u1"
+    )
 
     assert [row["item_id"] for row in result["items"]] == [
         "i1",
@@ -425,7 +415,7 @@ def test_lookup_inspector_propagates_unexpected_history_errors():
     with pytest.raises(Boom, match="bug"):
         lookup_inspector(
             make_settings(dashboard_enabled=True),
-            _KReader(),
+            _service(FakeReader(_k_recs())),
             _History(pd.DataFrame(), events_error=Boom("bug")),
             "u1",
         )
@@ -434,7 +424,7 @@ def test_lookup_inspector_propagates_unexpected_history_errors():
 def test_lookup_inspector_hides_history_exception_details():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(pd.DataFrame(), events_error=OSError("dsn=postgres://secret@host/db")),
         "u1",
     )
@@ -447,7 +437,7 @@ def test_lookup_inspector_hides_history_exception_details():
 def test_lookup_inspector_missing_events_file_is_unavailable():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(pd.DataFrame(), events_error=FileNotFoundError("events.parquet")),
         "u1",
     )
@@ -470,7 +460,7 @@ def test_lookup_inspector_caps_events():
     )
     result = lookup_inspector(
         make_settings(dashboard_enabled=True, dashboard_lookup_events=3),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(events),
         "u1",
     )
@@ -484,7 +474,7 @@ def test_lookup_inspector_user_attr_error_still_returns_events():
     )
     result = lookup_inspector(
         make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(events, user_error=OSError("users boom")),
         "u1",
     )
@@ -499,7 +489,7 @@ def test_lookup_inspector_trims_user_id_for_history():
     )
     result = lookup_inspector(
         make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(events, {"user_id": "u1", "region_slug": "lazio"}),
         "  u1  ",
     )
@@ -512,7 +502,7 @@ def test_lookup_inspector_trims_user_id_for_history():
 def test_lookup_inspector_event_error_still_loads_user_attrs():
     result = lookup_inspector(
         make_settings(dashboard_enabled=True, dashboard_lookup_user_attrs=("region_slug",)),
-        _KReader(),
+        _service(FakeReader(_k_recs())),
         _History(
             pd.DataFrame(),
             {"user_id": "u1", "region_slug": "lazio"},
@@ -531,7 +521,9 @@ def test_lookup_inspector_skips_get_user_when_allowlist_empty():
         [{"user_id": "u1", "item_id": "i1", "event_type": "view", "quantity": 1, "occurred_at": None}]
     )
     history = _History(events, {"user_id": "u1", "region_slug": "lazio", "email": "a@example.com"})
-    result = lookup_inspector(make_settings(dashboard_enabled=True), _KReader(), history, "u1")
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True), _service(FakeReader(_k_recs())), history, "u1"
+    )
 
     assert history.get_user_calls == 0
     assert result["user_attrs"] == []
