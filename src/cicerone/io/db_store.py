@@ -336,13 +336,9 @@ class DatabaseOutputSink:
             )
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
-            # Keys go first, in their own commit: MySQL's TRUNCATE commits implicitly, so a failed insert
-            # after it could otherwise roll the key delete back while the rows stay gone.
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 self._clear_applied_keys(conn, table)
-            with self._engine.begin() as conn:
-                self._ensure_fence()
                 _clear_table_for_replace(conn, table)
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
