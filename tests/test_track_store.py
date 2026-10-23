@@ -1289,13 +1289,13 @@ def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
     from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
 
     backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())
-    assert backend._ensure_fence() is None
+    assert backend._fence.ensure() is None
     lost = TrackDbBackend(
         {"database_url": "sqlite+pysqlite://"},
         WriteFence(None, lambda: False, "track fence lost"),
     )
     with pytest.raises(LockLostError, match="track fence lost"):
-        lost._ensure_fence()
+        lost._fence.ensure()
     assert _existing_event_ids(None, "recommendation_track", ["", ""]) == set()
 
 

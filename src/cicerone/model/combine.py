@@ -12,8 +12,6 @@ from cicerone.reasons import PRIORITY_BLOCK_COLUMN, SOURCE_CONTRIBS_COLUMN
 
 
 def _as_rank(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
     if isinstance(value, (int, float)):
         return int(value)
     return int(float(str(value)))
