@@ -9,7 +9,6 @@ from cicerone.model.constants import (
     RANDOM_STATE,
     RRF_K,
     SOURCE_COLUMN,
-    WEIGHT_COLUMN,
 )
 from cicerone.model.fit import (
     FitOptions,
@@ -39,7 +38,6 @@ __all__ = [
     "SOURCE_COLUMN",
     "STRATEGIES",
     "Strategy",
-    "WEIGHT_COLUMN",
     "RecommenderModel",
     "build_strategy_model",
     "content_fallback_enabled_from_models",

@@ -6,7 +6,7 @@ import pytest
 from rectools import Columns
 
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
-from cicerone.model.constants import WEIGHT_COLUMN
+from cicerone.ranking import WEIGHT_COLUMN
 from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
 
 
