@@ -44,7 +44,6 @@ class RefreshedValue(Generic[T]):
             return self._reload()
 
     def _reload(self) -> T:
-        now = time.monotonic()
         value = self._load()
-        self._state = (now + self._ttl_seconds, value)
+        self._state = (time.monotonic() + self._ttl_seconds, value)
         return value

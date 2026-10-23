@@ -38,6 +38,19 @@ def test_ttl_reloads_once_expired(refresh_clock) -> None:
     assert value.get() == 2
 
 
+def test_ttl_starts_when_the_load_finishes(refresh_clock) -> None:
+    load = _Counter()
+
+    def slow_load() -> int:
+        refresh_clock.now += 10.0
+        return load()
+
+    value = RefreshedValue(slow_load, ttl_seconds=5.0)
+    assert value.get() == 1
+    assert value.get() == 1
+    assert load.calls == 1
+
+
 def test_zero_ttl_reloads_every_get() -> None:
     load = _Counter()
     value = RefreshedValue(load, ttl_seconds=0)
