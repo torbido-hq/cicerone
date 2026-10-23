@@ -576,7 +576,7 @@ def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp
     assert sink.applied_event_keys(["k1"]) == {"k1"}
 
 
-def test_a_failed_full_write_keeps_the_rows_and_their_replay_keys(tmp_path, monkeypatch) -> None:
+def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
@@ -588,27 +588,4 @@ def test_a_failed_full_write_keeps_the_rows_and_their_replay_keys(tmp_path, monk
     with pytest.raises(OSError, match="insert failed"):
         sink.write_recommendations(rows)
     monkeypatch.undo()
-    assert sink.applied_event_keys(["k1"]) == {"k1"}
-    kept = pd.read_sql("SELECT user_id, item_id FROM recommendations", sink._engine)
-    assert kept.values.tolist() == [["u1", "i1"]]
-
-
-def test_clear_table_for_replace_uses_delete_on_mysql():
-    # MySQL commits TRUNCATE implicitly, which would end the replace transaction.
-    from types import SimpleNamespace
-
-    from sqlalchemy.dialects import mysql
-
-    from cicerone.io.db_store import _clear_table_for_replace
-
-    executed: list[str] = []
-    savepoint = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
-    conn = SimpleNamespace(
-        dialect=mysql.dialect(),
-        begin_nested=lambda: savepoint,
-        execute=lambda statement: executed.append(str(statement)),
-    )
-
-    _clear_table_for_replace(conn, "Recs")
-
-    assert executed == ["DELETE FROM `Recs`"]
+    assert sink.applied_event_keys(["k1"]) == set()

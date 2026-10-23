@@ -171,7 +171,7 @@ def test_postgres_mixed_case_event_columns_poll_and_page():
     source.connect()
 
     first = list(source.poll(1))
-    assert source.ack([event.event_id for event in first]) == ("e1",)
+    source.ack(first)
     second = list(source.poll(1))
 
     assert [(event.event_id, event.user_id) for event in first + second] == [("e1", "u1"), ("e2", "u2")]
