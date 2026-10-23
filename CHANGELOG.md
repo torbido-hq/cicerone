@@ -61,6 +61,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an `error` in `cicerone_track_ingest_total`.
 - The missing feature column warning names `user_features` or
   `item_features`.
+- Concurrent dashboard lookups refresh the recommendation reader once per
+  5-second window instead of each racing their own refresh.
+- A dashboard promote or unpromote that hits a busy or lost writer lock
+  shows "Writer lock is busy" / "Writer lock was lost" instead of
+  "Experiment report is not available".
 
 ## [0.8.5] - 2026-10-14
 

@@ -7,18 +7,13 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import ValidationError
 
 from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.metrics import record_track_ingest
-from cicerone.serve.events_routes import (
-    attach_ingest_openapi,
-    max_body_bytes,
-    payloads_from_body,
-    read_limited_json,
-)
+from cicerone.serve.code_samples import TRACK_PATH
+from cicerone.serve.events_routes import IngestSpec, read_ingest
 from cicerone.serve_schemas import (
     ErrorDetail,
     TrackEvent,
@@ -31,7 +26,7 @@ from cicerone.track.store import TrackStore
 
 logger = logging.getLogger(__name__)
 
-TRACK_PATH = "/track"
+TRACK_INGEST = IngestSpec(TRACK_PATH, TrackEvent, TrackIngestRequest, "TrackIngestBody")
 
 
 def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
@@ -41,16 +36,6 @@ def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
         counts[kind] = counts.get(kind, 0) + 1
     for kind, count in counts.items():
         record_track_ingest(kind=kind, status="accepted", count=count)
-
-
-def attach_track_ingest_openapi(schema: dict[str, Any]) -> None:
-    attach_ingest_openapi(
-        schema,
-        TRACK_PATH,
-        event_model=TrackEvent,
-        request_model=TrackIngestRequest,
-        title="TrackIngestBody",
-    )
 
 
 def mount_track_routes(
@@ -67,7 +52,7 @@ def mount_track_routes(
     dependencies = optional_bearer_deps(settings.serve.auth_token)
 
     @app.post(
-        TRACK_PATH,
+        TRACK_INGEST.path,
         response_model=TrackIngestResponse,
         dependencies=dependencies,
         status_code=202,
@@ -85,22 +70,9 @@ def mount_track_routes(
     )
     async def post_track(request: Request) -> TrackIngestResponse:
         try:
-            body = await read_limited_json(request, max_body_bytes(settings))
-        except HTTPException:
-            record_track_ingest(kind="other", status="error")
-            raise
-        try:
-            payloads = payloads_from_body(body)
-            if isinstance(body, dict) and "events" in body:
-                TrackIngestRequest.model_validate(body)
-            else:
-                for payload in payloads:
-                    TrackEvent.model_validate(payload)
+            payloads = await read_ingest(request, settings, TRACK_INGEST)
             rows = [normalize_track(payload).as_row() for payload in payloads]
             accepted_rows = await asyncio.to_thread(track_store.append_accepted_rows, rows)
-        except ValidationError as exc:
-            record_track_ingest(kind="other", status="error")
-            raise HTTPException(status_code=400, detail=exc.errors()) from exc
         except TrackNormalizeError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
