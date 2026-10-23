@@ -17,7 +17,7 @@ from cicerone.amqp_options import (
     require_amqp_url,
     require_queue,
 )
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import ConfigError, import_extra
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -56,13 +56,6 @@ def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
         optional_routing_key(options, prefix=_PREFIX)
 
 
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'publish.kind = "rabbitmq" requires the pika package; '
-        "install with: pip install 'cicerone-recommender[rabbitmq]'"
-    )
-
-
 class RabbitMQPublisher:
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_publish_options(options)
@@ -79,10 +72,7 @@ class RabbitMQPublisher:
     def connect(self) -> None:
         if self._channel is not None:
             return
-        try:
-            import pika
-        except ImportError as exc:
-            raise _missing_extra() from exc
+        pika = import_extra("pika", "rabbitmq", 'publish.kind = "rabbitmq"')
         connection = None
         connected = False
         try:

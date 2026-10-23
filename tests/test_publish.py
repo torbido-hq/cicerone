@@ -8,6 +8,7 @@ import pytest
 from support.events import event_payload
 from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.errors import AMQPError, KafkaException
@@ -193,6 +194,14 @@ def test_kafka_publisher_emits_per_user(monkeypatch):
     publisher.close()
 
 
+def test_kafka_publisher_serves_delivery_callbacks_per_message(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+    publisher.publish(_recs_frame())
+    assert broker.poll_calls == [0, 0]
+
+
 def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher(
@@ -310,16 +319,7 @@ def test_every_built_publisher_accepts_user_ids(kind):
 
 
 def test_missing_kafka_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "confluent_kafka":
-            raise ImportError("no kafka")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "confluent_kafka")
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
         build_publisher(
             PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
@@ -327,16 +327,7 @@ def test_missing_kafka_extra(monkeypatch):
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "pika":
-            raise ImportError("no pika")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "pika")
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
         build_publisher(
             PublishSettings(

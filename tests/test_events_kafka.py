@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from support.events import event_payload
 from support.fake_kafka import install_fake_kafka
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError, HeartbeatSource
@@ -301,6 +302,34 @@ def test_ack_keeps_local_state_when_commit_fails(monkeypatch):
     source.close()
 
 
+def test_rebalance_drops_revoked_deliveries(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    for event_id in ("e1", "e2", "e3"):
+        broker.add("cicerone.events", event_payload(event_id=event_id))
+    source = KafkaEventSource(_options())
+    source.connect()
+    polled = list(source.poll(2))
+    source.nack(polled[1:])
+    source._consumer.rebalance([0])
+    assert source.ack(["e1"]) == ()
+    assert broker.committed == []
+    assert [event.event_id for event in source.poll(10)] == ["e1", "e2", "e3"]
+    assert sorted(source.ack(["e1", "e2", "e3"])) == ["e1", "e2", "e3"]
+    assert broker.committed == [(0, 3)]
+
+
+def test_replaced_consumer_revoke_keeps_current_deliveries(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="e1"))
+    source = KafkaEventSource(_options())
+    source.connect()
+    previous = source._consumer
+    source.connect()
+    assert [event.event_id for event in source.poll(1)] == ["e1"]
+    previous.rebalance([0])
+    assert source.ack(["e1"]) == ("e1",)
+
+
 def test_sasl_options_in_consumer_config(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     source = KafkaEventSource(
@@ -320,16 +349,7 @@ def test_sasl_options_in_consumer_config(monkeypatch):
 
 
 def test_missing_confluent_kafka_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "confluent_kafka":
-            raise ImportError("no kafka")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "confluent_kafka")
     source = KafkaEventSource(_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
         source.connect()

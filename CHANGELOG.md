@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ExperimentStore` delegates to a db or dataset backend
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
+- Redis Streams treats an empty `consumer_name` or `group_start_id` as
+  unset (host name / `0-0`), like Kafka, instead of rejecting it.
 
 ### Fixed
 
@@ -85,6 +87,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   acked with its batch without being applied.
 - db source health no longer fails on a row with an unparseable
   `occurred_at`.
+- The Kafka event source drops the deliveries of partitions revoked or lost
+  in a group rebalance, so their acks no longer commit offsets for another
+  member or fail every worker tick, and the redelivered messages are not
+  skipped when the partition comes back.
+- The event worker keeps at most 10,000 unconfirmed acks for retry and
+  drops the oldest with a warning, instead of retrying them forever.
+- The db events source compares a naive `occurred_at` on Postgres in UTC,
+  as it reads it, instead of the session time zone, which skipped or
+  re-read rows when the server zone was not UTC.
+- The Kafka publisher serves delivery callbacks after each message, so a
+  large publish no longer fills the producer queue.
 
 ## [0.8.5] - 2026-10-14
 

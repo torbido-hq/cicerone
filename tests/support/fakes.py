@@ -1,8 +1,11 @@
-"""Shared fakes for storage tests."""
+"""Shared test fakes."""
 
 from __future__ import annotations
 
+import sys
 from typing import Any
+
+import pytest
 
 
 class FakeS3Body:
@@ -30,3 +33,8 @@ class FakeS3Client:
 
     def get_object(self, **_kwargs: Any) -> dict[str, Any]:
         return {"Body": self.body}
+
+
+def hide_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make ``import name`` fail as if its optional extra were not installed."""
+    monkeypatch.setitem(sys.modules, name, None)

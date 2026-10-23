@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from support.events import event_payload
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -316,16 +317,7 @@ def test_busygroup_is_ok(monkeypatch):
 
 
 def test_missing_redis_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "redis":
-            raise ImportError("no redis")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "redis")
     source = RedisStreamsEventSource(_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         source.connect()

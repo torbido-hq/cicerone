@@ -7,11 +7,12 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
@@ -28,7 +29,7 @@ from cicerone.events.db_identity import (
     row_to_event,
 )
 from cicerone.events.normalize import EventNormalizeError
-from cicerone.events.state_file import write_json_durably
+from cicerone.events.state_file import read_json_object_file, write_json_durably
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, quote_identifier, release_engine, sql_source
@@ -87,6 +88,15 @@ def _row_event(payload: dict[str, Any]) -> NormalizedEvent:
     # Placed on the cursor so the worker acks it in order; raises when occurred_at is unusable.
     occurred_at, event_id = payload_cursor(payload)
     return NormalizedEvent("", "", "", 0, occurred_at, event_id, rejected=reason)
+
+
+@contextmanager
+def _utc_connection(engine: Engine) -> Iterator[Connection]:
+    with engine.connect() as conn:
+        if engine.dialect.name == "postgresql":
+            # Naive occurred_at values are UTC (db_occurred_at), so compare them in UTC, not the session zone.
+            conn.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+        yield conn
 
 
 def _log_unplaceable_row(payload: dict[str, Any], exc: EventNormalizeError) -> None:
@@ -321,7 +331,7 @@ class DbEventSource(EventSource):
             f"SELECT {select_clause} FROM {self._from_clause(engine)} "
             f"WHERE {where} ORDER BY {order} LIMIT :limit"
         )
-        with engine.connect() as conn:
+        with _utc_connection(engine) as conn:
             result = conn.execute(sql, {**params, "limit": max(limit, 1)})
             return [dict(row) for row in result.mappings()]
 
@@ -340,7 +350,7 @@ class DbEventSource(EventSource):
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
         where, _order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
         sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause(engine)} WHERE {where}")
-        with engine.connect() as conn:
+        with _utc_connection(engine) as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
     def _count_after_rows(
@@ -356,12 +366,12 @@ class DbEventSource(EventSource):
         return count
 
     def _load_watermark_unlocked(self) -> None:
-        if self._watermark_path is None or not self._watermark_path.is_file():
+        if self._watermark_path is None:
             return
         try:
-            raw = json.loads(self._watermark_path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("watermark root must be an object")
+            raw = read_json_object_file(self._watermark_path)
+            if raw is None:
+                return
             watermark_at = self._watermark_at
             occurred_at = raw.get("occurred_at")
             if occurred_at:

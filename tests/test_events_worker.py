@@ -1409,6 +1409,28 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
     assert acked == ["already-1", "already-1"]
 
 
+def test_event_worker_retry_acks_stay_bounded(tmp_path, feature_config: FeatureConfig, monkeypatch):
+    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 2)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+    )
+    worker = EventWorker(
+        WebhookEventSource({}),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    gone = [normalize_event(event_payload(event_id=f"gone-{n}")) for n in range(3)]
+    worker._ack_unbuffered(gone)
+    assert [event.event_id for event in worker._retry_acks] == ["gone-1", "gone-2"]
+    worker._flush_retry_acks()
+    assert [event.event_id for event in worker._retry_acks] == ["gone-1", "gone-2"]
+
+
 def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):

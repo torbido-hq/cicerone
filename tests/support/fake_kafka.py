@@ -62,6 +62,7 @@ class FakeKafkaBroker:
         self.producer_error: Exception | None = None
         self.commit_error: Exception | None = None
         self.flush_calls: list[float | None] = []
+        self.poll_calls: list[float] = []
         self.list_topics_timeouts: list[float | None] = []
         self.delivery_error: object | None = None
         self._seq = 0
@@ -91,9 +92,22 @@ class FakeConsumer:
         self._topics: list[str] = []
         self._index: dict[str, int] = {}
         self.closed = False
+        self.on_revoke: Any | None = None
 
-    def subscribe(self, topics: list[str]) -> None:
+    def subscribe(self, topics: list[str], on_revoke: Any | None = None, on_lost: Any | None = None) -> None:
+        del on_lost
         self._topics = list(topics)
+        self.on_revoke = on_revoke
+
+    def rebalance(self, partitions: list[int]) -> None:
+        """Revoke ``partitions`` and rewind to the last commit, as a group rebalance does."""
+        if self.on_revoke is not None:
+            self.on_revoke(
+                self, [FakeTopicPartition(topic, p, -1) for topic in self._topics for p in partitions]
+            )
+        committed = [offset for partition, offset in self.broker.committed if partition in partitions]
+        for topic in self._topics:
+            self._index[topic] = max(committed, default=0)
 
     def poll(self, timeout: float) -> FakeKafkaMessage | None:
         del timeout
@@ -148,6 +162,10 @@ class FakeProducer:
         self.broker.produce(topic, value, key)
         if on_delivery is not None:
             on_delivery(self.broker.delivery_error, None)
+
+    def poll(self, timeout: float) -> int:
+        self.broker.poll_calls.append(timeout)
+        return 0
 
     def flush(self, timeout: float | None = None) -> int:
         self.broker.flush_calls.append(timeout)
