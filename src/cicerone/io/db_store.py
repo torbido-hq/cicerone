@@ -159,9 +159,9 @@ def _manifest_column_type(value: Any) -> Any:
 def _clear_table_for_replace(conn, table: str) -> None:
     """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
 
-    SQLite lacks TRUNCATE, and MySQL commits it implicitly (ending the replace transaction), so
-    both use DELETE. Rolling back only a failed savepoint keeps the rewrite atomic; if the table
-    does not exist yet, every statement fails and ``to_sql`` creates it.
+    MySQL commits TRUNCATE implicitly (ending the replace transaction), so it uses DELETE; on
+    SQLite TRUNCATE fails and DELETE follows. Rolling back only a failed savepoint keeps the
+    rewrite atomic; if the table does not exist yet, every statement fails and ``to_sql`` creates it.
     """
     verbs = ("DELETE FROM",) if conn.dialect.name == "mysql" else ("TRUNCATE TABLE", "DELETE FROM")
     for verb in verbs:

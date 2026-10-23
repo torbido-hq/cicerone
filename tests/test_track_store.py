@@ -1365,7 +1365,7 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
 
 
 def test_track_table_creates_on_mysql():
-    # MySQL needs a bounded key column and backticks for the reserved word rank.
+    # MySQL needs a bounded, case-sensitive key column and backticks for the reserved word rank.
     from sqlalchemy.dialects import mysql
     from sqlalchemy.schema import CreateTable
 
@@ -1373,6 +1373,6 @@ def test_track_table_creates_on_mysql():
 
     ddl = str(CreateTable(track_table("track")).compile(dialect=mysql.dialect()))
 
-    assert "event_id VARCHAR(255) NOT NULL" in ddl
+    assert "event_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL" in ddl
     assert "`rank` INTEGER" in ddl
     assert "PRIMARY KEY (event_id)" in ddl

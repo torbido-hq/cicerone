@@ -31,8 +31,8 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
     return bind.dialect.identifier_preparer.quote(name)
 
 
-# MySQL can't index TEXT without a length; other dialects keep TEXT.
-TEXT_KEY = Text().with_variant(String(255), "mysql")
+# MySQL can't index TEXT without a length; binary collation keeps keys case-sensitive as elsewhere.
+TEXT_KEY = Text().with_variant(String(255, collation="utf8mb4_bin"), "mysql")
 
 
 def insert_ignoring_duplicates(bind: Engine | Connection, table: Table) -> Insert:

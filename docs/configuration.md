@@ -51,6 +51,12 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `incremental_applied_events` (incremental event keys, see
 [incremental events](incremental-events.md)).
 
+On MySQL, run in strict SQL mode (the default since 5.7) so an over-long
+value errors instead of being truncated. Track and experiment-state keys
+are `VARCHAR(255)` with a binary (case-sensitive) collation. Tables
+cicerone creates are used as created; extra unique indexes on them are not
+supported.
+
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
 requires the table (use a placeholder path).
