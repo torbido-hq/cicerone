@@ -25,7 +25,7 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 import pandas as pd
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowException, ArrowNotImplementedError, ArrowTypeError
 
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
 from cicerone.locks import WriterLockBusyError
@@ -276,6 +276,41 @@ def read_parquet(
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
     obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
+
+
+PARQUET_PUSHDOWN_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    ArrowTypeError,
+    ArrowNotImplementedError,
+)
+_PUSHDOWN_ERROR_TOKENS = ("fieldref", "filter", "column", "projection")
+
+
+def _rejects_pushdown(exc: BaseException, names: Sequence[str]) -> bool:
+    if isinstance(exc, (ArrowTypeError, ArrowNotImplementedError)):
+        return True
+    message = str(exc).lower()
+    return any(token in message for token in (*(name.lower() for name in names), *_PUSHDOWN_ERROR_TOKENS))
+
+
+def read_parquet_pushdown(
+    options: dict[str, Any],
+    filename: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filters: Sequence[tuple[str, str, Any]] | None = None,
+) -> pd.DataFrame:
+    """``read_parquet`` that falls back to a full read when the engine rejects the pushdown.
+
+    The fallback returns every row and column: callers filter and project it themselves.
+    """
+    try:
+        return read_parquet(options, filename, columns=columns, filters=filters)
+    except PARQUET_PUSHDOWN_ERRORS as exc:
+        if not _rejects_pushdown(exc, [*(columns or ()), *(name for name, _op, _value in filters or ())]):
+            raise
+        logger.warning("Pushdown read of %s failed; falling back to full-file load: %s", filename, exc)
+        return read_parquet(options, filename)
 
 
 def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]:
