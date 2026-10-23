@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
 from cicerone.config import Settings
-from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
+from cicerone.errors import STORE_UNAVAILABLE_ERRORS, log_caught
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.metrics import record_track_ingest
@@ -111,7 +111,7 @@ def mount_track_routes(
         except LockLostError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=503, detail="Writer lock was lost") from exc
-        except OPTIONAL_IO_ERRORS as exc:
+        except STORE_UNAVAILABLE_ERRORS as exc:
             record_track_ingest(kind="other", status="error")
             log_caught("Track store unavailable", exc, log=logger)
             raise HTTPException(status_code=503, detail="Track store unavailable") from exc
