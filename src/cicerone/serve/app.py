@@ -5,13 +5,16 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -178,10 +181,21 @@ def create_app(
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
 ) -> FastAPI:
+    # One writer thread keeps appends ordered and off the request threadpool.
+    append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            append_pool.shutdown(wait=True)
+
     app = FastAPI(
         title=SERVE_API_TITLE,
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
+        lifespan=lifespan,
     )
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
@@ -271,7 +285,6 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
-        background_tasks: BackgroundTasks,
         limit: int | None = Query(
             default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
         ),
@@ -312,7 +325,7 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                background_tasks.add_task(
+                append_pool.submit(
                     _append_exposures_safe,
                     experiment_store,
                     [
@@ -341,7 +354,7 @@ def create_app(
                 }
                 for row in filtered.itertuples(index=False)
             ]
-            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
+            append_pool.submit(_append_impressions_safe, track_store, rows, user_id)
 
         body = RecommendationsResponse(
             generated_at=generated_at,

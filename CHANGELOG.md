@@ -66,6 +66,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A dashboard promote or unpromote that hits a busy or lost writer lock
   shows "Writer lock is busy" / "Writer lock was lost" instead of
   "Experiment report is not available".
+- Serve writes exposures and impressions on one dedicated thread instead
+  of the request threadpool, so busy-lock retries no longer hold request
+  workers; pending writes finish on shutdown.
 
 ## [0.8.5] - 2026-10-14
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from fastapi.testclient import TestClient
 from support.fakes import FakeReader
 from support.settings import make_settings
@@ -421,7 +423,8 @@ def test_get_does_not_log_impressions_by_default(tmp_path):
 
 def test_get_log_impressions_when_enabled(tmp_path):
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
-    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    with TestClient(app) as client:
+        body = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     rows = TrackStore(_settings(tmp_path).output).read_rows()
     assert {row["kind"] for row in rows} == {"impression"}
     assert {row["item_id"] for row in rows} == {item["item_id"] for item in body["items"]}
@@ -445,7 +448,8 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
     monkeypatch.setattr(serve_app.time, "sleep", lambda _seconds: None)
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
-    response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    with TestClient(app) as client:
+        response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert calls["n"] == 3
 
@@ -459,6 +463,27 @@ def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):
     response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert response.json()["items"]
+
+
+def test_get_log_impressions_append_runs_on_dedicated_thread_and_drains(tmp_path, monkeypatch):
+    release = threading.Event()
+    appended: list[str] = []
+
+    def slow_append(*args, **kwargs):
+        del args, kwargs
+        release.wait(timeout=5)
+        appended.append(threading.current_thread().name)
+        return 1
+
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    with TestClient(app) as client:
+        response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+        assert response.status_code == 200
+        assert appended == []
+        threading.Timer(0.1, release.set).start()
+    assert len(appended) == 1
+    assert appended[0].startswith("cicerone-serve-append")
 
 
 def test_attach_track_ingest_openapi_noop_without_post():
