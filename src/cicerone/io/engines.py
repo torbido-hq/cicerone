@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 
 import sqlalchemy
 from sqlalchemy import Connection, Engine, Insert, String, Table, Text
@@ -77,3 +78,21 @@ def dispose_engines() -> None:
         _checkouts.clear()
     for engine in engines:
         engine.dispose()
+
+
+class LazyEngine:
+    """Check out ``engine_for(url)`` once, on first use, even under concurrent first calls."""
+
+    def __init__(self, database_url: Callable[[], str]):
+        self._database_url = database_url
+        self._engine: Engine | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> Engine:
+        engine = self._engine
+        if engine is not None:
+            return engine
+        with self._lock:
+            if self._engine is None:
+                self._engine = engine_for(self._database_url())
+            return self._engine

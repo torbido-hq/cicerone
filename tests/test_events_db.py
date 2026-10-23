@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import event_payload, record_durable_write_steps
 
 from cicerone.events.db import (
     DbEventSource,
@@ -210,6 +212,19 @@ def test_db_watermark_path_persists(tmp_path):
     restarted.connect()
     left = list(restarted.poll(10))
     assert [event.event_id for event in left] == ["e2"]
+
+
+def test_db_watermark_renames_before_directory_fsync(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    watermark = tmp_path / "wm.json"
+    _seed_events(url, [event_payload()])
+    source = DbEventSource({"database_url": url, "watermark_path": str(watermark)})
+    source.connect()
+    batch = list(source.poll(1))
+    steps = record_durable_write_steps(monkeypatch)
+    source.ack([batch[0].event_id])
+    assert steps == ["fsync_file", "replace", "fsync_dir"]
+    assert json.loads(watermark.read_text())["event_id"] == "e1"
 
 
 def test_db_events_query_and_stable_id_without_event_id(tmp_path):

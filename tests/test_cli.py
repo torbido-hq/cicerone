@@ -265,3 +265,11 @@ def test_package_main_exports_cli_main():
     import cicerone.__main__ as package_main
 
     assert package_main.main is main
+
+
+@pytest.mark.parametrize("command", ["users", "export-openapi"])
+def test_forwarded_help_names_cicerone_subcommand(command, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([command, "--help"])
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.startswith(f"usage: cicerone {command} ")
