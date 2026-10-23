@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.model_config import LATEST_WINDOW_DAYS
 
 RANDOM_STATE = 42
-SOURCE_COLUMN = "source"
 WEIGHT_COLUMN = "_weight"  # internal-only; dropped before returning to callers
 
 COLLABORATIVE_EPOCHS = 30  # LightFMWrapperModel.fit() runs these in one fit_partial
