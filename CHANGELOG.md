@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- An escaped `$${NAME}` in `events.options.auth_token` stays the literal
+  `${NAME}` instead of being expanded by a second placeholder pass.
 
 ## [0.8.5] - 2026-10-14
 

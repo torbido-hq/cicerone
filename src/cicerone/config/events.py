@@ -21,7 +21,6 @@ from cicerone.config.validation import (
     require_non_negative_int,
     require_positive_float,
     require_positive_int,
-    resolve_env_placeholders,
 )
 from cicerone.events.registry import registered_event_source_kinds
 
@@ -76,13 +75,7 @@ def load_events_settings(
     enabled, kind, options = load_kind_section(
         events_raw, "events", "webhook", registered_event_source_kinds()
     )
-    auth_token = (
-        resolve_env_placeholders(options["auth_token"], "events.options.auth_token")
-        if "auth_token" in options
-        else None
-    )
-    if auth_token is not None:
-        options = {**options, "auth_token": auth_token}
+    auth_token = options.get("auth_token")
 
     if "incremental" in events_raw:
         incremental_raw = events_raw["incremental"]

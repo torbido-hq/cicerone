@@ -435,3 +435,16 @@ def test_input_rejects_artifact_hmac_key(tmp_path):
     )
     with pytest.raises(ConfigError, match="only valid on \\[output\\]"):
         load_settings(path)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"), [("${EVENTS_TOKEN}", "secret"), ("$${EVENTS_TOKEN}", "${EVENTS_TOKEN}")]
+)
+def test_load_events_resolves_auth_token_placeholders_once(monkeypatch, token, expected):
+    monkeypatch.setenv("EVENTS_TOKEN", "secret")
+    settings = load_events_settings(
+        {"enabled": True, "kind": "webhook", "options": {"auth_token": token}},
+        mode="serve",
+        serve_auth_token=None,
+    )
+    assert settings.options["auth_token"] == expected
