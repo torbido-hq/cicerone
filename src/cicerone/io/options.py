@@ -212,18 +212,12 @@ def storage_backend(options: dict[str, Any]) -> str:
     return str(backend)
 
 
-def validate_storage_options(options: dict[str, Any], backend: str | None = None) -> str:
+def validate_storage_options(options: dict[str, Any]) -> str:
     """Validate ``storage_backend`` and required options; return the resolved backend.
 
-    Always resolves from ``options``. If ``backend`` is passed, it must match
-    ``options['storage_backend']`` (or the default ``local``).
-
-    Raises ``ConfigError`` for unknown backends, backend mismatches, or missing
-    required options.
+    Raises ``ConfigError`` for unknown backends or missing required options.
     """
     resolved = storage_backend(options)
-    if backend is not None and str(backend) != resolved:
-        raise ConfigError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
     if resolved == "local":
         require_option(options, "path", "local")
     else:
@@ -237,7 +231,6 @@ def read_parquet(
     options: dict[str, Any],
     filename: str,
     *,
-    s3_client: Any | None = None,
     columns: Sequence[str] | None = None,
     filters: Sequence[Any] | None = None,
 ) -> pd.DataFrame:
@@ -261,9 +254,6 @@ def read_parquet(
     bucket = require_option(options, "bucket", "s3")
     key = object_key(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
-    if s3_client is not None:
-        obj = s3_client.get_object(Bucket=bucket, Key=key)
-        return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
     try:
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
     except _PYARROW_S3_FALLBACK_ERRORS:
@@ -330,12 +320,11 @@ def _read_s3_parquet_pyarrow(
     *,
     columns: Sequence[str] | None,
     filters: Sequence[Any] | None,
-    filesystem: Any | None = None,
 ) -> pd.DataFrame:
     import pyarrow.parquet as pq
 
     read_kwargs: dict[str, Any] = {
-        "filesystem": filesystem if filesystem is not None else _s3_filesystem(options),
+        "filesystem": _s3_filesystem(options),
         "use_pandas_metadata": True,
     }
     if columns is not None:

@@ -211,17 +211,17 @@ def test_resolve_recommend_models_skips_content_fallback_when_disabled(caplog):
     assert "content_fallback is listed" in caplog.text
 
 
-def test_resolve_run_models_centralizes_content_fallback_and_blending():
-    from cicerone.model import content_fallback_enabled_from_models, plan_model_run, resolve_run_models
+def test_plan_model_run_centralizes_content_fallback_and_blending():
+    from cicerone.model import content_fallback_enabled_from_models, plan_model_run
 
-    resolved, recommend = resolve_run_models(
+    explicit = plan_model_run(
         ["collaborative", "popular"],
         blending_enabled=False,
         content_fallback_enabled=True,
     )
-    assert resolved == ["collaborative", "popular"]
-    assert recommend == ["collaborative", "content_fallback", "popular"]
-    assert content_fallback_enabled_from_models(recommend) is True
+    assert list(explicit.enabled_models) == ["collaborative", "popular"]
+    assert list(explicit.recommend_models) == ["collaborative", "content_fallback", "popular"]
+    assert content_fallback_enabled_from_models(list(explicit.recommend_models)) is True
     assert content_fallback_enabled_from_models(["collaborative", "popular"]) is False
 
     plan = plan_model_run(
@@ -229,7 +229,6 @@ def test_resolve_run_models_centralizes_content_fallback_and_blending():
         blending_enabled=False,
         content_fallback_enabled=None,
     )
-    assert plan.content_fallback_active is True
     assert list(plan.recommend_models) == ["collaborative", "content_fallback", "popular"]
 
 

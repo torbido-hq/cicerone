@@ -9,19 +9,12 @@ from typing import Any, Protocol
 import pandas as pd
 
 from cicerone.config.settings import IOSettings
-from cicerone.deprecation import renamed_attribute
-from cicerone.locks import LockBackend, WriteFence
+from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
-    DEFAULT_EVAL_TABLE,  # noqa: F401
-    DEFAULT_HISTORY_TABLE,  # noqa: F401
-    DEFAULT_TRACK_TABLE,  # noqa: F401
     EVAL_FILENAME,
     HISTORY_COLUMNS,
     HISTORY_DIR,
-    HISTORY_FILENAME,  # noqa: F401
-    TRACK_COLUMNS,  # noqa: F401
     TRACK_FILENAME,
-    TRACK_LOG_BACKEND_ERROR,  # noqa: F401
     TRACK_LOG_HA_ERROR,
     history_frame,
     iso_utc,
@@ -35,16 +28,10 @@ from cicerone.track.store_db import TrackDbBackend
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "DEFAULT_EVAL_TABLE",
-    "DEFAULT_HISTORY_TABLE",
-    "DEFAULT_TRACK_TABLE",
     "EVAL_FILENAME",
     "HISTORY_COLUMNS",
     "HISTORY_DIR",
-    "HISTORY_FILENAME",
-    "TRACK_COLUMNS",
     "TRACK_FILENAME",
-    "TRACK_LOG_BACKEND_ERROR",
     "TRACK_LOG_HA_ERROR",
     "TrackBackend",
     "TrackStore",
@@ -87,19 +74,9 @@ class TrackStore:
         self,
         output: IOSettings,
         *,
-        writer_lock: LockBackend | None = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
         self.backend = build_track_backend(output, self._fence)
 
     @property
@@ -150,15 +127,3 @@ class TrackStore:
             if not wanted:
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
         return self.backend.read_history(generated_ats=wanted, since=iso_utc(since))
-
-
-_RENAMED = {
-    "_history_frame": "cicerone.track.store.history_frame",
-    "_history_part_name": "cicerone.track.store.history_part_name",
-    "_jsonish": "cicerone.track.store.jsonish",
-}
-__all__ += list(_RENAMED)
-
-
-def __getattr__(name: str) -> Any:
-    return renamed_attribute(__name__, _RENAMED, name)

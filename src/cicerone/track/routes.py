@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from cicerone.config import Settings
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.locks import LockLostError, WriterLockBusyError, build_dataset_writer_lock
+from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.metrics import record_track_ingest
 from cicerone.serve.events_routes import (
     attach_ingest_openapi,
@@ -61,7 +61,7 @@ def mount_track_routes(
     track_store = (
         store
         if store is not None
-        else TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        else TrackStore(settings.output, fence=WriteFence(build_dataset_writer_lock(settings)))
     )
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)

@@ -8,7 +8,7 @@ from cicerone.job_output import (
     write_job_manifest,
     write_manifest_accepts_skip,
 )
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriteFence
 
 
 def test_truncate_job_error_short() -> None:
@@ -16,9 +16,10 @@ def test_truncate_job_error_short() -> None:
 
 
 def test_skip_stale_job_manifest_on_lock_loss() -> None:
-    assert skip_stale_job_manifest(exc=LockLostError("lost", kind="retrain")) is True
-    assert skip_stale_job_manifest(fence_check=lambda: False) is True
-    assert skip_stale_job_manifest(fence_check=lambda: True) is False
+    assert skip_stale_job_manifest(WriteFence(), exc=LockLostError("lost", kind="retrain")) is True
+    assert skip_stale_job_manifest(WriteFence(check=lambda: False)) is True
+    assert skip_stale_job_manifest(WriteFence(check=lambda: True)) is False
+    assert skip_stale_job_manifest(WriteFence()) is False
 
 
 def test_ensure_fence_raises_when_lost() -> None:

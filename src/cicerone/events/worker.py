@@ -11,7 +11,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
 )
-from cicerone.events.base import ClosableSource, EphemeralIdSource, EventSource, NormalizedEvent
+from cicerone.events.base import ClosableSource, EventSource, NormalizedEvent, has_ephemeral_event_ids
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import (
     EVENT_APPLY_ERRORS,
@@ -82,6 +82,10 @@ class EventWorker:
         poll_without_lock: bool = False,
         heartbeat_interval_seconds: float = DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     ):
+        if has_ephemeral_event_ids(source) and not buffer.fingerprint_dedupe:
+            raise ValueError(
+                "source has ephemeral event ids; build its MicroBatchBuffer with fingerprint_dedupe=True"
+            )
         self._source = source
         self._buffer = buffer
         self._updater = updater
@@ -103,8 +107,7 @@ class EventWorker:
         self._retry_acks: list[NormalizedEvent] = []
         self._applied_event_ids = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
         self._applied_fingerprints = _BoundedSeen(_APPLIED_EVENT_ID_CAP)
-        self._ephemeral_event_ids = isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
-        self._buffer.configure_fingerprint_dedupe(self._ephemeral_event_ids, generated_only=True)
+        self._ephemeral_event_ids = has_ephemeral_event_ids(source)
         updater.use_replay_key(self._replay_key)
 
     def start(self) -> None:
@@ -402,9 +405,6 @@ class EventWorker:
         if rejected:
             self._restore_buffer(rejected)
 
-    def _requeue_buffer_after_reconnect(self, leftover: list[NormalizedEvent]) -> None:
-        self._return_events(leftover)
-
     def _reconnect_source(self) -> bool:
         with self._tick_guard:
             with self._source_guard:
@@ -421,7 +421,7 @@ class EventWorker:
                     if self._stop.is_set():
                         self._drain_and_close()
                     return False
-                self._requeue_buffer_after_reconnect(leftover)
+                self._return_events(leftover)
                 if self._stop.is_set():
                     self._drain_and_close()
                     return False
@@ -753,34 +753,30 @@ class EventWorker:
         logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
     def _persist_online_after_ack(self) -> None:
-        last_error: BaseException | None = None
+        persisted = False
         try:
             for attempt in range(1, _ONLINE_PERSIST_ATTEMPTS + 1):
                 try:
                     self._updater.persist_online()
+                    persisted = True
                     return
                 except LockLostError as exc:
                     logger.error("%s; dropping pending artifact", exc)
-                    self._updater.abort_online()
                     return
                 except WriterLockBusyError as exc:
-                    last_error = exc
                     logger.info(
                         "%s; online persist after ack (attempt %d/%d)",
                         exc,
                         attempt,
                         _ONLINE_PERSIST_ATTEMPTS,
                     )
-                except EVENT_APPLY_ERRORS as exc:
-                    last_error = exc
+                except EVENT_APPLY_ERRORS:
                     logger.exception(
                         "Online artifact persist failed after ack (attempt %d/%d)",
                         attempt,
                         _ONLINE_PERSIST_ATTEMPTS,
                     )
-            self._updater.abort_online()
-            if last_error is not None:
-                logger.error("Online artifact persist gave up after ack; pending fit dropped")
-        except Exception:
-            self._updater.abort_online()
-            raise
+            logger.error("Online artifact persist gave up after ack; pending fit dropped")
+        finally:
+            if not persisted:
+                self._updater.abort_online()
