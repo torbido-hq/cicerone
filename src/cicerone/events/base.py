@@ -51,7 +51,10 @@ class EventSource(Protocol):
         ...
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        """Ack ids that still have a live delivery; return those ids."""
+        """Ack ids that still have a live delivery; return those ids.
+
+        A source may confirm only some ids (Kafka: offsets its commit passed); the rest are not retried.
+        """
         ...
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:

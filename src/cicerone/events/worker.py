@@ -352,11 +352,7 @@ class EventWorker:
         except BaseException:
             self._retry_acks.extend(events)
             raise
-        live = [event for event in events if event.event_id in live_ids]
-        if len(live) < len(events):
-            # The source redelivers what it no longer holds; dedupe acks that delivery instead.
-            logger.debug("Not retrying %d ack(s) the source no longer holds", len(events) - len(live))
-        return live
+        return [event for event in events if event.event_id in live_ids]
 
     def _settle_live(self, live: Sequence[NormalizedEvent]) -> None:
         if live:

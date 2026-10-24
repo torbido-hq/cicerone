@@ -963,6 +963,8 @@ def test_event_worker_reconnect_acks_redelivery_of_a_dropped_retry_ack(
     worker._poll_into_buffer()
     assert worker._buffer.flush() == []
     assert source.ack(["retry-live"]) == ()
+    assert nacked == []
+    assert source.health().lag == 0
 
 
 def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
@@ -1411,7 +1413,7 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
     assert acked == ["already-1", "already-1"]
 
 
-def test_event_worker_retry_acks_stay_bounded(tmp_path, feature_config: FeatureConfig):
+def test_event_worker_drops_unconfirmed_acks(tmp_path, feature_config: FeatureConfig):
     _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
     worker = EventWorker(
         WebhookEventSource({}), MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater
@@ -1421,9 +1423,10 @@ def test_event_worker_retry_acks_stay_bounded(tmp_path, feature_config: FeatureC
     assert worker._retry_acks == []
 
 
-def test_event_worker_retries_failed_acks_until_success_but_not_acks_the_source_no_longer_holds(
-    tmp_path, feature_config: FeatureConfig
+def test_event_worker_retries_failed_acks_until_success_but_not_unconfirmed_acks(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
+    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 1)
     acked: list[list[str]] = []
 
     class _AckDownTwice(WebhookEventSource):

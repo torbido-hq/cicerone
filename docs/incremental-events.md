@@ -235,13 +235,12 @@ until an entry arrives and so holds buffered events on a quiet stream),
 `event_id` uses the stream entry id. Requires
 `pip install 'cicerone-recommender[redis]'` or
 `pip install -r requirements-redis.txt` (same extra as the Redis lock).
-The worker retries a failed ack until it succeeds. An ack for a delivery
-the source no longer holds is not retried: Kafka redelivers the message
-from the committed offset after a rebalance, RabbitMQ requeues it when the
-channel closes, and after a restart Redis Streams hands the entry back with
-`XAUTOCLAIM` once it has been idle `claim_idle_ms`. The worker acks the
-redelivery through its applied-event dedupe or replay key instead of
-applying it again.
+The worker retries a failed ack until it succeeds. An ack the source does
+not confirm is not retried: Kafka commits it with a later offset, and
+RabbitMQ requeues it when the channel closes. After a restart, unacked
+Redis Streams entries come back through `XAUTOCLAIM` once idle
+`claim_idle_ms`. The worker acks a redelivery through its applied-event
+dedupe or replay key instead of applying it again.
 
 Prefer Redis Streams when you already run Redis for the lock; Kafka and
 RabbitMQ are extras for shops that already have those brokers.

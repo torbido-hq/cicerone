@@ -305,6 +305,19 @@ def test_autoclaim_idle_from_other_consumer(monkeypatch):
     source.ack([events[0].event_id])
 
 
+def test_restarted_consumer_reclaims_its_own_unacked_entry(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    first = RedisStreamsEventSource(_options(claim_idle_ms=50))
+    first.connect()
+    entry_id = client.xadd("cicerone:events", event_payload(event_id="unacked"))
+    assert [event.event_id for event in first.poll(10)] == ["unacked"]
+    first.close()
+    restarted = RedisStreamsEventSource(_options(claim_idle_ms=50))
+    restarted.connect()
+    client.age_pending("cicerone:events", "cicerone", entry_id, idle_ms=100)
+    assert [event.event_id for event in restarted.poll(10)] == ["unacked"]
+
+
 def test_busygroup_is_ok(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())

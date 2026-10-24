@@ -94,10 +94,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in a group rebalance, so their acks no longer commit offsets for another
   member or fail every worker tick, and the redelivered messages are not
   skipped when the partition comes back.
-- The event worker no longer retries forever an ack for a delivery the
-  source no longer holds: the source redelivers or requeues it and the
-  worker acks the redelivery through its dedupe. A failed ack is still
-  retried until it succeeds.
+- The event worker no longer retries forever an ack the source does not
+  confirm (Kafka commits it with a later offset, RabbitMQ requeues it when
+  the channel closes). A failed ack is still retried until it succeeds.
 - The db events source compares a naive `occurred_at` on Postgres in UTC,
   as it reads it, instead of the session time zone, which skipped or
   re-read rows when the server zone was not UTC.
