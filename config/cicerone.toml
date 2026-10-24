@@ -217,6 +217,9 @@ feature_config_path = "/app/config/features.toml"
 # # event notifications only deliver to SQS/SNS/Lambda and aren't portable
 # # across S3-compatible backends, so polling is used instead):
 # poll_input_bucket = false
+# # With lock_backend "postgres" / "redis", poll on exactly one replica and
+# # acknowledge it there (config error otherwise):
+# # poll_input_single_replica = true
 # poll_interval_seconds = 300
 # # Optional distributed lock for multiple scheduler replicas (default
 # # "in_process" = single-instance threading.Lock, no extra infra).

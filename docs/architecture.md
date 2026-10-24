@@ -372,7 +372,10 @@ serve-only image.
 - `poll_input_forever()` (only started when
   `Settings.trigger_poll_input_bucket`) periodically fingerprints the input
   source (`_current_marker`: local file mtime, or S3 `head_object`'s
-  `LastModified`) and calls `guard.trigger("s3-poll")` when it changes. This
+  `LastModified`) and calls `guard.trigger("s3-poll")` when it changes. A
+  change counts as handled once a run is accepted: a trigger skipped as busy
+  or debounced is retried on the next poll, but a run that starts and fails
+  waits for the next input change or cron, as a webhook-triggered run does. This
   is a deliberate substitute for real S3 event notifications, which require
   SNS/SQS/Lambda wiring and aren't portable across S3-compatible backends
   (R2, MinIO) — polling avoids adding that infra while still being

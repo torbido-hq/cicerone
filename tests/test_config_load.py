@@ -1505,6 +1505,46 @@ def test_load_settings_redis_lock_with_url(tmp_path, monkeypatch):
     assert settings.trigger.redis_url == "redis://localhost:6379/0"
 
 
+def _poll_with_redis_lock_toml(extra: str = "") -> str:
+    return f"""
+        [job]
+        [job.trigger]
+        poll_input_bucket = true
+        lock_backend = "redis"
+        redis_url = "redis://localhost:6379/0"
+        {extra}
+        {_base_io_toml()}
+        """
+
+
+def test_load_settings_poll_with_distributed_lock_requires_single_replica_ack(tmp_path):
+    config_path = write_toml(tmp_path, _poll_with_redis_lock_toml())
+    with pytest.raises(ConfigError, match="poll_input_single_replica = true"):
+        load_settings(config_path)
+
+
+def test_load_settings_poll_with_distributed_lock_and_single_replica_ack(tmp_path):
+    config_path = write_toml(tmp_path, _poll_with_redis_lock_toml("poll_input_single_replica = true"))
+    settings = load_settings(config_path)
+    assert settings.trigger.poll_input_bucket is True
+    assert settings.trigger.poll_input_single_replica is True
+
+
+def test_load_settings_poll_with_in_process_lock_needs_no_ack(tmp_path):
+    config_path = write_toml(
+        tmp_path,
+        f"""
+        [job]
+        [job.trigger]
+        poll_input_bucket = true
+        {_base_io_toml()}
+        """,
+    )
+    settings = load_settings(config_path)
+    assert settings.trigger.poll_input_bucket is True
+    assert settings.trigger.poll_input_single_replica is False
+
+
 def test_load_settings_lock_key_and_ttl(tmp_path):
     config_path = write_toml(
         tmp_path,

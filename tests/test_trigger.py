@@ -241,26 +241,91 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
     assert guard.calls == []
 
 
-def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
+def _run_poller(tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: None) -> None:
+    """Poll ``ticks`` times; the input marker is v1 at start and v2 on every poll after."""
     input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    guard = _FakeGuard()
-
-    markers = iter(["v1", "v2"])
+    markers = iter(["v1"])
     monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
-
-    sleep_calls = {"n": 0}
+    sleeps = {"n": 0}
 
     def fake_sleep(_seconds):
-        sleep_calls["n"] += 1
-        if sleep_calls["n"] >= 2:
-            raise SystemExit("stop after two ticks")
+        sleeps["n"] += 1
+        on_tick(sleeps["n"])
+        if sleeps["n"] > ticks:
+            raise SystemExit("stop")
 
     monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
-
     with pytest.raises(SystemExit):
         poll_input_forever(input_settings, guard, interval_seconds=0.01)
 
+
+def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
+    guard = _FakeGuard()
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=1)
+
     assert guard.calls == ["s3-poll"]
+
+
+def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
+    guard = _FakeGuard(result=False)
+
+    def accept_on_third_tick(tick: int) -> None:
+        if tick == 3:
+            guard.result = True
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=accept_on_third_tick)
+
+    assert guard.calls == ["s3-poll", "s3-poll", "s3-poll"]
+
+
+def test_poll_input_forever_survives_a_lock_backend_outage(tmp_path, monkeypatch):
+    from cicerone.locks.redis import RedisError
+
+    guard = _FakeGuard()
+    outage = {"left": 1}
+    real_trigger = guard.trigger
+
+    def trigger(triggered_by: str) -> bool:
+        if outage["left"]:
+            outage["left"] -= 1
+            raise RedisError("lock backend down")
+        return real_trigger(triggered_by)
+
+    guard.trigger = trigger  # type: ignore[method-assign]
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=3)
+
+    assert guard.calls == ["s3-poll"]
+
+
+def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp_path, monkeypatch):
+    release = threading.Event()
+    runs: list[str] = []
+
+    def blocking_run(triggered_by: str) -> None:
+        runs.append(triggered_by)
+        if triggered_by == "cron":
+            release.wait(timeout=5)
+
+    guard = RunGuard(debounce_seconds=0, run_fn=blocking_run)
+    assert guard.trigger("cron") is True
+    real_sleep = time.sleep
+
+    def wait_until_idle() -> None:
+        deadline = time.monotonic() + 5
+        while guard.busy and time.monotonic() < deadline:
+            real_sleep(0.01)
+
+    def end_the_cron_run_on_third_tick(tick: int) -> None:
+        if tick == 3:
+            release.set()
+            wait_until_idle()
+
+    _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=end_the_cron_run_on_third_tick)
+
+    wait_until_idle()
+    assert runs == ["cron", "s3-poll"]
 
 
 def test_current_marker_local_backend_reflects_mtime(tmp_path):
