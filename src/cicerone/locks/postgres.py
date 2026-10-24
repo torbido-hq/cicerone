@@ -46,6 +46,8 @@ class PostgresAdvisoryLock:
                 return False
             conn = self._engine.connect()
             try:
+                # No implicit transaction: the session idles for the whole hold.
+                conn.execution_options(isolation_level="AUTOCOMMIT")
                 got = bool(
                     conn.execute(
                         text("SELECT pg_try_advisory_lock(:k1, :k2)"),
@@ -129,6 +131,8 @@ class PostgresAdvisoryLock:
                 )
             except SQLAlchemyError:
                 logger.exception("Failed to release Postgres advisory lock")
+                # Never return a session that may still hold the lock to the pool.
+                self._conn.invalidate()
             finally:
                 self._conn.close()
                 self._conn = None

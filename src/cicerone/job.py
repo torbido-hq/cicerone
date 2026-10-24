@@ -63,7 +63,7 @@ from cicerone.locks import (
     LockLostError,
     WriteFence,
     WriterLockBusyError,
-    acquire_blocking,
+    acquire_until,
     build_dataset_writer_lock,
     build_lock_backend,
     build_output_writer_lock,
@@ -321,7 +321,8 @@ def _maybe_acquire_direct_retrain_lock(
     if fence_check is not None or not has_distributed_lock(settings):
         return None
     lock = build_lock_backend(settings)
-    if not acquire_blocking(lock):
+    ok, _generation = acquire_until(lock)
+    if not ok:
         raise WriterLockBusyError("retrain lock busy")
     return lock
 

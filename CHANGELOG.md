@@ -46,6 +46,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The Postgres advisory lock holds its session in autocommit, so it no
+  longer idles in a transaction for the whole run, and a failed unlock
+  discards the session instead of returning it, still locked, to the pool.
+- The cron loop no longer runs a tick twice when the wall clock steps back
+  just after it fired.
+- AutoML runs its parallel folds in spawned worker processes instead of
+  forking the threaded scheduler, which could deadlock the workers.
 
 ## [0.8.5] - 2026-10-14
 

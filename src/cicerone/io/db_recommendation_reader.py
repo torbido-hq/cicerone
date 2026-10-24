@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
 from typing import Any
 
 import pandas as pd
@@ -52,18 +51,6 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         self._present_variants: tuple[str, ...] | None = None
         self._init_item_filter_state()
         self.refresh()
-
-    def configure_item_filters(
-        self,
-        *,
-        category_column: str | None = None,
-        availability_filters: Sequence[str] = (),
-    ) -> None:
-        super().configure_item_filters(
-            category_column=category_column,
-            availability_filters=availability_filters,
-        )
-        self._reload_items()
 
     def _items_select(self):
         wanted = item_snapshot_columns(

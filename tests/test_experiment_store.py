@@ -6,6 +6,7 @@ import threading
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.fakes import FakeLock
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -262,23 +263,9 @@ def test_append_exposures_serializes_concurrent_local_writers(tmp_path) -> None:
     assert sorted(row["user_id"] for row in store.read_exposures()) == ["u1", "u2"]
 
 
-def test_append_exposures_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_append_exposures_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, fence=WriteFence(_Busy()))
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
@@ -376,24 +363,9 @@ def test_write_state_skips_acquire_when_held_here(tmp_path) -> None:
     assert store.read_state() is not None
 
 
-def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
-
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
+def test_write_state_other_thread_does_not_skip_acquire(tmp_path, no_lock_wait) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, fence=WriteFence(_Busy()))
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False)))
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
