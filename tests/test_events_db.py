@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import event_payload, record_durable_write_steps
 
 from cicerone.events.db import (
     DbEventSource,
@@ -38,10 +40,12 @@ def test_db_registered_and_build(tmp_path):
 
 def test_db_from_clause_uses_sql_identifier_as_is(tmp_path):
     url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
     table_source = DbEventSource({"database_url": url, "events_table": "events"})
-    assert table_source._from_clause() == "events"
+    assert table_source._from_clause(engine) == "events"
+    assert DbEventSource({"database_url": url, "events_table": "Events"})._from_clause(engine) == '"Events"'
     query_source = DbEventSource({"database_url": url, "events_query": "SELECT * FROM events"})
-    assert query_source._from_clause() == "(SELECT * FROM events) AS cicerone_events_src"
+    assert query_source._from_clause(engine) == "(SELECT * FROM events) AS cicerone_events_src"
 
 
 def test_db_poll_ack_advances_watermark(tmp_path):
@@ -208,6 +212,19 @@ def test_db_watermark_path_persists(tmp_path):
     restarted.connect()
     left = list(restarted.poll(10))
     assert [event.event_id for event in left] == ["e2"]
+
+
+def test_db_watermark_renames_before_directory_fsync(tmp_path, monkeypatch):
+    url = _sqlite_url(tmp_path)
+    watermark = tmp_path / "wm.json"
+    _seed_events(url, [event_payload()])
+    source = DbEventSource({"database_url": url, "watermark_path": str(watermark)})
+    source.connect()
+    batch = list(source.poll(1))
+    steps = record_durable_write_steps(monkeypatch)
+    source.ack([batch[0].event_id])
+    assert steps == ["fsync_file", "replace", "fsync_dir"]
+    assert json.loads(watermark.read_text())["event_id"] == "e1"
 
 
 def test_db_events_query_and_stable_id_without_event_id(tmp_path):

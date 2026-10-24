@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from conftest import make_settings
 from sqlalchemy import create_engine
+from support.fakes import raising
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
@@ -691,7 +692,7 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
         raise _S3Missing("missing")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _raise)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: True)
     context = experiment_context(settings)
     assert context["report"] is not None
 
@@ -1039,7 +1040,7 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
         raise OSError("parquet")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _boom)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: False)
     context = experiment_context(settings)
     assert context["report"] is not None
     assert calls["n"] >= 2
@@ -1537,6 +1538,23 @@ def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypat
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] is None
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
+
+
+def test_thompson_unpromote_keeps_state_when_state_read_fails(tmp_path, monkeypatch):
+    settings = _thompson_three_variants(tmp_path)
+    ExperimentStore(settings.output).write_state(
+        experiment_state("exp-1", promoted_variant="treatment", champion="control", challenger="treatment")
+    )
+    monkeypatch.setattr("cicerone.dashboard_experiments._PROMOTE_STATE", {})
+    original = ExperimentStore.read_state
+    monkeypatch.setattr(ExperimentStore, "read_state", raising(OSError("store down")))
+    assert clear_promotion(settings) == "Experiment state could not be read"
+    monkeypatch.setattr(ExperimentStore, "read_state", original)
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
     assert state["champion"] == "control"
     assert state["challenger"] == "treatment"
 

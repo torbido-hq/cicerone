@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -74,3 +75,15 @@ def coerce_item_true(value: object) -> bool:
 def item_true_mask(item_values: pd.Series) -> pd.Series:
     """Boolean mask for availability / ``item_true`` without silent string→True coercion."""
     return item_values.map(coerce_item_true).astype(bool)
+
+
+def utc_stamp(value: object) -> pd.Timestamp | None:
+    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(stamp):
+        return None
+    return stamp
+
+
+def occurred_since(row: Mapping[str, Any], start: pd.Timestamp) -> bool:
+    stamp = utc_stamp(row.get("occurred_at"))
+    return stamp is not None and stamp >= start

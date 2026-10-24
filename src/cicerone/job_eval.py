@@ -32,7 +32,8 @@ from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
 from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store import TrackStore
-from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since, utc_stamp
+from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
+from cicerone.values import utc_stamp
 
 logger = logging.getLogger(__name__)
 

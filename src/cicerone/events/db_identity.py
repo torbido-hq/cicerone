@@ -12,9 +12,7 @@ from cicerone.events.normalize import normalize_event, parse_occurred_at
 _ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _IDENTITY_SORT_SEP = "\x1f"
-_SQLITE_OCCURRED_AT = "strftime('%Y-%m-%d %H:%M:%f', occurred_at)"
-_SQLITE_WATERMARK_AT = "strftime('%Y-%m-%d %H:%M:%f', :watermark_at)"
-# SQLite/Postgres expression matching `_identity_bind_sort_key`.
+# SQLite/Postgres expression matching `_identity_bind_sort_key`; `event_id` stands for the quoted column.
 _SQLITE_CTID_INNER = "replace(replace(replace(event_id, ' ', ''), 'ctid:(', ''), ')', '')"
 _SQLITE_IDENTITY_SORT = (
     "CASE"
@@ -118,23 +116,22 @@ def identity_bind_sort_key(event_id: str) -> str:
     return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)
 
 
-def identity_sql_sort_expr(dialect: str) -> str | None:
+def identity_sql_sort_expr(dialect: str, event_id: str) -> str | None:
     if dialect == "sqlite":
-        return _SQLITE_IDENTITY_SORT
+        return _SQLITE_IDENTITY_SORT.replace("event_id", event_id)
     if dialect == "postgresql":
-        return _POSTGRES_IDENTITY_SORT
+        return _POSTGRES_IDENTITY_SORT.replace("event_id", event_id)
     return None
 
 
-def occurred_at_predicates(dialect: str) -> tuple[str, str, str]:
-    """SQL fragments: later-than watermark, same watermark, order-by occurred_at."""
+def occurred_at_predicates(dialect: str, occurred_at: str) -> tuple[str, str, str]:
+    """SQL fragments: later-than watermark, same watermark, order-by ``occurred_at`` (a quoted column)."""
     if dialect == "sqlite":
-        return (
-            f"{_SQLITE_OCCURRED_AT} > {_SQLITE_WATERMARK_AT}",
-            f"{_SQLITE_OCCURRED_AT} = {_SQLITE_WATERMARK_AT}",
-            f"{_SQLITE_OCCURRED_AT} ASC",
-        )
-    return ("occurred_at > :watermark_at", "occurred_at = :watermark_at", "occurred_at ASC")
+        occurred_at = f"strftime('%Y-%m-%d %H:%M:%f', {occurred_at})"
+        watermark_at = "strftime('%Y-%m-%d %H:%M:%f', :watermark_at)"
+    else:
+        watermark_at = ":watermark_at"
+    return (f"{occurred_at} > {watermark_at}", f"{occurred_at} = {watermark_at}", f"{occurred_at} ASC")
 
 
 def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[str, tuple[str, ...]]]:

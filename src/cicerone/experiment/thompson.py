@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -21,6 +20,7 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
+from cicerone.values import occurred_since, utc_stamp
 
 _EMPTY = np.array([], dtype=object)
 _EMPTY_REWARDS = np.array([], dtype=float)
@@ -115,17 +115,10 @@ def track_rows_since(
 ) -> list[dict[str, Any]]:
     if not started_at:
         return [dict(row) for row in rows]
-    stamp = pd.to_datetime(started_at, utc=True, errors="coerce")
-    if pd.isna(stamp):
+    stamp = utc_stamp(started_at)
+    if stamp is None:
         return []
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if pd.isna(when):
-            continue
-        if when >= stamp:
-            out.append(dict(row))
-    return out
+    return [dict(row) for row in rows if occurred_since(row, stamp)]
 
 
 def add_counts(base: ArmCounts, extra: ArmCounts) -> ArmCounts:

@@ -204,7 +204,9 @@ assigned list (no `/track`). See [evaluation.md](evaluation.md).
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
 - Approximate mixture CIs on the primary metric (a LIL-style radius for
-  peeking — not a full anytime-valid CS for heavy-tailed outcomes).
+  peeking — not a full anytime-valid CS for heavy-tailed outcomes). With
+  `[track]` on, the test does not decide until each arm has at least
+  `track.min_impressions` users.
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this
   `experiment_id`).

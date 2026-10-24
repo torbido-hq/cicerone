@@ -9,22 +9,22 @@ from typing import Any
 import pandas as pd
 from botocore.exceptions import BotoCoreError
 from pyarrow.lib import ArrowInvalid, ArrowIOError, ArrowNotImplementedError, ArrowTypeError
-from sqlalchemy import bindparam, text
+from sqlalchemy import Engine, bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
+from cicerone.io.blob import is_storage_not_found
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for, release_engine
+from cicerone.io.engines import engine_for, quote_identifier, release_engine, sql_source
 from cicerone.io.factory import build_input_source
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
-    is_s3_not_found,
     read_parquet,
     readonly_select,
     require_option,
-    sql_identifier,
+    table_option,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError
@@ -109,20 +109,21 @@ def _with_default_quantity(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _metric_event_sql(
+    engine: Engine,
     source: str,
     *,
     types: tuple[str, ...] | None,
     floor: str | None,
     columns: tuple[str, ...] = EVENT_METRIC_COLUMNS,
 ) -> tuple[Any, dict[str, Any]]:
-    quoted = ", ".join(f'"{column}"' for column in columns)
+    quoted = ", ".join(quote_identifier(engine, column) for column in columns)
     clauses: list[str] = []
     params: dict[str, Any] = {}
     if types:
-        clauses.append('"event_type" IN :types')
+        clauses.append(f"{quote_identifier(engine, 'event_type')} IN :types")
         params["types"] = list(types)
     if floor is not None:
-        clauses.append('"occurred_at" >= :since')
+        clauses.append(f"{quote_identifier(engine, 'occurred_at')} >= :since")
         params["since"] = floor
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     stmt = text(f"SELECT {quoted} FROM {source}{where}")
@@ -183,10 +184,8 @@ def _read_metric_parquet(
                     columns=list(columns),
                     filters=filters,
                 )
-            except FileNotFoundError:
-                raise
             except _METRIC_READ_ERRORS as exc:
-                if is_s3_not_found(exc):
+                if is_storage_not_found(exc):
                     raise
                 last_error = exc
     if last_error is not None:
@@ -205,10 +204,8 @@ def load_metric_events(
     if inp.kind == "dataset":
         try:
             frame = _read_metric_parquet(inp.options, types=types, floor=floor)
-        except FileNotFoundError:
-            return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
         except _METRIC_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+            if is_storage_not_found(exc):
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
@@ -225,6 +222,7 @@ def load_metric_events(
         try:
             engine = engine_for(url)
             try:
+                cleaned, table = None, ""
                 if query:
                     cleaned = readonly_select(str(query), option="input.options.events_query")
                     if _sql_has_page(cleaned):
@@ -234,21 +232,17 @@ def load_metric_events(
                         return _filter_events_since(
                             filter_events_by_types(_with_default_quantity(frame), types), since
                         )
-                    source = f"({cleaned}) AS _cicerone_metric_events"
                 else:
-                    table = sql_identifier(
-                        inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
-                        option="events_table",
-                    )
-                    source = f'"{table}"'
+                    table = table_option(inp.options, "events_table", DEFAULT_EVENTS_TABLE)
+                source = sql_source(engine, cleaned, table, "_cicerone_metric_events")
                 try:
-                    stmt, params = _metric_event_sql(source, types=types, floor=floor)
+                    stmt, params = _metric_event_sql(engine, source, types=types, floor=floor)
                     frame = pd.read_sql(stmt, engine, params=params)
                 except _METRIC_READ_ERRORS as exc:
                     if not is_missing_column_error(exc):
                         raise
                     stmt, params = _metric_event_sql(
-                        source, types=types, floor=floor, columns=REQUIRED_EVENT_COLUMNS
+                        engine, source, types=types, floor=floor, columns=REQUIRED_EVENT_COLUMNS
                     )
                     frame = pd.read_sql(stmt, engine, params=params)
                 return _filter_events_since(_with_default_quantity(frame), since)

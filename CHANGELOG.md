@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
@@ -46,6 +49,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- Dataset user lookups (serve history, `get_user`) work when `user_id` is
+  stored as an integer column instead of failing the filtered read.
+- `replace_model_artifact_if` on SQLite db output matches the artifact
+  fingerprint it hands out instead of never swapping.
+- SQL statements quote table and column names the way the database dialect
+  does. A mixed-case `recommendations_table` on Postgres no longer keeps a
+  user's old rows on incremental replace, and identifiers use backticks on
+  MySQL instead of double quotes. A full recommendations write on MySQL
+  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there),
+  and the track, eval and experiment-state tables can be created and
+  written on MySQL (key columns of up to 255 characters; a longer key is
+  rejected, not truncated).
+- The db events source polls tables whose `occurred_at` / `event_id`
+  columns are mixed case on Postgres.
+- The db events watermark is renamed into place before its directory is
+  fsynced, so a crash cannot lose the update (shared with the s3 list
+  marker write).
+- Concurrent first use of the db track or experiment store checks out one
+  shared engine instead of two.
+- The Kafka event source no longer starts an idle heartbeat thread on every
+  apply.
+- The dashboard config page drops a hint for `serve.enabled`, which is not
+  a setting.
+- `cicerone users --help` and `cicerone export-openapi --help` show the
+  `cicerone` subcommand in their usage line.
+- `POST /track` counts a body that is not an event, list or `{"events": [...]}`
+  as an `error` in `cicerone_track_ingest_total`.
+- The missing feature column warning names `user_features` or
+  `item_features`.
+- The experiment sequential test does not decide until each arm has at
+  least `track.min_impressions` users (with `[track]` on), instead of
+  deciding on two users per arm.
+- `POST /track` returns **503** "Track store unavailable" (retryable)
+  instead of **500** when the track store write fails with a storage or
+  database error.
 
 ## [0.8.5] - 2026-10-14
 
