@@ -12,7 +12,7 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import LazyEngine
+from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 
@@ -27,6 +27,14 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
     "variant",
     "generated_at",
     "exposed_at",
+)
+
+
+_STATE_TABLE = (
+    ("experiment_id", "TEXT PRIMARY KEY"),
+    ("promoted_variant", "TEXT"),
+    ("promoted_at", "TEXT"),
+    ("payload", "TEXT"),
 )
 
 
@@ -91,15 +99,19 @@ class ExperimentDbBackend:
     def read_state(self) -> dict[str, Any] | None:
         table = self._state_table()
         engine = self.engine()
+        quoted_table, promoted_at = quote_identifier(engine, table), quote_identifier(engine, "promoted_at")
         try:
             frame = pd.read_sql(
-                text(f'SELECT * FROM "{table}" ORDER BY (promoted_at IS NULL), promoted_at DESC LIMIT 1'),
+                text(
+                    f"SELECT * FROM {quoted_table} "
+                    f"ORDER BY ({promoted_at} IS NULL), {promoted_at} DESC LIMIT 1"
+                ),
                 engine,
             )
         except SQL_READ_ERRORS as exc:
             if is_missing_column_error(exc):
                 try:
-                    frame = pd.read_sql(text(f'SELECT * FROM "{table}" LIMIT 1'), engine)
+                    frame = pd.read_sql(text(f"SELECT * FROM {quoted_table} LIMIT 1"), engine)
                 except SQL_READ_ERRORS as retry_exc:
                     if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
                         return None
@@ -123,6 +135,7 @@ class ExperimentDbBackend:
         # Encode before the caller takes the fence; only the SQL runs under it.
         table = self._state_table()
         engine = self.engine()
+        quoted_table = quote_identifier(engine, table)
         experiment_id = str(state.get("experiment_id") or "")
         promoted_variant = state.get("promoted_variant")
         promoted_at = state.get("promoted_at")
@@ -130,33 +143,23 @@ class ExperimentDbBackend:
             promoted_variant = str(promoted_variant)
         if promoted_at is not None:
             promoted_at = str(promoted_at)
-        create_sql = text(
-            f'CREATE TABLE IF NOT EXISTS "{table}" ('
-            "experiment_id TEXT PRIMARY KEY, "
-            "promoted_variant TEXT, "
-            "promoted_at TEXT, "
-            "payload TEXT"
-            ")"
-        )
+        create_sql = text(create_table_sql(engine, table, _STATE_TABLE))
         params = {
             "experiment_id": experiment_id,
             "promoted_variant": promoted_variant,
             "promoted_at": promoted_at,
             "payload": _state_payload_json(state),
         }
-        insert_sql = text(
-            f'INSERT INTO "{table}" (experiment_id, promoted_variant, promoted_at, payload) '
-            "VALUES (:experiment_id, :promoted_variant, :promoted_at, :payload)"
-        )
+        row_sql = text(insert_sql(engine, table, list(params)))
 
         def _fence() -> None:
             self._fence.ensure()
 
         def _replace_row(conn: Any) -> None:
             _fence()
-            conn.execute(text(f'DELETE FROM "{table}"'))
+            conn.execute(text(f"DELETE FROM {quoted_table}"))
             _fence()
-            conn.execute(insert_sql, params)
+            conn.execute(row_sql, params)
             _fence()
 
         def _write() -> None:
@@ -170,7 +173,8 @@ class ExperimentDbBackend:
                     raise
                 with engine.begin() as conn:
                     _fence()
-                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN payload TEXT'))
+                    payload = quote_identifier(engine, "payload")
+                    conn.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {payload} TEXT"))
                     _replace_row(conn)
 
         return _write
@@ -206,6 +210,7 @@ class ExperimentDbBackend:
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         table = self._exposures_table()
         engine = self.engine()
+        quoted_table = quote_identifier(engine, table)
         selected = self.stored_exposure_columns(engine, table)
         if selected is not None and not selected:
             logger.warning("Exposures table %r has none of the exposure columns; ignoring rows", table)
@@ -217,13 +222,19 @@ class ExperimentDbBackend:
         quoted = (
             "*"
             if selected is None
-            else ", ".join(f'"{sql_identifier(column, option="exposures column")}"' for column in selected)
+            else ", ".join(
+                quote_identifier(engine, sql_identifier(column, option="exposures column"))
+                for column in selected
+            )
         )
         if experiment_id:
-            sql = text(f'SELECT {quoted} FROM "{table}" WHERE experiment_id = :experiment_id')
+            sql = text(
+                f"SELECT {quoted} FROM {quoted_table} "
+                f"WHERE {quote_identifier(engine, 'experiment_id')} = :experiment_id"
+            )
             params: dict[str, Any] = {"experiment_id": experiment_id}
         else:
-            sql = text(f'SELECT {quoted} FROM "{table}"')
+            sql = text(f"SELECT {quoted} FROM {quoted_table}")
             params = {}
         try:
             frame = pd.read_sql(sql, engine, params=params)

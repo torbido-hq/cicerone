@@ -40,10 +40,12 @@ def test_db_registered_and_build(tmp_path):
 
 def test_db_from_clause_uses_sql_identifier_as_is(tmp_path):
     url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
     table_source = DbEventSource({"database_url": url, "events_table": "events"})
-    assert table_source._from_clause() == "events"
+    assert table_source._from_clause(engine) == "events"
+    assert DbEventSource({"database_url": url, "events_table": "Events"})._from_clause(engine) == '"Events"'
     query_source = DbEventSource({"database_url": url, "events_query": "SELECT * FROM events"})
-    assert query_source._from_clause() == "(SELECT * FROM events) AS cicerone_events_src"
+    assert query_source._from_clause(engine) == "(SELECT * FROM events) AS cicerone_events_src"
 
 
 def test_db_poll_ack_advances_watermark(tmp_path):
