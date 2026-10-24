@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -393,6 +394,23 @@ def test_main_propagates_unexpected_store_errors(monkeypatch):
     monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
 
     with pytest.raises(RuntimeError, match="bug"):
+        main()
+
+
+def test_main_fails_on_a_malformed_feature_config(tmp_path, monkeypatch):
+    features = tmp_path / "features.toml"
+    features.write_text('[[item_features]]\ncolumn = "style"\ntype = "bogus"\n')
+    monkeypatch.setattr(
+        "cicerone.dashboard.load_settings",
+        lambda: dataclasses.replace(_settings(), feature_config_path=str(features)),
+    )
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr(
+        "cicerone.dashboard.build_recommendation_reader", lambda _output: FakeReader(pd.DataFrame())
+    )
+
+    with pytest.raises(ValueError, match="Unknown feature type"):
         main()
 
 

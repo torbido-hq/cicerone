@@ -370,10 +370,11 @@ def main() -> None:
     reader = build_manifest_reader(settings.output)
     try:
         rec_reader = build_recommendation_reader(settings.output)
-        feature_config = prepare_reader_item_filters(settings, rec_reader)
     except _STORE_OPEN_ERRORS:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
-        rec_reader, feature_config = None, None
+        rec_reader = None
+    # A malformed features.toml fails startup, as it does for serve.
+    feature_config = prepare_reader_item_filters(settings, rec_reader) if rec_reader is not None else None
     try:
         history_reader = build_input_source(settings.input)
     except _STORE_OPEN_ERRORS:
