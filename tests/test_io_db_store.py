@@ -463,6 +463,28 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
 
+def test_full_write_on_mysql_empties_the_table_with_delete_only() -> None:
+    from cicerone.io import db_store
+
+    class _Savepoint:
+        def commit(self) -> None:
+            pass
+
+    class _Conn:
+        dialect = mysql.dialect()
+        sql: list[str] = []
+
+        def begin_nested(self) -> _Savepoint:
+            return _Savepoint()
+
+        def execute(self, statement):  # type: ignore[no-untyped-def]
+            self.sql.append(str(statement))
+
+    conn = _Conn()
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == ['DELETE FROM "recommendations"']
+
+
 def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     assert sink._applied_scope("Recs") == sink._applied_scope("recs")

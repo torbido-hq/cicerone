@@ -157,22 +157,18 @@ def _clear_table_for_replace(conn, table: str) -> None:
 
     Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
     savepoint and then appending would duplicate rows, so DELETE is tried next.
+    MySQL uses DELETE only: its TRUNCATE commits implicitly, breaking the rewrite's atomicity.
     If the table does not exist yet, both fail and ``to_sql`` creates it.
     """
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-        savepoint.commit()
-        return
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
-
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'DELETE FROM "{table}"'))
-        savepoint.commit()
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
+    verbs = ("DELETE FROM",) if conn.dialect.name == "mysql" else ("TRUNCATE TABLE", "DELETE FROM")
+    for verb in verbs:
+        savepoint = conn.begin_nested()
+        try:
+            conn.execute(text(f'{verb} "{table}"'))
+            savepoint.commit()
+            return
+        except _MISSING_TABLE_ERRORS:
+            savepoint.rollback()
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
