@@ -94,6 +94,8 @@ Promote winner).
 Each run adds the track rows with `occurred_at` in `[previous run, this run)`
 to the posteriors. A row stored after its window was counted (late delivery,
 or a conversion after its impression was counted) is not counted later.
+With no stored champion/challenger pair (first run) the window has no lower
+bound; a stored pair without `window_started_at` counts no rows that run.
 
 Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
 [MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
