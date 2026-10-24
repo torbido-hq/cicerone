@@ -393,7 +393,7 @@ never imports `cicerone.model`/`dataset`/`automl`.
   source) for the events pane. Recs go through serve's
   `RecommendationService` in-process (no HTTP hop), so Inspect shows what
   `GET /recommendations/{user_id}` returns with default parameters:
-  `serve.default_k` rows, variant and cold-start fallbacks (with a badge),
+  `serve.default_k` rows, variant fallback, cold-start fallback (with a badge),
   unavailable items dropped (`features.toml` availability filters) and ranks
   renumbered. `dashboard.lookup_k` is deprecated and has no effect. Events use
   `dashboard.lookup_events` (default 20). User attributes use

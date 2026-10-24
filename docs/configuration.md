@@ -200,11 +200,13 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
-| `lookup_k` | `20` | Deprecated and ignored (removed in 0.9.0), but must still be a positive integer; Inspect shows `serve.default_k` rows |
+| `lookup_k` | `20` | Deprecated and ignored (removed in 0.9.0); warns when the dashboard is enabled; Inspect shows `serve.default_k` rows |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
 
 The dashboard loads `[job].feature_config_path` at startup to drop unavailable items from Inspect user, as serve does.
+Inspect takes `[serve]`, `[job].feature_config_path` and `[experiment]` from the dashboard's own config file, so they must match serve's.
+After a promote, Inspect can show the new variant up to one serve `refresh_interval_seconds` before serve does.
 
 ## `[publish]`
 

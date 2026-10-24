@@ -39,6 +39,12 @@ history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db"
 lookup_events = 20 # inspector event rows (from [input], newest first)
 # lookup_user_attrs = ["region_slug"] # allowlisted user columns to show; default none
 
+# Inspect user answers as serve does, using [serve], [job].feature_config_path
+# and [experiment] from this file: they must match serve's config.
+# [serve]
+# default_k = 10
+# category_column = "category"
+
 # [job] is required by config.load_settings() even though the dashboard
 # never trains anything -- kept generic/simple rather than special-casing
 # it away. cron_schedule IS read (to compute whether the latest run looks
