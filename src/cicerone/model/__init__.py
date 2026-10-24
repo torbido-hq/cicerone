@@ -17,7 +17,6 @@ from cicerone.model.fit import (
     fit_strategies,
     plan_model_run,
     resolve_recommend_models,
-    resolve_run_models,
 )
 from cicerone.model.recommend import recommend_with_models, train_and_recommend
 from cicerone.model.strategies import (
@@ -45,6 +44,5 @@ __all__ = [
     "plan_model_run",
     "recommend_with_models",
     "resolve_recommend_models",
-    "resolve_run_models",
     "train_and_recommend",
 ]

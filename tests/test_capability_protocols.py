@@ -109,7 +109,7 @@ def test_capability_set_to_none_is_not_offered():
 
 
 def test_a_non_callable_release_generation_falls_back_to_release():
-    from cicerone.locks.hold import held_writer_lock
+    from cicerone.locks.hold import WriteFence
 
     class Lock:
         release_generation = 1
@@ -132,7 +132,7 @@ def test_a_non_callable_release_generation_falls_back_to_release():
 
     lock = Lock()
     assert not isinstance(lock, GenerationReleaseLock)
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         pass
     assert lock.released == 1
 

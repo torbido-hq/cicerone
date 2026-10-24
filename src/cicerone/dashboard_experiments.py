@@ -44,9 +44,9 @@ from cicerone.io.factory import build_manifest_reader
 from cicerone.job_eval import try_load
 from cicerone.locks import (
     LockLostError,
+    WriteFence,
     WriterLockBusyError,
     build_output_writer_lock,
-    held_writer_lock,
 )
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
@@ -71,8 +71,6 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
         else:
             _PROMOTE_STATE.pop(settings.experiment.id, None)
             state = None
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read experiment state", exc, log=logger)
         state = store.last_state(settings.experiment.id) or _PROMOTE_STATE.get(settings.experiment.id)
@@ -84,8 +82,6 @@ def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any]
 def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
     try:
         state = store.read_state()
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read experiment state", exc, log=logger)
         raise _PromoteRejected("Experiment state could not be read") from exc
@@ -403,9 +399,10 @@ def _publish_experiment_state(
     settings: Settings, payload_for: Callable[[ExperimentStore], dict[str, Any]]
 ) -> str | None:
     writer_lock = build_output_writer_lock(settings)
-    store = ExperimentStore(settings.output, writer_lock=writer_lock)
+    fence = WriteFence(writer_lock)
+    store = ExperimentStore(settings.output, fence=fence)
     try:
-        with held_writer_lock(writer_lock):
+        with fence.hold():
             payload = payload_for(store)
             store.write_state(payload)
     except _PromoteRejected as exc:

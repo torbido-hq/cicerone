@@ -1,0 +1,53 @@
+{
+  "files": {
+    "items_snapshot.parquet": {
+      "category": "object",
+      "in_stock": "bool",
+      "item_id": "object",
+      "producer_id": "object",
+      "published": "bool"
+    },
+    "manifest.json": null,
+    "model.artifact": null,
+    "recommendation_history/<generated_at>.parquet": {
+      "generated_at": "object",
+      "item_id": "object",
+      "rank": "int64",
+      "source": "object",
+      "user_id": "object",
+      "variant": "object"
+    },
+    "recommendations.parquet": {
+      "item_id": "object",
+      "rank": "int64",
+      "reasons": "object",
+      "score": "float32",
+      "source": "object",
+      "user_id": "object"
+    },
+    "track_eval.json": null
+  },
+  "manifest": {
+    "artifact_schema_version": 3,
+    "artifact_written": true,
+    "automl_enabled": false,
+    "automl_metrics": "",
+    "error": null,
+    "experiment_id": "",
+    "experiment_variants": "",
+    "lock_backend": "in_process",
+    "model_weights": "",
+    "models": "collaborative,popular",
+    "n_events": 5,
+    "n_items": 4,
+    "n_target_users": 4,
+    "n_users_with_recommendations": 4,
+    "partial_outputs": false,
+    "rrf_k": 60,
+    "served_eval": "",
+    "status": "success",
+    "top_k": 3,
+    "track_eval": "{\"overall\": {\"n_impressions\": 0, \"n_clicks\": 0, \"n_conversions_click\": 0, \"n_conversions_view\": 0, \"ctr\": 0.0, \"cvr_click\": 0.0, \"cvr_view\": 0.0, \"n_users\": 0}, \"by_rank\": {}, \"by_source\": {}, \"by_variant\": {}}",
+    "triggered_by": "contract"
+  }
+}

@@ -27,7 +27,12 @@ from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
-from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
+from cicerone.locks import (
+    WriteFence,
+    WriterLockBusyError,
+    build_dataset_writer_lock,
+    build_output_writer_lock,
+)
 from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
     record_experiment_served,
@@ -237,14 +242,14 @@ def create_app(
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
     experiment_store = (
-        ExperimentStore(settings.output, writer_lock=build_output_writer_lock(settings))
+        ExperimentStore(settings.output, fence=WriteFence(build_output_writer_lock(settings)))
         if settings.experiment.enabled
         else None
     )
     overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
     app.state.assignment_overlay_cache = overlay_cache
     track_store = (
-        TrackStore(settings.output, writer_lock=build_dataset_writer_lock(settings))
+        TrackStore(settings.output, fence=WriteFence(build_dataset_writer_lock(settings)))
         if settings.track.enabled
         else None
     )

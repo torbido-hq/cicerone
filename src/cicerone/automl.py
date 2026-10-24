@@ -45,10 +45,6 @@ from cicerone.ranking import drop_seen_pairs, keep_top_k, renumber_ranks
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
-DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
-DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
-
 
 def median_distinct_items_per_user(events: pd.DataFrame) -> float:
     """Median number of distinct items per user in ``events`` (0 if empty)."""
@@ -357,8 +353,8 @@ def evaluate_candidates(
     top_k: int,
     half_life_days: float,
     candidates: list[dict[str, Any]] | None = None,
-    n_splits: int = DEFAULT_N_SPLITS,
-    test_days: int = DEFAULT_TEST_DAYS,
+    n_splits: int = AUTOML_DEFAULT_N_SPLITS,
+    test_days: int = AUTOML_DEFAULT_TEST_DAYS,
     max_workers: int = 1,
     model_configs: dict[str, dict[str, Any]] | None = None,
     sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
@@ -481,7 +477,7 @@ def _resolve_metric_key(available_metrics: list[str], primary_metric: str) -> st
 
 
 def select_best_candidate(
-    results: list[CandidateResult], primary_metric: str = DEFAULT_PRIMARY_METRIC
+    results: list[CandidateResult], primary_metric: str = AUTOML_DEFAULT_PRIMARY_METRIC
 ) -> CandidateResult:
     """Pick the highest ``primary_metric`` (exact name or ``NAME@k``). Ties keep list order."""
     if not results:
