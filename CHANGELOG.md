@@ -49,8 +49,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The db events watermark is renamed into place before its directory is
   fsynced, so a crash cannot lose the update (shared with the s3 list
   marker write).
-- Concurrent first use of the db track or experiment store checks out one
-  shared engine instead of two.
+- Concurrent first use of the db experiment store checks out one shared
+  engine instead of two.
 - The Kafka event source no longer starts an idle heartbeat thread on every
   apply.
 - The dashboard config page drops a hint for `serve.enabled`, which is not

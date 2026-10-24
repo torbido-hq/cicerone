@@ -214,6 +214,7 @@ dataset I/O. Default `mode = "list"` (list/marker under `prefix`; durable
 `marker_path`). Objects are JSON event objects or arrays; missing
 `event_id` uses `bucket/key|etag|index`. List mode is a **single consumer**
 per bucket/prefix.
+The db `watermark_path` and s3 `marker_path` need a POSIX filesystem.
 
 AWS-only `mode = "sqs"` (`queue_url`) is rejected when `endpoint_url` is
 set. `nack` requeues locally and extends SQS visibility so a lock-busy
