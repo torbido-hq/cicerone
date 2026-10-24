@@ -136,13 +136,18 @@ def build_interactions(events: pd.DataFrame, config: FeatureConfig, half_life_da
 
 
 def _explode_features(
-    df: pd.DataFrame, id_column: str, rectools_id_column: str, columns: list[FeatureColumn]
+    df: pd.DataFrame,
+    id_column: str,
+    rectools_id_column: str,
+    columns: list[FeatureColumn],
+    *,
+    table: str,
 ) -> pd.DataFrame:
     """Long-form features with columns ``{id, feature, value}`` (possibly empty)."""
     frames = []
     for feature in columns:
         if feature.column not in df.columns:
-            logger.warning("Configured feature column '%s' not found — skipping", feature.column)
+            logger.warning("Configured %s column '%s' not found — skipping", table, feature.column)
             continue
         part = df[[id_column, feature.column]].rename(
             columns={id_column: rectools_id_column, feature.column: "value"}
@@ -167,10 +172,14 @@ def build_dataset(
     interactions = build_interactions(events, config, half_life_days)
 
     user_features = _normalize_feature_df(
-        _explode_features(users, "user_id", Columns.User, config.user_features) if users is not None else None
+        _explode_features(users, "user_id", Columns.User, config.user_features, table="user_features")
+        if users is not None
+        else None
     )
     item_features = _normalize_feature_df(
-        _explode_features(items, "item_id", Columns.Item, config.item_features) if items is not None else None
+        _explode_features(items, "item_id", Columns.Item, config.item_features, table="item_features")
+        if items is not None
+        else None
     )
 
     dataset = Dataset.construct(

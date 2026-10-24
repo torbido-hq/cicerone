@@ -19,6 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
 
+### Deprecated
+
+- `dashboard.lookup_k` has no effect and logs a warning when set; it will
+  be removed in 0.9.0.
+
 ### Fixed
 
 - An incremental flush that fails after its recommendations are written
@@ -46,6 +51,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The db events watermark is renamed into place before its directory is
+  fsynced, so a crash cannot lose the update (shared with the s3 list
+  marker write).
+- Concurrent first use of the db track or experiment store checks out one
+  shared engine instead of two.
+- The Kafka event source no longer starts an idle heartbeat thread on every
+  apply.
+- The dashboard config page drops a hint for `serve.enabled`, which is not
+  a setting.
+- `cicerone users --help` and `cicerone export-openapi --help` show the
+  `cicerone` subcommand in their usage line.
+- `POST /track` counts a body that is not an event, list or `{"events": [...]}`
+  as an `error` in `cicerone_track_ingest_total`.
+- The missing feature column warning names `user_features` or
+  `item_features`.
+- Concurrent dashboard lookups refresh the recommendation reader once per
+  5-second window instead of each racing their own refresh.
+- A dashboard promote or unpromote that hits a busy or lost writer lock
+  shows "Writer lock is busy" / "Writer lock was lost" instead of
+  "Experiment report is not available".
+- Dashboard Inspect user shows what `GET /recommendations/{user_id}`
+  returns with default parameters: `serve.default_k` rows, variant
+  fallback, unavailable items dropped (`features.toml`), ranks renumbered.
 
 ## [0.8.5] - 2026-10-14
 

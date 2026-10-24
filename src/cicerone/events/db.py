@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -26,6 +25,7 @@ from cicerone.events.db_identity import (
     occurred_at_predicates,
     row_to_event,
 )
+from cicerone.events.state_file import write_json_durably
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, release_engine
@@ -357,23 +357,7 @@ class DbEventSource(EventSource):
     def _persist_watermark_unlocked(self) -> None:
         if self._watermark_path is None:
             return
-        self._watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "occurred_at": self._watermark_at.isoformat(),
-            "event_id": self._watermark_event_id,
-        }
-        tmp = self._watermark_path.with_name(f".{self._watermark_path.name}.tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            dir_fd = os.open(str(tmp.parent), os.O_RDONLY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        tmp.replace(self._watermark_path)
+        write_json_durably(
+            self._watermark_path,
+            {"occurred_at": self._watermark_at.isoformat(), "event_id": self._watermark_event_id},
+        )

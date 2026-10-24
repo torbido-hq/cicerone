@@ -232,21 +232,13 @@ def dashboard_users(
 
 
 def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
-    from cicerone.feature_config import load_feature_config
     from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
     from cicerone.serve import create_app
     from cicerone.serve.bootstrap_events import start_events_runtime
-    from cicerone.serve.item_filters import configure_reader_item_filters
+    from cicerone.serve.item_filters import prepare_reader_item_filters
 
     reader = build_recommendation_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    feature_config = load_feature_config(feature_path) if feature_path.is_file() else None
-    availability = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability,
-    )
+    feature_config = prepare_reader_item_filters(settings, reader)
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,

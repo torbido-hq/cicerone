@@ -23,7 +23,9 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
-from cicerone.errors import OPTIONAL_IO_ERRORS
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
+from cicerone.experiment.store import ExperimentStore
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -40,6 +42,9 @@ from cicerone.http_security import (
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
+from cicerone.refreshed_value import RefreshedValue
+from cicerone.serve.item_filters import build_items_cache, prepare_reader_item_filters
+from cicerone.serve.recommendations import RecommendationService, read_assignment_overlay
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -54,6 +59,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
 _TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+_LOOKUP_REFRESH_TTL_SECONDS = 5.0
 _LOGOUT_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -195,6 +201,7 @@ def create_app(
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
     config_path: str | None = None,
+    feature_config: FeatureConfig | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="cicerone-dashboard",
@@ -237,6 +244,31 @@ def create_app(
             "incremental": _incremental_status(history),
         }
 
+    reader_refresh = (
+        RefreshedValue(recommendation_reader.refresh, ttl_seconds=_LOOKUP_REFRESH_TTL_SECONDS)
+        if recommendation_reader is not None
+        else None
+    )
+    experiment_store = ExperimentStore(settings.output) if settings.experiment.enabled else None
+    recommendation_service = (
+        RecommendationService(
+            settings,
+            recommendation_reader,
+            items_cache=build_items_cache(settings, recommendation_reader, feature_config),
+            assignment_overlay=lambda: read_assignment_overlay(settings, experiment_store),
+        )
+        if recommendation_reader is not None
+        else None
+    )
+
+    def _lookup(user_id: str) -> dict[str, Any]:
+        if reader_refresh is not None and user_id.strip():
+            try:
+                reader_refresh.get()
+            except OPTIONAL_IO_ERRORS as exc:
+                log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
+        return lookup_inspector(settings, recommendation_service, history_reader, user_id)
+
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
         return _TEMPLATES.TemplateResponse(request, "_status.html", _status_context())
@@ -246,14 +278,14 @@ def create_app(
         return _TEMPLATES.TemplateResponse(
             request,
             "_recommendations.html",
-            lookup_inspector(settings, recommendation_reader, history_reader, user_id),
+            _lookup(user_id),
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
+        context.update(_lookup(user_id))
         context["page_title"] = page_title(
             user_id=str(context.get("user_id") or ""),
             manifest=context["manifest"],
@@ -338,9 +370,10 @@ def main() -> None:
     reader = build_manifest_reader(settings.output)
     try:
         rec_reader = build_recommendation_reader(settings.output)
+        feature_config = prepare_reader_item_filters(settings, rec_reader)
     except _STORE_OPEN_ERRORS:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
-        rec_reader = None
+        rec_reader, feature_config = None, None
     try:
         history_reader = build_input_source(settings.input)
     except _STORE_OPEN_ERRORS:
@@ -354,6 +387,7 @@ def main() -> None:
         rec_reader,
         history_reader,
         config_path=loaded_config_path,
+        feature_config=feature_config,
     )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 

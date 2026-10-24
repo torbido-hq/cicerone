@@ -6,7 +6,6 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -20,9 +19,10 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import ExperimentStore
-from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -42,13 +42,14 @@ from cicerone.metrics import (
     update_events_source_health,
 )
 from cicerone.reasons import parse_reasons
+from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
-from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
-from cicerone.serve.recommendations import RecommendationService
+from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, mount_events_routes
+from cicerone.serve.item_filters import build_items_cache, prepare_reader_item_filters
+from cicerone.serve.recommendations import RecommendationService, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
-from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
+from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
@@ -118,7 +119,7 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
-def _refresh_step(step: RecommendationReader | _GeneratedAtCache | _AssignmentOverlayCache) -> bool:
+def _refresh_step(step: RecommendationReader | RefreshedValue[Any]) -> bool:
     # Readers are pluggable; one failed step must not end the loop.
     try:
         return step.refresh() is not False
@@ -131,8 +132,8 @@ def _start_refresh_loop(
     reader: RecommendationReader,
     interval_seconds: float,
     *,
-    generated_at_cache: _GeneratedAtCache | None = None,
-    overlay_cache: _AssignmentOverlayCache | None = None,
+    generated_at_cache: RefreshedValue[str | None] | None = None,
+    overlay_cache: RefreshedValue[AssignmentOverlay] | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
@@ -161,61 +162,6 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     return str(value) if value is not None else None
 
 
-class _GeneratedAtCache:
-    """Cache manifest ``generated_at``; refresh with the recommendations loop."""
-
-    def __init__(self, manifest_reader: ManifestReader | None) -> None:
-        self._manifest_reader = manifest_reader
-        self._lock = threading.Lock()
-        self._value: str | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        value = _read_generated_at(self._manifest_reader)
-        with self._lock:
-            self._value = value
-
-    def get(self) -> str | None:
-        with self._lock:
-            return self._value
-
-
-class _AssignmentOverlayCache:
-    """Last successful promote/pair overlay; refresh with the recommendations loop."""
-
-    def __init__(self, settings: Settings, store: ExperimentStore | None) -> None:
-        self._settings = settings
-        self._store = store
-        self._lock = threading.Lock()
-        self._promoted: str | None = None
-        self._pair: tuple[str, str] | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        if self._store is None or not self._settings.experiment.enabled:
-            return
-        try:
-            promoted, pair = _assignment_overlay(self._settings, self._store)
-        except Exception:
-            logger.exception("Failed to refresh assignment overlay; keeping previous")
-            return
-        with self._lock:
-            self._promoted = promoted
-            self._pair = pair
-
-    def get(self) -> tuple[str | None, tuple[str, str] | None]:
-        with self._lock:
-            return self._promoted, self._pair
-
-
-def _assignment_overlay(
-    settings: Settings, store: ExperimentStore | None
-) -> tuple[str | None, tuple[str, str] | None]:
-    if store is None or not settings.experiment.enabled:
-        return None, None
-    return store.assignment_overlay(settings.experiment.id)
-
-
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -232,13 +178,8 @@ def create_app(
     )
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    items_cache = ItemsFilterCache(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-    generated_at_cache = _GeneratedAtCache(manifest_reader)
+    generated_at_cache = RefreshedValue(lambda: _read_generated_at(manifest_reader))
+    generated_at_cache.refresh()
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
     experiment_store = (
@@ -246,7 +187,10 @@ def create_app(
         if settings.experiment.enabled
         else None
     )
-    overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
+    overlay_cache: RefreshedValue[AssignmentOverlay] = RefreshedValue(
+        lambda: read_assignment_overlay(settings, experiment_store), initial=(None, None)
+    )
+    _refresh_step(overlay_cache)
     app.state.assignment_overlay_cache = overlay_cache
     track_store = (
         TrackStore(settings.output, fence=WriteFence(build_dataset_writer_lock(settings)))
@@ -256,7 +200,7 @@ def create_app(
     recommendation_service = RecommendationService(
         settings,
         reader,
-        items_cache=items_cache,
+        items_cache=build_items_cache(settings, reader, feature_config),
         assignment_overlay=overlay_cache.get,
     )
 
@@ -432,8 +376,8 @@ def create_app(
                 "$ref": "#/components/headers/X-Generated-At",
             }
         attach_code_samples(schema)
-        attach_events_ingest_openapi(schema)
-        attach_track_ingest_openapi(schema)
+        attach_ingest_openapi(schema, EVENTS_INGEST)
+        attach_ingest_openapi(schema, TRACK_INGEST)
         app.openapi_schema = schema
         return app.openapi_schema
 
@@ -450,23 +394,7 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    if feature_path.is_file():
-        feature_config = load_feature_config(feature_path)
-    else:
-        logger.warning(
-            "feature config missing at %s; serve continuing without features.toml",
-            feature_path,
-        )
-        feature_config = None
-
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-
+    feature_config = prepare_reader_item_filters(settings, reader)
     events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
     app = create_app(
         settings,

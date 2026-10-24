@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -14,23 +13,17 @@ import pandas as pd
 
 from cicerone.config import Settings
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
-from cicerone.experiment.assignment import (
-    assignment_needs_snapshot,
-    resolve_assignment,
-    snapshot_variant_names,
-)
-from cicerone.experiment.store import ExperimentStore
-from cicerone.io.base import RecommendationReader, UserHistoryReader
+from cicerone.io.base import UserHistoryReader
 from cicerone.io.options import is_s3_not_found
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
     SCORE_COLUMN,
     SOURCE_COLUMN,
-    has_variant_column,
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
 from cicerone.reasons import parse_reasons
+from cicerone.serve.recommendations import RecommendationService
 from cicerone.values import as_list, is_missing, is_sequence_attr
 
 logger = logging.getLogger(__name__)
@@ -39,8 +32,6 @@ LOOKUP_FAILED = "Could not load recommendations."
 HISTORY_UNAVAILABLE = "Event history is not available."
 HISTORY_FAILED = "Could not load event history."
 MISSING = "—"
-_LOOKUP_REFRESH_TTL_SECONDS = 5.0
-_last_lookup_refresh: tuple[int, float] | None = None
 _MAX_USER_ATTRS = 12
 _EVENT_TYPE_COLUMN = "event_type"
 _QUANTITY_COLUMN = "quantity"
@@ -78,21 +69,17 @@ def empty_recommendations_context(
     }
 
 
-def lookup_k(top_k: int, cap: int) -> int:
-    return min(top_k, cap)
-
-
 def lookup_inspector(
     settings: Settings,
-    recommendation_reader: RecommendationReader | None,
+    service: RecommendationService | None,
     history_reader: UserHistoryReader | None,
     user_id: str,
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
         return empty_recommendations_context()
-    recs = lookup_recommendations(settings, recommendation_reader, user_id)
-    if not recs["queried"] or recommendation_reader is None:
+    recs = lookup_recommendations(settings, service, user_id)
+    if not recs["queried"] or service is None:
         return recs
     recs.update(lookup_history(settings, history_reader, user_id))
     rec_ids = {row["item_id"] for row in recs["items"] if row["item_id"] and row["item_id"] != MISSING}
@@ -105,65 +92,39 @@ def lookup_inspector(
 
 def lookup_recommendations(
     settings: Settings,
-    recommendation_reader: RecommendationReader | None,
+    service: RecommendationService | None,
     user_id: str,
 ) -> dict[str, Any]:
     user_id = user_id.strip()
     if not user_id:
         return empty_recommendations_context()
-    if recommendation_reader is None:
+    if service is None:
         return empty_recommendations_context(
             user_id=user_id,
             queried=True,
             error="Recommendation store is not available.",
         )
 
-    global _last_lookup_refresh
     try:
-        global _last_lookup_refresh
-        key = id(recommendation_reader)
-        now = time.monotonic()
-        last_key, last_at = _last_lookup_refresh if _last_lookup_refresh is not None else (0, 0.0)
-        if key != last_key or now - last_at >= _LOOKUP_REFRESH_TTL_SECONDS:
-            recommendation_reader.refresh()
-            _last_lookup_refresh = (key, now)
-    except OPTIONAL_IO_ERRORS as exc:
-        log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
-
-    k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
-    experiment_id, variant = None, None
-    if settings.experiment.enabled:
-        promoted, active_pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
-        snapshot = (
-            snapshot_variant_names(recommendation_reader)
-            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
-        experiment_id, variant = resolve_assignment(
-            settings,
-            user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
-        )
-    try:
-        recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
-        if not has_variant_column(recs):
-            experiment_id, variant = None, None
-        category_column = settings.serve.category_column
+        # Default GET /recommendations/{user_id} query: serve.default_k, no category, exclude_unavailable.
+        served = service.get(user_id, settings.serve.default_k, category=None, exclude_unavailable=True)
+        if served is None:
+            return empty_recommendations_context(user_id=user_id, queried=True)
+        recs = served.recs
+        category_column = service.items_cache.category_column
         if category_column not in recs.columns:
-            recs = _join_category(recs, recommendation_reader.get_items(), category_column)
+            recs = _join_category(recs, service.items_cache.get()[0], category_column)
         show_category = category_column in recs.columns
         items = format_recommendation_rows(recs, category_column=category_column if show_category else None)
         return {
             "user_id": user_id,
             "items": items,
-            "fallback": used_fallback,
+            "fallback": served.used_fallback,
             "queried": True,
             "show_category": show_category,
             "show_reasons": any(row.get("reasons") and row["reasons"] != MISSING for row in items),
-            "experiment_id": experiment_id,
-            "variant": variant,
+            "experiment_id": served.experiment_id,
+            "variant": served.variant,
             "error": None,
             **empty_history_fields(),
         }
@@ -264,18 +225,6 @@ def format_user_attrs(user: dict[str, Any] | None, *, allowed: Sequence[str] = (
         if len(rows) >= _MAX_USER_ATTRS:
             break
     return rows
-
-
-def _load_rows(
-    recommendation_reader: RecommendationReader, user_id: str, k: int, *, variant: str | None = None
-) -> tuple[pd.DataFrame, bool]:
-    recs = recommendation_reader.get_recommendations(user_id, k, variant=variant)
-    if not recs.empty:
-        return recs, False
-    fallback = recommendation_reader.get_cold_start_fallback(k, variant=variant)
-    if fallback.empty:
-        return recs, False
-    return fallback, True
 
 
 def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_column: str) -> pd.DataFrame:

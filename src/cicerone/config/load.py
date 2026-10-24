@@ -507,6 +507,11 @@ def load_settings(config_path: str | None = None) -> Settings:
 
     dashboard_raw = raw.get("dashboard", {})
     dashboard_enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
+    if "lookup_k" in dashboard_raw:
+        logger.warning(
+            "dashboard.lookup_k is deprecated, has no effect and will be removed in 0.9.0; "
+            "Inspect user shows serve.default_k rows"
+        )
 
     events = load_events_settings(
         raw.get("events", {}) or {},
