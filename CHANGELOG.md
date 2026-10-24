@@ -46,6 +46,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The db events watermark is renamed into place before its directory is
+  fsynced, so a crash cannot lose the update (shared with the s3 list
+  marker write).
+- Concurrent first use of the db experiment store checks out one shared
+  engine instead of two.
+- The Kafka event source no longer starts an idle heartbeat thread on every
+  apply.
+- The dashboard config page drops a hint for `serve.enabled`, which is not
+  a setting.
+- `cicerone users --help` and `cicerone export-openapi --help` show the
+  `cicerone` subcommand in their usage line, and `cicerone users --help`
+  no longer needs a config with dashboard users.
+- `POST /track` counts a body that is not an event, list or `{"events": [...]}`
+  as an `error` in `cicerone_track_ingest_total`.
+- The missing feature column warning names `user_features` or
+  `item_features`.
 - Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
   is unset, so a quiet stream no longer parks the event worker. An
   explicit `block_ms = 0` keeps that behaviour and logs a warning.

@@ -158,9 +158,6 @@ class KafkaEventSource(QueuedEventSource):
                     self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
         return tuple(eid for eid, _message in finished)
 
-    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
-        del events
-
     def health(self) -> EventSourceHealth:
         with self._lock:
             connected = self._connected
