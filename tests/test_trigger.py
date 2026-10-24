@@ -8,6 +8,7 @@ import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from support.fakes import FakeGuard
 from support.prometheus_metrics import metric_value
 
 from cicerone.config import IOSettings, Settings
@@ -16,16 +17,6 @@ from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
 def _settings(**overrides) -> Settings:
     return make_settings(**{"trigger_enabled": True, "trigger_auth_token": "secret", **overrides})
-
-
-class _FakeGuard:
-    def __init__(self, result: bool = True):
-        self.result = result
-        self.calls: list[str] = []
-
-    def trigger(self, triggered_by: str) -> bool:
-        self.calls.append(triggered_by)
-        return self.result
 
 
 def test_run_guard_records_retrain_trigger_metrics():
@@ -171,7 +162,7 @@ def test_run_guard_recovers_after_run_fn_raises():
 
 
 def test_trigger_endpoint_requires_auth():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.post("/trigger/retrain")
@@ -180,7 +171,7 @@ def test_trigger_endpoint_requires_auth():
 
 
 def test_trigger_endpoint_rejects_wrong_token():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.post("/trigger/retrain", headers={"Authorization": "Bearer wrong"})
@@ -189,7 +180,7 @@ def test_trigger_endpoint_rejects_wrong_token():
 
 
 def test_trigger_endpoint_starts_a_run():
-    guard = _FakeGuard(result=True)
+    guard = FakeGuard(result=True)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -201,7 +192,7 @@ def test_trigger_endpoint_starts_a_run():
 
 
 def test_trigger_endpoint_returns_429_when_debounced():
-    guard = _FakeGuard(result=False)
+    guard = FakeGuard(result=False)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -211,7 +202,7 @@ def test_trigger_endpoint_returns_429_when_debounced():
 
 
 def test_trigger_endpoint_health_requires_no_auth():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.get("/health")
@@ -220,21 +211,21 @@ def test_trigger_endpoint_health_requires_no_auth():
 
 
 def test_trigger_docs_are_disabled():
-    client = TestClient(create_app(_settings(), _FakeGuard()))
+    client = TestClient(create_app(_settings(), FakeGuard()))
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
     assert client.get("/openapi.json").status_code == 404
 
 
 def test_trigger_security_headers_on_health():
-    response = TestClient(create_app(_settings(), _FakeGuard())).get("/health")
+    response = TestClient(create_app(_settings(), FakeGuard())).get("/health")
     assert response.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def test_poll_input_forever_disabled_for_db_input(caplog):
     input_settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
-    guard = _FakeGuard()
+    guard = FakeGuard()
 
     poll_input_forever(input_settings, guard, interval_seconds=0.01)
 
@@ -243,7 +234,7 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
 
 def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
     input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    guard = _FakeGuard()
+    guard = FakeGuard()
 
     markers = iter(["v1", "v2"])
     monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
