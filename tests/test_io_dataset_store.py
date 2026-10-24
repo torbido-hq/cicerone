@@ -694,17 +694,16 @@ def test_s3_backend_round_trip(s3_options):
     sink.write_recommendations(df)
     sink.write_manifest({"n_events": 1})
 
-    # Re-read sink output as if it were events.parquet.
-    source = DatasetInputSource(s3_options)
+    events = pd.DataFrame([{"user_id": "u2", "item_id": "i9", "event_type": "view"}])
     client = boto3.client("s3", region_name="us-east-1")
-    bucket = s3_options["bucket"]
-    body = client.get_object(Bucket=bucket, Key=f"{s3_options['prefix']}/recommendations.parquet")[
-        "Body"
-    ].read()
-    client.put_object(Bucket=bucket, Key=f"{s3_options['prefix']}/events.parquet", Body=body)
+    client.put_object(
+        Bucket=s3_options["bucket"],
+        Key=f"{s3_options['prefix']}/events.parquet",
+        Body=events.to_parquet(index=False),
+    )
 
-    events = source.read_events()
-    assert list(events["user_id"]) == ["u1"]
+    read = DatasetInputSource(s3_options).read_events()
+    assert read.to_dict("records") == events.to_dict("records")
 
 
 def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options, monkeypatch):
