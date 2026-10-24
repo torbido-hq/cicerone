@@ -6,8 +6,8 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from cicerone.config.settings import IOSettings
-from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader, UserHistoryReader
-from cicerone.locks import LockBackend, WriteFence
+from cicerone.io.base import InputSource, ManifestReader, OutputSink, RecommendationReader
+from cicerone.locks import WriteFence
 
 T = TypeVar("T")
 
@@ -39,18 +39,6 @@ def _db_input(options: dict[str, Any]) -> InputSource:
     return DatabaseInputSource(options)
 
 
-def _dataset_output(options: dict[str, Any]) -> OutputSink:
-    from cicerone.io.dataset_store import DatasetOutputSink
-
-    return DatasetOutputSink(options)
-
-
-def _db_output(options: dict[str, Any]) -> OutputSink:
-    from cicerone.io.db_store import DatabaseOutputSink
-
-    return DatabaseOutputSink(options)
-
-
 def _dataset_recommendations(options: dict[str, Any]) -> RecommendationReader:
     from cicerone.io.recommendation_reader import DatasetRecommendationReader
 
@@ -79,10 +67,6 @@ _INPUT_SOURCES: dict[str, _BackendFactory[InputSource]] = {
     "dataset": _dataset_input,
     "db": _db_input,
 }
-_OUTPUT_SINKS: dict[str, _BackendFactory[OutputSink]] = {
-    "dataset": _dataset_output,
-    "db": _db_output,
-}
 _RECOMMENDATION_READERS: dict[str, _BackendFactory[RecommendationReader]] = {
     "dataset": _dataset_recommendations,
     "db": _db_recommendations,
@@ -97,26 +81,11 @@ def build_input_source(settings: IOSettings) -> InputSource:
     return _build_from_registry(settings, _INPUT_SOURCES, role="input")
 
 
-def build_user_history_reader(settings: IOSettings) -> UserHistoryReader:
-    return build_input_source(settings)
-
-
 def build_output_sink(
     settings: IOSettings,
     *,
-    writer_lock: LockBackend | None = None,
-    fence_check: Callable[[], bool] | None = None,
-    fence_lost: str = "lock lost before write",
-    fence_kind: str = "lock",
     fence: WriteFence | None = None,
 ) -> OutputSink:
-    fence = WriteFence.resolve(
-        fence,
-        writer_lock=writer_lock,
-        fence_check=fence_check,
-        fence_lost=fence_lost,
-        fence_kind=fence_kind,
-    )
     if settings.kind == "dataset":
         from cicerone.io.dataset_store import DatasetOutputSink
 
@@ -125,7 +94,7 @@ def build_output_sink(
         from cicerone.io.db_store import DatabaseOutputSink
 
         return DatabaseOutputSink(settings.options, fence=fence)
-    return _build_from_registry(settings, _OUTPUT_SINKS, role="output")
+    raise ValueError(f"Unknown output kind: {settings.kind!r}")
 
 
 def build_recommendation_reader(settings: IOSettings) -> RecommendationReader:

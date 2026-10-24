@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Any, Protocol
 
 from cicerone.io.base import ensure_sink_writer_held
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriteFence
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +85,12 @@ def truncate_job_error(exc: BaseException) -> str:
     return error_message
 
 
-def skip_stale_job_manifest(
-    *,
-    fence_check: Callable[[], bool] | None = None,
-    exc: BaseException | None = None,
-) -> bool:
+def skip_stale_job_manifest(fence: WriteFence, *, exc: BaseException | None = None) -> bool:
     if isinstance(exc, LockLostError):
         logger.error("Skipping job manifest: %s", exc)
         return True
-    if fence_check is not None and not fence_check():
-        logger.error("Skipping job manifest: retrain lock lost before write")
+    if fence.check is not None and not fence.check():
+        logger.error("Skipping job manifest: %s", fence.lost)
         return True
     return False
 

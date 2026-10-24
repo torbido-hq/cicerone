@@ -26,7 +26,7 @@ from cicerone.experiment.store_db import (
     ExperimentDbBackend,
 )
 from cicerone.io.db_errors import SQL_READ_ERRORS
-from cicerone.locks import LockBackend, WriteFence
+from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +131,6 @@ class ExperimentStore:
         self,
         output: IOSettings,
         *,
-        writer_lock: LockBackend | None = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
         self._promote_lock = threading.Lock()
@@ -142,13 +138,7 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
         self.backend = build_experiment_backend(output, self._fence)
 
     def read_state(self) -> dict[str, Any] | None:

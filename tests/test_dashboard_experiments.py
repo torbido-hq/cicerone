@@ -1602,17 +1602,17 @@ def test_promote_winner_maps_writer_lock_errors(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
     assert promote_winner(settings, "treatment") == "Writer lock is busy"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(LockLostError("writer lock lost", kind="writer")),
     )
     assert promote_winner(settings, "treatment") == "Writer lock was lost"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
     assert clear_promotion(settings) == "Writer lock is busy"

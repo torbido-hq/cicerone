@@ -16,6 +16,7 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
 )
 from cicerone.errors import PUBLISH_ERRORS
+from cicerone.events.base import has_ephemeral_event_ids
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import poll_without_apply_lock
 from cicerone.events.registry import build_event_source
@@ -31,6 +32,7 @@ from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
 from cicerone.locks import (
     LockBackend,
+    WriteFence,
     build_lock_backend,
     build_output_writer_lock,
     events_apply_lock_key,
@@ -218,10 +220,12 @@ def start_events_runtime(
 
     sink = build_output_sink(
         settings.output,
-        writer_lock=build_output_writer_lock(settings),
-        fence_check=(apply_lock.owned if apply_lock is not None else None),
-        fence_lost="events apply lock lost before write",
-        fence_kind="apply",
+        fence=WriteFence(
+            build_output_writer_lock(settings),
+            apply_lock.owned if apply_lock is not None else None,
+            "events apply lock lost before write",
+            "apply",
+        ),
     )
     publisher = build_publisher(settings, connect=False)
     worker: EventWorker | None = None
@@ -281,6 +285,7 @@ def start_events_runtime(
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,
             batch_window_seconds=settings.events.incremental.batch_window_seconds,
+            fingerprint_dedupe=has_ephemeral_event_ids(source),
         )
         worker = EventWorker(
             source,
