@@ -7,8 +7,8 @@ import boto3
 import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
-from moto import mock_aws
 from pyarrow.lib import ArrowTypeError
+from support.fakes import patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
@@ -602,6 +602,17 @@ def test_local_backend_get_events_for_user_filters_and_limits(tmp_path):
     assert list(source.get_events_for_user("ghost", limit=5)["item_id"]) == []
 
 
+def test_local_backend_user_lookups_match_a_numeric_user_id_column(tmp_path):
+    pd.DataFrame(
+        [{"user_id": 1, "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"}]
+    ).to_parquet(tmp_path / "events.parquet", index=False)
+    pd.DataFrame([{"user_id": 1, "region_slug": "lazio"}]).to_parquet(tmp_path / "users.parquet", index=False)
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    assert list(source.get_events_for_user("1", limit=5)["item_id"]) == ["i1"]
+    assert source.get_user("1")["region_slug"] == "lazio"
+    assert source.get_user("2") is None
+
+
 def test_local_backend_get_user_returns_row_or_none(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     source = DatasetInputSource(options)
@@ -618,19 +629,10 @@ def test_local_backend_get_user_returns_row_or_none(tmp_path):
     "exc", [TypeError("bad user_id filter arg"), ArrowTypeError("user_id: type mismatch")]
 )
 def test_local_backend_get_events_for_user_only_falls_back_on_arrow_errors(tmp_path, monkeypatch, exc):
-    import cicerone.io.dataset_store as dataset_store
-
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"}]
     ).to_parquet(tmp_path / "events.parquet", index=False)
-    real_read = dataset_store.read_parquet
-
-    def read(options, filename, **kwargs):
-        if kwargs.get("filters"):
-            raise exc
-        return real_read(options, filename, **kwargs)
-
-    monkeypatch.setattr(dataset_store, "read_parquet", read)
+    patch_parquet_reads(monkeypatch, pushdown_error=exc)
     source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
     if isinstance(exc, ArrowTypeError):
         assert list(source.get_events_for_user("u1", limit=5)["item_id"]) == ["i1"]
@@ -686,20 +688,6 @@ def test_s3_backend_missing_required_option_raises(missing_key):
 # --- s3 backend (mocked) ------------------------------------------------------
 
 
-@pytest.fixture
-def s3_options():
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="test-bucket")
-        yield {
-            "storage_backend": "s3",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-            "bucket": "test-bucket",
-            "prefix": "datasets/latest",
-        }
-
-
 def test_s3_backend_round_trip(s3_options):
     sink = DatasetOutputSink(s3_options)
     df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5, "source": "personalized"}])
@@ -710,8 +698,10 @@ def test_s3_backend_round_trip(s3_options):
     source = DatasetInputSource(s3_options)
     client = boto3.client("s3", region_name="us-east-1")
     bucket = s3_options["bucket"]
-    body = client.get_object(Bucket=bucket, Key="datasets/latest/recommendations.parquet")["Body"].read()
-    client.put_object(Bucket=bucket, Key="datasets/latest/events.parquet", Body=body)
+    body = client.get_object(Bucket=bucket, Key=f"{s3_options['prefix']}/recommendations.parquet")[
+        "Body"
+    ].read()
+    client.put_object(Bucket=bucket, Key=f"{s3_options['prefix']}/events.parquet", Body=body)
 
     events = source.read_events()
     assert list(events["user_id"]) == ["u1"]
@@ -727,6 +717,7 @@ def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options, monkeypa
         raise AssertionError("applied_event_keys read the recommendation rows")
 
     monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _rows_read)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _rows_read)
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
 
 
@@ -772,7 +763,7 @@ def test_s3_backend_optional_users_not_found_logs_warning_and_returns_none(s3_op
         {"Error": {"Code": "NoSuchKey", "Message": "Object not found"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
         result = source.read_users()
@@ -787,7 +778,7 @@ def test_s3_backend_optional_users_client_error_is_propagated_for_non_not_found_
         {"Error": {"Code": "AccessDenied", "Message": "Access denied"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with pytest.raises(ClientError):
         source.read_users()
@@ -799,7 +790,7 @@ def test_s3_backend_optional_items_not_found_logs_warning_and_returns_none(s3_op
         {"Error": {"Code": "404", "Message": "Not Found"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
         result = source.read_items()

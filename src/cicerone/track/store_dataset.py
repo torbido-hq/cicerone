@@ -13,10 +13,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from botocore.exceptions import BotoCoreError, ClientError
 
 from cicerone.config.settings import IOSettings
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
+from cicerone.io.blob import (
+    S3_READ_ERRORS,
+    append_storage_bytes,
+    read_parquet_if_exists,
+    read_storage_bytes,
+    write_storage_bytes,
+)
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
@@ -44,7 +49,6 @@ from cicerone.track.store_common import (
 logger = logging.getLogger(__name__)
 
 _HISTORY_READ_WORKERS = 8
-_S3_READ_ERRORS = (BotoCoreError, ClientError)
 
 
 def _collect_frames(loaders: list[Callable[[], pd.DataFrame | None]]) -> list[pd.DataFrame]:
@@ -131,17 +135,8 @@ class TrackDatasetBackend:
         return filter_history(pd.concat(frames, ignore_index=True), generated_ats=generated_ats, since=since)
 
     def _read_legacy_history(self) -> list[pd.DataFrame]:
-        from cicerone.io.options import read_parquet
-
-        try:
-            frame = read_parquet(self._options, HISTORY_FILENAME)
-        except FileNotFoundError:
-            return []
-        except _S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                return []
-            raise
-        return [] if frame.empty else [frame]
+        frame = read_parquet_if_exists(self._options, HISTORY_FILENAME)
+        return [] if frame is None or frame.empty else [frame]
 
     def _read_history_parts(
         self,
@@ -168,7 +163,7 @@ class TrackDatasetBackend:
             return _s3_history_frames(client, bucket, prefix, self._options, generated_ats)
         try:
             keys = _list_s3_parquet_keys(client, bucket, prefix)
-        except _S3_READ_ERRORS as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return []
             raise
@@ -286,7 +281,7 @@ def _local_parquet_frame(path: Path) -> pd.DataFrame | None:
 def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None:
     try:
         obj = client.get_object(Bucket=bucket, Key=key)
-    except _S3_READ_ERRORS as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return None
         raise
@@ -326,7 +321,7 @@ def _s3_history_frames(
         return frames
     try:
         keys = _list_s3_parquet_keys(client, bucket, prefix)
-    except _S3_READ_ERRORS as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return frames
         raise

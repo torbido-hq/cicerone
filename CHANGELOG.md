@@ -46,6 +46,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- Dataset user lookups (serve history, `get_user`) work when `user_id` is
+  stored as an integer column instead of failing the filtered read.
+- Loading dataset recommendations for a set of users (event updates,
+  dashboard quality) finds integer `user_id` rows by their string id
+  instead of failing when a requested id is not numeric.
+- `replace_model_artifact_if` on SQLite db output matches the artifact
+  fingerprint it hands out instead of never swapping.
 
 ## [0.8.5] - 2026-10-14
 

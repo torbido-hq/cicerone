@@ -6,19 +6,19 @@ import logging
 from collections.abc import Collection, Sequence
 
 import pandas as pd
-from pyarrow.lib import ArrowInvalid, ArrowNotImplementedError, ArrowTypeError
-from sqlalchemy import Engine, bindparam, text
+from pyarrow.lib import ArrowInvalid
+from sqlalchemy import bindparam, text
 
 from cicerone.config import IOSettings
-from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.blob import STORAGE_READ_ERRORS, is_storage_not_found, read_parquet_if_exists
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
 )
-from cicerone.io.engines import dispose_engines, engine_for, release_engine
+from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
-from cicerone.io.options import is_s3_not_found, read_parquet, require_option, sql_identifier
+from cicerone.io.options import PARQUET_PUSHDOWN_ERRORS, read_parquet_pushdown, require_option, table_option
 from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -33,21 +33,12 @@ from cicerone.io.recommendation_schema import (
 logger = logging.getLogger(__name__)
 
 _CATALOG_SOFT_ERRORS = (ArrowInvalid,)
-_PARQUET_PROJECTION_ERRORS = (ValueError, ArrowTypeError, ArrowInvalid, ArrowNotImplementedError)
 
 GUARDRAIL_COLUMNS: tuple[str, ...] = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN)
 
 
 def empty_recommendations_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
-
-
-def dispose_recommendation_engines() -> None:
-    dispose_engines()
-
-
-def _engine_for(database_url: str) -> Engine:
-    return engine_for(database_url)
 
 
 def _normalize_recommendation_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -65,29 +56,6 @@ def _empty_on_schema_mismatch(frame: pd.DataFrame) -> pd.DataFrame:
         return empty_recommendations_frame()
 
 
-def _is_parquet_projection_error(exc: BaseException, columns: Sequence[str]) -> bool:
-    if isinstance(exc, (ArrowInvalid, ArrowNotImplementedError)):
-        return True
-    message = str(exc).lower()
-    return (
-        any(str(column).lower() in message for column in columns)
-        or "fieldref" in message
-        or "column" in message
-        or "projection" in message
-    )
-
-
-def _read_parquet_columns(output: IOSettings, filename: str, columns: Sequence[str]) -> pd.DataFrame:
-    try:
-        return read_parquet(output.options, filename, columns=list(columns))
-    except FileNotFoundError:
-        raise
-    except _PARQUET_PROJECTION_ERRORS as exc:
-        if _is_parquet_projection_error(exc, columns):
-            return read_parquet(output.options, filename)
-        raise
-
-
 def _project_columns(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
     keep = [column for column in columns if column in frame.columns]
     return frame.loc[:, keep] if keep else frame.iloc[0:0].copy()
@@ -101,11 +69,9 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
     """Distinct items in the serve snapshot, or ``None`` when it is missing."""
     if output.kind == "dataset":
         try:
-            frame = _read_parquet_columns(output, ITEMS_SNAPSHOT_FILENAME, (ITEM_COLUMN,))
-        except FileNotFoundError:
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+            frame = read_parquet_pushdown(output.options, ITEMS_SNAPSHOT_FILENAME, columns=[ITEM_COLUMN])
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return None
             raise
         except _CATALOG_SOFT_ERRORS:
@@ -115,12 +81,9 @@ def load_items_catalog_size(output: IOSettings) -> int | None:
             return None
         return int(frame[ITEM_COLUMN].astype(str).nunique())
     if output.kind == "db":
-        table = sql_identifier(
-            output.options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
-        )
+        table = table_option(output.options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f'SELECT COUNT(DISTINCT "{ITEM_COLUMN}") FROM "{table}"')).scalar()
@@ -138,11 +101,9 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     """Project source/item/variant columns for catalog guardrails."""
     if output.kind == "dataset":
         try:
-            frame = _read_parquet_columns(output, RECOMMENDATIONS_FILENAME, GUARDRAIL_COLUMNS)
-        except FileNotFoundError:
-            return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+            frame = read_parquet_pushdown(output.options, RECOMMENDATIONS_FILENAME, columns=GUARDRAIL_COLUMNS)
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return pd.DataFrame(columns=list(GUARDRAIL_COLUMNS))
             raise
         if frame.empty:
@@ -151,7 +112,7 @@ def load_recommendation_guardrail_rows(output: IOSettings) -> pd.DataFrame | Non
     if output.kind == "db":
         table, _required, _user = _db_table_and_columns(output)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         column_sets = (GUARDRAIL_COLUMNS, (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN))
         loaded: pd.DataFrame | None = None
         last_exc: BaseException | None = None
@@ -204,60 +165,36 @@ def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
 
 
 def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
-    try:
-        frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME)
-    except FileNotFoundError:
-        return empty_recommendations_frame()
-    except S3_READ_ERRORS as exc:
-        if is_s3_not_found(exc):
-            return empty_recommendations_frame()
-        raise
-    if frame.empty:
+    frame = read_parquet_if_exists(output.options, RECOMMENDATIONS_FILENAME)
+    if frame is None or frame.empty:
         return empty_recommendations_frame()
     return _empty_on_schema_mismatch(frame)
 
 
 def _load_dataset_recommendations_for_users(output: IOSettings, user_ids: list[str]) -> pd.DataFrame:
-    """Load only rows for ``user_ids`` when the parquet engine can push down filters."""
     try:
-        frame = read_parquet(
+        frame = read_parquet_pushdown(
             output.options,
             RECOMMENDATIONS_FILENAME,
             filters=[(USER_COLUMN, "in", user_ids)],
         )
-    except FileNotFoundError:
-        return empty_recommendations_frame()
-    except S3_READ_ERRORS as exc:
-        if is_s3_not_found(exc):
+    except STORAGE_READ_ERRORS as exc:
+        if is_storage_not_found(exc):
             return empty_recommendations_frame()
-        raise
-    except _PARQUET_PROJECTION_ERRORS as exc:
-        message = str(exc).lower()
-        if (
-            isinstance(exc, ArrowNotImplementedError)
-            or USER_COLUMN in message
-            or "fieldref" in message
-            or "filter" in message
-        ):
-            logger.warning("Filtered recommendations read failed; falling back to full-file load: %s", exc)
-            frame = _load_dataset_recommendations(output)
-            if frame.empty:
-                return frame
-            return frame.loc[frame[USER_COLUMN].astype(str).isin(user_ids)].reset_index(drop=True)
         raise
     if frame.empty:
         return empty_recommendations_frame()
     normalized = _empty_on_schema_mismatch(frame)
     if normalized.empty:
         return normalized
-    # Defensive: keep only requested ids if the engine ignored/partial-applied filters.
+    # The full-file fallback returns every user.
     return normalized.loc[normalized[USER_COLUMN].astype(str).isin(user_ids)].reset_index(drop=True)
 
 
 def _load_db_recommendations(output: IOSettings, *, user_ids: Collection[str] | None = None) -> pd.DataFrame:
     table, _required_columns, user_col = _db_table_and_columns(output)
     url = require_option(output.options, "database_url", "db")
-    engine = _engine_for(url)
+    engine = engine_for(url)
     try:
         if user_ids is None:
             frame = pd.read_sql_query(text(f"SELECT * FROM {table}"), engine)
@@ -308,23 +245,12 @@ def load_recommendations_for_users(output: IOSettings, user_ids: Collection[str]
 def count_recommendation_users(output: IOSettings) -> int:
     if output.kind == "dataset":
         try:
-            # Project only user_id — avoids materializing the full recommendations frame.
-            frame = read_parquet(output.options, RECOMMENDATIONS_FILENAME, columns=[USER_COLUMN])
-        except FileNotFoundError:
-            return 0
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+            frame = read_parquet_pushdown(output.options, RECOMMENDATIONS_FILENAME, columns=[USER_COLUMN])
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return 0
             raise
-        except _PARQUET_PROJECTION_ERRORS as exc:
-            if isinstance(exc, ArrowNotImplementedError):
-                logger.warning(
-                    "Recommendations column projection failed; falling back to full-file load: %s", exc
-                )
-                frame = _load_dataset_recommendations(output)
-                if frame.empty or USER_COLUMN not in frame.columns:
-                    return 0
-                return int(frame[USER_COLUMN].astype(str).nunique())
+        except PARQUET_PUSHDOWN_ERRORS as exc:
             message = str(exc).lower()
             if USER_COLUMN in message or "fieldref" in message:
                 logger.warning(
@@ -332,6 +258,9 @@ def count_recommendation_users(output: IOSettings) -> int:
                 )
                 return 0
             raise
+        if USER_COLUMN not in frame.columns:
+            logger.warning("Recommendations schema mismatch while counting users; treating as empty")
+            return 0
         if frame.empty:
             return 0
         return int(frame[USER_COLUMN].astype(str).nunique())
@@ -339,7 +268,7 @@ def count_recommendation_users(output: IOSettings) -> int:
     if output.kind == "db":
         table, _columns, user_col = _db_table_and_columns(output)
         url = require_option(output.options, "database_url", "db")
-        engine = _engine_for(url)
+        engine = engine_for(url)
         try:
             with engine.connect() as conn:
                 value = conn.execute(text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")).scalar()

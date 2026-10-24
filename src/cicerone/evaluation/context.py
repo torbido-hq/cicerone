@@ -14,17 +14,17 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.settings import Settings
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
+from cicerone.io.blob import is_storage_not_found
 from cicerone.io.db_errors import is_missing_column_error
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, release_engine
 from cicerone.io.factory import build_input_source
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
-    is_s3_not_found,
     read_parquet,
     readonly_select,
     require_option,
-    sql_identifier,
+    table_option,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError
@@ -183,10 +183,8 @@ def _read_metric_parquet(
                     columns=list(columns),
                     filters=filters,
                 )
-            except FileNotFoundError:
-                raise
             except _METRIC_READ_ERRORS as exc:
-                if is_s3_not_found(exc):
+                if is_storage_not_found(exc):
                     raise
                 last_error = exc
     if last_error is not None:
@@ -205,10 +203,8 @@ def load_metric_events(
     if inp.kind == "dataset":
         try:
             frame = _read_metric_parquet(inp.options, types=types, floor=floor)
-        except FileNotFoundError:
-            return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
         except _METRIC_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+            if is_storage_not_found(exc):
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
@@ -236,10 +232,7 @@ def load_metric_events(
                         )
                     source = f"({cleaned}) AS _cicerone_metric_events"
                 else:
-                    table = sql_identifier(
-                        inp.options.get("events_table", DEFAULT_EVENTS_TABLE),
-                        option="events_table",
-                    )
+                    table = table_option(inp.options, "events_table", DEFAULT_EVENTS_TABLE)
                     source = f'"{table}"'
                 try:
                     stmt, params = _metric_event_sql(source, types=types, floor=floor)

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import errno
 
+import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 from pyarrow.lib import ArrowInvalid
+from support.fakes import FakeS3Body, patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.options import (
@@ -15,30 +17,12 @@ from cicerone.io.options import (
     exclusive_file_lock,
     is_s3_not_found,
     object_key,
+    read_parquet_pushdown,
     read_s3_body,
     readonly_select,
     storage_backend,
     validate_storage_options,
 )
-
-
-class _FakeS3Body:
-    def __init__(self, payload: bytes, *, fail: bool = False) -> None:
-        self._payload = payload
-        self._fail = fail
-        self.closed = False
-        self.reads: list[int | None] = []
-
-    def read(self, size: int | None = None) -> bytes:
-        self.reads.append(size)
-        if self._fail:
-            raise RuntimeError("read failed")
-        if size is None:
-            return self._payload
-        return self._payload[:size]
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @pytest.mark.parametrize(
@@ -79,13 +63,13 @@ def test_is_s3_not_found_false_for_non_client_error_exceptions(exc):
 
 
 def test_read_s3_body_closes_after_read():
-    body = _FakeS3Body(b"payload")
+    body = FakeS3Body(b"payload")
     assert read_s3_body({"Body": body}) == b"payload"
     assert body.closed is True
 
 
 def test_read_s3_body_closes_when_read_fails():
-    body = _FakeS3Body(b"payload", fail=True)
+    body = FakeS3Body(b"payload", fail=True)
     with pytest.raises(RuntimeError, match="read failed"):
         read_s3_body({"Body": body})
     assert body.closed is True
@@ -96,14 +80,14 @@ def test_close_s3_body_ignores_missing_close():
 
 
 def test_read_s3_body_rejects_content_length_and_closes():
-    body = _FakeS3Body(b"123456789")
+    body = FakeS3Body(b"123456789")
     with pytest.raises(ValueError, match="max is 4"):
         read_s3_body({"Body": body, "ContentLength": 9}, max_bytes=4)
     assert body.closed is True
 
 
 def test_read_s3_body_rejects_oversize_read_and_closes():
-    body = _FakeS3Body(b"123456789")
+    body = FakeS3Body(b"123456789")
     with pytest.raises(ValueError, match="max is 4"):
         read_s3_body({"Body": body}, max_bytes=4)
     assert body.reads == [5]
@@ -111,7 +95,7 @@ def test_read_s3_body_rejects_oversize_read_and_closes():
 
 
 def test_read_s3_body_rejects_nonpositive_max_bytes():
-    body = _FakeS3Body(b"x")
+    body = FakeS3Body(b"x")
     with pytest.raises(ValueError, match="max_bytes"):
         read_s3_body({"Body": body}, max_bytes=0)
     assert body.closed is True
@@ -378,7 +362,7 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker, error):
     from cicerone.io.options import read_parquet
 
     mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=error)
-    body = _FakeS3Body(b"parquet-bytes")
+    body = FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
@@ -465,7 +449,7 @@ def test_read_parquet_s3_skips_native_arrow_in_tests(mocker):
     from cicerone.io.options import read_parquet
 
     ctor = mocker.patch("pyarrow.fs.S3FileSystem")
-    body = _FakeS3Body(b"parquet-bytes")
+    body = FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
@@ -500,3 +484,34 @@ def test_build_s3_client_uses_configured_region(mocker):
         is client
     )
     assert ctor.call_args.kwargs["region_name"] == "eu-west-1"
+
+
+def test_read_parquet_pushdown_falls_back_to_a_full_read(tmp_path, monkeypatch):
+    pd.DataFrame({"item_id": ["a"], "extra": [1]}).to_parquet(tmp_path / "items.parquet", index=False)
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    calls = patch_parquet_reads(monkeypatch, pushdown_error=ValueError("no projection"))
+    frame = read_parquet_pushdown(options, "items.parquet", columns=["item_id"])
+    assert list(frame.columns) == ["item_id", "extra"]
+    assert calls == [{"columns": ["item_id"], "filters": None}, {"columns": None, "filters": None}]
+
+
+def test_read_parquet_pushdown_falls_back_on_a_missing_projected_column(tmp_path):
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items.parquet", index=False)
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    frame = read_parquet_pushdown(options, "items.parquet", columns=["item_id", "variant"])
+    assert list(frame.columns) == ["item_id"]
+
+
+def test_read_parquet_pushdown_raises_errors_unrelated_to_pushdown(tmp_path, monkeypatch):
+    calls = []
+
+    def boom(*args, **_kwargs):
+        calls.append(args)
+        raise ValueError("file too large")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", boom)
+    with pytest.raises(ValueError, match="file too large"):
+        read_parquet_pushdown(
+            {"storage_backend": "local", "path": str(tmp_path)}, "items.parquet", columns=["item_id"]
+        )
+    assert len(calls) == 1
