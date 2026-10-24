@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+from types import ModuleType
 from typing import Literal
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
@@ -108,3 +110,14 @@ DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 class ConfigError(ValueError):
     """Invalid config content or knobs (not missing files / unset env vars)."""
+
+
+def import_extra(module: str, extra: str, setting: str) -> ModuleType:
+    """Import an optional extra's module; ``setting`` names the config that needs it."""
+    try:
+        return importlib.import_module(module)
+    except ImportError as exc:
+        raise ConfigError(
+            f"{setting} requires the {module.replace('_', '-')} package; "
+            f"install with: pip install 'cicerone-recommender[{extra}]'"
+        ) from exc

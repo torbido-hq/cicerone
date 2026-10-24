@@ -148,3 +148,61 @@ def test_postgres_event_id_column_numeric_identity_does_not_skip_id_10():
     assert source.health().lag == 2
     rest = list(source.poll(10))
     assert {event.event_id for event in rest} == {"id:10", "id:11"}
+
+
+def test_postgres_mixed_case_event_columns_poll_and_page():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f'CREATE TABLE "{_TABLE}" ("User_Id" TEXT, "Item_Id" TEXT, "Event_Type" TEXT, '
+                '"Occurred_At" TIMESTAMPTZ, "Event_Id" TEXT)'
+            )
+        )
+        conn.execute(
+            text(
+                f'INSERT INTO "{_TABLE}" ("User_Id", "Item_Id", "Event_Type", "Occurred_At", "Event_Id") '
+                "VALUES "
+                "('u1', 'i1', 'purchase', '2026-08-13T12:00:00Z', 'e1'), "
+                "('u2', 'i2', 'purchase', '2026-08-13T12:00:00Z', 'e2')"
+            )
+        )
+    source = _source()
+    source.connect()
+
+    first = list(source.poll(1))
+    assert source.ack([event.event_id for event in first]) == ("e1",)
+    second = list(source.poll(1))
+
+    assert [(event.event_id, event.user_id) for event in first + second] == [("e1", "u1"), ("e2", "u2")]
+
+
+def test_postgres_naive_occurred_at_is_utc_whatever_the_session_time_zone():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f'CREATE TABLE "{_TABLE}" (user_id TEXT, item_id TEXT, event_type TEXT, '
+                "occurred_at TIMESTAMP, event_id TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                f'INSERT INTO "{_TABLE}" (user_id, item_id, event_type, occurred_at, event_id) VALUES '
+                "('u1', 'i1', 'purchase', '2026-08-13 04:00:00', 'before'), "
+                "('u1', 'i2', 'purchase', '2026-08-13 12:00:00', 'after')"
+            )
+        )
+    source = DbEventSource(
+        {
+            "database_url": f"{TEST_DATABASE_URL}?options=-c%20timezone%3DAsia/Tokyo",
+            "events_table": _TABLE,
+            "initial_watermark": "2026-08-13T05:00:00Z",
+        }
+    )
+    source.connect()
+    try:
+        assert source.health().lag == 1
+        assert [event.event_id for event in source.poll(10)] == ["after"]
+    finally:
+        source.close()

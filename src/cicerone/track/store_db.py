@@ -9,11 +9,12 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, bindparam, text
+from sqlalchemy import Column, Engine, Integer, MetaData, Table, Text, bindparam, text
+from sqlalchemy.schema import CreateTable
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
-from cicerone.io.engines import engine_for
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.engines import TEXT_KEY, LazyEngine, insert_ignoring_duplicates, quote_identifier
+from cicerone.io.options import require_option, table_option
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
@@ -30,14 +31,35 @@ from cicerone.track.store_common import (
 logger = logging.getLogger(__name__)
 
 
+def track_table(name: str) -> Table:
+    return Table(
+        name,
+        MetaData(),
+        Column("event_id", TEXT_KEY, primary_key=True),
+        Column("kind", Text, nullable=False),
+        Column("user_id", Text, nullable=False),
+        Column("item_id", Text, nullable=False),
+        Column("rank", Integer),
+        Column("occurred_at", Text, nullable=False),
+        Column("variant", Text),
+        Column("experiment_id", Text),
+        Column("generated_at", Text),
+    )
+
+
+def _eval_table(name: str) -> Table:
+    return Table(
+        name, MetaData(), Column("payload", Text, nullable=False), Column("written_at", Text, nullable=False)
+    )
+
+
 class TrackDbBackend:
     """Track rows, eval report and history in ``[output]`` tables."""
 
     def __init__(self, options: dict[str, Any], fence: WriteFence):
         self._options = options
         self._fence = fence
-        self._engine: Engine | None = None
-        self._engine_lock = threading.Lock()
+        self._engine = LazyEngine(lambda: require_option(options, "database_url", "db"))
         self._append_lock = threading.Lock()
 
     def _ensure_fence(self) -> None:
@@ -69,44 +91,14 @@ class TrackDbBackend:
         return filter_history(frame, generated_ats=generated_ats, since=since)
 
     def _db_engine(self) -> Engine:
-        engine = self._engine
-        if engine is not None:
-            return engine
-        with self._engine_lock:
-            if self._engine is None:
-                self._engine = engine_for(require_option(self._options, "database_url", "db"))
-            return self._engine
+        return self._engine.get()
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
-        conn.execute(
-            text(
-                f'CREATE TABLE IF NOT EXISTS "{table}" ('
-                "event_id TEXT PRIMARY KEY, "
-                "kind TEXT NOT NULL, "
-                "user_id TEXT NOT NULL, "
-                "item_id TEXT NOT NULL, "
-                "rank INTEGER, "
-                "occurred_at TEXT NOT NULL, "
-                "variant TEXT, "
-                "experiment_id TEXT, "
-                "generated_at TEXT"
-                ")"
-            )
-        )
+        conn.execute(CreateTable(track_table(table), if_not_exists=True))
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        table = sql_identifier(
-            self._options.get("track_table", DEFAULT_TRACK_TABLE),
-            option="track_table",
-        )
+        table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self._db_engine()
-        insert_sql = text(
-            f'INSERT INTO "{table}" (event_id, kind, user_id, item_id, rank, occurred_at, '
-            "variant, experiment_id, generated_at) "
-            "VALUES (:event_id, :kind, :user_id, :item_id, :rank, :occurred_at, "
-            ":variant, :experiment_id, :generated_at) "
-            "ON CONFLICT (event_id) DO NOTHING"
-        )
         params: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
@@ -135,7 +127,7 @@ class TrackDbBackend:
             if not fresh:
                 return []
             self._ensure_fence()
-            conn.execute(insert_sql, fresh)
+            conn.execute(insert_ignoring_duplicates(conn, track_table(table)), fresh)
             self._ensure_fence()
             return fresh
 
@@ -146,14 +138,12 @@ class TrackDbBackend:
         experiment_id: str | None,
         since: str | None = None,
     ) -> list[dict[str, Any]]:
-        table = sql_identifier(
-            self._options.get("track_table", DEFAULT_TRACK_TABLE),
-            option="track_table",
-        )
+        table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self._db_engine()
+        quoted = quote_identifier(engine, table)
         clause, params = track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
         try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{table}"{clause}'), engine, params=params)
+            frame = pd.read_sql(text(f"SELECT * FROM {quoted}{clause}"), engine, params=params)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
                 return []
@@ -165,33 +155,25 @@ class TrackDbBackend:
         return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
 
     def _write_eval_db(self, encoded: str) -> None:
-        table = sql_identifier(
-            self._options.get("eval_table", DEFAULT_EVAL_TABLE),
-            option="eval_table",
-        )
+        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
         engine = self._db_engine()
+        eval_table = _eval_table(table)
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    f'CREATE TABLE IF NOT EXISTS "{table}" (payload TEXT NOT NULL, written_at TEXT NOT NULL)'
-                )
-            )
-            conn.execute(text(f'DELETE FROM "{table}"'))
+            conn.execute(CreateTable(eval_table, if_not_exists=True))
+            conn.execute(eval_table.delete())
             self._ensure_fence()
-            conn.execute(
-                text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
-                {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
-            )
+            written_at = pd.Timestamp.now(tz="UTC").isoformat()
+            conn.execute(eval_table.insert(), {"payload": encoded, "written_at": written_at})
             self._ensure_fence()
 
     def _read_eval_db(self) -> dict[str, Any] | None:
-        table = sql_identifier(
-            self._options.get("eval_table", DEFAULT_EVAL_TABLE),
-            option="eval_table",
-        )
+        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
         engine = self._db_engine()
+        quoted = quote_identifier(engine, table)
         try:
-            frame = pd.read_sql(text(f'SELECT payload FROM "{table}" LIMIT 1'), engine)
+            frame = pd.read_sql(
+                text(f"SELECT {quote_identifier(engine, 'payload')} FROM {quoted} LIMIT 1"), engine
+            )
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
                 return None
@@ -207,10 +189,7 @@ class TrackDbBackend:
         return parsed if isinstance(parsed, dict) else None
 
     def _append_history_db(self, frame: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("history_table", DEFAULT_HISTORY_TABLE),
-            option="history_table",
-        )
+        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
         with self._db_engine().begin() as conn:
             self._ensure_fence()
             frame.to_sql(table, conn, if_exists="append", index=False)
@@ -221,19 +200,17 @@ class TrackDbBackend:
         *,
         generated_ats: set[str] | None,
     ) -> pd.DataFrame:
-        table = sql_identifier(
-            self._options.get("history_table", DEFAULT_HISTORY_TABLE),
-            option="history_table",
-        )
+        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
         engine = self._db_engine()
+        quoted = quote_identifier(engine, table)
         clause, params = history_sql_filter(generated_ats=generated_ats)
         try:
             if params:
-                stmt = text(f'SELECT * FROM "{table}"{clause}')
+                stmt = text(f"SELECT * FROM {quoted}{clause}")
                 if generated_ats:
                     stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
                 return pd.read_sql(stmt, engine, params=params)
-            return pd.read_sql(text(f'SELECT * FROM "{table}"'), engine)
+            return pd.read_sql(text(f"SELECT * FROM {quoted}"), engine)
         except SQL_READ_ERRORS as exc:
             if is_missing_table_error(exc):
                 return pd.DataFrame(columns=list(HISTORY_COLUMNS))
@@ -245,7 +222,8 @@ def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[
     ids = [event_id for event_id in event_ids if event_id]
     if not ids:
         return set()
-    stmt = text(f'SELECT event_id FROM "{table}" WHERE event_id IN :ids').bindparams(
+    event_id, quoted_table = quote_identifier(conn, "event_id"), quote_identifier(conn, table)
+    stmt = text(f"SELECT {event_id} FROM {quoted_table} WHERE {event_id} IN :ids").bindparams(
         bindparam("ids", expanding=True)
     )
     return {str(row[0]) for row in conn.execute(stmt, {"ids": ids}) if row[0] is not None}

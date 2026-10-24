@@ -7,7 +7,7 @@ import threading
 import uuid
 from typing import TYPE_CHECKING
 
-from cicerone.config.constants import DEFAULT_LOCK_KEY, ConfigError
+from cicerone.config.constants import DEFAULT_LOCK_KEY, import_extra
 from cicerone.locks.keys import REDIS_LOCK_TTL_MS
 
 if TYPE_CHECKING:
@@ -51,15 +51,10 @@ class RedisLock:
         ttl_ms: int = REDIS_LOCK_TTL_MS,
         refresh_interval_ms: int | None = None,
     ):
-        try:
-            from cicerone.redis_client import redis_from_url
+        import_extra("redis", "redis", 'lock_backend = "redis"')
+        from cicerone.redis_client import redis_from_url
 
-            self._client = redis_from_url(redis_url)
-        except ImportError as exc:
-            raise ConfigError(
-                'lock_backend = "redis" requires the redis package; '
-                "install with: pip install 'cicerone-recommender[redis]'"
-            ) from exc
+        self._client = redis_from_url(redis_url)
         self._key = key
         self._ttl_ms = ttl_ms
         self._refresh_interval_ms = (

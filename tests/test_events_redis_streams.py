@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from support.events import event_payload
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -316,16 +317,7 @@ def test_busygroup_is_ok(monkeypatch):
 
 
 def test_missing_redis_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "redis":
-            raise ImportError("no redis")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "redis")
     source = RedisStreamsEventSource(_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         source.connect()
@@ -557,3 +549,30 @@ def test_repeated_nack_does_not_duplicate(monkeypatch):
 def test_whitespace_required_options_rejected():
     with pytest.raises(ConfigError, match="redis_url"):
         validate_redis_stream_options({"redis_url": "  ", "stream": "s", "consumer_group": "g"})
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [({}, None), ({"block_ms": None}, None), ({"block_ms": 0}, 0), ({"block_ms": 250}, 250)],
+)
+def test_read_sends_block_only_when_configured(monkeypatch, options, expected):
+    # Redis treats BLOCK 0 as "wait forever"; unset must not send it.
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    seen: list[int | None] = []
+    real_read = client.xreadgroup
+
+    def _recording_read(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(kwargs.get("block"))
+        return real_read(*args, **kwargs)
+
+    client.xreadgroup = _recording_read  # type: ignore[method-assign]
+    source = RedisStreamsEventSource(_options(**options))
+    source.connect()
+    assert list(source.poll(1)) == []
+    assert seen == [expected]
+
+
+def test_explicit_block_zero_warns(caplog):
+    with caplog.at_level("WARNING", logger="cicerone.events.redis_streams"):
+        RedisStreamsEventSource(_options(block_ms=0))
+    assert "block_ms = 0" in caplog.text

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
@@ -13,6 +11,7 @@ from typing import Any
 
 from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import Batch
+from cicerone.events.state_file import read_json_object_file, write_json_durably
 from cicerone.io.blob import S3_READ_ERRORS
 
 logger = logging.getLogger("cicerone.events.s3")
@@ -83,42 +82,19 @@ class S3ListPoll:
     def _load_marker_unlocked(self) -> None:
         if self._marker_path is None:
             return
-        # Read directly rather than probing with is_file(), which reports an
-        # inaccessible marker as absent and would restart from a stale marker.
         try:
-            text = self._marker_path.read_text()
-        except FileNotFoundError:
-            return
-        try:
-            raw = json.loads(text)
-            if not isinstance(raw, dict):
-                raise ValueError("marker root must be an object")
-            key = raw.get("key")
-            if key:
-                self._marker_key = str(key)
+            raw = read_json_object_file(self._marker_path)
         except ValueError:
             logger.exception(
                 "Ignoring corrupt marker file %s; keeping marker %r",
                 self._marker_path,
                 self._marker_key,
             )
+            return
+        if raw is not None and raw.get("key"):
+            self._marker_key = str(raw["key"])
 
     def _persist_marker_unlocked(self) -> None:
         if self._marker_path is None:
             return
-        self._marker_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"key": self._marker_key}
-        tmp = self._marker_path.with_name(f".{self._marker_path.name}.tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp.replace(self._marker_path)
-        try:
-            dir_fd = os.open(str(self._marker_path.parent), os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        write_json_durably(self._marker_path, {"key": self._marker_key})

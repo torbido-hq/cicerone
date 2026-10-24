@@ -150,14 +150,18 @@ def select_cold_start_fallback(
 
 def index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Normalize user ids once and build an O(1) lookup for serve requests."""
+    if RANK_COLUMN in frame.columns:
+        frame = frame.sort_values(RANK_COLUMN, kind="mergesort")
+    return group_by_user(frame)
+
+
+def group_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Rows per string user id, each group indexed from 0."""
     if frame.empty or USER_COLUMN not in frame.columns:
         return {}
-    indexed = frame.copy()
-    indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
-    if RANK_COLUMN in indexed.columns:
-        indexed = indexed.sort_values(RANK_COLUMN, kind="mergesort")
+    keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
     return {
-        user_id: group.reset_index(drop=True) for user_id, group in indexed.groupby(USER_COLUMN, sort=False)
+        user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
     }
 
 

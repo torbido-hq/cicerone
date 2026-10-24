@@ -8,6 +8,7 @@ import pytest
 from support.events import event_payload
 from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
 from cicerone.events.errors import AMQPError, KafkaException
@@ -193,6 +194,14 @@ def test_kafka_publisher_emits_per_user(monkeypatch):
     publisher.close()
 
 
+def test_kafka_publisher_serves_delivery_callbacks_per_message(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+    publisher.publish(_recs_frame())
+    assert broker.poll_calls == [0, 0]
+
+
 def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher(
@@ -310,16 +319,7 @@ def test_every_built_publisher_accepts_user_ids(kind):
 
 
 def test_missing_kafka_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "confluent_kafka":
-            raise ImportError("no kafka")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "confluent_kafka")
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
         build_publisher(
             PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
@@ -327,16 +327,7 @@ def test_missing_kafka_extra(monkeypatch):
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "pika":
-            raise ImportError("no pika")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "pika")
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
         build_publisher(
             PublishSettings(
@@ -921,7 +912,7 @@ def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkey
     assert users == ["u1", "u2"]
 
 
-def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -935,12 +926,13 @@ def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
         raise RuntimeError("publish bug")
 
     monkeypatch.setattr(FakeChannel, "basic_publish", boom)
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="publish bug"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
 
 
-def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_recover_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -957,13 +949,14 @@ def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypa
         raise AMQPError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="unreachable or setup failed"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert publisher._channel is None
 
 
-def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -983,7 +976,8 @@ def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_rais
 
     channel.basic_publish = boom  # type: ignore[method-assign]
     channel.close = boom_close  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="close bug"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert broker.connection.closed is True

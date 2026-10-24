@@ -43,6 +43,7 @@ def _clean_tables():
             "custom_recommendations",
             "custom_manifest_runs",
             "custom_model_artifacts",
+            "Mixed_Case_Recs",
         ):
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
     yield
@@ -152,6 +153,30 @@ def test_database_output_replace_recommendations_for_users():
     assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
     assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_replace_recommendations_for_users_on_a_mixed_case_table():
+    # to_sql creates "Mixed_Case_Recs" quoted; an unquoted DELETE hit mixed_case_recs and left old rows.
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL, "recommendations_table": "Mixed_Case_Recs"})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.8, "source": "personalized"},
+            ]
+        )
+    )
+
+    replaced = sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+
+    assert replaced == 2
+    stored = pd.read_sql(
+        'SELECT user_id, item_id FROM "Mixed_Case_Recs" ORDER BY user_id', create_engine(TEST_DATABASE_URL)
+    )
+    assert stored.values.tolist() == [["u1", "new"], ["u2", "keep"]]
 
 
 def test_database_output_replace_recommendations_rejects_extra_users():
@@ -564,3 +589,24 @@ def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch)
         sink.write_recommendations(rows)
     monkeypatch.undo()
     assert sink.applied_event_keys(["k1"]) == set()
+
+
+def test_clear_table_for_replace_uses_delete_on_mysql():
+    # MySQL commits TRUNCATE implicitly, which would end the replace transaction.
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import mysql
+
+    from cicerone.io.db_store import _clear_table_for_replace
+
+    executed: list[str] = []
+    savepoint = SimpleNamespace(commit=lambda: None, rollback=lambda: None)
+    conn = SimpleNamespace(
+        dialect=mysql.dialect(),
+        begin_nested=lambda: savepoint,
+        execute=lambda statement: executed.append(str(statement)),
+    )
+
+    _clear_table_for_replace(conn, "Recs")
+
+    assert executed == ["DELETE FROM `Recs`"]

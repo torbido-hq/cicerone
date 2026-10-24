@@ -4,20 +4,17 @@ from __future__ import annotations
 
 import logging
 import socket
+from collections import deque
 from collections.abc import Sequence, Set
 from typing import Any
 
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import KafkaException
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
-from cicerone.kafka_options import (
-    kafka_client_config,
-    kafka_timeout_seconds,
-    optional_nonempty_str,
-    require_nonempty_str,
-)
+from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
+from cicerone.option_parse import optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +33,6 @@ def _close_quietly(consumer: Any, message: str) -> None:
         consumer.close()
     except KafkaException:
         logger.exception(message)
-
-
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'events.kind = "kafka" requires the confluent-kafka package; '
-        "install with: pip install 'cicerone-recommender[kafka]'"
-    )
 
 
 class KafkaEventSource(QueuedEventSource):
@@ -65,11 +55,7 @@ class KafkaEventSource(QueuedEventSource):
         self._topic_partition: Any | None = None
 
     def connect(self) -> None:
-        try:
-            from confluent_kafka import Consumer, TopicPartition
-        except ImportError as exc:
-            raise _missing_extra() from exc
-
+        confluent_kafka = import_extra("confluent_kafka", "kafka", 'events.kind = "kafka"')
         conf = {
             **self._conf,
             "group.id": self._group_id,
@@ -77,7 +63,7 @@ class KafkaEventSource(QueuedEventSource):
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
         }
-        consumer = Consumer(conf)
+        consumer = confluent_kafka.Consumer(conf)
         connected = False
         try:
             consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
@@ -87,40 +73,47 @@ class KafkaEventSource(QueuedEventSource):
         finally:
             if not connected:
                 _close_quietly(consumer, "Failed to close Kafka consumer after connect error")
-        consumer.subscribe([self._topic])
+        consumer.subscribe([self._topic], on_revoke=self._on_revoke, on_lost=self._on_revoke)
 
         with self._lock:
-            previous = self._consumer
+            previous = self._detach_unlocked()
             self._consumer = consumer
-            self._topic_partition = TopicPartition
+            self._topic_partition = confluent_kafka.TopicPartition
             self._connected = True
             self._clear_lifecycle()
-            self._messages.clear()
-            self._held_offsets.clear()
-            self._max_offset.clear()
-        if previous is not None and previous is not consumer:
-            _close_quietly(previous, "Failed to close previous Kafka consumer")
+        if previous is not None:
+            self._release(previous)
 
-    def close(self) -> None:
+    def _detach_unlocked(self) -> Any | None:
+        consumer = self._consumer
+        self._consumer = None
+        self._messages.clear()
+        self._held_offsets.clear()
+        self._max_offset.clear()
+        self._topic_partition = None
+        return consumer
+
+    def _release(self, consumer: Any) -> None:
+        _close_quietly(consumer, "Kafka consumer close failed")
+
+    def _on_revoke(self, consumer: Any, partitions: Sequence[Any]) -> None:
+        # Another member now owns these partitions: their deliveries are no longer ours to commit.
+        revoked = {int(tp.partition) for tp in partitions}
         with self._lock:
-            consumer = self._consumer
-            self._consumer = None
-            self._connected = False
-            self._clear_lifecycle()
-            self._messages.clear()
-            self._held_offsets.clear()
-            self._max_offset.clear()
-            self._topic_partition = None
-        if consumer is not None:
-            _close_quietly(consumer, "Kafka consumer close failed")
+            if consumer is not self._consumer:
+                return  # a replaced consumer revokes on close
+            dropped = {eid for eid, message in self._messages.items() if int(message.partition()) in revoked}
+            for eid in dropped:
+                del self._messages[eid]
+                self._forget_ids_unlocked(eid)
+            self._pending = deque(event for event in self._pending if event.event_id not in dropped)
+            self._held_offsets = {
+                (part, offset) for part, offset in self._held_offsets if part not in revoked
+            }
+            for partition in revoked:
+                self._max_offset.pop(partition, None)
 
-    def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        if not event_ids:
-            return ()
-        consumer = self._require_ready()
-        resolved = self._resolve_deliveries(event_ids)
-        if not resolved:
-            return ()
+    def _commit_acks(self, consumer: Any, resolved: Sequence[tuple[str, Any]]) -> Sequence[str]:
         with self._lock:
             done: dict[int, set[int]] = {}
             for _eid, message in resolved:
@@ -135,7 +128,7 @@ class KafkaEventSource(QueuedEventSource):
             for partition, nxt in watermarks.items():
                 if nxt is None:
                     continue
-                self._commit_watermarks(consumer, {partition: nxt})
+                self._commit_offset(consumer, partition, nxt)
                 with self._lock:
                     for eid, message in self._messages.items():
                         if int(message.partition()) == partition and int(message.offset()) < nxt:
@@ -144,22 +137,18 @@ class KafkaEventSource(QueuedEventSource):
             with self._lock:
                 for eid, message in finished:
                     self._messages.pop(eid, None)
-                    partition = int(message.partition())
-                    offset = int(message.offset())
-                    self._held_offsets.discard((partition, offset))
-                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+                    self._release_offset_unlocked(message)
                     self._forget_ids_unlocked(eid)
                 for eid, message in resolved:
-                    if eid not in self._messages:
-                        continue
-                    partition = int(message.partition())
-                    offset = int(message.offset())
-                    self._held_offsets.discard((partition, offset))
-                    self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
+                    if eid in self._messages:
+                        self._release_offset_unlocked(message)
         return tuple(eid for eid, _message in finished)
 
-    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
-        del events
+    def _release_offset_unlocked(self, message: Any) -> None:
+        partition = int(message.partition())
+        offset = int(message.offset())
+        self._held_offsets.discard((partition, offset))
+        self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
 
     def health(self) -> EventSourceHealth:
         with self._lock:
@@ -257,13 +246,11 @@ class KafkaEventSource(QueuedEventSource):
             return None
         return max_seen + 1
 
-    def _commit_watermarks(self, consumer: Any, watermarks: dict[int, int | None]) -> None:
+    def _commit_offset(self, consumer: Any, partition: int, nxt: int | None) -> None:
         ctor = self._topic_partition
         if ctor is None:
             raise EventSourceError("KafkaEventSource is not connected")
-        for partition, nxt in watermarks.items():
-            if nxt is None:
-                continue
+        if nxt is not None:
             consumer.commit(offsets=[ctor(self._topic, partition, nxt)], asynchronous=False)
 
     def _commit_discard(self, consumer: Any, message: Any) -> None:
@@ -272,6 +259,6 @@ class KafkaEventSource(QueuedEventSource):
         with self._lock:
             nxt = self._next_commit_offset(partition, extra_done={offset})
         try:
-            self._commit_watermarks(consumer, {partition: nxt})
+            self._commit_offset(consumer, partition, nxt)
         except KafkaException:
             logger.exception("Failed to commit discarded Kafka message")
