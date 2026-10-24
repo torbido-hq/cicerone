@@ -105,7 +105,7 @@ events worker loads the last artifact for write-through only:
 | --- | --- | --- |
 | `GET` | `/health` | Liveness probe (no auth) |
 | `GET` | `/recommendations/{user_id}` | Precomputed top-K for that user (optional `reasons`) |
-| `GET` | `/metrics` | Prometheus text format (no bearer token; optional `X-Metrics-Token`) |
+| `GET` | `/metrics` | Prometheus text format, only with `[serve].metrics_enabled` (`X-Metrics-Token` required, not the bearer) |
 | `POST` | `/events` | Incremental ingest when `[events]` `kind = "webhook"` (`202` = queued, not written) |
 | `POST` | `/track` | Impressions/clicks when `[track]` is on (`202` = row persisted). Not training |
 | `GET` | `/docs` / `/redoc` | Interactive OpenAPI docs (Swagger / ReDoc) |
@@ -115,7 +115,7 @@ Query parameters for `/recommendations/{user_id}`:
 
 | Param | Default | Description |
 | --- | --- | --- |
-| `limit` | `[serve].default_k` (10) | Top-K rows to return (`k` is accepted as an alias) |
+| `limit` | `[serve].default_k` (10) | Top-K rows to return, 1–100 (`422` outside). `k` is an alias; `400` if both are set and differ |
 | `category` | _(none)_ | Keep only items whose `[serve].category_column` (default `category`) matches |
 | `exclude_unavailable` | `true` | Re-apply `item_availability_filters` against the items snapshot written with the last run |
 
@@ -174,9 +174,8 @@ tracking (`POST /track`, CTR/CVR, Quality dashboard) is documented in
 
 See `config/cicerone.serve.toml` for a standalone example config, and the
 `serve` service in `docker-compose.yml` for how it's wired up alongside the
-batch `recommender` service. The serve port is exposed only when
-`[job].mode = "serve"` — batch-only deployments keep "no ports exposed by
-default".
+batch `recommender` service. Serve listens only when
+`[job].mode = "serve"`; compose binds every published port to `127.0.0.1`.
 
 #### OpenAPI and clients
 
@@ -222,9 +221,11 @@ Batch-only (cron) scheduling still works exactly as before. Optionally,
 process:
 
 - `POST /trigger/retrain` — a generic webhook any external system can call
-  to kick off a run immediately.
-- `[job.trigger].poll_input_bucket = true` additionally polls the configured
-  input source for a changed `events.parquet` (local file mtime, or S3
+  to kick off a run immediately: `202 {"status": "started"}`, or `429` when a
+  run is in progress or debounced. `GET /health` needs no token.
+- `[job.trigger].poll_input_bucket = true` additionally polls a `dataset`
+  input (other kinds log a warning and skip polling) for a changed
+  `events.parquet` (local file mtime, or S3
   `HEAD` `LastModified`) every `poll_interval_seconds`. This is an
   in-app substitute for real S3 event notifications: those require wiring
   up SNS/SQS/Lambda and aren't portable across S3-compatible backends
@@ -236,8 +237,8 @@ process:
   in-process `threading.Lock`) and needs no extra config or dependencies.
   For multiple scheduler replicas, set `[job.trigger].lock_backend` to
   `"postgres"` or `"redis"` — use `postgres` if your output is already `db`
-  (or set `postgres_url`); use `redis` only if you're on dataset/S3 output
-  and need HA (`pip install 'cicerone-recommender[redis]'` or
+  (or set `postgres_url`); use `redis` (with `redis_url`) only if you're on
+  dataset/S3 output and need HA (`pip install 'cicerone-recommender[redis]'` or
   `pip install -r requirements-redis.txt`). Optional `lock_key`
   (and Redis-only `lock_ttl_seconds`) that namespace the lock when several
   schedulers share one Postgres/Redis; Redis refreshes TTL while the lock is
@@ -247,9 +248,10 @@ process:
   **read** path. Incremental `[events]` apply is
   single-writer by default; HA is in
   [docs/incremental-events.md](docs/incremental-events.md).
-- The run manifest records `triggered_by` (`"cron"`, `"webhook"`, or
-  `"s3-poll"`) and `lock_backend` alongside its existing counts/timestamp
-  fields.
+- The run manifest (failed runs too) records `triggered_by` (`"cron"`,
+  `"webhook"`, `"s3-poll"`, `"manual"` for `cicerone job` / the `start` boot
+  run, or `"incremental"` for an events flush) and `lock_backend` alongside
+  its existing counts/timestamp fields.
 
 ### Incremental events
 
@@ -281,7 +283,10 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
-  a winner to 100% traffic. `GET /dashboard/config` shows the Settings this
+  a winner to 100% traffic (`POST …/promote`; `POST …/unpromote` resumes the
+  split). `GET /dashboard/quality` shows tracked CTR/conversion and replay
+  metrics when `[track]` or `[job.eval]` is on. `GET /dashboard/logout` drops
+  the Basic credentials. `GET /dashboard/config` shows the Settings this
   dashboard process loaded (and `features.toml` when present), with tokens,
   URLs, and keys redacted. Section titles and known keys offer a one-line
   hint (`?`), with a Docs link when cicerone.dev covers that setting.
@@ -307,7 +312,7 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
 
   (`--users-path` is optional when `--config` points at a dashboard TOML).
   Passwords are hashed with bcrypt; the file is plain TOML
-  (`username = "<bcrypt hash>"`).
+  (`username = "<bcrypt hash>"` under `[users]`).
 - Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
   use the standalone `config/cicerone.dashboard.toml` example config). See
   the `dashboard` service in `docker-compose.yml` for how it's wired up
@@ -378,17 +383,18 @@ mapping looks like:
 
 `users` (optional, enables user features for cold-start + per-user
 eligibility): columns are configurable in `config/features.toml` →
-`user_features` (default: `favorite_styles` as a list, `region_slug` as
+`user_features` (shipped file: `favorite_styles` as a list, `region_slug` as
 categorical — rename/replace these for your own domain). Any extra columns
 referenced by `[[eligibility]]` rules (e.g. `nationality`, `market`) must
 also be present on the users frame.
 
 `items` (optional, enables item features + availability / eligibility /
 boosts): columns are configurable in `config/features.toml` →
-`item_features` (default: `category`, `primary_style`, `producer_id`,
+`item_features` (shipped file: `category`, `primary_style`, `producer_id`,
 `region_slug`, `abv_bucket` — again, adapt these to your catalog). The
-availability filter (`item_availability_filters`, default `published` +
+availability filter (`item_availability_filters`, shipped `published` +
 `in_stock`) always excludes unavailable items from the recommendations.
+Feature and filter lists default to empty when omitted from the file.
 Additional policy columns (e.g. `available_countries`, `is_paying_producer`,
 `plan_tier`) are only required when the matching `[[eligibility]]` /
 `[[boost]]` rules are enabled.
@@ -532,7 +538,8 @@ Each run, `cicerone.automl.evaluate_candidates()` splits your event history
 into `n_splits` non-overlapping, most-recent-first `test_days`-day windows;
 for each candidate strategy/weight combination, it trains on everything
 before the window and scores the recommendations against what actually
-happened during it (`MAP@k`, `NDCG@k`, `Recall@k`, via `rectools.metrics`).
+happened during it (`MAP@k`, `NDCG@k`, `Recall@k`, `HitRate@k`, `MRR@k`,
+`Precision@k`, via `rectools.metrics`).
 `select_best_candidate()` then picks the highest-scoring candidate by
 `primary_metric`, and that candidate's `models`/`weights`/`rrf_k` are used
 for the run in place of the static config, ties broken by candidate order.
@@ -622,11 +629,15 @@ not loadable.
 ## Output
 
 `recommendations`: `user_id, item_id, rank, score, source` plus optional
-`reasons` JSON (`[job.explain]`, default on). `source` is the label of
-whichever strategy produced that row: `personalized`, `item_based`,
-`sequential`, `content_fallback`, `popular_fallback`, `latest`, or `blended`
-when multi-source blending combined more than one. Existing DB tables need
-`ALTER TABLE … ADD COLUMN reasons TEXT` before the extra column will persist.
+`reasons` JSON (`[job.explain]`, default on) and `variant` (`[experiment]`).
+`source` is the label of whichever strategy produced that row:
+`personalized`, `item_based`, `sequential`, `ease`, `als`,
+`content_fallback`, `popular_fallback`, `popular_in_category`, `latest`,
+`random`, `incremental`, `blended` when multi-source blending combined more
+than one, or a `+`-joined label under RRF. Writing to an existing DB table
+without the `reasons` / `variant` column fails with
+`RecommendationSchemaError`; run `ALTER TABLE … ADD COLUMN reasons TEXT`
+(or `variant TEXT`) first.
 An incremental flush rewrites a whole user's rows, but only the event-derived
 boost rows carry `incremental`: preserved personalized rows keep their original
 label unless `[events.online]` replaced them, and the refilled slices stay
@@ -772,8 +783,9 @@ code is structured. See [CHANGELOG.md](CHANGELOG.md) for release notes.
   input side, write on the output side, no delete/admin permissions).
   Custom `input.options.*_query` and `events.options.events_query` values
   must be a single `SELECT`; give that role only the tables it should read.
-- `[events.online]` requires `[output].artifact_hmac_key` (16+ bytes). The
-  job signs `model.artifact`; the events worker verifies before unpickle.
+- `[events.online]` requires `[output].artifact_hmac_key` (16+ bytes), a
+  `db` or local dataset output, and LightFM as `collaborative`. The job
+  signs `model.artifact`; the events worker verifies before unpickle.
 - No personal data other than `user_id` (an opaque identifier) is ever read
   or written.
 - The batch job itself accepts no inbound connections. The optional serve
