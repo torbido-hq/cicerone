@@ -15,7 +15,13 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.config.settings import EventsIncrementalSettings, EventsOnlineSettings, EventsSettings
-from cicerone.config.validation import require_non_negative_int, require_positive_float, require_positive_int
+from cicerone.config.validation import (
+    float_field,
+    int_field,
+    require_non_negative_int,
+    require_positive_float,
+    require_positive_int,
+)
 from cicerone.events.registry import registered_event_source_kinds
 
 ResolveEnv = Callable[[Any, str], Any]
@@ -37,17 +43,20 @@ def _incremental_settings(
     else:
         raise TypeError(f"Expected EventsIncrementalSettings, dict, or None; got {type(raw).__name__}")
     return EventsIncrementalSettings(
-        batch_size=require_positive_int(
-            int(data.get("batch_size", DEFAULT_EVENTS_BATCH_SIZE)),
-            name="events.incremental.batch_size",
+        batch_size=int_field(
+            data, "events.incremental.batch_size", DEFAULT_EVENTS_BATCH_SIZE, require_positive_int
         ),
-        batch_window_seconds=require_positive_float(
-            float(data.get("batch_window_seconds", DEFAULT_EVENTS_BATCH_WINDOW_SECONDS)),
-            name="events.incremental.batch_window_seconds",
+        batch_window_seconds=float_field(
+            data,
+            "events.incremental.batch_window_seconds",
+            DEFAULT_EVENTS_BATCH_WINDOW_SECONDS,
+            require_positive_float,
         ),
-        poll_interval_seconds=require_positive_float(
-            float(data.get("poll_interval_seconds", DEFAULT_EVENTS_POLL_INTERVAL_SECONDS)),
-            name="events.incremental.poll_interval_seconds",
+        poll_interval_seconds=float_field(
+            data,
+            "events.incremental.poll_interval_seconds",
+            DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
+            require_positive_float,
         ),
     )
 
@@ -68,17 +77,20 @@ def _online_settings(raw: dict[str, Any] | EventsOnlineSettings | None) -> Event
         raise TypeError(f"Expected EventsOnlineSettings, dict, or None; got {type(raw).__name__}")
     return EventsOnlineSettings(
         enabled=bool(data.get("enabled", False)),
-        fit_partial_epochs=require_non_negative_int(
-            int(data.get("fit_partial_epochs", DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS)),
-            name="events.online.fit_partial_epochs",
+        fit_partial_epochs=int_field(
+            data,
+            "events.online.fit_partial_epochs",
+            DEFAULT_EVENTS_ONLINE_FIT_PARTIAL_EPOCHS,
+            require_non_negative_int,
         ),
-        fit_min_events=require_positive_int(
-            int(data.get("fit_min_events", DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS)),
-            name="events.online.fit_min_events",
+        fit_min_events=int_field(
+            data, "events.online.fit_min_events", DEFAULT_EVENTS_ONLINE_FIT_MIN_EVENTS, require_positive_int
         ),
-        max_extra_interactions=require_positive_int(
-            int(data.get("max_extra_interactions", DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS)),
-            name="events.online.max_extra_interactions",
+        max_extra_interactions=int_field(
+            data,
+            "events.online.max_extra_interactions",
+            DEFAULT_EVENTS_ONLINE_MAX_EXTRA_INTERACTIONS,
+            require_positive_int,
         ),
     )
 
