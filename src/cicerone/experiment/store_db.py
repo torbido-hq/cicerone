@@ -13,7 +13,7 @@ from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.engines import create_table_sql, engine_for, insert_sql, quote_identifier
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
@@ -86,20 +86,8 @@ class ExperimentDbBackend:
             self._engine = engine_for(require_option(self._options, "database_url", "db"))
         return self._engine
 
-    def _state_table(self) -> str:
-        return sql_identifier(
-            self._options.get("experiment_state_table", DEFAULT_STATE_TABLE),
-            option="experiment_state_table",
-        )
-
-    def _exposures_table(self) -> str:
-        return sql_identifier(
-            self._options.get("exposures_table", DEFAULT_EXPOSURES_TABLE),
-            option="exposures_table",
-        )
-
     def read_state(self) -> dict[str, Any] | None:
-        table = self._state_table()
+        table = table_option(self._options, "experiment_state_table", DEFAULT_STATE_TABLE)
         engine = self.engine()
         quoted_table, promoted_at = quote_identifier(engine, table), quote_identifier(engine, "promoted_at")
         try:
@@ -135,7 +123,7 @@ class ExperimentDbBackend:
 
     def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
         # Encode before the caller takes the fence; only the SQL runs under it.
-        table = self._state_table()
+        table = table_option(self._options, "experiment_state_table", DEFAULT_STATE_TABLE)
         engine = self.engine()
         quoted_table = quote_identifier(engine, table)
         experiment_id = str(state.get("experiment_id") or "")
@@ -182,7 +170,7 @@ class ExperimentDbBackend:
         return _write
 
     def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
-        table = self._exposures_table()
+        table = table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE)
         engine = self.engine()
         frame = pd.DataFrame(list(rows))
 
@@ -210,7 +198,7 @@ class ExperimentDbBackend:
         return [column for column in EXPOSURE_COLUMNS if column in existing]
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
-        table = self._exposures_table()
+        table = table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE)
         engine = self.engine()
         quoted_table = quote_identifier(engine, table)
         selected = self.stored_exposure_columns(engine, table)

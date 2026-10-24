@@ -46,6 +46,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The dashboard user lookup on dataset storage (history pane, `get_user`)
+  works when `user_id` is stored as an integer column instead of failing
+  the filtered read.
+- `replace_model_artifact_if` on SQLite db output matches the artifact
+  fingerprint it hands out instead of never swapping.
 - Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
   is unset, so a quiet stream no longer parks the event worker. An
   explicit `block_ms = 0` keeps that behaviour and logs a warning.
