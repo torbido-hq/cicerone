@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- An escaped `$${NAME}` in `events.options.auth_token` stays the literal
+  `${NAME}` instead of being expanded by a second placeholder pass.
 
 ## [0.8.5] - 2026-10-14
 
@@ -85,9 +87,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Deprecated
 
 - Flat `Settings` aliases (`serve_host`, `trigger_lock_backend`,
-  `dashboard_enabled`, …) and flat `make_settings` overrides
-  (`make_settings(serve_port=…)`) warn and will be removed in 0.9.0. Use
-  the nested `settings.serve.host` / `make_settings(serve=ServeSettings(…))`.
+  `dashboard_enabled`, …) warn and will be removed in 0.9.0. Use the
+  nested `settings.serve.host`.
 - The old `_`-prefixed names exported by `cicerone.evaluation`,
   `cicerone.io.recommendation_reader`, `cicerone.track.store` and
   `cicerone.locks` warn and will be removed in 0.9.0. Use the public names.

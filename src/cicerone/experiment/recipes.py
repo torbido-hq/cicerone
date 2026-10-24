@@ -10,6 +10,7 @@ from typing import Any, TypeVar, cast
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
 from cicerone.config.settings import Settings, VariantSettings
 from cicerone.config.validation import (
+    parse_policy_rules,
     require_finite,
     unique_policy_names,
     validate_model_weights,
@@ -23,6 +24,7 @@ from cicerone.feature_config import (
     FeatureConfig,
     parse_boost_rules,
     parse_eligibility_rules,
+    parse_latest_date_columns,
 )
 
 COMBINER_PRIORITY = "priority"
@@ -144,12 +146,7 @@ def _resolve_policy_spec(
         names = unique_policy_names(items, label=label)
         return _pick_named(inherited, names, label=label)
     if all(isinstance(item, Mapping) for item in items):
-        try:
-            rules = tuple(parse([dict(item) for item in items]))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ConfigError(f"{label}: {exc}") from exc
-        unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
-        return rules
+        return parse_policy_rules(cast(tuple[Mapping[str, Any], ...], items), parse, label=label)
     if all(isinstance(item, rule_type) for item in items):
         return cast(tuple[_T, ...], items)
     raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
@@ -396,11 +393,7 @@ def _recipe_blending(
         if field in overlay:
             updates[field] = require_finite(float(overlay[field]), name=f"{label}.{field}")
     if "latest_date_columns" in overlay:
-        raw = overlay["latest_date_columns"]
-        if isinstance(raw, str):
-            updates["latest_date_columns"] = (raw,)
-        else:
-            updates["latest_date_columns"] = tuple(str(column) for column in raw)
+        updates["latest_date_columns"] = parse_latest_date_columns(overlay["latest_date_columns"])
     return replace(base, **updates)
 
 

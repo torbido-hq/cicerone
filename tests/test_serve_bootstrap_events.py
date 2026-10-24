@@ -516,6 +516,7 @@ def test_start_events_runtime_connects_source_when_worker_not_started(
                 events=EventsSettings(
                     enabled=True,
                     kind="db",
+                    options={"database_url": "sqlite+pysqlite:///:memory:"},
                     incremental=EventsIncrementalSettings(
                         batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
                     ),

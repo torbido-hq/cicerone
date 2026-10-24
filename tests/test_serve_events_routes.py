@@ -166,7 +166,11 @@ def test_events_route_absent_when_disabled():
 
 def test_events_route_absent_for_non_webhook_kind():
     app = create_app(
-        _settings(events=EventsSettings(enabled=True, kind="db")),
+        _settings(
+            events=EventsSettings(
+                enabled=True, kind="db", options={"database_url": "sqlite+pysqlite:///:memory:"}
+            )
+        ),
         _FakeReader(_recs_df()),
     )
     assert (

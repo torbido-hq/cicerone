@@ -10,13 +10,19 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.config.settings import EvalSettings, TrackSettings
-from cicerone.config.validation import require_non_negative_int, require_positive_float, require_positive_int
+from cicerone.config.validation import (
+    float_field,
+    int_field,
+    require_non_negative_int,
+    require_positive_float,
+    require_positive_int,
+)
 
 
 def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
     if raw is None:
         return ()
-    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+    if not isinstance(raw, list | tuple) or not all(isinstance(item, str) and item.strip() for item in raw):
         raise ConfigError(f"{name} must be a list of non-empty strings")
     return tuple(item.strip() for item in raw)
 
@@ -24,7 +30,7 @@ def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
 def _load_positive_int_tuple(raw: object, *, name: str) -> tuple[int, ...]:
     if raw is None:
         return ()
-    if not isinstance(raw, list):
+    if not isinstance(raw, list | tuple):
         raise ConfigError(f"{name} must be a list of positive integers")
     values: list[int] = []
     for item in raw:
@@ -39,13 +45,11 @@ def _load_positive_int_tuple(raw: object, *, name: str) -> tuple[int, ...]:
 def load_track_settings(raw: dict[str, Any] | None) -> TrackSettings:
     data = raw or {}
     enabled = bool(data.get("enabled", False))
-    window = require_positive_float(
-        float(data.get("attribution_window_hours", DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS)),
-        name="track.attribution_window_hours",
+    window = float_field(
+        data, "track.attribution_window_hours", DEFAULT_TRACK_ATTRIBUTION_WINDOW_HOURS, require_positive_float
     )
-    min_impressions = require_non_negative_int(
-        int(data.get("min_impressions", DEFAULT_TRACK_MIN_IMPRESSIONS)),
-        name="track.min_impressions",
+    min_impressions = int_field(
+        data, "track.min_impressions", DEFAULT_TRACK_MIN_IMPRESSIONS, require_non_negative_int
     )
     return TrackSettings(
         enabled=enabled,
