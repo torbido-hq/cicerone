@@ -46,6 +46,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The db events source no longer skips an earlier event after a restart
+  when a later event was acked first: the watermark only advances through
+  the leading run of acked events, and a nacked event holds it until it is
+  polled again and acked.
 
 ## [0.8.5] - 2026-10-14
 

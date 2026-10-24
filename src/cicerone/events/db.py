@@ -79,7 +79,10 @@ class DbEventSource(EventSource):
         self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
         self._engine: Engine | None = None
         self._lock = threading.Lock()
+        # Polled events in cursor order; acked/nacked ones stay until the leading run is acked.
         self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
+        self._acked: set[str] = set()
+        self._nacked: set[str] = set()
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -141,8 +144,9 @@ class DbEventSource(EventSource):
                     break
                 if cursor_key(event) <= cursor:
                     continue
-                if event.event_id in self._in_flight:
+                if event.event_id in self._in_flight and event.event_id not in self._nacked:
                     continue
+                self._nacked.discard(event.event_id)
                 self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
                 out.append(event)
@@ -150,22 +154,22 @@ class DbEventSource(EventSource):
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
-            for event in events:
-                self._in_flight.pop(event.event_id, None)
+            self._nacked.update(event.event_id for event in events if event.event_id in self._in_flight)
         return ()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
         with self._lock:
-            advanced = False
             for event_id in event_ids:
                 eid = str(event_id)
-                event = self._in_flight.pop(eid, None)
-                if event is None:
-                    continue
-                confirmed.append(eid)
-                key = cursor_key(event)
-                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
+                if eid in self._in_flight and eid not in self._acked and eid not in self._nacked:
+                    self._acked.add(eid)
+                    confirmed.append(eid)
+            advanced = False
+            while self._in_flight and next(iter(self._in_flight)) in self._acked:
+                eid, event = self._in_flight.popitem(last=False)
+                self._acked.discard(eid)
+                if cursor_key(event) > cursor_tuple(self._watermark_at, self._watermark_event_id):
                     self._watermark_at = event.occurred_at
                     self._watermark_event_id = event.event_id
                     advanced = True

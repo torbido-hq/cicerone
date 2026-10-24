@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import event_payload
 
 from cicerone.events.db import (
     DbEventSource,
@@ -208,6 +210,67 @@ def test_db_watermark_path_persists(tmp_path):
     restarted.connect()
     left = list(restarted.poll(10))
     assert [event.event_id for event in left] == ["e2"]
+
+
+def _ids(events) -> list[str]:
+    return [event.event_id for event in events]
+
+
+def _watermarked_source(tmp_path, rows: list[dict]) -> tuple[DbEventSource, dict]:
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, rows)
+    options = {"database_url": url, "watermark_path": str(tmp_path / "wm.json")}
+    source = DbEventSource(options)
+    source.connect()
+    return source, options
+
+
+def _restarted_poll(options: dict) -> list[str]:
+    restarted = DbEventSource(options)
+    restarted.connect()
+    return _ids(restarted.poll(10))
+
+
+def _three_events(**overrides) -> list[dict]:
+    times = ["2026-08-13T12:00:00Z", "2026-08-13T12:01:00Z", "2026-08-13T12:02:00Z"]
+    return [
+        event_payload(event_id=f"e{i}", item_id=f"i{i}", occurred_at=times[i - 1], **overrides)
+        for i in (1, 2, 3)
+    ]
+
+
+def test_db_out_of_order_ack_keeps_watermark_before_unacked_event(tmp_path):
+    source, options = _watermarked_source(tmp_path, _three_events())
+    assert _ids(source.poll(10)) == ["e1", "e2", "e3"]
+    assert tuple(source.ack(["e3", "e2"])) == ("e3", "e2")
+    assert not (tmp_path / "wm.json").exists()
+    assert _restarted_poll(options) == ["e1", "e2", "e3"]
+    assert tuple(source.ack(["e1"])) == ("e1",)
+    assert json.loads((tmp_path / "wm.json").read_text())["event_id"] == "e3"
+    assert _restarted_poll(options) == []
+
+
+def test_db_nacked_event_blocks_watermark_until_repolled_and_acked(tmp_path):
+    source, options = _watermarked_source(tmp_path, _three_events())
+    first, _second, _third = source.poll(10)
+    assert tuple(source.nack([first])) == ()
+    assert tuple(source.ack(["e1", "e2"])) == ("e2",)
+    assert not (tmp_path / "wm.json").exists()
+    assert _ids(source.poll(10)) == ["e1"]
+    assert tuple(source.ack(["e1"])) == ("e1",)
+    assert _restarted_poll(options) == ["e3"]
+
+
+def test_db_same_timestamp_watermark_follows_event_id_order(tmp_path):
+    rows = [event_payload(event_id=f"e{i}", item_id=f"i{i}") for i in (3, 1, 2)]
+    source, options = _watermarked_source(tmp_path, rows)
+    assert _ids(source.poll(10)) == ["e1", "e2", "e3"]
+    source.ack(["e3"])
+    source.ack(["e1"])
+    assert json.loads((tmp_path / "wm.json").read_text())["event_id"] == "e1"
+    assert _restarted_poll(options) == ["e2", "e3"]
+    source.ack(["e2"])
+    assert _restarted_poll(options) == []
 
 
 def test_db_events_query_and_stable_id_without_event_id(tmp_path):
