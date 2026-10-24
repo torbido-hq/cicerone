@@ -115,7 +115,7 @@ def test_post_track_counts_malformed_body_as_error_once(tmp_path):
 
     labels = {"kind": "other", "status": "error"}
     before = registry_metric_value("cicerone_track_ingest_total", labels)
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json="nope")
     assert response.status_code == 400
     assert registry_metric_value("cicerone_track_ingest_total", labels) == before + 1
