@@ -6,8 +6,11 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
+from support.fakes import FakeS3Body, FakeS3Client
 
 from cicerone.config import ConfigError, IOSettings
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
@@ -38,8 +41,8 @@ def test_track_row_sql_filter_invalid_since_is_empty() -> None:
     assert "since" not in params
 
 
-def test_store_reexports_prior_constants() -> None:
-    from cicerone.track.store import (
+def test_store_constants() -> None:
+    from cicerone.track.store_common import (
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
         DEFAULT_TRACK_TABLE,
@@ -273,16 +276,8 @@ def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:
     assert TrackStore(output).read_eval() is None
 
 
-def test_append_track_rejects_object_store() -> None:
-    output = IOSettings(
-        kind="dataset",
-        options={
-            "storage_backend": "s3",
-            "bucket": "recs",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-        },
-    )
+def test_append_track_rejects_object_store(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
     with pytest.raises(ConfigError, match="not atomic"):
         TrackStore(output).append_rows([_row()])
 
@@ -312,35 +307,21 @@ def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
     assert rows[0]["event_id"] == "imp-1"
 
 
-def test_track_eval_roundtrip_s3() -> None:
-    import boto3
-    from moto import mock_aws
-
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-                "prefix": "out",
-            },
-        )
-        store = TrackStore(output)
-        assert store.read_eval() is None
-        assert store.read_rows() == []
-        store.write_eval({"ok": True})
-        assert store.read_eval() == {"ok": True}
-        history = store.read_history()
-        assert history.empty
-        store.append_history(pd.DataFrame(), generated_at="t")
-        assert store.read_history().empty
-        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
-        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
-        assert len(store.read_history()) == 2
+def test_track_eval_roundtrip_s3(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
+    store = TrackStore(output)
+    assert store.read_eval() is None
+    assert store.read_rows() == []
+    store.write_eval({"ok": True})
+    assert store.read_eval() == {"ok": True}
+    history = store.read_history()
+    assert history.empty
+    store.append_history(pd.DataFrame(), generated_at="t")
+    assert store.read_history().empty
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    assert len(store.read_history()) == 2
 
 
 def test_track_store_sqlite_missing_tables(tmp_path) -> None:
@@ -540,7 +521,7 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Busy())
+    store = TrackStore(output, fence=WriteFence(_Busy()))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_rows([_row()])
 
@@ -565,7 +546,7 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Lock())
+    store = TrackStore(output, fence=WriteFence(_Lock()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_rows([_row()])
     assert store.read_rows() == []
@@ -577,9 +558,7 @@ def test_track_jsonl_append_honors_caller_fence(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_accepted_rows([_row()])
@@ -593,9 +572,7 @@ def test_track_db_append_honors_caller_fence(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_accepted_rows([_row()])
@@ -610,9 +587,7 @@ def test_write_eval_db_honors_fence(tmp_path) -> None:
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_eval({"ok": True})
@@ -632,9 +607,7 @@ def test_write_eval_db_rechecks_fence_after_delete(tmp_path) -> None:
 
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_eval({"ok": True})
@@ -661,9 +634,7 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
@@ -673,7 +644,7 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
 
 
 def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
-    from cicerone.locks import held_writer_lock
+    from cicerone.locks import WriteFence
 
     acquires = {"n": 0}
 
@@ -693,9 +664,9 @@ def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     lock = _Lock()
-    store = TrackStore(output, writer_lock=lock)
+    store = TrackStore(output, fence=WriteFence(lock))
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         store.write_eval({"ok": True})
         store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
         store.append_accepted_rows([_row(event_id="held-1")])
@@ -722,7 +693,7 @@ def test_write_eval_takes_writer_lock(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Lost())
+    store = TrackStore(output, fence=WriteFence(_Lost()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.write_eval({"ok": True})
     assert store.read_eval() is None
@@ -845,18 +816,10 @@ def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_pa
         store.read_rows()
 
 
-def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
-    output = IOSettings(
-        kind="dataset",
-        options={
-            "storage_backend": "s3",
-            "bucket": "recs",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-        },
-    )
+def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch, s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
     monkeypatch.setattr(
-        "cicerone.io.options.read_parquet",
+        "cicerone.io.blob.read_parquet",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("corrupt")),
     )
     monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: False)
@@ -867,68 +830,28 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch) -> None:
 def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
     from cicerone.track.store_dataset import _s3_parquet_frame
 
-    class _Body:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def read(self) -> bytes:
-            return b"parquet"
-
-        def close(self) -> None:
-            self.closed = True
-
-    body = _Body()
-
-    class _Client:
-        def get_object(self, **_kwargs):
-            return {"Body": body}
-
+    body = FakeS3Body(b"parquet")
     monkeypatch.setattr(
         "cicerone.track.store_dataset.pd.read_parquet",
         lambda _buf: pd.DataFrame({"x": [1]}),
     )
-    frame = _s3_parquet_frame(_Client(), "recs", "history/part.parquet")
+    frame = _s3_parquet_frame(FakeS3Client(body), "recs", "history/part.parquet")
     assert frame is not None
     assert body.closed is True
 
 
-def test_track_read_bytes_s3_generic_error(monkeypatch) -> None:
-    import boto3
-    from moto import mock_aws
-
+def test_track_read_bytes_s3_generic_error(monkeypatch, s3_options) -> None:
     class _Boom:
         def get_object(self, **_kwargs):
             raise RuntimeError("network")
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-        with pytest.raises(RuntimeError, match="network"):
-            TrackStore(output).read_eval()
+    output = IOSettings(kind="dataset", options=s3_options)
+    with pytest.raises(RuntimeError, match="network"):
+        TrackStore(output).read_eval()
 
 
-def _s3_dataset() -> IOSettings:
-    return IOSettings(
-        kind="dataset",
-        options={
-            "storage_backend": "s3",
-            "bucket": "recs",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-        },
-    )
-
-
-def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
+def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch, s3_options) -> None:
     class _Boom:
         def list_objects_v2(self, **_kwargs):
             raise RuntimeError("list failed")
@@ -936,14 +859,14 @@ def test_track_history_s3_unexpected_error_ignores_not_found_helper(monkeypatch)
     def _legacy(*_args, **_kwargs):
         raise FileNotFoundError("legacy")
 
-    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _legacy)
     monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
     monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
     with pytest.raises(RuntimeError, match="list failed"):
-        TrackStore(_s3_dataset()).read_history()
+        TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history()
 
 
-def test_track_history_s3_access_denied_reraises(monkeypatch) -> None:
+def test_track_history_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
     from botocore.exceptions import ClientError
 
     denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "ListObjectsV2")
@@ -955,10 +878,10 @@ def test_track_history_s3_access_denied_reraises(monkeypatch) -> None:
     def _legacy(*_args, **_kwargs):
         raise FileNotFoundError("legacy")
 
-    monkeypatch.setattr("cicerone.io.options.read_parquet", _legacy)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _legacy)
     monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Denied())
     with pytest.raises(ClientError, match="AccessDenied"):
-        TrackStore(_s3_dataset()).read_history()
+        TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history()
 
 
 def test_s3_parquet_frame_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
@@ -986,7 +909,7 @@ def test_s3_parquet_frame_access_denied_reraises() -> None:
         _s3_parquet_frame(_Denied(), "recs", "history/part.parquet")
 
 
-def test_track_read_eval_s3_access_denied_reraises(monkeypatch) -> None:
+def test_track_read_eval_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
     from botocore.exceptions import ClientError
 
     class _Denied:
@@ -995,7 +918,7 @@ def test_track_read_eval_s3_access_denied_reraises(monkeypatch) -> None:
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
     with pytest.raises(ClientError, match="AccessDenied"):
-        TrackStore(_s3_dataset()).read_eval()
+        TrackStore(IOSettings(kind="dataset", options=s3_options)).read_eval()
 
 
 def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
@@ -1115,34 +1038,23 @@ def test_track_read_history_since_skips_older_part_files(tmp_path) -> None:
     assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
 
 
-def test_track_read_history_s3_since_skips_older_parts() -> None:
+def test_track_read_history_s3_since_skips_older_parts(s3_options) -> None:
     import boto3
-    from moto import mock_aws
 
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-        store = TrackStore(output)
-        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
-        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
-        client.put_object(
-            Bucket="recs",
-            Key="recommendation_history/2026-08-28T03-00-00+00-00.parquet",
-            Body=b"not parquet",
-        )
-        history = store.read_history(since="2026-08-29T00:00:00+00:00")
-        assert len(history) == 1
-        assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
+    client = boto3.client("s3", region_name="us-east-1")
+    output = IOSettings(kind="dataset", options=s3_options)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    client.put_object(
+        Bucket=s3_options["bucket"],
+        Key=f"{s3_options['prefix']}/recommendation_history/2026-08-28T03-00-00+00-00.parquet",
+        Body=b"not parquet",
+    )
+    history = store.read_history(since="2026-08-29T00:00:00+00:00")
+    assert len(history) == 1
+    assert str(history.iloc[0]["generated_at"]) == "2026-08-29T03:00:00+00:00"
 
 
 def test_track_read_history_sqlite_generated_ats(tmp_path) -> None:
@@ -1204,103 +1116,69 @@ def test_track_read_history_generated_ats_skips_glob_when_exact_name_exists(tmp_
     assert len(history) == 1
 
 
-def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch) -> None:
+def test_track_read_history_s3_empty_exact_key_skips_list(monkeypatch, s3_options) -> None:
     import boto3
-    from moto import mock_aws
 
     from cicerone.track import store_dataset
     from cicerone.track.store_common import HISTORY_COLUMNS, HISTORY_DIR
     from cicerone.track.store_dataset import history_part_name
 
     stamp = "2026-08-29T03:00:00+00:00"
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="recs")
-        buf = BytesIO()
-        pd.DataFrame(columns=list(HISTORY_COLUMNS)).to_parquet(buf, index=False)
-        client.put_object(
-            Bucket="recs",
-            Key=f"{HISTORY_DIR}/{history_part_name(stamp)}",
-            Body=buf.getvalue(),
-        )
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
+    client = boto3.client("s3", region_name="us-east-1")
+    buf = BytesIO()
+    pd.DataFrame(columns=list(HISTORY_COLUMNS)).to_parquet(buf, index=False)
+    client.put_object(
+        Bucket=s3_options["bucket"],
+        Key=f"{s3_options['prefix']}/{HISTORY_DIR}/{history_part_name(stamp)}",
+        Body=buf.getvalue(),
+    )
+    output = IOSettings(kind="dataset", options=s3_options)
 
-        def _no_list(*_args, **_kwargs):
-            raise AssertionError("list should not run when the exact history key exists")
+    def _no_list(*_args, **_kwargs):
+        raise AssertionError("list should not run when the exact history key exists")
 
-        monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
-        history = TrackStore(output).read_history(generated_ats=[stamp])
-        assert history.empty
+    monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+    history = TrackStore(output).read_history(generated_ats=[stamp])
+    assert history.empty
 
 
-def test_track_read_history_s3_generated_ats_skips_list_when_exact_key_exists(monkeypatch) -> None:
-    import boto3
-    from moto import mock_aws
+def test_track_read_history_s3_generated_ats_skips_list_when_exact_key_exists(
+    monkeypatch, s3_options
+) -> None:
 
     from cicerone.track import store_dataset
 
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-        store = TrackStore(output)
-        store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
+    output = IOSettings(kind="dataset", options=s3_options)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-29T03:00:00+00:00")
 
-        def _no_list(*_args, **_kwargs):
-            raise AssertionError("list should not run when exact history keys exist")
+    def _no_list(*_args, **_kwargs):
+        raise AssertionError("list should not run when exact history keys exist")
 
-        monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
-        history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
-        assert len(history) == 1
+    monkeypatch.setattr(store_dataset, "_list_s3_parquet_keys", _no_list)
+    history = store.read_history(generated_ats=["2026-08-29T03:00:00+00:00"])
+    assert len(history) == 1
 
 
-def test_track_read_history_s3_generated_ats_matches_z_and_offset() -> None:
-    import boto3
-    from moto import mock_aws
-
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-        recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-        store = TrackStore(output)
-        store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
-        history = store.read_history(generated_ats=["2026-08-28T03:00:00Z"])
-        assert len(history) == 1
+def test_track_read_history_s3_generated_ats_matches_z_and_offset(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    store = TrackStore(output)
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
+    history = store.read_history(generated_ats=["2026-08-28T03:00:00Z"])
+    assert len(history) == 1
 
 
 def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
-    from cicerone.locks import LockLostError, WriteFence
+    from cicerone.locks import LockLostError
     from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
 
-    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))
+    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())
     assert backend._ensure_fence() is None
     lost = TrackDbBackend(
         {"database_url": "sqlite+pysqlite://"},
-        WriteFence.resolve(None, fence_check=lambda: False, fence_lost="track fence lost"),
+        WriteFence(None, lambda: False, "track fence lost"),
     )
     with pytest.raises(LockLostError, match="track fence lost"):
         lost._ensure_fence()
@@ -1339,7 +1217,25 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
         output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     else:
         output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    store = TrackStore(output, writer_lock=_NeverAcquire())
+    store = TrackStore(output, fence=WriteFence(_NeverAcquire()))
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})
     assert not (tmp_path / "track_eval.json").exists()
+
+
+def test_track_table_quotes_its_columns_for_the_dialect():
+    # rank is reserved on MySQL.
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import mysql
+
+    from cicerone.locks import WriteFence
+    from cicerone.track.store_db import TrackDbBackend
+
+    executed: list[str] = []
+    conn = SimpleNamespace(dialect=mysql.dialect(), execute=lambda statement: executed.append(str(statement)))
+
+    TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())._ensure_track_table(conn, "track")
+
+    assert "`rank` INTEGER" in executed[0]
+    assert executed[0].startswith("CREATE TABLE IF NOT EXISTS track (event_id TEXT PRIMARY KEY")

@@ -21,7 +21,7 @@ from cicerone.experiment.assignment import (
 )
 from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import RecommendationReader, UserHistoryReader
-from cicerone.io.options import is_s3_not_found
+from cicerone.io.blob import is_storage_not_found
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -30,7 +30,6 @@ from cicerone.io.recommendation_schema import (
     has_variant_column,
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
-from cicerone.locks import LockLostError
 from cicerone.reasons import parse_reasons
 from cicerone.values import as_list, is_missing, is_sequence_attr
 
@@ -128,8 +127,6 @@ def lookup_recommendations(
         if key != last_key or now - last_at >= _LOOKUP_REFRESH_TTL_SECONDS:
             recommendation_reader.refresh()
             _last_lookup_refresh = (key, now)
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
 
@@ -170,8 +167,6 @@ def lookup_recommendations(
             "error": None,
             **empty_history_fields(),
         }
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught(f"Failed to look up recommendations for user_id={user_id!r}", exc, log=logger)
         return empty_recommendations_context(user_id=user_id, queried=True, error=LOOKUP_FAILED)
@@ -189,8 +184,6 @@ def lookup_history(
 
     try:
         events = history_reader.get_events_for_user(user_id, settings.dashboard.lookup_events)
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         if _history_unavailable(exc):
             empty["events_error"] = HISTORY_UNAVAILABLE
@@ -206,8 +199,6 @@ def lookup_history(
         try:
             user = history_reader.get_user(user_id)
             empty["user_attrs"] = format_user_attrs(user, allowed=settings.dashboard.lookup_user_attrs)
-        except LockLostError:
-            raise
         except OPTIONAL_IO_ERRORS as exc:
             log_caught(f"Failed to look up user attributes for user_id={user_id!r}", exc, log=logger)
     return empty
@@ -322,7 +313,7 @@ def _source_mix(items: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 
 def _history_unavailable(exc: BaseException) -> bool:
-    if isinstance(exc, FileNotFoundError) or is_s3_not_found(exc):
+    if is_storage_not_found(exc):
         return True
     message = str(exc).lower()
     return "no such table" in message or "does not exist" in message or "no such file" in message

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
-from cicerone.events.base import EventSourceError, EventSourceHealth
+from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
@@ -16,7 +19,7 @@ from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.serve.metrics import update_events_leader
+from cicerone.metrics import update_events_leader
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -1579,7 +1582,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
     worker = EventWorker(
         _FailApplyAck(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2510,7 +2513,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
 
     worker = EventWorker(
         _Replay(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2575,7 +2578,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     source = _Redeliver()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2696,7 +2699,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
     source = _TwoShots()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2750,7 +2753,7 @@ def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
     assert event_fingerprint(held) == event_fingerprint(generated)
     worker = EventWorker(
         _Ephemeral(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2866,7 +2869,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
     source = _Ephemeral()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -3509,3 +3512,136 @@ def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
     with pytest.raises(KeyboardInterrupt):
         worker.tick()
     assert source.health().lag == 1
+
+
+class _ListSource:
+    def __init__(self, events) -> None:  # type: ignore[no-untyped-def]
+        self.pending = list(events)
+        self.acks: list[list[str]] = []
+
+    def connect(self) -> None:
+        return None
+
+    def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+        del max_events
+        polled, self.pending = self.pending, []
+        return polled
+
+    def ack(self, event_ids):  # type: ignore[no-untyped-def]
+        self.acks.append(list(event_ids))
+        return list(event_ids)
+
+    def nack(self, events):  # type: ignore[no-untyped-def]
+        return list(events)
+
+    def health(self) -> EventSourceHealth:
+        return EventSourceHealth(connected=True, lag=len(self.pending))
+
+
+def _rejected_event(event_id: str) -> NormalizedEvent:
+    return replace(
+        normalize_event(event_payload(event_id=event_id)), rejected=f'(bad row): {{"event_id": "{event_id}"}}'
+    )
+
+
+def _recording_worker(tmp_path, feature_config, source, applies: list[str], batch_size: int) -> EventWorker:  # type: ignore[no-untyped-def]
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        top_k=3,
+    )
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    updater = _CountApply(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    return EventWorker(source, MicroBatchBuffer(batch_size=batch_size, batch_window_seconds=60.0), updater)
+
+
+def test_event_worker_acks_rejected_events_with_their_batch_without_applying(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    first = normalize_event(event_payload(event_id="w1", item_id="i1"))
+    last = normalize_event(event_payload(event_id="w2", item_id="i2"))
+    source = _ListSource([first, _rejected_event("r1"), last])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=3)
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.worker"):
+        assert worker.tick() == 2
+        assert worker.tick() == 0
+    assert applies == ["w1", "w2"]
+    assert source.acks == [["w1", "r1", "w2"]]
+    assert caplog.text.count("Skipping invalid event row") == 1
+    assert '(bad row): {"event_id": "r1"}' in caplog.text
+
+
+def test_event_worker_acks_a_rejected_only_batch_and_logs_each_delivery(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    rejected = _rejected_event("r1")
+    source = _ListSource([rejected])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.worker"):
+        assert worker.tick() == 0
+        source.pending = [rejected]
+        assert worker.tick() == 0
+    assert applies == []
+    assert source.acks == [["r1"], ["r1"]]
+    assert caplog.text.count("Skipping invalid event row") == 2
+
+
+@pytest.mark.parametrize("with_valid", [False, True])
+def test_event_worker_applies_a_valid_event_after_a_rejected_one_with_its_id(
+    tmp_path, feature_config: FeatureConfig, with_valid: bool
+):
+    first = [normalize_event(event_payload(event_id="w1", item_id="i1"))] if with_valid else []
+    source = _ListSource([*first, _rejected_event("r1")])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=len(first) + 1)
+    assert worker.tick() == len(first)
+
+    retry = [normalize_event(event_payload(event_id="r1", item_id="i2"))]
+    if with_valid:
+        retry.append(normalize_event(event_payload(event_id="w2", item_id="i3")))
+    source.pending = retry
+    assert worker.tick() == len(retry)
+    assert "r1" in applies
+    assert source.acks[-1] == [event.event_id for event in retry]
+
+
+def test_event_worker_rejects_ephemeral_source_without_fingerprint_dedupe(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        top_k=3,
+    )
+
+    class _EphemeralWebhook(WebhookEventSource):
+        ephemeral_event_ids = True
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    with pytest.raises(ValueError, match="fingerprint_dedupe=True"):
+        EventWorker(_EphemeralWebhook({}), MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    EventWorker(
+        _EphemeralWebhook({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
+        updater,
+    )

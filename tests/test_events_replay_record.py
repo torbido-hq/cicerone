@@ -11,6 +11,7 @@ from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import IOSettings, make_settings
+from cicerone.events.base import has_ephemeral_event_ids
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater, event_replay_key
@@ -46,7 +47,13 @@ def _worker(
         top_k=3,
     )
     return EventWorker(
-        source, MicroBatchBuffer(batch_size=batch_size, batch_window_seconds=60.0), updater
+        source,
+        MicroBatchBuffer(
+            batch_size=batch_size,
+            batch_window_seconds=60.0,
+            fingerprint_dedupe=has_ephemeral_event_ids(source),
+        ),
+        updater,
     ), updater
 
 
@@ -247,6 +254,7 @@ def test_dataset_key_lookup_reads_no_recommendation_rows(tmp_path, monkeypatch) 
         raise AssertionError("the lookup must read only the parquet footer")
 
     monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _no_row_reads)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _no_row_reads)
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
 
 

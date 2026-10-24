@@ -686,7 +686,7 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
     from dataclasses import replace
 
     from cicerone.feature_config import DEFAULT_BOOST_OVERFETCH_FACTOR, BoostRule
-    from cicerone.model.recommend import boost_overfetch_k
+    from cicerone.model.recommend_cohort import boost_overfetch_k
 
     assert DEFAULT_BOOST_OVERFETCH_FACTOR > 1
     assert boost_overfetch_k(2, True, overfetch_factor=5) == 10

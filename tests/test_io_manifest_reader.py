@@ -4,7 +4,7 @@ import json
 
 import boto3
 import pytest
-from moto import mock_aws
+from support.fakes import FakeS3Body, FakeS3Client
 
 from cicerone.config import ConfigError
 from cicerone.io.manifest_reader import DatasetManifestReader
@@ -51,20 +51,6 @@ def test_dataset_reader_read_recent_empty_when_no_run_yet(tmp_path):
     assert reader.read_recent(20) == []
 
 
-@pytest.fixture
-def s3_options():
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="test-bucket")
-        yield {
-            "storage_backend": "s3",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-            "bucket": "test-bucket",
-            "prefix": "recommendations/latest",
-        }
-
-
 def test_dataset_reader_s3_backend_returns_latest_manifest(s3_options):
     client = boto3.client("s3", region_name="us-east-1")
     manifest = {"status": "success", "n_events": 10}
@@ -85,32 +71,10 @@ def test_dataset_reader_s3_backend_missing_object_returns_none(s3_options):
     assert reader.read_latest() is None
 
 
-def test_dataset_reader_s3_closes_body(monkeypatch):
-    class _Body:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def read(self) -> bytes:
-            return b'{"status":"success"}'
-
-        def close(self) -> None:
-            self.closed = True
-
-    body = _Body()
-
-    class _Client:
-        def get_object(self, **_kwargs):
-            return {"Body": body}
-
-    monkeypatch.setattr("cicerone.io.manifest_reader.build_s3_client", lambda _options: _Client())
-    reader = DatasetManifestReader(
-        {
-            "storage_backend": "s3",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-            "bucket": "bucket",
-        }
-    )
+def test_dataset_reader_s3_closes_body(monkeypatch, s3_options):
+    body = FakeS3Body(b'{"status":"success"}')
+    monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: FakeS3Client(body))
+    reader = DatasetManifestReader(s3_options)
     assert reader.read_latest() == {"status": "success"}
     assert body.closed is True
 

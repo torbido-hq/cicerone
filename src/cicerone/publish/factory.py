@@ -36,12 +36,3 @@ def build_publisher(
 
 def registered_publish_kinds() -> tuple[str, ...]:
     return tuple(sorted(_PUBLISHERS))
-
-
-def build_publisher_from_kind(kind: str, options: dict[str, Any] | None = None) -> RecommendationPublisher:
-    factory = _PUBLISHERS.get(kind.lower())
-    if factory is None:
-        raise ConfigError(f"publish.kind must be one of {sorted(_PUBLISHERS)}, got {kind!r}")
-    publisher = factory(dict(options or {}))
-    publisher.connect()
-    return publisher

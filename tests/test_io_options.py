@@ -7,6 +7,7 @@ import errno
 import pytest
 from botocore.exceptions import ClientError
 from pyarrow.lib import ArrowInvalid
+from support.fakes import FakeS3Body
 
 from cicerone.config import ConfigError
 from cicerone.io.options import (
@@ -20,25 +21,6 @@ from cicerone.io.options import (
     storage_backend,
     validate_storage_options,
 )
-
-
-class _FakeS3Body:
-    def __init__(self, payload: bytes, *, fail: bool = False) -> None:
-        self._payload = payload
-        self._fail = fail
-        self.closed = False
-        self.reads: list[int | None] = []
-
-    def read(self, size: int | None = None) -> bytes:
-        self.reads.append(size)
-        if self._fail:
-            raise RuntimeError("read failed")
-        if size is None:
-            return self._payload
-        return self._payload[:size]
-
-    def close(self) -> None:
-        self.closed = True
 
 
 @pytest.mark.parametrize(
@@ -79,13 +61,13 @@ def test_is_s3_not_found_false_for_non_client_error_exceptions(exc):
 
 
 def test_read_s3_body_closes_after_read():
-    body = _FakeS3Body(b"payload")
+    body = FakeS3Body(b"payload")
     assert read_s3_body({"Body": body}) == b"payload"
     assert body.closed is True
 
 
 def test_read_s3_body_closes_when_read_fails():
-    body = _FakeS3Body(b"payload", fail=True)
+    body = FakeS3Body(b"payload", fail=True)
     with pytest.raises(RuntimeError, match="read failed"):
         read_s3_body({"Body": body})
     assert body.closed is True
@@ -96,14 +78,14 @@ def test_close_s3_body_ignores_missing_close():
 
 
 def test_read_s3_body_rejects_content_length_and_closes():
-    body = _FakeS3Body(b"123456789")
+    body = FakeS3Body(b"123456789")
     with pytest.raises(ValueError, match="max is 4"):
         read_s3_body({"Body": body, "ContentLength": 9}, max_bytes=4)
     assert body.closed is True
 
 
 def test_read_s3_body_rejects_oversize_read_and_closes():
-    body = _FakeS3Body(b"123456789")
+    body = FakeS3Body(b"123456789")
     with pytest.raises(ValueError, match="max is 4"):
         read_s3_body({"Body": body}, max_bytes=4)
     assert body.reads == [5]
@@ -111,44 +93,14 @@ def test_read_s3_body_rejects_oversize_read_and_closes():
 
 
 def test_read_s3_body_rejects_nonpositive_max_bytes():
-    body = _FakeS3Body(b"x")
+    body = FakeS3Body(b"x")
     with pytest.raises(ValueError, match="max_bytes"):
         read_s3_body({"Body": body}, max_bytes=0)
     assert body.closed is True
 
 
-def test_read_parquet_s3_closes_body(mocker):
-    import pandas as pd
-
-    from cicerone.io.options import read_parquet
-
-    body = _FakeS3Body(b"parquet-bytes")
-    client = mocker.Mock()
-    client.get_object.return_value = {"Body": body}
-    arrow = mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow")
-    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
-    frame = read_parquet(
-        {
-            "storage_backend": "s3",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-            "bucket": "bucket",
-        },
-        "data.parquet",
-        s3_client=client,
-    )
-    assert list(frame.columns) == ["x"]
-    assert body.closed is True
-    arrow.assert_not_called()
-
-
 def test_validate_storage_options_resolves_from_options():
     assert validate_storage_options({"storage_backend": "local", "path": "/tmp"}) == "local"
-
-
-def test_validate_storage_options_rejects_explicit_backend_mismatch():
-    with pytest.raises(ConfigError, match="does not match"):
-        validate_storage_options({"storage_backend": "local", "path": "/tmp"}, backend="s3")
 
 
 def test_storage_backend_rejects_unknown():
@@ -408,7 +360,7 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker, error):
     from cicerone.io.options import read_parquet
 
     mocker.patch("cicerone.io.options._read_s3_parquet_pyarrow", side_effect=error)
-    body = _FakeS3Body(b"parquet-bytes")
+    body = FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
@@ -495,7 +447,7 @@ def test_read_parquet_s3_skips_native_arrow_in_tests(mocker):
     from cicerone.io.options import read_parquet
 
     ctor = mocker.patch("pyarrow.fs.S3FileSystem")
-    body = _FakeS3Body(b"parquet-bytes")
+    body = FakeS3Body(b"parquet-bytes")
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)

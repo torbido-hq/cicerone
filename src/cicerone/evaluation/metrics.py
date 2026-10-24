@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, USER_COLUMN
+from cicerone.track.normalize import assign_missing_event_id
 
 OCCURRED_AT = "occurred_at"
 
@@ -57,7 +58,9 @@ _JOIN_KEYS = (OCCURRED_AT, USER_COLUMN, ITEM_COLUMN)
 def with_join_keys(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or any(column not in frame.columns for column in _JOIN_KEYS):
         return frame.iloc[0:0]
-    return frame.dropna(subset=list(_JOIN_KEYS))
+    frame = frame.dropna(subset=list(_JOIN_KEYS))
+    # Future-dated events have not happened yet; they count once their time has passed.
+    return frame.loc[frame[OCCURRED_AT] <= pd.Timestamp.now(tz="UTC")]
 
 
 def safe_ratio(numerator: int, denominator: int) -> float:
@@ -66,39 +69,34 @@ def safe_ratio(numerator: int, denominator: int) -> float:
     return float(numerator) / float(denominator)
 
 
-def fill_blank_ids(frame: pd.DataFrame, prefix: str) -> pd.DataFrame:
+def fill_blank_ids(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.reset_index(drop=True).copy()
-    generated = [f"{prefix}-{i}" for i in range(len(frame))]
-    if "event_id" not in frame.columns:
-        frame["event_id"] = generated
-        return frame
-    ids = frame["event_id"].astype(str).str.strip()
-    frame["event_id"] = [
-        current if kept else fallback
-        for current, kept, fallback in zip(
-            frame["event_id"], ids.ne("") & frame["event_id"].notna(), generated, strict=True
-        )
-    ]
+    if "event_id" in frame.columns:
+        ids = frame["event_id"].astype(str).str.strip()
+        frame["event_id"] = frame["event_id"].where(ids.ne("") & frame["event_id"].notna(), None)
+    else:
+        frame["event_id"] = None
+    frame["event_id"] = [assign_missing_event_id(row)["event_id"] for row in frame.to_dict("records")]
     return frame
 
 
-def _clicked_impression_count(matched_clicks: pd.DataFrame) -> int:
-    if matched_clicks.empty:
+def _distinct_prior_count(matched: pd.DataFrame) -> int:
+    if matched.empty:
         return 0
-    if "prior_event_id" in matched_clicks.columns:
-        return int(matched_clicks["prior_event_id"].dropna().astype(str).nunique())
-    return int(len(matched_clicks))
+    if "prior_event_id" in matched.columns:
+        return int(matched["prior_event_id"].dropna().astype(str).nunique())
+    return int(len(matched))
 
 
-def clicked_impressions_by_user(matched_clicks: pd.DataFrame) -> pd.Series:
-    if matched_clicks.empty or USER_COLUMN not in matched_clicks.columns:
+def distinct_priors_by_user(matched: pd.DataFrame) -> pd.Series:
+    if matched.empty or USER_COLUMN not in matched.columns:
         return pd.Series(dtype=int)
-    if "prior_event_id" in matched_clicks.columns:
-        keyed = matched_clicks.dropna(subset=["prior_event_id"])
+    if "prior_event_id" in matched.columns:
+        keyed = matched.dropna(subset=["prior_event_id"])
         if keyed.empty:
             return pd.Series(dtype=int)
         return keyed.groupby(USER_COLUMN)["prior_event_id"].nunique()
-    return matched_clicks.groupby(USER_COLUMN).size()
+    return matched.groupby(USER_COLUMN).size()
 
 
 def _slice_metrics(
@@ -108,9 +106,9 @@ def _slice_metrics(
     click_conversions: pd.DataFrame,
 ) -> SliceMetrics:
     n_impressions = int(len(impressions))
-    n_clicks = min(_clicked_impression_count(matched_clicks), n_impressions)
-    n_view = min(int(len(view_conversions)), n_impressions)
-    n_click = min(int(len(click_conversions)), n_impressions)
+    n_clicks = min(_distinct_prior_count(matched_clicks), n_impressions)
+    n_view = min(_distinct_prior_count(view_conversions), n_impressions)
+    n_click = min(_distinct_prior_count(click_conversions), n_impressions)
     users = set()
     if not impressions.empty and USER_COLUMN in impressions.columns:
         users.update(impressions[USER_COLUMN].astype(str))
@@ -139,7 +137,7 @@ def merge_asof_events(
     if "event_id" in earlier.columns:
         keep.append("event_id")
     right = earlier.loc[:, [column for column in keep if column in earlier.columns]].copy()
-    right = fill_blank_ids(right, "prior")
+    right = fill_blank_ids(right)
     right = right.rename(columns={OCCURRED_AT: "prior_at", "event_id": "prior_event_id"})
     left = left.sort_values(OCCURRED_AT)
     right = right.sort_values("prior_at")
@@ -200,7 +198,7 @@ def metrics_for_impression_slice(
     impression_ids = _column_ids(impressions, "event_id")
     clicks = _slice_later_events(matched_clicks, impressions, impression_ids)
     views = _slice_later_events(view_conv, impressions, impression_ids)
-    attributed = _slice_later_events(click_conv, clicks, _column_ids(clicks, "event_id"))
+    attributed = _slice_later_events(click_conv, impressions, impression_ids)
     return _slice_metrics(impressions, clicks, views, attributed)
 
 
@@ -232,6 +230,12 @@ def _group_sizes(frame: pd.DataFrame) -> pd.Series:
     if frame.empty:
         return pd.Series(dtype=int)
     return frame.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True).size()
+
+
+def _distinct_priors_by_group(attributed: pd.DataFrame) -> pd.Series:
+    if attributed.empty or _PRIOR_EVENT_KEY not in attributed.columns:
+        return pd.Series(dtype=int)
+    return attributed.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
 
 
 def _dimension_value_key(dimension: str, value: Any) -> str:
@@ -277,12 +281,8 @@ def metrics_by_impression_dimensions(
         attribution_memberships,
         event_column="prior_event_id",
     )
-    click_counts = (
-        clicks.groupby([_DIMENSION, _DIMENSION_VALUE], dropna=True)[_PRIOR_EVENT_KEY].nunique()
-        if not clicks.empty
-        else pd.Series(dtype=int)
-    )
-    view_counts = _group_sizes(
+    click_counts = _distinct_priors_by_group(clicks)
+    view_counts = _distinct_priors_by_group(
         _event_memberships(
             view_conv,
             attribution_memberships,
@@ -290,19 +290,10 @@ def metrics_by_impression_dimensions(
         )
     )
 
-    if not clicks.empty and "event_id" in clicks.columns:
-        click_memberships = clicks.loc[
-            :,
-            ["event_id", _DIMENSION, _DIMENSION_VALUE],
-        ].copy()
-        click_memberships[_EVENT_KEY] = click_memberships["event_id"].astype(str)
-        click_memberships = click_memberships[[_EVENT_KEY, _DIMENSION, _DIMENSION_VALUE]].drop_duplicates()
-    else:
-        click_memberships = attribution_memberships.iloc[0:0]
-    click_conversion_counts = _group_sizes(
+    click_conversion_counts = _distinct_priors_by_group(
         _event_memberships(
             click_conv,
-            click_memberships,
+            attribution_memberships,
             event_column="prior_event_id",
         )
     )

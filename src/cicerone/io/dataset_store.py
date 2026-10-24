@@ -13,17 +13,24 @@ import io
 import json
 import logging
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowException, ArrowNotImplementedError
 
 from cicerone.io.applied_events import APPLIED_EVENTS_ATTR, merge_applied_keys, unexpired_keys
-from cicerone.io.blob import S3_READ_ERRORS, read_storage_bytes, write_storage_bytes
+from cicerone.io.blob import (
+    S3_READ_ERRORS,
+    STORAGE_READ_ERRORS,
+    is_storage_not_found,
+    read_parquet_if_exists,
+    read_storage_bytes,
+    write_storage_bytes,
+)
 from cicerone.io.filenames import (
     EVENTS_FILENAME,
     ITEMS_FILENAME,
@@ -70,25 +77,14 @@ class DatasetInputSource:
         self._options = options
         self._backend = validate_storage_options(options)
 
-    def _read(self, filename: str) -> pd.DataFrame:
-        return read_parquet(self._options, filename)
-
     def read_events(self) -> pd.DataFrame:
-        return self._read(EVENTS_FILENAME)
+        return read_parquet(self._options, EVENTS_FILENAME)
 
     def _read_optional(self, filename: str, label: str) -> pd.DataFrame | None:
-        try:
-            return self._read(filename)
-        except FileNotFoundError:
+        frame = read_parquet_if_exists(self._options, filename)
+        if frame is None:
             logger.warning("Optional input %r not found — continuing without %s features.", filename, label)
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                logger.warning(
-                    "Optional input %r not found — continuing without %s features.", filename, label
-                )
-                return None
-            raise
+        return frame
 
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(USERS_FILENAME, "user")
@@ -101,13 +97,15 @@ class DatasetInputSource:
             frame = read_parquet(self._options, filename, filters=[("user_id", "==", user_id)])
         except FileNotFoundError:
             raise
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                raise
-            raise
         except (OSError, ValueError, ArrowException) as exc:
             message = str(exc).lower()
-            if "user_id" in message or "fieldref" in message or "filter" in message:
+            # A numeric user_id column has no kernel for the string filter value.
+            if (
+                isinstance(exc, ArrowNotImplementedError)
+                or "user_id" in message
+                or "fieldref" in message
+                or "filter" in message
+            ):
                 logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
                 frame = read_parquet(self._options, filename)
             else:
@@ -122,10 +120,8 @@ class DatasetInputSource:
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         try:
             frame = self._read_for_user(USERS_FILENAME, user_id)
-        except FileNotFoundError:
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return None
             raise
         if frame.empty:
@@ -138,21 +134,11 @@ class DatasetOutputSink:
         self,
         options: dict[str, Any],
         *,
-        writer_lock: Any = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
         self._options = options
         self._backend = validate_storage_options(options)
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
         self._recs_write_held = threading.local()
 
     @contextmanager
@@ -233,14 +219,8 @@ class DatasetOutputSink:
             self._write_recommendations_unlocked(df)
 
     def _read_recommendations_or_empty(self) -> pd.DataFrame:
-        try:
-            return read_parquet(self._options, RECOMMENDATIONS_FILENAME)
-        except FileNotFoundError:
-            return pd.DataFrame()
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                return pd.DataFrame()
-            raise
+        frame = read_parquet_if_exists(self._options, RECOMMENDATIONS_FILENAME)
+        return pd.DataFrame() if frame is None else frame
 
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = {str(key) for key in keys}
@@ -248,10 +228,8 @@ class DatasetOutputSink:
             return set()
         try:
             attrs = read_parquet_attrs(self._options, RECOMMENDATIONS_FILENAME)
-        except FileNotFoundError:
-            return set()
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return set()
             raise
         recorded = attrs.get(APPLIED_EVENTS_ATTR) or {}

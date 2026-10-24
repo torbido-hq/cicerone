@@ -23,6 +23,7 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
+from cicerone.errors import OPTIONAL_IO_ERRORS
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -37,10 +38,14 @@ from cicerone.http_security import (
     set_flash_cookie,
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
-from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
+from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+# ImportError: a missing optional DB driver.
+_STORE_OPEN_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS, ImportError)
 
 ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet, noimageindex"
 ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
@@ -333,12 +338,12 @@ def main() -> None:
     reader = build_manifest_reader(settings.output)
     try:
         rec_reader = build_recommendation_reader(settings.output)
-    except Exception:
+    except _STORE_OPEN_ERRORS:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
     try:
-        history_reader = build_user_history_reader(settings.input)
-    except Exception:
+        history_reader = build_input_source(settings.input)
+    except _STORE_OPEN_ERRORS:
         logger.exception("Event store is not available; dashboard history pane will be disabled")
         history_reader = None
     loaded_config_path = os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH

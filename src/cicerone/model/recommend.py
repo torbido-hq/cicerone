@@ -19,10 +19,7 @@ from cicerone.explain import attach_reasons
 from cicerone.feature_config import FeatureConfig
 from cicerone.model.fit import FitOptions, ModelRunPlan, fit_strategies, merge_fit_options, plan_model_run
 from cicerone.model.recommend_cache import RecommendCache
-from cicerone.model.recommend_cohort import (
-    boost_overfetch_k,  # noqa: F401
-    resolve_cohort_plan,
-)
+from cicerone.model.recommend_cohort import resolve_cohort_plan
 from cicerone.model.recommend_combine import combine_strategy_frames
 from cicerone.model.recommend_strategy import recommend_per_strategy
 from cicerone.model.strategies import RecommenderModel

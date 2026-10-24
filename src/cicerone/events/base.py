@@ -21,6 +21,8 @@ class NormalizedEvent:
     occurred_at: datetime
     event_id: str
     generated_event_id: bool = False
+    # Set by a source for a row it cannot normalize: the worker acks it without applying.
+    rejected: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,10 @@ class ClosableSource(Protocol, metaclass=CapabilityMeta):
 class EphemeralIdSource(Protocol, metaclass=CapabilityMeta):
     # Ids are regenerated on redelivery, so the worker dedupes by fingerprint instead.
     ephemeral_event_ids: bool
+
+
+def has_ephemeral_event_ids(source: object) -> bool:
+    return isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
 
 
 class QueuedEventSource:

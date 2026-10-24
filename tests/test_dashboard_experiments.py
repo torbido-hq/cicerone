@@ -691,7 +691,7 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
         raise _S3Missing("missing")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _raise)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: True)
     context = experiment_context(settings)
     assert context["report"] is not None
 
@@ -1039,7 +1039,7 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
         raise OSError("parquet")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _boom)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: False)
     context = experiment_context(settings)
     assert context["report"] is not None
     assert calls["n"] >= 2
@@ -1602,17 +1602,17 @@ def test_promote_winner_maps_writer_lock_errors(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
     assert promote_winner(settings, "treatment") == "Writer lock is busy"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(LockLostError("writer lock lost", kind="writer")),
     )
     assert promote_winner(settings, "treatment") == "Writer lock was lost"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.dashboard_experiments.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
     assert clear_promotion(settings) == "Writer lock is busy"

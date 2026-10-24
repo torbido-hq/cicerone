@@ -61,6 +61,7 @@ from cicerone.job_output import (
 from cicerone.locks import (
     LockBackend,
     LockLostError,
+    WriteFence,
     WriterLockBusyError,
     acquire_blocking,
     build_dataset_writer_lock,
@@ -124,10 +125,9 @@ class JobWriteResult:
 class JobRun:
     settings: Settings
     sink: OutputSink
-    publication_lock: LockBackend | None
-    writer_lock: LockBackend | None
+    fence: WriteFence
+    track_fence: WriteFence
     manifest: JobManifest
-    fence_check: Callable[[], bool] | None
     started_at: str
     publisher: RecommendationPublisher | None = None
     eval_generated_at: str | None = None
@@ -228,13 +228,14 @@ def _select_thompson_recipes(
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
+    now = datetime.now(UTC)
     window_started = ""
     if previous is not None and has_pair:
         window_started = str(previous.get("window_started_at") or "").strip()
     if has_pair and not window_started:
         window_rows = []
     else:
-        window_rows = track_rows_since(track_rows, window_started or None)
+        window_rows = track_rows_since(track_rows, window_started or None, until=now)
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
@@ -289,6 +290,7 @@ def _select_thompson_recipes(
             rotate_min_prob=experiment.rotate_min_prob,
             promoted_variant=promoted,
             guardrails_ok=guardrails_ok,
+            now=now,
         )
         selected = select_active_recipes(
             recipes,
@@ -310,8 +312,6 @@ def _select_thompson_recipes(
             allocation.rotated,
         )
         return ThompsonSelection(selected, pending)
-    except (LockLostError, WriterLockBusyError):
-        raise
     except _OPTIONAL_EVAL_ERRORS as exc:
         _log_caught("Thompson allocation fail closed", exc, log=logger)
         return ThompsonSelection(recipes)
@@ -528,7 +528,7 @@ def _write_job_outputs(
     automl_result: CandidateResult | None,
     feature_config: FeatureConfig,
 ) -> JobWriteResult:
-    settings, sink, manifest, fence_check = run.settings, run.sink, run.manifest, run.fence_check
+    settings, sink, manifest, fence_check = run.settings, run.sink, run.manifest, run.fence.check
     recommendations, fitted = scored.recommendations, scored.fitted
     weights, rrf_k = scored.weights, scored.rrf_k
     run_models = list(scored.run_plan.recommend_models)
@@ -578,9 +578,7 @@ def _write_job_outputs(
                 sink.write_recommendations(recommendations)
                 if run.pending_thompson is not None:
                     ensure_publication_fence(sink, fence_check)
-                    store = ExperimentStore(
-                        settings.output, fence=retrain_fence(run.publication_lock, fence_check)
-                    )
+                    store = ExperimentStore(settings.output, fence=run.fence)
                     store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
                 ensure_publication_fence(sink, fence_check)
                 manifest.update(
@@ -619,10 +617,7 @@ def _write_job_outputs(
                 if (
                     not result.manifest_written
                     and manifest.get("status") != "success"
-                    and not skip_stale_job_manifest(
-                        fence_check=fence_check,
-                        exc=exc,
-                    )
+                    and not skip_stale_job_manifest(run.fence, exc=exc)
                 ):
                     manifest["error"] = truncate_job_error(exc)
                     manifest["generated_at"] = datetime.now(UTC).isoformat()
@@ -644,7 +639,7 @@ def _write_job_outputs(
 
 
 def _publish_job_sidecar(run: JobRun) -> None:
-    publisher, manifest, fence_check = run.publisher, run.manifest, run.fence_check
+    publisher, manifest, fence_check = run.publisher, run.manifest, run.fence.check
     if publisher is None or manifest.get("status") != "success":
         return
     try:
@@ -656,14 +651,12 @@ def _publish_job_sidecar(run: JobRun) -> None:
             publisher.publish(run.recommendations)
         else:
             log_sidecar_generation_skip(current)
-    except LockLostError:
-        raise
     except _PUBLISH_ERRORS as exc:
         _log_caught("Publish failed after successful write", exc, log=logger)
 
 
 def _finalize_job(run: JobRun, error: BaseException | None) -> None:
-    settings, manifest, fence_check = run.settings, run.manifest, run.fence_check
+    settings, manifest = run.settings, run.manifest
     manifest_written = run.manifest_written
     replace_success_manifest = run.replace_success_manifest
     persist_exc: BaseException | None = None
@@ -679,7 +672,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
             _persist_track_outputs(
-                TrackStore(settings.output, fence=retrain_fence(run.writer_lock, fence_check)),
+                TrackStore(settings.output, fence=run.track_fence),
                 kind=settings.output.kind,
                 eval_report={
                     "generated_at": run.eval_generated_at,
@@ -688,7 +681,6 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
                 },
                 recommendations=run.recommendations,
                 generated_at=str(manifest["generated_at"]),
-                fence_check=fence_check,
             )
         except Exception as exc:
             manifest["status"] = "failed"
@@ -711,10 +703,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     skip_if_newer_than = (
         (run.success_generated_at or run.started_at) if replace_success_manifest else run.started_at
     )
-    if not manifest_written and not skip_stale_job_manifest(
-        fence_check=fence_check,
-        exc=leftover_exc,
-    ):
+    if not manifest_written and not skip_stale_job_manifest(run.fence, exc=leftover_exc):
         manifest["generated_at"] = datetime.now(UTC).isoformat()
         try:
             with recommendations_write_guard(run.sink):
@@ -761,21 +750,19 @@ def _record_run_failure(run: JobRun, exc: BaseException) -> None:
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
     started_at = datetime.now(UTC).isoformat()
     feature_config = load_feature_config(settings.feature_config_path)
-    publication_lock = build_output_writer_lock(settings)
-    writer_lock = build_dataset_writer_lock(settings)
-    sink = build_output_sink(settings.output, fence=retrain_fence(publication_lock, fence_check))
+    fence = retrain_fence(build_output_writer_lock(settings), fence_check)
+    track_fence = retrain_fence(build_dataset_writer_lock(settings), fence_check)
     run = JobRun(
         settings=settings,
-        sink=sink,
-        publication_lock=publication_lock,
-        writer_lock=writer_lock,
+        sink=build_output_sink(settings.output, fence=fence),
+        fence=fence,
+        track_fence=track_fence,
         manifest=JobManifest(
             triggered_by=triggered_by,
             lock_backend=settings.trigger.lock_backend,
             top_k=settings.top_k,
             automl_enabled=settings.automl.enabled,
         ),
-        fence_check=fence_check,
         started_at=started_at,
     )
     error: BaseException | None = None

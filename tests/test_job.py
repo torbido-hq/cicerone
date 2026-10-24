@@ -11,6 +11,7 @@ from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
 from cicerone.job import _recommendation_user_count, _target_user_ids
+from cicerone.locks import WriteFence
 from cicerone.model import RRF_K
 from cicerone.publish import PublishError
 from cicerone.track.store import TrackStore
@@ -1083,18 +1084,6 @@ def test_log_caught_defaults_to_errors_logger(caplog):
     ]
 
 
-def test_job_eval_reexports_error_groups():
-    from cicerone import errors, job_eval
-
-    for name in (
-        "OPTIONAL_IO_ERRORS",
-        "OPTIONAL_EVAL_ERRORS",
-        "PUBLISH_ERRORS",
-        "SINK_WRITE_ERRORS",
-    ):
-        assert getattr(job_eval, name) is getattr(errors, name)
-
-
 def test_job_eval_log_caught_keeps_its_default_logger(caplog):
     from cicerone.job_eval import log_caught
 
@@ -1118,7 +1107,8 @@ def test_try_load_does_not_swallow_unexpected_errors():
 
 @pytest.mark.parametrize("errors", ["io", "eval"])
 def test_try_load_does_not_swallow_type_errors(errors):
-    from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, try_load
+    from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS
+    from cicerone.job_eval import try_load
 
     with pytest.raises(TypeError, match="bug"):
         try_load(
@@ -1168,12 +1158,12 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
-    monkeypatch.setattr("cicerone.locks.hold.held_writer_lock", _busy)
+    monkeypatch.setattr("cicerone.locks.hold.WriteFence.hold", _busy)
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         job._persist_track_outputs(
             TrackStore(
                 IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
-                writer_lock=object(),
+                fence=WriteFence(object()),
             ),
             kind="dataset",
             eval_report={"generated_at": "t"},
@@ -1286,7 +1276,7 @@ def test_persist_track_outputs_holds_lock_for_db(monkeypatch):
     job._persist_track_outputs(
         TrackStore(
             IOSettings(kind="db", options={"database_url": "sqlite://"}),
-            writer_lock=_Lock(),
+            fence=WriteFence(_Lock()),
         ),
         kind="db",
         eval_report={"generated_at": "t"},
@@ -1766,10 +1756,9 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
         JobRun(
             settings=settings,
             sink=_Sink(),
-            publication_lock=None,
-            writer_lock=None,
+            fence=WriteFence(),
+            track_fence=WriteFence(),
             manifest=manifest,
-            fence_check=None,
             started_at="2026-01-01T00:00:00+00:00",
         ),
         JobRecommendations(
@@ -1826,10 +1815,9 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
             JobRun(
                 settings=settings,
                 sink=_Sink(),
-                publication_lock=None,
-                writer_lock=None,
+                fence=WriteFence(),
+                track_fence=WriteFence(),
                 manifest=JobManifest(triggered_by="test", top_k=10),
-                fence_check=None,
                 started_at="2026-01-01T00:00:00+00:00",
                 written=result,
             ),
@@ -1881,10 +1869,9 @@ def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
         JobRun(
             settings=load_settings(),
             sink=_Sink(),
-            publication_lock=None,
-            writer_lock=None,
+            fence=WriteFence(),
+            track_fence=WriteFence(),
             manifest=JobManifest(status="failed", error="boom"),
-            fence_check=None,
             started_at="2026-01-01T00:00:00+00:00",
             publisher=_Pub(),
         ),
@@ -1920,10 +1907,9 @@ def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_pat
             JobRun(
                 settings=load_settings(),
                 sink=_Sink(),
-                publication_lock=None,
-                writer_lock=None,
+                fence=WriteFence(),
+                track_fence=WriteFence(),
                 manifest=JobManifest(status="failed", error="boom"),
-                fence_check=None,
                 started_at="2026-01-01T00:00:00+00:00",
                 publisher=_Pub(),
             ),
