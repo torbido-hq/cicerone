@@ -31,8 +31,7 @@ class MicroBatchBuffer:
         batch_window_seconds: float,
         dedupe: bool = True,
         max_events: int | None = None,
-        fingerprint_dedupe: bool = True,
-        fingerprint_generated_only: bool = False,
+        fingerprint_dedupe: bool = False,
     ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -42,30 +41,24 @@ class MicroBatchBuffer:
         cap = batch_size if max_events is None else max_events
         if cap < batch_size:
             raise ValueError("max_events must be >= batch_size")
+        if fingerprint_dedupe and not dedupe:
+            raise ValueError("fingerprint_dedupe requires dedupe")
         self._batch_size = batch_size
         self._max_events = cap
         self._batch_window_seconds = batch_window_seconds
         self._dedupe = dedupe
         self._fingerprint_dedupe = fingerprint_dedupe
-        self._fingerprint_generated_only = fingerprint_generated_only
         self._events: list[NormalizedEvent] = []
         self._event_ids: set[str] = set()
         self._fingerprints: set[str] = set()
         self._window_started_at: float | None = None
 
-    def configure_fingerprint_dedupe(self, enabled: bool, *, generated_only: bool = False) -> None:
-        self._fingerprint_dedupe = enabled
-        self._fingerprint_generated_only = generated_only
-        self._fingerprints = {
-            event_fingerprint(event) for event in self._events if self._tracks_fingerprint(event)
-        }
+    @property
+    def fingerprint_dedupe(self) -> bool:
+        return self._fingerprint_dedupe
 
     def _tracks_fingerprint(self, event: NormalizedEvent) -> bool:
-        if not self._fingerprint_dedupe:
-            return False
-        if self._fingerprint_generated_only:
-            return event.generated_event_id
-        return True
+        return self._fingerprint_dedupe and event.generated_event_id
 
     def __len__(self) -> int:
         return len(self._events)

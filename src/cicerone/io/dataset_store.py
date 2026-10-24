@@ -13,7 +13,7 @@ import io
 import json
 import logging
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -138,21 +138,11 @@ class DatasetOutputSink:
         self,
         options: dict[str, Any],
         *,
-        writer_lock: Any = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
         self._options = options
         self._backend = validate_storage_options(options)
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
         self._recs_write_held = threading.local()
 
     @contextmanager

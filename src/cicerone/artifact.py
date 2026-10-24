@@ -338,18 +338,6 @@ def load_artifact(
     return loads_artifact(payload, hmac_key=hmac_key, max_bytes=max_bytes)
 
 
-def save_rectools_model(path: Path | str, model: ModelBase) -> None:
-    """``model.save`` → bytes."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    model.save(path)
-
-
-def load_rectools_model(path: Path | str) -> RecommenderModel:
-    """``load_model`` from bytes."""
-    return load_model(Path(path))  # type: ignore[return-value]
-
-
 def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:
     """External-id interaction table already stored inside the RecTools Dataset."""
     frame = dataset.get_raw_interactions()

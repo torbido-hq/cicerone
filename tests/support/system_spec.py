@@ -132,6 +132,8 @@ def write_system_config(
     feature_config_path: Path | str = REPO_FEATURES_CONFIG,
     serve_token: str = SYSTEM_SERVE_TOKEN,
     events_webhook: bool = False,
+    models: Sequence[str] = ("collaborative", "popular"),
+    extra_toml: str = "",
 ) -> Path:
     """Write the shared system-spec TOML. ``input_kind`` / ``output_kind`` override ``kind``."""
     io_blocks = _io_toml(
@@ -163,7 +165,7 @@ def write_system_config(
         [job]
         top_k = 3
         feature_config_path = "{feature_config_path}"
-        models = ["collaborative", "popular"]
+        models = {json.dumps(list(models))}
         save_model_artifact = true
 
         [job.eval]
@@ -182,6 +184,7 @@ def write_system_config(
         [track]
         enabled = true
         {events_block}
+        {extra_toml}
         """
     )
     return path
@@ -273,9 +276,9 @@ def mount_dashboard_app(
 ):
     from cicerone.dashboard import create_app
     from cicerone.io.factory import (
+        build_input_source,
         build_manifest_reader,
         build_recommendation_reader,
-        build_user_history_reader,
     )
 
     return create_app(
@@ -283,7 +286,7 @@ def mount_dashboard_app(
         build_manifest_reader(settings.output),
         users,
         build_recommendation_reader(settings.output),
-        build_user_history_reader(settings.input),
+        build_input_source(settings.input),
         config_path=None if config_path is None else str(config_path),
     )
 
