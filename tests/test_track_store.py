@@ -1349,9 +1349,7 @@ def test_track_table_quotes_its_columns_for_the_dialect():
     executed: list[str] = []
     conn = SimpleNamespace(dialect=mysql.dialect(), execute=lambda statement: executed.append(str(statement)))
 
-    TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))._ensure_track_table(
-        conn, "track"
-    )
+    TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())._ensure_track_table(conn, "track")
 
     assert "`rank` INTEGER" in executed[0]
     assert executed[0].startswith("CREATE TABLE IF NOT EXISTS track (event_id TEXT PRIMARY KEY")
