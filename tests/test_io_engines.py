@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import text
 
 from cicerone.io.db_store import DatabaseInputSource
-from cicerone.io.engines import dispose_engines, engine_for, release_engine
+from cicerone.io.engines import dispose_engines, engine_for, quote_identifier, release_engine
 from cicerone.locks.postgres import PostgresAdvisoryLock
 from cicerone.serve.bootstrap_events import EventsRuntime
 
@@ -67,3 +67,15 @@ def test_events_runtime_stop_keeps_shared_engine(tmp_path):
     assert EventsRuntime(webhook_source=None, worker=None).stop() is True
     assert engine_for(url) is first
     dispose_engines()
+
+
+def test_quote_identifier_follows_the_dialect():
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import mysql, postgresql
+
+    postgres = SimpleNamespace(dialect=postgresql.dialect())
+    assert quote_identifier(postgres, "recommendations") == "recommendations"
+    assert quote_identifier(postgres, "Mixed_Case") == '"Mixed_Case"'
+    assert quote_identifier(postgres, "user") == '"user"'
+    assert quote_identifier(SimpleNamespace(dialect=mysql.dialect()), "Mixed_Case") == "`Mixed_Case`"
