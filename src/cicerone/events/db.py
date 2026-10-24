@@ -32,7 +32,7 @@ from cicerone.events.normalize import EventNormalizeError
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
 from cicerone.io.engines import engine_for, quote_identifier, release_engine, sql_source
-from cicerone.io.options import readonly_select, require_option, sql_identifier
+from cicerone.io.options import readonly_select, require_option, table_option
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +103,7 @@ class DbEventSource(EventSource):
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
         self._database_url = require_option(options, "database_url", "db")
-        self._events_table = sql_identifier(
-            options.get("events_table", DEFAULT_EVENTS_TABLE),
-            option="events_table",
-        )
+        self._events_table = table_option(options, "events_table", DEFAULT_EVENTS_TABLE)
         self._events_query = options.get("events_query")
         if self._events_query is not None:
             if not isinstance(self._events_query, str):

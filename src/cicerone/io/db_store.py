@@ -39,13 +39,19 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
-from cicerone.io.db_errors import is_missing_column_error
+from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error
 from cicerone.io.engines import engine_for, quote_identifier, sql_source
-from cicerone.io.options import readonly_select, require_option, sql_identifier
+from cicerone.io.options import (
+    readonly_select,
+    reject_oversize,
+    require_max_bytes,
+    require_option,
+    sql_identifier,
+    table_option,
+)
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
@@ -57,11 +63,7 @@ from cicerone.locks.hold import WriteFence
 
 logger = logging.getLogger(__name__)
 
-_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 _SQL_HISTORY_OVERFETCH = 8
-
-# Prefer the public alias used by readers and writers.
-MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
 
 
 DEFAULT_EVENTS_TABLE = "events"
@@ -140,7 +142,7 @@ def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> No
                         f"ADD COLUMN {quote_identifier(engine, column)} {column_type}"
                     )
                 )
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             # A concurrent writer may have added the same column first.
             if column not in {column_info["name"] for column_info in inspect(engine).get_columns(table)}:
                 raise
@@ -169,7 +171,7 @@ def _clear_table_for_replace(conn, table: str) -> None:
             conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
             savepoint.commit()
             return
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             savepoint.rollback()
 
 
@@ -213,7 +215,7 @@ class DatabaseInputSource:
     def read_events(self) -> pd.DataFrame:
         return self._read(
             self._configured_query("events_query"),
-            sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
+            table_option(self._options, "events_table", DEFAULT_EVENTS_TABLE),
         )
 
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
@@ -227,21 +229,21 @@ class DatabaseInputSource:
             return None
         try:
             return self._read(query, table)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             logger.warning("Optional %s source unavailable — continuing without %s features.", label, label)
             return None
 
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._configured_query("users_query"),
-            sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table"),
+            table_option(self._options, "users_table", DEFAULT_USERS_TABLE),
             "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._configured_query("items_query"),
-            sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
+            table_option(self._options, "items_table", DEFAULT_ITEMS_TABLE),
             "items",
         )
 
@@ -269,28 +271,32 @@ class DatabaseInputSource:
         return pd.read_sql(text(sql), self._engine, params=params)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
-        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
+        table = table_option(self._options, "events_table", DEFAULT_EVENTS_TABLE)
         query = self._configured_query("events_query")
         sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
         try:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit, order_occurred_at=True)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit)
         return newest_events(filter_rows_for_user(frame, user_id), limit)
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         query = self._configured_query("users_query")
-        table = sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table")
+        table = table_option(self._options, "users_table", DEFAULT_USERS_TABLE)
         if query is None and not inspect(self._engine).has_table(table):
             return None
         try:
             frame = self._select_user_rows(query, table, user_id)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             return None
         matched = filter_rows_for_user(frame, user_id)
         if matched.empty:
             return None
         return matched.iloc[0].to_dict()
+
+
+def _artifact_fingerprint(written: datetime | None) -> str | None:
+    return None if written is None else f"db:{written.isoformat()}"
 
 
 class DatabaseOutputSink:
@@ -347,10 +353,7 @@ class DatabaseOutputSink:
             return self._replace_recommendations_for_users_unlocked(df, ids, applied_keys)
 
     def _applied_events_table(self) -> Table:
-        name = sql_identifier(
-            self._options.get("applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE),
-            option="applied_events_table",
-        )
+        name = table_option(self._options, "applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE)
         # Keys are scoped to the recommendations table (see _applied_scope), so outputs sharing a database
         # don't see each other's.
         return Table(
@@ -370,7 +373,7 @@ class DatabaseOutputSink:
         try:
             with self._engine.begin() as ddl:
                 table.create(ddl, checkfirst=True)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             # Another output sharing the database may have created it first.
             if not inspect(self._engine).has_table(table.name):
                 raise
@@ -422,7 +425,7 @@ class DatabaseOutputSink:
                         table.c.applied_at >= cutoff,
                     )
                     found.update((str(key), str(applied_at)) for key, applied_at in conn.execute(query))
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             # The table may have been dropped; check again on the next lookup.
             self._applied_table_seen = False
             raise
@@ -436,10 +439,7 @@ class DatabaseOutputSink:
         return {key for key, applied_at in found.items() if applied_at >= full_write_at}
 
     def _latest_full_write_at(self) -> str | None:
-        table = sql_identifier(
-            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
-            option="manifest_table",
-        )
+        table = table_option(self._options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         generated_at = quote_identifier(self._engine, "generated_at")
         triggered_by = quote_identifier(self._engine, "triggered_by")
         query = text(
@@ -449,7 +449,7 @@ class DatabaseOutputSink:
         try:
             with self._engine.connect() as conn:
                 value = conn.execute(query).scalar()
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             # No manifest table (or no such columns) yet: no full write to supersede the keys.
             return None
         if value is None:
@@ -518,7 +518,7 @@ class DatabaseOutputSink:
             try:
                 conn.execute(delete_sql, {"user_ids": ids})
                 savepoint.commit()
-            except _MISSING_TABLE_ERRORS as exc:
+            except MISSING_TABLE_ERRORS as exc:
                 savepoint.rollback()
                 logger.warning(
                     "Recommendations delete skipped for table %r (missing table or schema issue): %s",
@@ -544,7 +544,7 @@ class DatabaseOutputSink:
                 try:
                     self._prune_applied_keys(conn, datetime.now(UTC))
                     prune.commit()
-                except _MISSING_TABLE_ERRORS:
+                except MISSING_TABLE_ERRORS:
                     # The table was dropped: skip pruning, never the rows write; check again later.
                     prune.rollback()
                     self._applied_table_seen = self._applied_table_checked = False
@@ -553,7 +553,7 @@ class DatabaseOutputSink:
             try:
                 value = conn.execute(count_sql).scalar()
                 count_savepoint.commit()
-            except _MISSING_TABLE_ERRORS as exc:
+            except MISSING_TABLE_ERRORS as exc:
                 count_savepoint.rollback()
                 logger.warning(
                     "Recommendations count skipped for table %r (missing table or schema issue): %s",
@@ -564,10 +564,7 @@ class DatabaseOutputSink:
         return int(value or 0)
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
-        table = sql_identifier(
-            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
-            option="manifest_table",
-        )
+        table = table_option(self._options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         logger.info("Appending run manifest to database table %r", table)
         with self.recommendations_write():
             self._ensure_fence()
@@ -582,18 +579,8 @@ class DatabaseOutputSink:
 
     def write_model_artifact(self, payload: bytes) -> None:
         """Replace the single-row model_artifacts table with the latest blob."""
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table_name)
-        metadata = MetaData()
-        artifacts = Table(
-            table_name,
-            metadata,
-            Column("payload", LargeBinary, nullable=False),
-            Column("written_at", DateTime(timezone=True), nullable=False),
-        )
+        artifacts = self._model_artifacts_table()
+        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), artifacts.name)
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
@@ -603,28 +590,23 @@ class DatabaseOutputSink:
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
             self._ensure_fence()
 
-    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        metadata = MetaData()
-        artifacts = Table(
-            table_name,
-            metadata,
+    def _model_artifacts_table(self) -> Table:
+        return Table(
+            table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            MetaData(),
             Column("payload", LargeBinary, nullable=False),
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
+
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        artifacts = self._model_artifacts_table()
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()
             artifacts.create(conn, checkfirst=True)
             row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
-            if row is None or row[0] is None:
+            if row is None or _artifact_fingerprint(row[0]) != expected_fingerprint:
                 return False
             written = row[0]
-            stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
-            if f"db:{stamp}" != expected_fingerprint:
-                return False
             self._ensure_fence()
             deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
             if deleted.rowcount < 1:
@@ -635,12 +617,8 @@ class DatabaseOutputSink:
         return True
 
     def read_model_artifact(self, *, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> bytes | None:
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be >= 1")
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
+        require_max_bytes(max_bytes)
+        table_name = table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE)
         if not inspect(self._engine).has_table(table_name):
             return None
         quoted_table, payload = (
@@ -658,38 +636,21 @@ class DatabaseOutputSink:
             row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
         if row is None or row[1] is None:
             return None
-        size = int(row[1])
-        if size > max_bytes:
-            raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+        reject_oversize(int(row[1]), max_bytes)
         if row[0] is None:
             return None
         return bytes(row[0])
 
     def model_artifact_fingerprint(self) -> str | None:
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        if not inspect(self._engine).has_table(table_name):
+        artifacts = self._model_artifacts_table()
+        if not inspect(self._engine).has_table(artifacts.name):
             return None
         with self._engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    f"SELECT {quote_identifier(self._engine, 'written_at')} "
-                    f"FROM {quote_identifier(self._engine, table_name)} LIMIT 1"
-                )
-            ).first()
-        if row is None or row[0] is None:
-            return None
-        written = row[0]
-        stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
-        return f"db:{stamp}"
+            row = conn.execute(select(artifacts.c.written_at).limit(1)).first()
+        return None if row is None else _artifact_fingerprint(row[0])
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
-        )
+        table = table_option(self._options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE)
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self.recommendations_write(), self._engine.begin() as conn:
             self._ensure_fence()

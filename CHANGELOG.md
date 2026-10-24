@@ -46,6 +46,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- The dashboard user lookup on dataset storage (history pane, `get_user`)
+  works when `user_id` is stored as an integer column instead of failing
+  the filtered read.
+- `replace_model_artifact_if` on SQLite db output matches the artifact
+  fingerprint it hands out instead of never swapping.
 - Tracking conversion counts and CVR count each converted impression once,
   as CTR does, so repeat conversions or several converting clicks on one
   recommendation no longer inflate them (overall, per rank/source/variant,

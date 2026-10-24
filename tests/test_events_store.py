@@ -12,19 +12,13 @@ from sqlalchemy.dialects import postgresql
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
     count_recommendation_users,
-    dispose_recommendation_engines,
     empty_recommendations_frame,
     load_items_catalog_size,
     load_recommendation_guardrail_rows,
     load_recommendations_for_users,
     load_recommendations_frame,
 )
-
-
-@pytest.fixture(autouse=True)
-def _dispose_engines():
-    yield
-    dispose_recommendation_engines()
+from cicerone.io.engines import dispose_engines
 
 
 class _FakeEngine:
@@ -114,14 +108,14 @@ def test_load_recommendations_unsupported_kind():
         load_recommendations_frame(IOSettings(kind="other", options={}))
 
 
-def test_dispose_recommendation_engines_clears_cache(tmp_path):
+def test_load_recommendations_after_engines_disposed(tmp_path):
     db_path = tmp_path / "dispose.db"
     sqlite3.connect(db_path).close()
     url = f"sqlite+pysqlite:///{db_path}"
     settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
     load_recommendations_frame(settings.output)
-    dispose_recommendation_engines()
-    dispose_recommendation_engines()  # idempotent
+    dispose_engines()
+    dispose_engines()  # idempotent
     frame = load_recommendations_frame(settings.output)
     assert frame.empty
 
@@ -544,7 +538,7 @@ def test_count_recommendation_users_pandas_missing_table(tmp_path, monkeypatch):
         def execute(self, *_args, **_kwargs):
             raise DatabaseError("no such table: recommendations")
 
-    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _FakeEngine(_Conn))
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
     assert count_recommendation_users(settings.output) == 0
 
 
@@ -565,24 +559,9 @@ def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
         def execute(self, *_args, **_kwargs):
             raise DatabaseError("connection refused")
 
-    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _FakeEngine(_Conn))
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
     with pytest.raises(DatabaseError, match="connection refused"):
         count_recommendation_users(settings.output)
-
-
-def test_recommendation_engine_cache_keeps_all_urls(tmp_path):
-    from cicerone.events import store as events_store
-    from cicerone.io import engines as io_engines
-
-    events_store.dispose_recommendation_engines()
-    engines = []
-    for i in range(10):
-        path = tmp_path / f"e{i}.db"
-        sqlite3.connect(path).close()
-        engines.append(events_store._engine_for(f"sqlite+pysqlite:///{path}"))
-    assert len(io_engines._engines) == 10
-    assert events_store._engine_for(f"sqlite+pysqlite:///{tmp_path / 'e0.db'}") is engines[0]
-    events_store.dispose_recommendation_engines()
 
 
 def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
@@ -599,7 +578,7 @@ def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("boom")),
     )
-    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.events.store.is_storage_not_found", lambda _exc: False)
     with pytest.raises(OSError, match="boom"):
         load_items_catalog_size(settings.output)
     monkeypatch.setattr(
@@ -724,7 +703,7 @@ def test_load_items_catalog_size_sqlite_generic_error(tmp_path, monkeypatch):
     url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
 
-    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _FakeEngine(_raise(RuntimeError)))
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_raise(RuntimeError)))
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
     with pytest.raises(RuntimeError, match="engine"):
@@ -744,7 +723,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
     )
-    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.events.store.is_storage_not_found", lambda _exc: False)
     with pytest.raises(BotoCoreError):
         load_items_catalog_size(settings.output)
     monkeypatch.setattr(
@@ -757,7 +736,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     output = IOSettings(kind="db", options={"database_url": url})
 
     engine = _FakeEngine(_raise(SQLAlchemyError))
-    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: engine)
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: engine)
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
     with pytest.raises(SQLAlchemyError, match="engine"):
@@ -767,7 +746,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
         def connect(self):
             raise OperationalError("SELECT 1", {}, Exception("connection refused"))
 
-    monkeypatch.setattr("cicerone.events.store._engine_for", lambda _url: _Busy())
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _Busy())
     with pytest.raises(OperationalError, match="connection refused"):
         load_items_catalog_size(output)
 
@@ -794,15 +773,16 @@ def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
         "cicerone.events.store._read_parquet_columns",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(BotoCoreError()),
     )
-    monkeypatch.setattr("cicerone.events.store.is_s3_not_found", lambda _exc: False)
+    monkeypatch.setattr("cicerone.events.store.is_storage_not_found", lambda _exc: False)
     with pytest.raises(BotoCoreError):
         load_items_catalog_size(settings.output)
     monkeypatch.undo()
 
-    monkeypatch.setattr(
-        "cicerone.events.store.read_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("cicerone.events.store.read_parquet", _boom)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _boom)
     with pytest.raises(RuntimeError, match="boom"):
         load_recommendations_frame(settings.output)
     with pytest.raises(RuntimeError, match="boom"):

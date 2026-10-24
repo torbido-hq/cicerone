@@ -2133,7 +2133,7 @@ def test_load_metric_events_dataset_s3_missing_is_empty(tmp_path, monkeypatch) -
         raise OSError("NoSuchKey")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: True)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
