@@ -177,10 +177,6 @@ class ModelRunPlan:
     enabled_models: tuple[str, ...]
     recommend_models: tuple[str, ...]
 
-    @property
-    def content_fallback_active(self) -> bool:
-        return "content_fallback" in self.recommend_models
-
 
 def resolve_recommend_models(
     enabled_models: list[str],
@@ -226,21 +222,6 @@ def plan_model_run(
         resolved, blending_enabled, content_fallback_enabled=content_fallback_enabled
     )
     return ModelRunPlan(enabled_models=tuple(resolved), recommend_models=tuple(recommend))
-
-
-def resolve_run_models(
-    enabled_models: list[str] | None,
-    *,
-    blending_enabled: bool,
-    content_fallback_enabled: bool = False,
-) -> tuple[list[str], list[str]]:
-    """Like ``plan_model_run``, returning plain lists for existing callers."""
-    plan = plan_model_run(
-        enabled_models,
-        blending_enabled=blending_enabled,
-        content_fallback_enabled=content_fallback_enabled,
-    )
-    return list(plan.enabled_models), list(plan.recommend_models)
 
 
 @dataclass(frozen=True)

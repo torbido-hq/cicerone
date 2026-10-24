@@ -29,10 +29,8 @@ from cicerone.locks import (
     build_lock_backend,
     build_output_writer_lock,
     dataset_append_lock_key,
-    ensure_writer_owned,
     events_apply_lock_key,
     has_distributed_lock,
-    held_writer_lock,
 )
 from cicerone.locks import hold as lock_hold
 from cicerone.locks.redis import RedisError
@@ -939,7 +937,7 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
     output_lock.release()
 
 
-def test_held_writer_lock_owned_after_nested_wait():
+def test_write_fence_hold_owned_after_nested_wait():
     from contextlib import contextmanager
 
     events: list[str] = []
@@ -964,12 +962,12 @@ def test_held_writer_lock_owned_after_nested_wait():
         events.append("nested")
         yield
 
-    with nested(), held_writer_lock(Lock()):
+    with nested(), WriteFence(Lock()).hold():
         events.append("write")
     assert events == ["nested", "acquire", "owned", "write", "release"]
 
 
-def test_held_writer_lock_binds_try_acquire_generation():
+def test_write_fence_hold_binds_try_acquire_generation():
     released: list[int] = []
 
     class Lock:
@@ -979,7 +977,7 @@ def test_held_writer_lock_binds_try_acquire_generation():
             return 3
 
         def acquire(self) -> bool:
-            raise AssertionError("held_writer_lock should use try_acquire")
+            raise AssertionError("WriteFence.hold should use try_acquire")
 
         def release(self) -> None:
             raise AssertionError("should release by generation")
@@ -994,9 +992,9 @@ def test_held_writer_lock_binds_try_acquire_generation():
             return True
 
     lock = Lock()
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         assert lock_hold.bound_writer_generation(lock) == 3
-        locks_mod.ensure_writer_owned(lock)
+        locks_mod.WriteFence(lock).ensure()
     assert released == [3]
 
 
@@ -1016,12 +1014,12 @@ def test_writer_lock_held_here_without_hold_generation():
 
     lock = Lock()
     assert not locks_mod.writer_lock_held_here(lock)
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         assert locks_mod.writer_lock_held_here(lock)
     assert not locks_mod.writer_lock_held_here(lock)
 
 
-def test_held_writer_lock_rechecks_caller_fence_after_acquire():
+def test_write_fence_hold_rechecks_caller_fence_after_acquire():
     events: list[str] = []
     held = {"v": True}
 
@@ -1043,33 +1041,23 @@ def test_held_writer_lock_rechecks_caller_fence_after_acquire():
 
     with (
         pytest.raises(LockLostError, match="retrain lock lost before write") as captured,
-        held_writer_lock(
-            Lock(),
-            fence_check=lambda: held["v"],
-            fence_lost="retrain lock lost before write",
-            fence_kind="retrain",
-        ),
+        WriteFence(Lock(), lambda: held["v"], "retrain lock lost before write", "retrain").hold(),
     ):
         events.append("write")
     assert captured.value.kind == "retrain"
     assert events == ["acquire", "owned", "release"]
 
 
-def test_held_writer_lock_fence_without_writer_lock():
+def test_write_fence_hold_fence_without_writer_lock():
     with (
         pytest.raises(LockLostError, match="events apply lock lost before write") as captured,
-        held_writer_lock(
-            None,
-            fence_check=lambda: False,
-            fence_lost="events apply lock lost before write",
-            fence_kind="apply",
-        ),
+        WriteFence(None, lambda: False, "events apply lock lost before write", "apply").hold(),
     ):
         pass
     assert captured.value.kind == "apply"
 
 
-def test_held_writer_lock_rejects_stale_generation_after_reacquire():
+def test_write_fence_hold_rejects_stale_generation_after_reacquire():
     class Lock:
         def __init__(self) -> None:
             self._held = False
@@ -1100,13 +1088,13 @@ def test_held_writer_lock_rejects_stale_generation_after_reacquire():
             return self._held
 
     lock = Lock()
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         first = lock.hold_generation
         lock._held = False
         assert lock.acquire() is True
         assert lock.hold_generation != first
         with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
-            ensure_writer_owned(lock)
+            WriteFence(lock).ensure()
 
 
 def test_lock_owned_falls_back_when_owned_rejects_generation():
@@ -1133,7 +1121,7 @@ def test_bound_writer_generation_ignores_other_lock():
         lock_hold.unbind_writer_generation()
 
 
-def test_held_writer_lock_raises_when_lease_lost():
+def test_write_fence_hold_raises_when_lease_lost():
     events: list[str] = []
 
     class Lock:
@@ -1153,7 +1141,7 @@ def test_held_writer_lock_raises_when_lease_lost():
 
     with (
         pytest.raises(LockLostError, match="dataset writer lock lost before write") as captured,
-        held_writer_lock(Lock()),
+        WriteFence(Lock()).hold(),
     ):
         events.append("write")
     assert events == ["acquire", "owned", "release"]
@@ -1313,23 +1301,6 @@ class _CountingLock:
 
     def is_locked(self) -> bool:
         return True
-
-
-def test_write_fence_resolve_rejects_mixed_arguments():
-    fence = WriteFence(kind="apply")
-    assert WriteFence.resolve(None, fence_kind="apply") == fence
-    assert WriteFence.resolve(fence) is fence
-    with pytest.raises(ValueError, match="either fence= or"):
-        WriteFence.resolve(fence, fence_kind="retrain")
-
-    class _EqualsEverything:
-        def __eq__(self, other: object) -> bool:
-            return True
-
-        __hash__ = object.__hash__
-
-    with pytest.raises(ValueError, match="either fence= or"):
-        WriteFence.resolve(fence, writer_lock=_EqualsEverything())  # type: ignore[arg-type]
 
 
 def test_write_fence_lease_is_reentrant_and_rechecks_fence():
