@@ -10,7 +10,6 @@ from cicerone.automl import (
     CandidateResult,
     _parse_candidates,
     _time_based_folds,
-    drop_seen_interactions,
     drop_seen_recommendations,
     evaluate_candidates,
     exclude_content_fallback_from_candidates,
@@ -21,6 +20,7 @@ from cicerone.automl import (
 from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.model import train_and_recommend
+from cicerone.ranking import drop_seen_pairs
 
 
 def _spread_events(n_days: int) -> pd.DataFrame:
@@ -69,18 +69,16 @@ def _spread_events(n_days: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_drop_seen_interactions_keeps_unseen_pairs() -> None:
+def test_drop_seen_pairs_keeps_unseen_pairs() -> None:
     train = pd.DataFrame({"user_id": ["u1", "u1"], "item_id": ["i1", "i2"]})
     test = pd.DataFrame(
         {"user_id": ["u1", "u1", "u2"], "item_id": ["i1", "i3", "i2"], "weight": [1.0, 1.0, 1.0]}
     )
-    kept = drop_seen_interactions(test, train)
+    kept = drop_seen_pairs(test, train)
     assert list(zip(kept["user_id"], kept["item_id"], strict=True)) == [("u1", "i3"), ("u2", "i2")]
-    assert drop_seen_interactions(test, pd.DataFrame()).equals(test)
-    assert drop_seen_interactions(pd.DataFrame(), train).empty
-    assert drop_seen_interactions(pd.DataFrame({"weight": [1.0]}), train).equals(
-        pd.DataFrame({"weight": [1.0]})
-    )
+    assert drop_seen_pairs(test, pd.DataFrame()).equals(test)
+    assert drop_seen_pairs(pd.DataFrame(), train).empty
+    assert drop_seen_pairs(pd.DataFrame({"weight": [1.0]}), train).equals(pd.DataFrame({"weight": [1.0]}))
     reco = pd.DataFrame(
         {
             "user_id": ["u1", "u1", "u1"],
@@ -471,7 +469,7 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
     per_fold_metrics = []
     for train_events, test_events in folds:
         built = build_dataset(train_events, None, sample_items, feature_config, half_life_days=90)
-        test_interactions = drop_seen_interactions(
+        test_interactions = drop_seen_pairs(
             build_interactions(test_events, feature_config, half_life_days=90),
             built.interactions,
         )

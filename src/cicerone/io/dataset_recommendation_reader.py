@@ -16,10 +16,9 @@ from pyarrow.lib import ArrowInvalid, ArrowIOError
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.blob import S3_READ_ERRORS, STORAGE_READ_ERRORS, is_storage_not_found
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import (
-    is_s3_not_found,
     read_parquet,
     require_option,
     validate_storage_options,
@@ -119,10 +118,8 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                     availability_filters=availability_filters,
                 ),
             )
-        except FileNotFoundError:
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return None
             raise
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import boto3
 import pandas as pd
 import pytest
+from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from support.settings import make_settings
@@ -37,6 +39,19 @@ def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """A busy writer lock fails at once instead of after the acquire timeout."""
     monkeypatch.setattr(lock_hold, "DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.0)
+
+
+@pytest.fixture
+def s3_options() -> Iterator[dict[str, str]]:
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="test-bucket")
+        yield {
+            "storage_backend": "s3",
+            "access_key_id": "test",
+            "secret_access_key": "test",
+            "bucket": "test-bucket",
+            "prefix": "recommendations/latest",
+        }
 
 
 @pytest.fixture(autouse=True)

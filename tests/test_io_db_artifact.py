@@ -52,3 +52,13 @@ def test_database_read_model_artifact_uses_one_select(tmp_path):
     payload_selects = [sql for sql in statements if "payload" in sql.lower()]
     assert len(payload_selects) == 1
     assert "substr" in payload_selects[0].lower()
+
+
+def test_database_replace_model_artifact_if_matches_the_sqlite_fingerprint(tmp_path):
+    sink = DatabaseOutputSink({"database_url": f"sqlite:///{tmp_path}/artifacts.sqlite"})
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    assert token is not None
+    assert sink.replace_model_artifact_if(b"second", token) is True
+    assert sink.read_model_artifact() == b"second"
+    assert sink.replace_model_artifact_if(b"third", token) is False
