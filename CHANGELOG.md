@@ -51,6 +51,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the filtered read.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
+- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
+  is unset, so a quiet stream no longer parks the event worker. An
+  explicit `block_ms = 0` keeps that behaviour and logs a warning.
+- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
+  rejected as invalid instead of stopping the event worker.
+- An invalid db event row no longer stops the worker: it is delivered in
+  order as a rejected event, logged once by its identity columns only, and
+  acked with its batch without being applied.
+- db source health no longer fails on a row with an unparseable
+  `occurred_at`.
 - SQL statements quote table and column names the way the database dialect
   does. On Postgres a mixed-case `recommendations_table` no longer keeps a
   user's old rows on incremental replace, and the events worker's reads of

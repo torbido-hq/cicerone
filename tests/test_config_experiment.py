@@ -3,30 +3,14 @@ from __future__ import annotations
 import logging
 
 import pytest
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import ConfigError, load_experiment_settings, load_settings
 from cicerone.feature_config import BoostRule, EligibilityRule
 
 
-def _minimal_io() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """
-
-
 def test_load_experiment_defaults_disabled(tmp_path):
-    settings = load_settings(write_toml(tmp_path, "[job]\n" + _minimal_io()))
+    settings = load_settings(write_toml(tmp_path, "[job]\n" + MINIMAL_IO_TOML))
     assert settings.experiment.enabled is False
     assert settings.experiment.variants == ()
     assert settings.experiment.log_exposures is False
@@ -42,7 +26,7 @@ def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [experiment]
             enabled = true
@@ -293,7 +277,7 @@ def test_load_experiment_policy_names_and_tables(tmp_path):
             """
             [job]
             """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
             [experiment]
             enabled = true
@@ -553,7 +537,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [track]
             enabled = true
@@ -580,7 +564,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [experiment]
             enabled = true
@@ -603,7 +587,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
             """
         [job]
         """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
         [track]
         enabled = true

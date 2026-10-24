@@ -10,7 +10,6 @@ from cicerone.config import (
     EpochMetricsSettings,
     load_settings,
     resolve_epoch_metrics,
-    resolve_max_workers,
 )
 
 
@@ -585,9 +584,6 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """,
     )
     assert load_settings(omitted).max_workers == 1
-    assert resolve_max_workers() == 1
-    assert resolve_max_workers(None) == 1
-    assert resolve_max_workers(3) == 3
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -646,9 +642,9 @@ def test_load_settings_log_epoch_metrics(tmp_path):
         plateau_eps=0.02,
         plateau_window=4,
     )
-    assert resolve_epoch_metrics(log_epoch_metrics=True, every=3).every == 3
-    assert resolve_epoch_metrics(log_epoch_metrics=False, every=3) is None
-    assert resolve_epoch_metrics(log_epoch_metrics=True, every=None).every == 5
+    assert resolve_epoch_metrics({"log_epoch_metrics": True, "epoch_metrics_every": 3}).every == 3
+    assert resolve_epoch_metrics({"log_epoch_metrics": False, "epoch_metrics_every": 3}) is None
+    assert resolve_epoch_metrics({"log_epoch_metrics": True}).every == 5
 
 
 def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
