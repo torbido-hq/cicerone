@@ -46,6 +46,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- Tracking conversion counts and CVR count each converted impression once,
+  as CTR does, so repeat conversions or several converting clicks on one
+  recommendation no longer inflate them (overall, per rank/source/variant,
+  experiment outcomes and Thompson arms).
+- Tracking metrics, experiment outcomes and Thompson arms leave out
+  impressions, clicks and conversions with a future `occurred_at` until
+  that time has passed, so Thompson no longer counts them twice.
 - Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
   is unset, so a quiet stream no longer parks the event worker. An
   explicit `block_ms = 0` keeps that behaviour and logs a warning.
