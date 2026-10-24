@@ -57,6 +57,8 @@ Commands you will see:
 | `cicerone start` | Batch mode: one job immediately, then the scheduler loop. Serve mode: read API only. |
 | `cicerone serve` | Read API (`job.mode = "serve"`). |
 | `cicerone scheduler` | Cron loop only — waits for the next `cron_schedule` tick; no immediate job. |
+| `cicerone dashboard` | Basic-Auth status UI (step 15). |
+| `cicerone users` | Add / remove / list dashboard users. |
 
 `job` and `start` are not interchangeable. This tutorial uses `job` until
 the scheduler / trigger step.
@@ -207,6 +209,8 @@ Available strategies:
   or `pip install -r requirements-sequential.txt`). Sequences are unique
   items by last-touch time. AutoML skips it on sparse data or a missing
   extra. Skip it in this tutorial.
+- `ease` / `als`: RecTools `EASEModel` / implicit ALS. Opt-in;
+  personalized, users with interactions only.
 - `content_fallback`: zero-interaction items via categorical feature
   similarity (opt-in: `[job.content_fallback].enabled = true`).
 - `popular`: `PopularModel` — global popularity. Non-personalized, backfills
@@ -215,6 +219,9 @@ Available strategies:
 - `latest`: `PopularModel` restricted to the last two weeks of interactions —
   trending items. Non-personalized, same backfill role as `popular`.
   Optional `[model.latest]` (`period = { days = 14 }`).
+- `popular_in_category`: popularity mixed across an item category feature.
+  Opt-in.
+- `random`: uniform catalog samples. Opt-in sanity baseline.
 
 Optional RecTools hyperparameters (omit to keep built-in defaults):
 
@@ -493,10 +500,11 @@ print(pd.read_sql('SELECT status, models, artifact_written FROM recommendation_r
 "
 ```
 
-A fresh `recommendations` table includes `reasons`. An existing table from
-an older Cicerone needs `ALTER TABLE recommendations ADD COLUMN reasons TEXT`
-before the extra column will persist (`pandas` `to_sql(append)` will not
-add it).
+A fresh `recommendations` table includes `reasons`. On an existing table
+from an older Cicerone the write fails with `RecommendationSchemaError`
+until you run `ALTER TABLE recommendations ADD COLUMN reasons TEXT` (and
+`variant TEXT` for experiments); `pandas` `to_sql(append)` will not add
+them.
 
 Input and output can be mixed (e.g. read from Postgres, write to S3, or
 vice versa), and raw SQL overrides (`events_query`/`users_query`/
@@ -585,11 +593,13 @@ The response is an object (not a bare list):
           {"label": "personalized", "rank": 4, "weight": 0.72, "contribution": 0.0113}
         ],
         "boosts": [],
-        "similar_items": [{"item_id": "lager-001", "score": 0.67}],
-        "matched_attributes": [{"column": "style", "value": "lager"}]
+        "similar_items": [{"item_id": "ipa-001", "score": 0.67}],
+        "matched_attributes": [{"column": "category", "value": "beer"}]
       }
     }
-  ]
+  ],
+  "experiment_id": null,
+  "variant": null
 }
 ```
 
@@ -750,15 +760,15 @@ debounce_seconds = 2
 `host = "0.0.0.0"` is required so `docker run -p 8080:8080` can reach the
 process (code default is `127.0.0.1` inside the container).
 `debounce_seconds = 2` is a tutorial override of the default 60 so you
-do not sit through a minute after the boot job.
+can trigger again after a couple of seconds instead of a minute.
 
 `cicerone start` in batch mode runs **one job immediately**, then enters
 the scheduler. That is why this step uses `start` instead of `job`.
 `cicerone scheduler` would only wait for the next cron tick.
 
-A trigger while that first job is in flight, or within
-`debounce_seconds` of it finishing, is **skipped**, not queued. Wait for
-the real log line `entering schedule loop`, then for the debounce:
+That boot job runs before the trigger server listens, so a call during it
+gets connection refused; it is not debounced. Wait for the real log line
+`entering schedule loop`:
 
 ```sh
 docker run --rm -d --name cicerone-tutorial-scheduler -p 8080:8080 \
@@ -776,15 +786,17 @@ read -s -p "Trigger auth token: " TRIGGER_TOKEN && echo
 curl -X POST -H "Authorization: Bearer $TRIGGER_TOKEN" http://localhost:8080/trigger/retrain
 ```
 
-A trigger fired while a run is already in flight, or within
-`debounce_seconds` of the last one, is skipped rather than queued —
+The webhook answers `202 {"status": "started"}`. A trigger fired while a
+run is already in flight, or within `debounce_seconds` of the last one
+starting, gets `429` and is skipped rather than queued —
 check `docker logs cicerone-tutorial-scheduler` to see it happen if you
 call the webhook twice in a row. Single-instance locking is
 the default; see [configuration.md](configuration.md#job-trigger) for
 optional `postgres` / `redis` backends when running multiple scheduler
 replicas. The
-written manifest also records `triggered_by` (`"cron"`, `"webhook"`, or
-`"s3-poll"` if `poll_input_bucket = true`) and `lock_backend`. Clean up when
+written manifest also records `triggered_by` (`"cron"`, `"webhook"`,
+`"s3-poll"` if `poll_input_bucket = true`, `"manual"` for the boot job, or
+`"incremental"` for an events flush) and `lock_backend`. Clean up when
 you're done:
 
 ```sh
@@ -815,9 +827,6 @@ path = "/data/input"
 storage_backend = "local"
 path = "/data/output"
 
-[job]
-cron_schedule = "0 3 * * *"
-
 [track]
 enabled = true
 ```
@@ -834,11 +843,12 @@ docker run --rm -it \
 Then start the dashboard and open `http://localhost:8090/dashboard` in a
 browser (log in with the user just created), or
 `http://localhost:8090/dashboard?user_id=alice` to fill the inspector on
-load. The header also links to **Quality**, where the impression from step 12
-appears, and **Config**, a read-only view of the TOML this dashboard process
-loaded (secrets redacted). HTTP Basic credentials stay in the browser until it forgets them
-for this origin — closing the tab is not a sign-out; use a private window
-or clear saved passwords. The **Inspect user** form shows that `user_id`'s
+load. The header links to **Status**, **Quality** (where the impression from
+step 12 appears), **Experiments**, **Config** (a read-only view of the TOML
+this dashboard process loaded, secrets redacted) and **Sign out**. HTTP
+Basic credentials stay in the browser until it forgets them for this origin
+— closing the tab is not a sign-out; use **Sign out**, a private window, or
+clear saved passwords. The **Inspect user** form shows that `user_id`'s
 recent `[input]` events beside current top-K (including cold-start
 fallback). Shared item ids are highlighted. When `reasons` is present, a
 Why column summarizes source labels and the top similar history item.
@@ -902,9 +912,8 @@ docker compose up --build
 - Sticky A/B tests of ranking recipes (optional job-time Thompson):
   [experiments.md](experiments.md).
 - Impressions, CTR/CVR, the dashboard Quality page, and production replay:
-  [evaluation.md](evaluation.md). The header also links to **Quality** and
-  **Config** once `[track]` is on (Quality) or the process has loaded TOML
-  (Config).
+  [evaluation.md](evaluation.md). The header always links to **Quality**
+  (marked off until `[track]` or `[job.eval]` is on) and **Config**.
 - Production incremental ingest (db / s3 / Redis Streams / Kafka /
   RabbitMQ, HA, online LightFM): [incremental-events.md](incremental-events.md).
 - Run the test suite (`docker compose -f docker-compose.ci.yml up --build

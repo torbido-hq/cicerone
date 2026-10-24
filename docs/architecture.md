@@ -14,7 +14,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases, deprecated); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases, deprecated: use `settings.automl` / `.trigger` / `.dashboard` / …); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
@@ -24,7 +24,10 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
 | `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
-| `io/recommendation_reader.py` | Read-only lookup of precomputed recs for serve mode (pulls `rectools` for `Columns` via `blending.py`, but no lightfm/implicit/torch); dataset path indexes by `user_id` at refresh; shared cold-start selection rule |
+| `io/recommendation_reader.py` | Re-exports the serve-mode recommendation readers and shared helpers |
+| `io/dataset_recommendation_reader.py` / `io/db_recommendation_reader.py` | Read-only lookup of precomputed recs (parquet cache indexed by `user_id` at refresh / SQL per request) |
+| `io/recommendation_reader_common.py` | Shared cold-start selection rule and item-filter mixin (pulls `rectools` for `Columns` via `blending.py` → `ranking.py`, but no lightfm/implicit/torch) |
+| `io/engines.py` | Shared SQLAlchemy engines keyed by database URL |
 | `io/manifest_reader.py` | Read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import) |
 | `io/options.py` | Shared `require_option` / `build_s3_client` helpers |
 | `io/replace_users.py` | Shared helpers for user-scoped recommendation replaces |
@@ -34,7 +37,8 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `model/` | `BuiltDataset` → `STRATEGIES` registry → fit / recommend / combine |
 | `model/strategies.py` | `RecommenderModel` protocol, `Strategy`, `STRATEGIES`, `build_strategy_model` |
 | `model/fit.py` | `fit_strategies`, `FitOptions`, `plan_model_run`, ProcessPool workers |
-| `model/recommend.py` | `recommend_with_models`, cohort plan, `train_and_recommend` |
+| `model/recommend.py` | `recommend_with_models`, `train_and_recommend` |
+| `model/recommend_cohort.py` / `recommend_strategy.py` / `recommend_combine.py` / `recommend_cache.py` | Cohort plan, per-strategy recommend, combine (blend / RRF / priority), recommend memo keys |
 | `model/combine.py` | Priority + weighted RRF combiners |
 | `model/epoch_metrics.py` | Optional collaborative/sequential per-epoch Precision/Recall logging |
 | `model/constants.py` | `RRF_K`, `DEFAULT_MODELS`, source column names |
@@ -43,7 +47,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `reasons.py` | Serve-safe serialize/parse for the optional `reasons` column |
 | `artifact.py` | Optional versioned fitted-model bundle (schema **v3**: RecTools `save`/`load_model` for library models + pickle envelope; `content_fallback` still pickle) |
 | `automl.py` | Optional: backtests candidate models/weights/`rrf_k` configs over time-based folds of event history and picks the best one |
-| `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log |
+| `experiment/` | Sticky A/B assignment, per-variant recipes, sequential stats, guardrails, promote state / exposure log; `thompson.py` job-time Thompson allocation |
 | `track/` | Impression/click ingest (`POST /track`), JSONL/db store, rec history snapshots |
 | `evaluation/` | CTR/CVR attribution and production replay (`metrics.py`, `served.py`, `tracking.py`) |
 | `cli.py` | `cicerone` console script (`start` (alias `run`) / `job` / `serve` / `dashboard` / `scheduler` / `users` / `export-openapi`; `--config`, `--log-level`, `--log-format`) |
@@ -52,6 +56,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `scheduler.py` | In-process cron loop that calls `job.run()`; when `[job.trigger]` is enabled, also hosts the retrain-trigger HTTP server (`trigger.py`) |
 | `serve/` | Serve mode package: FastAPI read API over precomputed recommendations |
 | `serve/app.py` | Routes, middleware, refresh loop (`cicerone serve`) |
+| `serve/recommendations.py` | Lookup: variant assignment, cold-start fallbacks, filtering |
 | `serve/item_filters.py` | Category / availability snapshot cache for serve requests |
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
@@ -69,6 +74,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `trigger.py` | Event-driven retrain trigger: webhook + optional input-bucket poll, debounce guard (`RunGuard`) shared with the cron loop; increments `cicerone_retrain_trigger_total` (per replica) |
 | `locks/` | Optional lock backends (`postgres.py` / `redis.py`) for `RunGuard` and the events apply lease; Redis `owned()` checks the fencing token, Postgres `owned()` checks `pg_locks` for this backend pid |
 | `locks/keys.py` | Lock key helpers shared by the Postgres and Redis backends |
+| `locks/hold.py` | `LockBackend`, `WriteFence`, acquire / fence / hold tracking, `LockLostError` / `WriterLockBusyError` |
 | `config/lock_url.py` | Postgres lock URL resolution for config load + lock builder |
 | `http_auth.py` | Shared bearer-token (serve/trigger) and HTTP Basic Auth (dashboard) dependencies |
 | `dashboard.py` | Standalone FastAPI dashboard: job status/history plus user-id lookup (`cicerone dashboard`) |
@@ -190,7 +196,8 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
      shared `__cold_start__` user is ranked against the global item-scoped
      allowlist for serve-mode fallback. When no date column is usable,
      `latest` is disabled and its weight moves to `popular`. Strategy
-     `latest` (trending PopularModel) is skipped while blending is on.
+     `latest` (trending PopularModel) is skipped while blending is on, and
+     `popular` is added to the models when missing.
    `Settings.max_workers` (`[job].max_workers`, default `1`) parallelizes
    AutoML fold evaluation and strategy fitting via `ProcessPoolExecutor`
    when set `>1`. Per-strategy top-K is rectools-native
@@ -219,23 +226,26 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    combination. The batch job also passes a `strategy_cache` when
    `[job].save_model_artifact = true` so fitted weights can be serialized
    without a second fit.
-4. If `Settings.automl_enabled` (`[job.automl].enabled`), before step 3
+4. If `Settings.automl.enabled` (`[job.automl].enabled`), before step 3
    `automl.evaluate_candidates()` backtests a list of candidate
    `models`/`weights`/`rrf_k` configs (defaults to `automl.DEFAULT_CANDIDATES`,
-   overridable via `[[job.automl.candidates]]`) over `Settings.automl_n_splits`
+   overridable via `[[job.automl.candidates]]`) over `Settings.automl.n_splits`
    time-based folds of the raw event history — each fold trains a fresh
-   `BuiltDataset` on everything before a `Settings.automl_test_days`-day
+   `BuiltDataset` on everything before a `Settings.automl.test_days`-day
    held-out window and scores its recommendations against that window with
-   `rectools.metrics` (MAP@k/NDCG@k/Recall@k; optional
+   `rectools.metrics` (MAP/NDCG/Recall/HitRate/MRR/Precision @k; optional
    `[job.automl].debias` / RecTools `DebiasConfig`, default off). Within a fold,
    `evaluate_candidates()` passes a `strategy_cache` dict (reset per fold,
    shared across every candidate scored against that fold) to
    `train_and_recommend()` so candidates sharing a strategy reuse its fitted
    model instead of retraining it per candidate. `sequential` is dropped from
    the pool (INFO log) when `rectools[torch]` is missing or median distinct
-   items/user is below `Settings.sequential_min_median_interactions`.
+   items/user is below `Settings.sequential_min_median_interactions`;
+   `content_fallback` when `[job.content_fallback]` is off; and
+   `popular_in_category` when items lack its category column. An empty
+   pool raises `ValueError`.
    `select_best_candidate()` then picks the highest scorer by
-   `Settings.automl_primary_metric`
+   `Settings.automl.primary_metric`
    (matched by prefix, e.g. `"MAP"` matches `"MAP@10"`), and its
    `models`/`weights`/`rrf_k` replace the static config for that run's call
    to `model.train_and_recommend()`.
@@ -243,7 +253,9 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    (counts, timestamp, effective `models`/`model_weights`/`rrf_k`,
    `artifact_written` / `artifact_schema_version` when a model artifact was
    saved, `experiment_id` / `experiment_variants` when `[experiment]` is on,
-   and `automl_metrics` when AutoML ran) back out via the configured
+   `automl_metrics` when AutoML ran, `track_eval` / `served_eval` from
+   `[track]` / `[job.eval]`, and `partial_outputs` on a failed run that
+   already wrote some outputs) back out via the configured
    `OutputSink`. When items were loaded, it also writes an items snapshot
    (`items_snapshot.parquet` / `recommendation_items`) so serve mode can
    apply `?category=` and `exclude_unavailable` without reading the input
@@ -260,7 +272,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
    computes the next run time from `cron_schedule` with `croniter`, sleeps,
    calls `job.run(triggered_by="cron")` (with `fence_check=backend.owned` when a
    distributed lock is held), and loops forever — a failed run is
-   logged but never kills the loop. When `Settings.trigger_enabled`
+   logged but never kills the loop. When `Settings.trigger.enabled`
    (`[job.trigger].enabled`), `scheduler.main()` instead delegates to
    `_run_with_trigger()`, which runs the same cron loop on a background
    thread and additionally serves `trigger.create_app()` (see below) in the
@@ -293,9 +305,10 @@ imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
 needs no lightfm/implicit/torch there. With `[events.online]`, the events
 worker lazy-imports the artifact stack (LightFM) for write-through only.
 It does import
-`rectools` at startup: `serve/app.py` → `events/worker.py` → `blending.py` →
-`from rectools import Columns`, so `rectools` cannot be dropped from a
-serve-only image.
+`rectools` at startup: `serve/app.py` → `serve/recommendations.py` →
+`io/recommendation_reader.py` → `recommendation_reader_common.py` →
+`blending.py` → `ranking.py` → `from rectools import Columns`, so `rectools`
+cannot be dropped from a serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
@@ -310,8 +323,10 @@ serve-only image.
   (`cicerone.metrics`). Layers (in-memory webhook queue vs output vs
   track store): [configuration.md](configuration.md#where-state-lives).
 - `serve.create_app()` exposes `GET /health` and
-  `GET /recommendations/{user_id}` (`limit`/`k`, `category`,
-  `exclude_unavailable`) behind `http_auth.require_bearer_token`. Unknown
+  `GET /recommendations/{user_id}` (`limit`/`k` 1–100 else `422`, `400` when
+  they differ; `category`, `exclude_unavailable`) behind
+  `http_auth.require_bearer_token`, plus `POST /track` when `[track]` is on
+  and `POST /events` when the `[events]` webhook is on. Unknown
   users fall back to the `__cold_start__` list when blending wrote one, else
   to one `popular_fallback` / `latest` user's top-K; with neither, they 404.
   Responses include `generated_at` from the run manifest, plus
@@ -337,21 +352,26 @@ serve-only image.
 (not a replacement for) `scheduler.py`'s cron loop:
 
 - `RunGuard` (thread-safe) debounces concurrent trigger sources: a run
-  already in flight, or one that finished within `debounce_seconds`, causes
-  a new trigger to be skipped rather than queued or run in parallel.
-- `create_app()` exposes `POST /trigger/retrain` (webhook, behind
-  `http_auth.require_bearer_token`) which calls `guard.trigger("webhook")`.
+  already in flight, or one that *started* within `debounce_seconds` of the
+  last guarded run, causes a new trigger to be skipped rather than queued or
+  run in parallel. The `cicerone start` boot job runs before the trigger
+  listens and is not tracked by `RunGuard`.
+- `create_app()` exposes `GET /health` (no auth) and `POST /trigger/retrain`
+  (webhook, behind `http_auth.require_bearer_token`) which calls
+  `guard.trigger("webhook")`: `202 {"status": "started"}`, or `429` when
+  skipped.
 - `poll_input_forever()` (only started when
-  `Settings.trigger_poll_input_bucket`) periodically fingerprints the input
-  source (`_current_marker`: local file mtime, or S3 `head_object`'s
+  `Settings.trigger.poll_input_bucket`; `dataset` input only, other kinds log
+  a warning) periodically fingerprints the input `events.parquet`
+  (`_current_marker`: local file mtime, or S3 `head_object`'s
   `LastModified`) and calls `guard.trigger("s3-poll")` when it changes. This
   is a deliberate substitute for real S3 event notifications, which require
   SNS/SQS/Lambda wiring and aren't portable across S3-compatible backends
   (R2, MinIO) — polling avoids adding that infra while still being
   event-driven from the operator's point of view.
-- Every successful run's manifest (written by `job.run()`) records
-  `triggered_by` (`"cron"`, `"webhook"`, or `"s3-poll"`) and
-  `lock_backend`.
+- Every run's manifest (written by `job.run()`, failed runs too) records
+  `triggered_by` (`"cron"`, `"webhook"`, `"s3-poll"`, `"manual"`, or
+  `"incremental"` for an events flush) and `lock_backend`.
 - Debounce exclusion defaults to an in-process `threading.Lock` with no
   distributed backend (`lock_backend = "in_process"`). Optional `postgres` /
   `redis` backends (see `cicerone.locks`) coordinate across scheduler
@@ -415,15 +435,18 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `templates/_status.html`), `GET /partials/recommendations` (Basic Auth,
   user-id lookup fragment — see `templates/_recommendations.html`),
   `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
-  (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/config`
+  (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/quality`
+  (Basic Auth, CTR/CVR and replay), `GET /dashboard/logout` (401 to drop
+  the Basic credentials), `GET /dashboard/config`
   (Basic Auth, read-only loaded Settings and features.toml with secrets
   redacted; known keys open a one-line hint with an optional cicerone.dev
   link), and
-  `POST /dashboard/experiments/promote` (Basic Auth, 100% traffic to a
-  winner). OpenAPI `/docs` is disabled. HTML pages include a `noindex`
+  `POST /dashboard/experiments/promote` / `…/unpromote` (Basic Auth plus a
+  CSRF form field; 100% traffic to a winner / resume the split). OpenAPI
+  `/docs` is disabled. HTML pages include a `noindex`
   meta tag; every response sets `X-Robots-Tag` and HTML uses
   `Cache-Control: private, no-store`. The page polls
-  `/partials/status` (`Settings.dashboard_refresh_interval_seconds`)
+  `/partials/status` (`Settings.dashboard.refresh_interval_seconds`)
   instead of a websocket or client-side JS framework. Initial markup is
   `hx-trigger="refresh"`; dashboard.js adds `every Ns` and the first request
   only when updates are not paused (`prefers-reduced-motion` starts paused).
@@ -435,7 +458,7 @@ never imports `cicerone.model`/`dataset`/`automl`.
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
   runtime and no Node/npm dependency at runtime or for end users. Tailwind
   is compiled ahead of time in a dedicated `frontend` Docker build stage
-  (`node:26.7.0-slim`, pinned via `package.json`/`package-lock.json`) whose only
+  (`node:26.12.0-slim`, pinned via `package.json`/`package-lock.json`) whose only
   output (`static/tailwind.css`) is copied into the runtime image and the
   PyPI wheel (`package` Docker stage).
 
