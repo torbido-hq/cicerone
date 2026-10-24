@@ -88,7 +88,9 @@ http.request(request)
 ```
 
 Clicks use the same contract with `kind: "click"`. Invalid body → **400**.
-Missing bearer → **401**. Writer lock busy or lost → **503**.
+Missing bearer → **401**. Writer lock busy or lost → **503**. Serve
+`/metrics` counts outcomes in `cicerone_track_ingest_total{kind,status}`
+(`impression` / `click` / `other`, `accepted` / `error`).
 
 ## Metrics
 
@@ -134,7 +136,7 @@ Storage is the same track store (`track.jsonl` or
 
 ```toml
 [experiment]
-primary_metric = "ctr"       # or "conversion", or an event_type / "weighted"
+primary_metric = "ctr"       # or "conversion" (event_type / "weighted" need user or recommended)
 attribution = "click"        # click | impression | user | recommended
 ```
 

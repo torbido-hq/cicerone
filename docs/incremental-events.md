@@ -58,8 +58,8 @@ Same columns as batch input:
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | must appear in `features.toml` `[event_weights]` |
-| `quantity` | no | default `1` |
+| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight |
+| `quantity` | no | integer `>= 1`, default `1` (else `400`) |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
 Optional transport fields:
@@ -107,8 +107,10 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 ```
 
-Startup fails if `[output].artifact_hmac_key` is missing, or if the
-`[output]` store has no artifact — the batch job must set
+Config load fails if `[output].artifact_hmac_key` is missing, if
+`[output]` is S3 (needs `db` or a local dataset path), or if
+`[model.collaborative].cls` is not `LightFMWrapperModel`. Startup fails if
+the `[output]` store has no artifact — the batch job must set
 `[job].save_model_artifact = true`. An event is trained only when both
 its `user_id` and `item_id` already exist in that artifact (including a new
 interaction between two known IDs). Unknown IDs still get popular / latest /
@@ -196,9 +198,9 @@ are a separate cheap path between those runs.
 ### `db`
 
 Watermark poll over `events_table` / `events_query`. No `POST /events`.
-Required: `events.options.database_url`. Optional durable `watermark_path`
-and `initial_watermark`. The watermark advances only after a successful
-flush `ack`. When an `event_id` column exists, poll orders by
+Required: `events.options.database_url`. Optional durable `watermark_path`,
+`initial_watermark` and `initial_watermark_event_id`. The watermark
+advances only after a successful flush `ack`. When an `event_id` column exists, poll orders by
 `(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
@@ -210,13 +212,15 @@ share a cursor.
 ### `s3`
 
 S3-compatible (R2-first): same `endpoint_url` + credentials shape as
-dataset I/O. Default `mode = "list"` (list/marker under `prefix`; durable
-`marker_path`). Objects are JSON event objects or arrays; missing
+dataset I/O. `mode` defaults to `"sqs"` when `queue_url` is set, else
+`"list"` (list/marker under `prefix`; durable `marker_path`, optional
+`initial_marker`). Objects are JSON event objects or arrays; missing
 `event_id` uses `bucket/key|etag|index`. List mode is a **single consumer**
 per bucket/prefix.
 
-AWS-only `mode = "sqs"` (`queue_url`) is rejected when `endpoint_url` is
-set. `nack` requeues locally and extends SQS visibility so a lock-busy
+AWS-only `mode = "sqs"` (`queue_url`, optional `region_name`) is rejected
+when `endpoint_url` is set. `nack` requeues locally and extends SQS
+visibility so a lock-busy
 replica can retry without waiting out the visibility timeout.
 
 ### `redis_streams`
@@ -305,7 +309,7 @@ not applied again (an id the source generated, e.g. RabbitMQ without `event_id`,
 stays at-least-once): a hash of each event's id is saved in the same write as
 the recommendations — the
 `incremental_applied_events` table on db output
-(`[output].applied_events_table`, a name no other output table uses; keyed
+(`[output.options].applied_events_table`, a name no other output table uses; keyed
 by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
 metadata on dataset output — and an event already recorded is acked
 instead of applied (`cicerone_events_replayed_total`). The key covers the id
@@ -325,7 +329,7 @@ Requires the matching extra.
 Default is **one writer process**. Dataset output is whole-object
 read-modify-write. Multi-replica serve is safe with a postgres or redis
 `lock_backend` (apply / dataset-append lease). `in_process` remains
-single-writer.
+single-writer; `events.ha = true` with `in_process` fails at load.
 
 A postgres or redis `job.trigger.lock_backend` is enough for serve to take
 the apply lease (`{lock_key}:events:apply`) around write-through (not the
@@ -381,7 +385,7 @@ Loads and writes are **user-scoped** (affected users + `__cold_start__`):
 a full-table overwrite. The updater keeps an LRU cache of those rows
 (default 2048 users) between micro-batches.
 
-Serve `/metrics` (when events are enabled):
+Serve `/metrics` (with `[serve].metrics_enabled` and `X-Metrics-Token`):
 
 | Metric | Meaning |
 | --- | --- |
