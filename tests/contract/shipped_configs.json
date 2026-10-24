@@ -1,0 +1,113 @@
+{
+  "cicerone.dashboard.toml": {
+    "dashboard.enabled": true,
+    "dashboard.history_limit": 20,
+    "dashboard.host": "0.0.0.0",
+    "dashboard.lookup_events": 20,
+    "dashboard.lookup_k": 20,
+    "dashboard.port": 8090,
+    "dashboard.refresh_interval_seconds": 30,
+    "dashboard.users_path": "/app/config/dashboard_users.toml",
+    "input.kind": "dataset",
+    "input.options.path": "/tmp/unused-in-dashboard-mode",
+    "input.options.storage_backend": "local",
+    "job.cron_schedule": "0 3 * * *",
+    "output.kind": "dataset",
+    "output.options.access_key_id": "${OUTPUT_S3_ACCESS_KEY_ID}",
+    "output.options.bucket": "${OUTPUT_S3_BUCKET}",
+    "output.options.endpoint_url": "${OUTPUT_S3_ENDPOINT_URL}",
+    "output.options.prefix": "recommendations/latest",
+    "output.options.secret_access_key": "${OUTPUT_S3_SECRET_ACCESS_KEY}",
+    "output.options.storage_backend": "s3"
+  },
+  "cicerone.serve.toml": {
+    "input.kind": "dataset",
+    "input.options.path": "/tmp/unused-in-serve-mode",
+    "input.options.storage_backend": "local",
+    "job.mode": "serve",
+    "output.kind": "dataset",
+    "output.options.access_key_id": "${OUTPUT_S3_ACCESS_KEY_ID}",
+    "output.options.bucket": "${OUTPUT_S3_BUCKET}",
+    "output.options.endpoint_url": "${OUTPUT_S3_ENDPOINT_URL}",
+    "output.options.prefix": "recommendations/latest",
+    "output.options.secret_access_key": "${OUTPUT_S3_SECRET_ACCESS_KEY}",
+    "output.options.storage_backend": "s3",
+    "serve.auth_token": "${SERVE_AUTH_TOKEN}",
+    "serve.category_column": "category",
+    "serve.default_k": 10,
+    "serve.host": "0.0.0.0",
+    "serve.metrics_enabled": false,
+    "serve.port": 8000,
+    "serve.refresh_interval_seconds": 60
+  },
+  "cicerone.toml": {
+    "input.kind": "dataset",
+    "input.options.access_key_id": "${INPUT_S3_ACCESS_KEY_ID}",
+    "input.options.bucket": "${INPUT_S3_BUCKET}",
+    "input.options.endpoint_url": "${INPUT_S3_ENDPOINT_URL}",
+    "input.options.prefix": "datasets/latest",
+    "input.options.secret_access_key": "${INPUT_S3_SECRET_ACCESS_KEY}",
+    "input.options.storage_backend": "s3",
+    "job.cron_schedule": "0 3 * * *",
+    "job.feature_config_path": "/app/config/features.toml",
+    "job.half_life_days": 90,
+    "job.mode": "batch",
+    "job.top_k": 10,
+    "output.kind": "dataset",
+    "output.options.access_key_id": "${OUTPUT_S3_ACCESS_KEY_ID}",
+    "output.options.bucket": "${OUTPUT_S3_BUCKET}",
+    "output.options.endpoint_url": "${OUTPUT_S3_ENDPOINT_URL}",
+    "output.options.prefix": "recommendations/latest",
+    "output.options.secret_access_key": "${OUTPUT_S3_SECRET_ACCESS_KEY}",
+    "output.options.storage_backend": "s3"
+  },
+  "features.toml": {
+    "boost_overfetch_factor": 3,
+    "event_caps.view": 5,
+    "event_weights.cart_add": 1.0,
+    "event_weights.purchase": 4.0,
+    "event_weights.review_negative": -3.0,
+    "event_weights.review_positive": 5.0,
+    "event_weights.saved": 2.0,
+    "event_weights.view": 0.3,
+    "item_availability_filters": [
+      "published",
+      "in_stock"
+    ],
+    "item_features": [
+      {
+        "column": "category",
+        "type": "categorical"
+      },
+      {
+        "column": "primary_style",
+        "type": "categorical"
+      },
+      {
+        "column": "producer_id",
+        "type": "categorical"
+      },
+      {
+        "column": "region_slug",
+        "type": "categorical"
+      },
+      {
+        "column": "abv_bucket",
+        "type": "categorical"
+      }
+    ],
+    "quantity_scaled_events": [
+      "purchase"
+    ],
+    "user_features": [
+      {
+        "column": "favorite_styles",
+        "type": "list"
+      },
+      {
+        "column": "region_slug",
+        "type": "categorical"
+      }
+    ]
+  }
+}

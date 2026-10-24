@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import event_payload
 
 from cicerone.events.db import (
     DbEventSource,
@@ -38,10 +39,12 @@ def test_db_registered_and_build(tmp_path):
 
 def test_db_from_clause_uses_sql_identifier_as_is(tmp_path):
     url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
     table_source = DbEventSource({"database_url": url, "events_table": "events"})
-    assert table_source._from_clause() == "events"
+    assert table_source._from_clause(engine) == "events"
+    assert DbEventSource({"database_url": url, "events_table": "Events"})._from_clause(engine) == '"Events"'
     query_source = DbEventSource({"database_url": url, "events_query": "SELECT * FROM events"})
-    assert query_source._from_clause() == "(SELECT * FROM events) AS cicerone_events_src"
+    assert query_source._from_clause(engine) == "(SELECT * FROM events) AS cicerone_events_src"
 
 
 def test_db_poll_ack_advances_watermark(tmp_path):
@@ -594,6 +597,7 @@ def test_row_identity_prefers_id_then_rowid_then_ctid():
     assert _row_identity({"id": 7, "rowid": 1, "ctid": "(0,1)"}) == "id:7"
     assert _row_identity({"rowid": 2}) == "rowid:00000000000000000002"
     assert _row_identity({"rowid": "not-an-int"}) == "rowid:not-an-int"
+    assert _row_identity({"rowid": float("inf")}) == "rowid:inf"
     assert _row_identity({"ctid": "(0,1)"}) == "ctid:(0,1)"
     assert _stable_event_id({"idempotency_key": "ik", "id": 1}, occurred) == "ik"
     assert _stable_event_id({"id": 9}, occurred) == "id:9"
@@ -900,3 +904,52 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
     assert released == []
     source.close()
     assert released == [url]
+
+
+def _event_row(event_id: str, minute: int, **overrides) -> dict:
+    defaults = {
+        "item_id": f"i{event_id}",
+        "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
+        "event_id": event_id,
+    }
+    return event_payload(**{**defaults, **overrides})
+
+
+def test_db_poll_delivers_an_invalid_row_as_rejected_in_cursor_order(tmp_path):
+    url = _sqlite_url(tmp_path)
+    bad = _event_row("bad", 1, user_id="alice@example.com", quantity=0)
+    _seed_events(url, [_event_row("e1", 0), bad, _event_row("e2", 2)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    first = list(source.poll(2))
+    assert [(event.event_id, event.rejected is None) for event in first] == [("e1", True), ("bad", False)]
+    reason = first[1].rejected or ""
+    assert "quantity must be >= 1" in reason
+    assert '"event_id": "bad"' in reason
+    assert "alice@example.com" not in reason
+    assert "ibad" not in reason
+    assert source.ack([event.event_id for event in first]) == ("e1", "bad")
+    assert [event.event_id for event in source.poll(10)] == ["e2"]
+
+
+def test_db_poll_keeps_an_unacked_rejected_row_in_flight(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row("bad", 0, quantity=0)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["bad"]
+    assert list(source.poll(10)) == []
+    source.ack(["bad"])
+    assert list(source.poll(10)) == []
+    assert source.health().lag == 0
+
+
+def test_db_rows_with_a_garbage_occurred_at_never_stall_the_source(tmp_path):
+    url = _sqlite_url(tmp_path)
+    junk = [_event_row(f"junk{n}", 0, occurred_at="not a time") for n in range(5)]
+    _seed_events(url, [*junk, _event_row("e1", 1)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+
+    assert [event.event_id for event in source.poll(2)] == ["e1"]
+    assert source.health().lag == 1
