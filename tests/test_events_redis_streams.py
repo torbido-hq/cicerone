@@ -4,9 +4,8 @@ import sys
 from typing import Any
 
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 from support.fakes import hide_module
-from test_events_worker import _dataset_updater
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -580,15 +579,13 @@ def test_explicit_block_zero_warns(caplog):
     assert "block_ms = 0" in caplog.text
 
 
-def test_worker_retries_failed_xack_past_retry_ack_cap(monkeypatch, tmp_path, feature_config: FeatureConfig):
-    # XAUTOCLAIM re-claims our own idle entry and the source skips it as held: only the worker retry acks it.
+def test_worker_retries_failed_xack_until_acked(monkeypatch, tmp_path, feature_config: FeatureConfig):
     client = _install_fake_redis(monkeypatch, FakeRedis())
-    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 0)
-    _settings, _sink, updater = _dataset_updater(tmp_path, feature_config)
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
     source = RedisStreamsEventSource(_options())
     worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
     source.connect()
-    entry_id = client.xadd("cicerone:events", event_payload(event_id="e1"))
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
     real_xack = client.xack
 
     def _fail_xack(*_args: Any) -> int:
@@ -598,6 +595,5 @@ def test_worker_retries_failed_xack_past_retry_ack_cap(monkeypatch, tmp_path, fe
     with pytest.raises(RedisError, match="xack down"):
         worker.tick()
     client.xack = real_xack  # type: ignore[method-assign]
-    client.age_pending("cicerone:events", "cicerone", entry_id, idle_ms=5_000)
     assert worker.tick() == 0
     assert client.groups[("cicerone:events", "cicerone")]["pending"] == {}

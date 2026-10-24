@@ -346,20 +346,17 @@ class EventWorker:
         self._settle_live(self._ack_tracked(batch))
 
     def _ack_tracked(self, events: Sequence[NormalizedEvent]) -> list[NormalizedEvent]:
-        """Ack ``events`` and return those still live; failed or missing acks are kept for retry."""
+        """Ack ``events`` and return those still live; failed acks are kept for retry."""
         try:
             live_ids = self._ack_live_ids([event.event_id for event in events])
         except BaseException:
             self._retry_acks.extend(events)
             raise
-        missing = [event for event in events if event.event_id not in live_ids]
-        # The source no longer holds these deliveries, so cap them; a failed ack above retries without limit.
-        dropped = len(missing) - max(0, _APPLIED_EVENT_ID_CAP - len(self._retry_acks))
-        if dropped > 0:
-            logger.warning("Dropping %d event ack(s) for deliveries the source no longer holds", dropped)
-            del missing[:dropped]
-        self._retry_acks.extend(missing)
-        return [event for event in events if event.event_id in live_ids]
+        live = [event for event in events if event.event_id in live_ids]
+        if len(live) < len(events):
+            # The source redelivers what it no longer holds; dedupe acks that delivery instead.
+            logger.debug("Not retrying %d ack(s) the source no longer holds", len(events) - len(live))
+        return live
 
     def _settle_live(self, live: Sequence[NormalizedEvent]) -> None:
         if live:
