@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
 from cicerone.io.replace_users import RecommendationSchemaError
-from cicerone.locks import LockLostError
+from cicerone.locks import LockLostError, WriteFence
 
 
 def _sqlite_url(tmp_path) -> str:
@@ -643,9 +643,7 @@ def test_sqlite_db_sink_fence_rejects_writes(tmp_path):
     owned = {"v": True}
     sink = DatabaseOutputSink(
         {"database_url": url},
-        fence_check=lambda: owned["v"],
-        fence_lost="events apply lock lost before write",
-        fence_kind="apply",
+        fence=WriteFence(None, lambda: owned["v"], "events apply lock lost before write", "apply"),
     )
     recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "latest"}])
     sink.write_recommendations(recs)

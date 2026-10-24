@@ -56,7 +56,7 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `serve/events_routes.py` | Optional `POST /events` webhook mount when `[events]` webhook is enabled |
 | `serve/bootstrap_events.py` | Start/stop the serve-process event worker (micro-batch → write-through) |
 | `serve/code_samples.py` | OpenAPI `x-codeSamples` snippets for serve mode (ReDoc / exported schema) |
-| `metrics.py` | Prometheus metric objects + helpers (default in-process registry); `serve.metrics` is an alias |
+| `metrics.py` | Prometheus metric objects + helpers (default in-process registry) |
 | `serve_schemas.py` | Pydantic models that drive the serve OpenAPI schema |
 | `serve_client.py` | Thin stdlib HTTP client for the serve read API |
 | `export_serve_openapi.py` | `cicerone export-openapi` — dump FastAPI OpenAPI JSON (`docs/openapi/…`) |
@@ -112,7 +112,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | `tests/test_config_load.py` | TOML load / Settings / env placeholders |
 | `tests/test_config_validation.py` | Weights, epoch metrics, max_workers helpers |
 | `tests/test_model_strategies.py` | `STRATEGIES` registry / `RecommenderModel` checks |
-| `tests/test_model_fit.py` | Fit cache, parallel fit, `resolve_run_models` |
+| `tests/test_model_fit.py` | Fit cache, parallel fit, `plan_model_run` |
 | `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |
 | `tests/test_model_combine.py` | Priority combiner unit tests |
 | `tests/test_model_epoch_metrics.py` | Per-epoch metric helpers |
@@ -388,7 +388,7 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `recommendation_runs` table for real history (`read_recent(limit)`).
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
-  `io.factory.build_user_history_reader(settings.input)` builds a
+  `io.factory.build_input_source(settings.input)` builds a
   `UserHistoryReader` (`get_events_for_user` / `get_user` on the input
   source) for the events pane. Lookup reads those stores directly (no serve
   hop). Recs `k` is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
@@ -482,8 +482,8 @@ keys a given backend requires. To add a new backend (e.g. another object store):
 1. Add a module under `src/cicerone/io/` implementing the `InputSource`
    and/or `OutputSink` protocol (`io/base.py`) — read `options` yourself,
    validating required keys with `io.options.require_option`.
-2. Register the new `kind` string in the `io/factory.py` registries:
-   `_INPUT_SOURCES` / `_OUTPUT_SINKS` for the batch job, and
+2. Register the new `kind` string in `io/factory.py`: `_INPUT_SOURCES`
+   and a branch in `build_output_sink` for the batch job, and
    `_RECOMMENDATION_READERS` / `_MANIFEST_READERS` for serve and the
    dashboard (otherwise they raise `Unknown recommendation kind` /
    `Unknown manifest kind`).
