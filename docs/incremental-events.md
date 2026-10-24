@@ -17,7 +17,9 @@ Sequential never runs `fit_partial`. The default runtime image is
 torch-free. New catalog IDs still wait for a full retrain.
 
 The incremental path injects recency boosts and may backfill popular / latest
-slots for affected users. Those injects use the items-snapshot eligibility
+slots for affected users. The boost puts the user's own just-applied items in the top 30% of their
+list for any positive-weight event type, so an item they just consumed (e.g.
+`watched`) comes back at the top; it is not configurable in 0.8.x. Those injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the serve-start
 users snapshot — an empty users table still applies missing-user handling,
 and serve takes that snapshot only when an applied recipe is user-scoped).
