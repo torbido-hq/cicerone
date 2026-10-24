@@ -88,8 +88,8 @@ http.request(request)
 ```
 
 Clicks use the same contract with `kind: "click"`. Invalid body → **400**.
-Missing bearer → **401**. Writer lock busy or lost, or the track store
-unavailable (a storage or database error) → **503**; retry later.
+Missing bearer → **401**. Writer lock busy or lost → **503**. Track store
+unavailable or failing (any storage or database error) → **503**.
 
 ## Metrics
 

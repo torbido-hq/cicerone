@@ -81,9 +81,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The experiment sequential test does not decide until each arm has at
   least `track.min_impressions` users (with `[track]` on), instead of
   deciding on two users per arm.
-- `POST /track` returns **503** "Track store unavailable" (retryable)
-  instead of **500** when the track store write fails with a storage or
-  database error.
+- `POST /track` returns **503** "Track store unavailable" instead of
+  **500** when the track store is unavailable or failing (any storage or
+  database error).
 
 ## [0.8.5] - 2026-10-14
 
