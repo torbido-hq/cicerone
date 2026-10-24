@@ -94,8 +94,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in a group rebalance, so their acks no longer commit offsets for another
   member or fail every worker tick, and the redelivered messages are not
   skipped when the partition comes back.
-- The event worker keeps at most 10,000 unconfirmed acks for retry and
-  drops the oldest with a warning, instead of retrying them forever.
+- The event worker keeps at most 10,000 retry acks for deliveries the
+  source no longer holds and drops the excess with a warning, instead of
+  retrying them forever. A failed ack is still retried until it succeeds.
 - The db events source compares a naive `occurred_at` on Postgres in UTC,
   as it reads it, instead of the session time zone, which skipped or
   re-read rows when the server zone was not UTC.

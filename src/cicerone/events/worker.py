@@ -351,18 +351,15 @@ class EventWorker:
             live_ids = self._ack_live_ids([event.event_id for event in events])
         except BaseException:
             self._retry_acks.extend(events)
-            self._trim_retry_acks()
             raise
-        self._retry_acks.extend(event for event in events if event.event_id not in live_ids)
-        self._trim_retry_acks()
+        missing = [event for event in events if event.event_id not in live_ids]
+        # The source no longer holds these deliveries, so cap them; a failed ack above retries without limit.
+        dropped = len(missing) - max(0, _APPLIED_EVENT_ID_CAP - len(self._retry_acks))
+        if dropped > 0:
+            logger.warning("Dropping %d event ack(s) for deliveries the source no longer holds", dropped)
+            del missing[:dropped]
+        self._retry_acks.extend(missing)
         return [event for event in events if event.event_id in live_ids]
-
-    def _trim_retry_acks(self) -> None:
-        # A delivery the source never hands back again must not be retried forever.
-        overflow = len(self._retry_acks) - _APPLIED_EVENT_ID_CAP
-        if overflow > 0:
-            logger.warning("Dropping %d oldest unconfirmed event ack(s)", overflow)
-            del self._retry_acks[:overflow]
 
     def _settle_live(self, live: Sequence[NormalizedEvent]) -> None:
         if live:

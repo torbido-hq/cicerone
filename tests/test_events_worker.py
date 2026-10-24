@@ -1431,6 +1431,31 @@ def test_event_worker_retry_acks_stay_bounded(tmp_path, feature_config: FeatureC
     assert [event.event_id for event in worker._retry_acks] == ["gone-1", "gone-2"]
 
 
+def test_event_worker_retry_ack_cap_drops_only_deliveries_the_source_no_longer_holds(
+    tmp_path, feature_config: FeatureConfig, monkeypatch, caplog
+):
+    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 1)
+    _settings, _sink, updater = _dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(
+        WebhookEventSource({}), MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater
+    )
+    failed = [normalize_event(event_payload(event_id=f"failed-{n}")) for n in range(3)]
+
+    def _ack_down(_event_ids):  # type: ignore[no-untyped-def]
+        raise OSError("ack down")
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack_down)
+    with pytest.raises(OSError, match="ack down"):
+        worker._ack_unbuffered(failed)
+    assert worker._retry_acks == failed
+
+    monkeypatch.setattr(worker, "_ack_live_ids", lambda _event_ids: set())
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.worker"):
+        worker._ack_unbuffered([normalize_event(event_payload(event_id="gone"))])
+    assert worker._retry_acks == failed
+    assert "Dropping 1 event ack(s) for deliveries the source no longer holds" in caplog.text
+
+
 def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
