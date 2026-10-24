@@ -228,13 +228,14 @@ def _select_thompson_recipes(
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
+    now = datetime.now(UTC)
     window_started = ""
     if previous is not None and has_pair:
         window_started = str(previous.get("window_started_at") or "").strip()
     if has_pair and not window_started:
         window_rows = []
     else:
-        window_rows = track_rows_since(track_rows, window_started or None)
+        window_rows = track_rows_since(track_rows, window_started or None, until=now)
     names = [recipe.name for recipe in recipes]
     try:
         conversions = conversion_events_for_settings(events, settings)
@@ -290,6 +291,7 @@ def _select_thompson_recipes(
             rotate_min_prob=experiment.rotate_min_prob,
             promoted_variant=promoted,
             guardrails_ok=guardrails_ok,
+            now=now,
         )
         selected = select_active_recipes(
             recipes,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from cicerone.blending import WEIGHT_COLUMN
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K
 from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.model_config import LATEST_WINDOW_DAYS
@@ -23,5 +22,4 @@ __all__ = [
     "RANDOM_STATE",
     "RRF_K",
     "SOURCE_COLUMN",
-    "WEIGHT_COLUMN",
 ]

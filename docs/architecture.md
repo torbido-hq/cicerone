@@ -110,7 +110,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | Path | Covers |
 | --- | --- |
 | `tests/test_config_load.py` | TOML load / Settings / env placeholders |
-| `tests/test_config_validation.py` | Weights, epoch metrics, max_workers helpers |
+| `tests/test_config_validation.py` | Weights, epoch metrics, number checks |
 | `tests/test_model_strategies.py` | `STRATEGIES` registry / `RecommenderModel` checks |
 | `tests/test_model_fit.py` | Fit cache, parallel fit, `plan_model_run` |
 | `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |

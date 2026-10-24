@@ -80,7 +80,6 @@ from cicerone.config.settings import (
 )
 from cicerone.config.validation import (
     resolve_epoch_metrics,
-    resolve_max_workers,
     validate_model_weights,
     validate_rrf_k,
 )
@@ -160,7 +159,6 @@ __all__ = [
     "make_settings",
     "require_postgres_lock_url_parts",
     "resolve_epoch_metrics",
-    "resolve_max_workers",
     "resolve_postgres_lock_url",
     "resolve_postgres_lock_url_parts",
     "validate_model_weights",
