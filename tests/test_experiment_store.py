@@ -107,6 +107,38 @@ def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
     assert [row["user_id"] for row in store.read_exposures()] == ["u1", "u2"]
 
 
+def test_experiment_db_engine_checked_out_once_under_concurrent_first_use(tmp_path, monkeypatch) -> None:
+    import time
+
+    from cicerone.io import engines
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
+    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    calls: list[str] = []
+    real_engine_for = engines.engine_for
+
+    def _slow_engine_for(database_url: str):
+        calls.append(database_url)
+        time.sleep(0.05)
+        return real_engine_for(database_url)
+
+    monkeypatch.setattr(engines, "engine_for", _slow_engine_for)
+    barrier = threading.Barrier(4)
+    seen: list[object] = []
+
+    def _first_use() -> None:
+        barrier.wait()
+        seen.append(store.backend.engine())
+
+    threads = [threading.Thread(target=_first_use) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert calls == [url]
+    assert len({id(engine) for engine in seen}) == 1
+
+
 def test_experiment_store_sqlite_replace_clears_other_experiment_ids(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     output = IOSettings(kind="db", options={"database_url": url})

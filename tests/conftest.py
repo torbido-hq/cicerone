@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -60,6 +61,14 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
     reset_schema(db_engine)
     yield
     reset_schema(db_engine)
+
+
+@pytest.fixture
+def refresh_clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Monotonic clock for ``RefreshedValue`` TTLs; advance ``refresh_clock.now``."""
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr("cicerone.refreshed_value.time", SimpleNamespace(monotonic=lambda: clock.now))
+    return clock
 
 
 @pytest.fixture

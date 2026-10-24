@@ -12,7 +12,7 @@ import pandas as pd
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import LazyEngine
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
@@ -36,8 +36,7 @@ class TrackDbBackend:
     def __init__(self, options: dict[str, Any], fence: WriteFence):
         self._options = options
         self._fence = fence
-        self._engine: Engine | None = None
-        self._engine_lock = threading.Lock()
+        self._engine = LazyEngine(lambda: require_option(options, "database_url", "db"))
         self._append_lock = threading.Lock()
 
     def _ensure_fence(self) -> None:
@@ -69,13 +68,7 @@ class TrackDbBackend:
         return filter_history(frame, generated_ats=generated_ats, since=since)
 
     def _db_engine(self) -> Engine:
-        engine = self._engine
-        if engine is not None:
-            return engine
-        with self._engine_lock:
-            if self._engine is None:
-                self._engine = engine_for(require_option(self._options, "database_url", "db"))
-            return self._engine
+        return self._engine.get()
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
         conn.execute(

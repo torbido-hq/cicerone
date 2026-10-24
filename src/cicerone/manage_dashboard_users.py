@@ -54,7 +54,9 @@ def _cmd_list(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Manage cicerone dashboard Basic Auth users")
+    parser = argparse.ArgumentParser(
+        prog="cicerone users", description="Manage cicerone dashboard Basic Auth users"
+    )
     parser.add_argument(
         "--users-path",
         default=DEFAULT_USERS_PATH,
