@@ -7,26 +7,12 @@ from pathlib import Path
 
 import pytest
 from conftest import make_settings
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import load_settings
 from cicerone.config.unknown_keys import warn_unknown_keys
 
 REPO_CONFIG = Path(__file__).resolve().parents[1] / "config"
-
-_IO = """
-[input]
-kind = "dataset"
-[input.options]
-storage_backend = "local"
-path = "/tmp/in"
-
-[output]
-kind = "dataset"
-[output.options]
-storage_backend = "local"
-path = "/tmp/out"
-"""
 
 
 def _unknown_warnings(caplog) -> list[str]:
@@ -36,7 +22,7 @@ def _unknown_warnings(caplog) -> list[str]:
 def test_unknown_keys_warn_and_defaults_still_apply(tmp_path, caplog):
     config_path = write_toml(
         tmp_path,
-        _IO
+        MINIMAL_IO_TOML
         + """
 [job]
 top_K = 50
@@ -103,7 +89,7 @@ def test_documented_keys_and_free_form_tables_do_not_warn():
 
 
 def test_loaded_defaults_match_dataclass_defaults(tmp_path):
-    settings = load_settings(write_toml(tmp_path, _IO))
+    settings = load_settings(write_toml(tmp_path, MINIMAL_IO_TOML))
     defaults = make_settings()
 
     for section in ("serve", "trigger", "dashboard", "automl", "explain"):
