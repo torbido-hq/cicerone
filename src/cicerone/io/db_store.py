@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -298,21 +298,11 @@ class DatabaseOutputSink:
         self,
         options: dict[str, Any],
         *,
-        writer_lock: Any = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
         self._options = options
         self._engine = engine_for(require_option(options, "database_url", "db"))
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
         self._applied_table_seen = False
         self._applied_table_checked = False
         self._check_applied_events_table_name()

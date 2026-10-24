@@ -80,6 +80,10 @@ class EphemeralIdSource(Protocol, metaclass=CapabilityMeta):
     ephemeral_event_ids: bool
 
 
+def has_ephemeral_event_ids(source: object) -> bool:
+    return isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
+
+
 class QueuedEventSource:
     """Pending/in-flight bookkeeping for persistent EventSource consumers."""
 

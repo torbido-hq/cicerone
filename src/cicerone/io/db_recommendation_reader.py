@@ -147,7 +147,7 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         message = db_error_message(exc)
         if VARIANT_COLUMN not in message:
             return False
-        if not is_missing_column_error(exc) and "no such column" not in message:
+        if not is_missing_column_error(exc):
             return False
         self._variant_supported = False
         return True
