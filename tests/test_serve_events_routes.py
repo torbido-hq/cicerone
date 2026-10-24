@@ -6,8 +6,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from support.fakes import FakeReader
 from support.settings import make_settings
-from test_serve import _FakeReader, _recs_df
+from test_serve import _recs_df
 
 from cicerone.config import EventsSettings
 from cicerone.config.constants import DEFAULT_EVENTS_MAX_BODY_BYTES
@@ -30,7 +31,7 @@ def _settings(**overrides):
 
 def test_post_events_single_and_batch():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     single = client.post(
@@ -69,7 +70,7 @@ def test_post_events_single_and_batch():
 
 
 def test_post_events_auth_and_validation():
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=WebhookEventSource({}))
     client = TestClient(app)
     assert client.post("/events", json={"user_id": "u1"}).status_code == 401
     bad = client.post(
@@ -88,7 +89,7 @@ def test_post_events_auth_and_validation():
 @pytest.mark.parametrize("occurred_at", ["NaN", "Infinity", "1e20"])
 def test_post_events_rejects_an_unusable_numeric_occurred_at(occurred_at):
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     # Raw body: Python's json module emits and accepts NaN/Infinity, httpx's encoder refuses them.
     body = f'{{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "occurred_at": {occurred_at}}}'
     response = TestClient(app).post(
@@ -102,7 +103,7 @@ def test_post_events_rejects_an_unusable_numeric_occurred_at(occurred_at):
 
 def test_post_events_list_body_validation_error_returns_400():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     response = client.post(
         "/events",
@@ -130,7 +131,7 @@ def test_post_events_list_body_validation_error_returns_400():
 
 
 def test_events_openapi_documents_structured_validation_400():
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=WebhookEventSource({}))
     schema = TestClient(app).get("/openapi.json").json()
     assert "ValidationErrorDetail" in schema["components"]["schemas"]
     assert "ValidationErrorItem" in schema["components"]["schemas"]
@@ -142,7 +143,7 @@ def test_events_openapi_documents_structured_validation_400():
 
 
 def test_events_openapi_documents_occurred_at_union():
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=WebhookEventSource({}))
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=WebhookEventSource({}))
     schema = TestClient(app).get("/openapi.json").json()
     assert "InteractionEvent" in schema["components"]["schemas"]
     assert "EventsIngestRequest" in schema["components"]["schemas"]
@@ -158,7 +159,7 @@ def test_events_openapi_documents_occurred_at_union():
 def test_events_route_absent_when_disabled():
     app = create_app(
         make_settings(mode="serve", serve_auth_token="secret"),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
     )
     client = TestClient(app)
     assert client.post("/events", headers={"Authorization": "Bearer secret"}, json={}).status_code == 404
@@ -167,7 +168,7 @@ def test_events_route_absent_when_disabled():
 def test_events_route_absent_for_non_webhook_kind():
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="db")),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
     )
     assert (
         TestClient(app).post("/events", headers={"Authorization": "Bearer secret"}, json={}).status_code
@@ -177,7 +178,7 @@ def test_events_route_absent_for_non_webhook_kind():
 
 def test_post_events_list_body_and_invalid_json_shape():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     listed = client.post(
@@ -208,7 +209,7 @@ def test_post_events_list_body_and_invalid_json_shape():
 
 def test_post_events_normalization_error_returns_400():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     response = client.post(
         "/events",
@@ -229,7 +230,7 @@ def test_post_events_normalization_error_returns_400():
 
 def test_post_events_unix_epoch_occurred_at_accepted():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     response = client.post(
         "/events",
@@ -249,7 +250,7 @@ def test_post_events_unix_epoch_occurred_at_accepted():
 
 def test_post_events_non_json_payload():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     resp = client.post(
         "/events",
@@ -264,7 +265,7 @@ def test_post_events_uses_events_auth_token():
     source = WebhookEventSource({})
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="webhook", options={"auth_token": "events"})),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
         event_source=source,
     )
     client = TestClient(app)
@@ -295,7 +296,7 @@ def test_post_events_uses_events_auth_token():
 
 def test_post_events_backpressure_429():
     source = WebhookEventSource({"max_pending": 100})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     for i in range(100):
@@ -333,7 +334,7 @@ def test_post_events_rejects_oversized_body():
     source = WebhookEventSource({})
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="webhook", options={"max_body_bytes": 64})),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
         event_source=source,
     )
     response = TestClient(app).post(
@@ -346,7 +347,7 @@ def test_post_events_rejects_oversized_body():
 
 def test_post_events_rejects_invalid_json():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     response = TestClient(app).post(
         "/events",
         headers={"Authorization": "Bearer secret", "content-type": "application/json"},
@@ -357,7 +358,7 @@ def test_post_events_rejects_invalid_json():
 
 def test_post_events_rejects_invalid_utf8_body():
     source = WebhookEventSource({})
-    app = create_app(_settings(), _FakeReader(_recs_df()), event_source=source)
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
     response = TestClient(app).post(
         "/events",
         headers={"Authorization": "Bearer secret", "content-type": "application/json"},
@@ -371,7 +372,7 @@ def test_post_events_rejects_oversized_content_length():
     source = WebhookEventSource({})
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="webhook", options={"max_body_bytes": 64})),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
         event_source=source,
     )
     response = TestClient(app).post(
