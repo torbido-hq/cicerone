@@ -21,7 +21,6 @@ from cicerone.events.post_write import PostWriteRepair
 from cicerone.events.store import empty_recommendations_frame
 from cicerone.events.updater_cache import UpdaterUserCache
 from cicerone.events.updater_merge import (
-    INCREMENTAL_SOURCE,  # noqa: F401
     UpdaterMerge,
     is_preserved_source,
 )
@@ -36,7 +35,6 @@ from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,
     publish_recommendations,
-    require_incremental_publisher,
 )
 from cicerone.publish.sidecar import (
     latest_manifest_generated_at,
@@ -126,7 +124,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._variant_names = tuple(str(name) for name in variant_names)
         self._assign_variant = assign_variant
         self._explain_enabled = explain_enabled
-        self._publisher = require_incremental_publisher(publisher)
+        self._publisher = publisher
         self._repair = PostWriteRepair()
         self._last_publish_failed = False
         self._last_apply_written = False
@@ -169,18 +167,15 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     def persist_online(self) -> None:
         if self._write_busy_check is not None and self._write_busy_check():
             logger.info("Skipping online persist: full retrain in progress")
-            self._abort_online()
+            self.abort_online()
             return
         with recommendations_write_guard(self._sink):
             if self._write_busy_check is not None and self._write_busy_check():
                 logger.info("Skipping online persist: full retrain in progress")
-                self._abort_online()
+                self.abort_online()
                 return
             self._ensure_fence()
             self._commit_online()
-
-    def abort_online(self) -> None:
-        self._abort_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
         self._last_apply_written = False
@@ -209,7 +204,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         def _persist() -> int:
             nonlocal pending_publish, written
             if not self._ensure_write_allowed():
-                self._abort_online()
+                self.abort_online()
                 return 0
             merged, replace_ids = self._merge_affected(
                 batch,
@@ -222,7 +217,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             )
             if merged is None or not replace_ids:
                 # Nothing is written or kept online, so a redelivery is a no-op too and needs no replay key.
-                self._abort_online()
+                self.abort_online()
                 now = datetime.now(UTC)
                 self._last_success_at = now
                 self._events_applied += len(events)
@@ -234,7 +229,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 )
                 return len(events)
             if not self._ensure_write_allowed():
-                self._abort_online()
+                self.abort_online()
                 return 0
             self._ensure_fence()
             user_ids = sorted(set(replace_ids))
@@ -368,8 +363,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             else:
                 log_sidecar_generation_skip(current, incremental=True)
             return current is not None
-        except (LockLostError, WriterLockBusyError):
-            raise
         except _SIDECAR_PUBLISH_ERRORS as exc:
             log_caught("Incremental publish failed after successful write", exc, log=logger)
             return False
@@ -484,7 +477,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if isinstance(self._online, CommittingOnlineRefresher):
             self._online.commit()
 
-    def _abort_online(self) -> None:
+    def abort_online(self) -> None:
         if self._online is None:
             return
         if isinstance(self._online, AbortingOnlineRefresher):
@@ -496,19 +489,19 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         try:
             return self._online.refresh(events)
         except LockLostError as exc:
-            self._abort_online()
+            self.abort_online()
             logger.error("%s; aborting pending online fit", exc)
             raise
         except WriterLockBusyError as exc:
-            self._abort_online()
+            self.abort_online()
             logger.info("%s; aborting pending online fit", exc)
             raise
         except _ONLINE_REFRESH_ERRORS:
-            self._abort_online()
+            self.abort_online()
             logger.exception("Online collaborative refresh failed; aborting pending fit")
             raise
         except Exception:
-            self._abort_online()
+            self.abort_online()
             raise
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:

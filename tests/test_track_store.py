@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from cicerone.config import ConfigError, IOSettings
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore, require_appendable_track_log
 
@@ -38,8 +40,8 @@ def test_track_row_sql_filter_invalid_since_is_empty() -> None:
     assert "since" not in params
 
 
-def test_store_reexports_prior_constants() -> None:
-    from cicerone.track.store import (
+def test_store_constants() -> None:
+    from cicerone.track.store_common import (
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
         DEFAULT_TRACK_TABLE,
@@ -540,7 +542,7 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Busy())
+    store = TrackStore(output, fence=WriteFence(_Busy()))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_rows([_row()])
 
@@ -565,7 +567,7 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Lock())
+    store = TrackStore(output, fence=WriteFence(_Lock()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_rows([_row()])
     assert store.read_rows() == []
@@ -577,9 +579,7 @@ def test_track_jsonl_append_honors_caller_fence(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = TrackStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_accepted_rows([_row()])
@@ -593,9 +593,7 @@ def test_track_db_append_honors_caller_fence(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'track.db'}"
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_accepted_rows([_row()])
@@ -610,9 +608,7 @@ def test_write_eval_db_honors_fence(tmp_path) -> None:
     output = IOSettings(kind="db", options={"database_url": url})
     store = TrackStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_eval({"ok": True})
@@ -632,9 +628,7 @@ def test_write_eval_db_rechecks_fence_after_delete(tmp_path) -> None:
 
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_eval({"ok": True})
@@ -661,9 +655,7 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     store = TrackStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
@@ -673,7 +665,7 @@ def test_append_history_db_rolls_back_when_fence_lost_after_insert(tmp_path, mon
 
 
 def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
-    from cicerone.locks import held_writer_lock
+    from cicerone.locks import WriteFence
 
     acquires = {"n": 0}
 
@@ -693,9 +685,9 @@ def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     lock = _Lock()
-    store = TrackStore(output, writer_lock=lock)
+    store = TrackStore(output, fence=WriteFence(lock))
     recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         store.write_eval({"ok": True})
         store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
         store.append_accepted_rows([_row(event_id="held-1")])
@@ -722,7 +714,7 @@ def test_write_eval_takes_writer_lock(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, writer_lock=_Lost())
+    store = TrackStore(output, fence=WriteFence(_Lost()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.write_eval({"ok": True})
     assert store.read_eval() is None
@@ -1293,14 +1285,14 @@ def test_track_read_history_s3_generated_ats_matches_z_and_offset() -> None:
 
 
 def test_track_db_backend_fence_and_empty_ids_are_noops() -> None:
-    from cicerone.locks import LockLostError, WriteFence
+    from cicerone.locks import LockLostError
     from cicerone.track.store_db import TrackDbBackend, _existing_event_ids
 
-    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence.resolve(None))
+    backend = TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())
     assert backend._ensure_fence() is None
     lost = TrackDbBackend(
         {"database_url": "sqlite+pysqlite://"},
-        WriteFence.resolve(None, fence_check=lambda: False, fence_lost="track fence lost"),
+        WriteFence(None, lambda: False, "track fence lost"),
     )
     with pytest.raises(LockLostError, match="track fence lost"):
         lost._ensure_fence()
@@ -1339,7 +1331,7 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
         output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     else:
         output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    store = TrackStore(output, writer_lock=_NeverAcquire())
+    store = TrackStore(output, fence=WriteFence(_NeverAcquire()))
     with pytest.raises(TypeError):
         store.write_eval({"report": object()})
     assert not (tmp_path / "track_eval.json").exists()

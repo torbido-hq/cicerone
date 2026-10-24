@@ -9,7 +9,8 @@ from sqlalchemy import create_engine, text
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
-from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 
 
 def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
@@ -277,7 +278,7 @@ def test_append_exposures_writer_lock_busy(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Busy())
+    store = ExperimentStore(output, fence=WriteFence(_Busy()))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
@@ -298,7 +299,7 @@ def test_append_exposures_writer_lock_lost(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lost())
+    store = ExperimentStore(output, fence=WriteFence(_Lost()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
@@ -322,7 +323,7 @@ def test_append_exposures_rechecks_owned_before_write(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lock())
+    store = ExperimentStore(output, fence=WriteFence(_Lock()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
@@ -343,7 +344,7 @@ def test_write_state_writer_lock_lost(tmp_path) -> None:
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lost())
+    store = ExperimentStore(output, fence=WriteFence(_Lost()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
@@ -368,8 +369,8 @@ def test_write_state_skips_acquire_when_held_here(tmp_path) -> None:
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     lock = _Lock()
-    store = ExperimentStore(output, writer_lock=lock)
-    with held_writer_lock(lock):
+    store = ExperimentStore(output, fence=WriteFence(lock))
+    with WriteFence(lock).hold():
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert acquires["n"] == 1
     assert store.read_state() is not None
@@ -392,7 +393,7 @@ def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -
             return True
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Busy())
+    store = ExperimentStore(output, fence=WriteFence(_Busy()))
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
@@ -403,9 +404,7 @@ def test_write_state_db_honors_fence(tmp_path) -> None:
     output = IOSettings(kind="db", options={"database_url": url})
     store = ExperimentStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -429,9 +428,7 @@ def test_write_state_db_rolls_back_create_when_fence_lost_after_ddl(tmp_path) ->
 
     store = ExperimentStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -456,9 +453,7 @@ def test_write_state_db_rechecks_fence_before_replace(tmp_path) -> None:
 
     store = ExperimentStore(
         output,
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -477,9 +472,7 @@ def test_write_state_db_rechecks_fence_after_delete(tmp_path) -> None:
 
     store = ExperimentStore(
         output,
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -509,9 +502,7 @@ def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
 
     store = ExperimentStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -559,9 +550,7 @@ def test_write_state_db_rolls_back_alter_when_fence_lost_after_ddl(tmp_path) -> 
 
     store = ExperimentStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -586,9 +575,7 @@ def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> Non
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = ExperimentStore(
         output,
-        fence_check=lambda: fence["ok"],
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: fence["ok"]),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -602,9 +589,7 @@ def test_append_exposures_honors_fence(tmp_path) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     store = ExperimentStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -624,9 +609,7 @@ def test_append_exposures_db_rechecks_fence_before_insert(tmp_path) -> None:
 
     store = ExperimentStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -653,9 +636,7 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     store = ExperimentStore(
         IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -1191,9 +1172,8 @@ def test_build_experiment_backend_picks_the_output_kind(tmp_path) -> None:
     from cicerone.experiment.store import build_experiment_backend
     from cicerone.experiment.store_dataset import ExperimentDatasetBackend
     from cicerone.experiment.store_db import ExperimentDbBackend
-    from cicerone.locks import WriteFence
 
-    fence = WriteFence.resolve(None)
+    fence = WriteFence()
     db = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"})
     dataset = IOSettings(kind="dataset", options={"path": str(tmp_path)})
     assert isinstance(build_experiment_backend(db, fence), ExperimentDbBackend)
@@ -1217,7 +1197,7 @@ def test_object_store_exposures_are_rejected_before_taking_the_writer_lock() -> 
             return False
 
     output = IOSettings(kind="dataset", options={"storage_backend": "s3", "bucket": "b", "prefix": "p"})
-    store = ExperimentStore(output, writer_lock=_NeverAcquire())
+    store = ExperimentStore(output, fence=WriteFence(_NeverAcquire()))
     with pytest.raises(ConfigError, match="not atomic"):
         store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": "control"}])
 
@@ -1237,7 +1217,7 @@ def test_dataset_writes_encode_before_taking_the_writer_lock(tmp_path) -> None:
             return False
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_NeverAcquire())
+    store = ExperimentStore(output, fence=WriteFence(_NeverAcquire()))
     with pytest.raises(TypeError):
         store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": object()}])
     with pytest.raises(TypeError):
@@ -1263,7 +1243,7 @@ def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) 
             return False
 
     output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"})
-    store = ExperimentStore(output, writer_lock=_NeverAcquire())
+    store = ExperimentStore(output, fence=WriteFence(_NeverAcquire()))
     with pytest.raises(TypeError):
         store.write_state(experiment_state("exp", promoted_variant="control", extra=object()))
 
@@ -1277,10 +1257,9 @@ def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) 
 
 def test_dataset_backend_filters_exposures_by_experiment(tmp_path) -> None:
     from cicerone.experiment.store import build_experiment_backend
-    from cicerone.locks import WriteFence
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    backend = build_experiment_backend(output, WriteFence.resolve(None))
+    backend = build_experiment_backend(output, WriteFence())
     backend.exposure_writer(
         [
             {"experiment_id": "exp-a", "user_id": "u1", "variant": "control"},

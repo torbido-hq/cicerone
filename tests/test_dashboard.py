@@ -335,7 +335,7 @@ def test_main_starts_when_recommendation_reader_fails(monkeypatch):
         return object()
 
     def boom(_output):
-        raise RuntimeError("bad store")
+        raise OSError("bad store")
 
     monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
@@ -362,13 +362,13 @@ def test_main_starts_when_history_reader_fails(monkeypatch):
         return object()
 
     def boom(_input):
-        raise RuntimeError("bad events")
+        raise ValueError("bad events")
 
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
     monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
-    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", boom)
+    monkeypatch.setattr("cicerone.dashboard.build_input_source", boom)
     monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
     monkeypatch.setattr(
         "cicerone.dashboard.uvicorn",
@@ -378,6 +378,19 @@ def test_main_starts_when_history_reader_fails(monkeypatch):
     main()
 
     assert captured["history_reader"] is None
+
+
+def test_main_propagates_unexpected_store_errors(monkeypatch):
+    def boom(_output):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
+
+    with pytest.raises(RuntimeError, match="bug"):
+        main()
 
 
 def test_main_uses_package_default_config_path(monkeypatch):
@@ -393,7 +406,7 @@ def test_main_uses_package_default_config_path(monkeypatch):
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
     monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
-    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
+    monkeypatch.setattr("cicerone.dashboard.build_input_source", lambda _input: object())
     monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
     monkeypatch.setattr(
         "cicerone.dashboard.uvicorn",

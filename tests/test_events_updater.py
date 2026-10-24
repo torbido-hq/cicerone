@@ -13,7 +13,8 @@ from cicerone.config import IOSettings, make_settings
 from cicerone.events.normalize import normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
-from cicerone.events.updater import INCREMENTAL_SOURCE, IncrementalUpdater
+from cicerone.events.updater import IncrementalUpdater
+from cicerone.events.updater_merge import INCREMENTAL_SOURCE
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.io.factory import build_output_sink
@@ -654,34 +655,6 @@ def test_incremental_updater_tombstones_new_user_when_signal_is_ineligible(
     merged, user_ids = published[0]
     assert user_ids == ["u1"]
     assert merged.empty
-
-
-def test_incremental_updater_requires_publisher_user_ids(tmp_path, feature_config: FeatureConfig) -> None:
-    out = tmp_path / "out"
-    out.mkdir()
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=5,
-    )
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    with pytest.raises(TypeError, match="user_ids"):
-        IncrementalUpdater(
-            sink=build_output_sink(settings.output),
-            output_settings=settings.output,
-            feature_config=feature_config,
-            top_k=5,
-            publisher=_Legacy(),
-        )
 
 
 def test_incremental_updater_unknown_variant_does_not_use_base_allowlist(

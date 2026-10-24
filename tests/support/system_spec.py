@@ -276,9 +276,9 @@ def mount_dashboard_app(
 ):
     from cicerone.dashboard import create_app
     from cicerone.io.factory import (
+        build_input_source,
         build_manifest_reader,
         build_recommendation_reader,
-        build_user_history_reader,
     )
 
     return create_app(
@@ -286,7 +286,7 @@ def mount_dashboard_app(
         build_manifest_reader(settings.output),
         users,
         build_recommendation_reader(settings.output),
-        build_user_history_reader(settings.input),
+        build_input_source(settings.input),
         config_path=None if config_path is None else str(config_path),
     )
 
