@@ -200,9 +200,11 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
-| `lookup_k` | `20` | Deprecated, no effect (removed in 0.9.0); Inspect shows `serve.default_k` rows |
+| `lookup_k` | `20` | Deprecated and ignored (removed in 0.9.0), but must still be a positive integer; Inspect shows `serve.default_k` rows |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
+
+The dashboard loads `[job].feature_config_path` at startup to drop unavailable items from Inspect user, as serve does.
 
 ## `[publish]`
 
