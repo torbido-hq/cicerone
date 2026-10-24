@@ -14,10 +14,9 @@ import pandas as pd
 from rectools import Columns
 
 from cicerone.feature_config import BlendingConfig
-from cicerone.ranking import rerank_by_score
-from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
+from cicerone.ranking import WEIGHT_COLUMN, fuse_weighted_rrf
 
-SOURCE_COLUMN = "source"
 BLENDED_SOURCE = "blended"
 PERSONALIZED_SOURCE = "personalized"
 POPULAR_SOURCE = "popular_fallback"
@@ -191,50 +190,10 @@ def _normalize_source_frame(frame: pd.DataFrame, source_label: str) -> pd.DataFr
     return out[[Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN]]
 
 
-def _rrf_contrib(rank: float, weight: float, rrf_k: float) -> float:
-    return weight / (rrf_k + rank)
-
-
-def _source_contrib(label: str, rank: float, weight: float, rrf_k: float) -> dict[str, object]:
-    return {
-        "label": label,
-        "rank": int(rank),
-        "weight": float(weight),
-        "contribution": float(_rrf_contrib(rank, weight, rrf_k)),
-    }
-
-
-def _ordered_contribs(contribs: list[dict[str, object]]) -> list[dict[str, object]]:
-    order = {label: index for index, label in enumerate(_SOURCE_ORDER)}
-    return sorted(contribs, key=lambda item: order.get(str(item.get("label")), len(order)))
-
-
-def _weighted_rrf_frame(
-    frame: pd.DataFrame,
-    *,
-    source_label: str,
-    user_weights: pd.Series,
-    rrf_k: float,
-) -> pd.DataFrame:
-    empty = pd.DataFrame(
-        columns=[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
-    )
-    if frame.empty:
-        return empty
-    weights = frame[Columns.User].astype(str).map(user_weights.rename(index=str))
+def _weighted_rows(frame: pd.DataFrame, user_weights: Mapping[str, float]) -> pd.DataFrame:
+    weights = frame[Columns.User].astype(str).map(user_weights)
     keep = weights.notna() & (weights > _WEIGHT_EPS)
-    if not bool(keep.any()):
-        return empty
-    out = frame.loc[keep, [Columns.User, Columns.Item, Columns.Rank]].copy()
-    ranks = out[Columns.Rank].to_numpy(dtype=float)
-    weight_vals = weights.loc[keep].to_numpy(dtype=float)
-    out[Columns.Score] = weight_vals / (rrf_k + ranks)
-    out[SOURCE_COLUMN] = source_label
-    out[SOURCE_CONTRIBS_COLUMN] = [
-        _source_contrib(source_label, rank, weight, rrf_k)
-        for rank, weight in zip(ranks, weight_vals, strict=True)
-    ]
-    return out[[Columns.User, Columns.Item, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]]
+    return frame.loc[keep].assign(**{WEIGHT_COLUMN: weights.loc[keep]})
 
 
 def _source_label_from_parts(labels: pd.Series) -> str:
@@ -315,49 +274,20 @@ def blend_for_users(
         user_id: source_weights(counts_by_user.get(user_id, 0), config, latest_available=latest_available)
         for user_id in unique_users
     }
-    personalized_w = pd.Series({u: w[PERSONALIZED_SOURCE] for u, w in weight_map.items()})
-    popular_w = pd.Series({u: w[POPULAR_SOURCE] for u, w in weight_map.items()})
-    latest_w = pd.Series({u: w.get(LATEST_SOURCE, 0.0) for u, w in weight_map.items()})
-    rrf_k = config.rrf_k
-
-    contribs = [
-        _weighted_rrf_frame(
-            frames[PERSONALIZED_SOURCE],
-            source_label=PERSONALIZED_SOURCE,
-            user_weights=personalized_w,
-            rrf_k=rrf_k,
-        ),
-        _weighted_rrf_frame(
-            frames[POPULAR_SOURCE],
-            source_label=POPULAR_SOURCE,
-            user_weights=popular_w,
-            rrf_k=rrf_k,
-        ),
-        _weighted_rrf_frame(
-            frames[LATEST_SOURCE],
-            source_label=LATEST_SOURCE,
-            user_weights=latest_w,
-            rrf_k=rrf_k,
-        ),
+    weighted = [
+        _weighted_rows(frames[label], {user_id: w.get(label, 0.0) for user_id, w in weight_map.items()})
+        for label in _SOURCE_ORDER
     ]
-    contribs = [frame for frame in contribs if not frame.empty]
-    if not contribs:
+    weighted = [rows for rows in weighted if not rows.empty]
+    if not weighted:
         return _empty_recs()
-    stacked = pd.concat(contribs, ignore_index=True)
-
-    combined = stacked.groupby([Columns.User, Columns.Item], as_index=False, sort=False).agg(
-        **{
-            Columns.Score: (Columns.Score, "sum"),
-            SOURCE_COLUMN: (SOURCE_COLUMN, _source_label_from_parts),
-            SOURCE_CONTRIBS_COLUMN: (SOURCE_CONTRIBS_COLUMN, list),
-        }
+    return fuse_weighted_rrf(
+        pd.concat(weighted, ignore_index=True),
+        rrf_k=config.rrf_k,
+        top_k=top_k,
+        source_label=_source_label_from_parts,
+        source_order=_SOURCE_ORDER,
     )
-    combined[SOURCE_CONTRIBS_COLUMN] = combined[SOURCE_CONTRIBS_COLUMN].map(_ordered_contribs)
-
-    combined = rerank_by_score(combined, top_k)
-    return combined[
-        [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
-    ].reset_index(drop=True)
 
 
 def append_cold_start_rows(
