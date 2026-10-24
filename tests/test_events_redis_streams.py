@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from typing import Any
 
@@ -570,7 +571,7 @@ def test_read_sends_block_only_when_configured(monkeypatch, options, expected):
     real_read = client.xreadgroup
 
     def _recording_read(*args, **kwargs):  # type: ignore[no-untyped-def]
-        seen.append(kwargs.get("block"))
+        seen.append(inspect.signature(real_read).bind(*args, **kwargs).arguments.get("block"))
         return real_read(*args, **kwargs)
 
     client.xreadgroup = _recording_read  # type: ignore[method-assign]
