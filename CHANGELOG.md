@@ -51,6 +51,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the filtered read.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
+- Tracking conversion counts and CVR count each converted impression once,
+  as CTR does, so repeat conversions or several converting clicks on one
+  recommendation no longer inflate them (overall, per rank/source/variant,
+  experiment outcomes and Thompson arms).
+- Tracking metrics, experiment outcomes and Thompson arms leave out
+  impressions, clicks and conversions with a future `occurred_at` until
+  that time has passed, so Thompson no longer counts them twice.
 - Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
   is unset, so a quiet stream no longer parks the event worker. An
   explicit `block_ms = 0` keeps that behaviour and logs a warning.
