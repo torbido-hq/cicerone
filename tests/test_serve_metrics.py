@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -364,13 +365,39 @@ def test_metrics_endpoint_resets_events_gauges_without_worker():
     assert metric_value(body, "cicerone_events_source_lag") == -1.0
 
 
-def test_record_events_flush_clamps_unknown_status(caplog):
+@pytest.mark.parametrize(
+    ("record", "kwarg", "metric", "labels", "message"),
+    [
+        (
+            "record_events_flush",
+            "status",
+            "cicerone_events_flush_total",
+            {"status": "error"},
+            "events flush status",
+        ),
+        (
+            "record_events_lock",
+            "status",
+            "cicerone_events_lock_total",
+            {"status": "skip"},
+            "events lock status",
+        ),
+        (
+            "record_events_apply_busy",
+            "reason",
+            "cicerone_events_apply_busy_total",
+            {"reason": "lock"},
+            "events apply busy reason",
+        ),
+    ],
+)
+def test_events_recorders_clamp_unknown_labels(caplog, record, kwarg, metric, labels, message):
     import logging
 
     from cicerone import metrics as metrics_mod
 
-    before = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before = registry_metric_value(metric, labels)
     with caplog.at_level(logging.WARNING, logger="cicerone.metrics"):
-        metrics_mod.record_events_flush(status="weird")
-    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
-    assert any("Unknown events flush status" in rec.message for rec in caplog.records)
+        getattr(metrics_mod, record)(**{kwarg: "weird"})
+    assert registry_metric_value(metric, labels) == before + 1
+    assert any(f"Unknown {message}" in rec.message for rec in caplog.records)

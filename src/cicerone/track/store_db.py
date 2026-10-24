@@ -40,9 +40,6 @@ class TrackDbBackend:
         self._engine_lock = threading.Lock()
         self._append_lock = threading.Lock()
 
-    def _ensure_fence(self) -> None:
-        self._fence.ensure()
-
     def append_accepted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         with self._append_lock, self._fence.lease():
             return self._append_rows_db(rows)
@@ -134,9 +131,9 @@ class TrackDbBackend:
             fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
             if not fresh:
                 return []
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(insert_sql, fresh)
-            self._ensure_fence()
+            self._fence.ensure()
             return fresh
 
     def _read_rows_db(
@@ -177,12 +174,12 @@ class TrackDbBackend:
                 )
             )
             conn.execute(text(f'DELETE FROM "{table}"'))
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(
                 text(f'INSERT INTO "{table}" (payload, written_at) VALUES (:payload, :written_at)'),
                 {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
             )
-            self._ensure_fence()
+            self._fence.ensure()
 
     def _read_eval_db(self) -> dict[str, Any] | None:
         table = sql_identifier(
@@ -212,9 +209,9 @@ class TrackDbBackend:
             option="history_table",
         )
         with self._db_engine().begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             frame.to_sql(table, conn, if_exists="append", index=False)
-            self._ensure_fence()
+            self._fence.ensure()
 
     def _read_history_db(
         self,

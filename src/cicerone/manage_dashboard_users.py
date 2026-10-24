@@ -13,6 +13,7 @@ from cicerone.dashboard_users import load_users, save_users
 
 DEFAULT_USERS_PATH = "/app/config/dashboard_users.toml"
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
 def _validate_username(username: str) -> None:
@@ -25,6 +26,8 @@ def _cmd_add(args: argparse.Namespace) -> None:
     password = getpass.getpass("Password: ")
     if not password:
         raise SystemExit("Password must not be empty.")
+    if len(password.encode("utf-8")) > _BCRYPT_MAX_PASSWORD_BYTES:
+        raise SystemExit(f"Password must be at most {_BCRYPT_MAX_PASSWORD_BYTES} bytes (UTF-8).")
     if getpass.getpass("Confirm password: ") != password:
         raise SystemExit("Passwords do not match.")
 
