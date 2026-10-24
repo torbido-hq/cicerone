@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
 
 from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
@@ -12,23 +13,29 @@ from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
     object_key,
+    read_capped,
+    read_parquet,
     read_s3_body,
+    require_max_bytes,
     require_option,
     validate_storage_options,
 )
 
 S3_READ_ERRORS: tuple[type[BaseException], ...] = (BotoCoreError, ClientError)
+STORAGE_READ_ERRORS: tuple[type[BaseException], ...] = (FileNotFoundError, *S3_READ_ERRORS)
 
 
-def _reject_oversize(size: int, max_bytes: int) -> None:
-    if size > max_bytes:
-        raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+def is_storage_not_found(exc: BaseException) -> bool:
+    return isinstance(exc, FileNotFoundError) or is_s3_not_found(exc)
 
 
-def _read_capped(read: Any, max_bytes: int) -> bytes:
-    payload = read(max_bytes + 1)
-    _reject_oversize(len(payload), max_bytes)
-    return payload
+def read_parquet_if_exists(options: dict[str, Any], filename: str, **kwargs: Any) -> pd.DataFrame | None:
+    try:
+        return read_parquet(options, filename, **kwargs)
+    except STORAGE_READ_ERRORS as exc:
+        if is_storage_not_found(exc):
+            return None
+        raise
 
 
 def read_storage_bytes(
@@ -37,14 +44,13 @@ def read_storage_bytes(
     *,
     max_bytes: int = DEFAULT_MAX_STORAGE_READ_BYTES,
 ) -> bytes | None:
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
+    require_max_bytes(max_bytes)
     backend = validate_storage_options(options)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         try:
             with path.open("rb") as handle:
-                return _read_capped(handle.read, max_bytes)
+                return read_capped(handle.read, max_bytes)
         except FileNotFoundError:
             return None
     bucket = require_option(options, "bucket", "s3")

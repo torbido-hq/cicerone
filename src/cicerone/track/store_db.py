@@ -13,7 +13,7 @@ from sqlalchemy import Engine, bindparam, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.options import require_option, table_option
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
@@ -87,10 +87,7 @@ class TrackDbBackend:
         conn.execute(text(create_table_sql(conn, table, _TRACK_TABLE)))
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        table = sql_identifier(
-            self._options.get("track_table", DEFAULT_TRACK_TABLE),
-            option="track_table",
-        )
+        table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self._db_engine()
         row_sql = text(
             insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
@@ -135,10 +132,7 @@ class TrackDbBackend:
         experiment_id: str | None,
         since: str | None = None,
     ) -> list[dict[str, Any]]:
-        table = sql_identifier(
-            self._options.get("track_table", DEFAULT_TRACK_TABLE),
-            option="track_table",
-        )
+        table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         clause, params = track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
@@ -155,10 +149,7 @@ class TrackDbBackend:
         return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
 
     def _write_eval_db(self, encoded: str) -> None:
-        table = sql_identifier(
-            self._options.get("eval_table", DEFAULT_EVAL_TABLE),
-            option="eval_table",
-        )
+        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         with engine.begin() as conn:
@@ -172,10 +163,7 @@ class TrackDbBackend:
             self._ensure_fence()
 
     def _read_eval_db(self) -> dict[str, Any] | None:
-        table = sql_identifier(
-            self._options.get("eval_table", DEFAULT_EVAL_TABLE),
-            option="eval_table",
-        )
+        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         try:
@@ -197,10 +185,7 @@ class TrackDbBackend:
         return parsed if isinstance(parsed, dict) else None
 
     def _append_history_db(self, frame: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("history_table", DEFAULT_HISTORY_TABLE),
-            option="history_table",
-        )
+        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
         with self._db_engine().begin() as conn:
             self._ensure_fence()
             frame.to_sql(table, conn, if_exists="append", index=False)
@@ -211,10 +196,7 @@ class TrackDbBackend:
         *,
         generated_ats: set[str] | None,
     ) -> pd.DataFrame:
-        table = sql_identifier(
-            self._options.get("history_table", DEFAULT_HISTORY_TABLE),
-            option="history_table",
-        )
+        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
         engine = self._db_engine()
         quoted = quote_identifier(engine, table)
         clause, params = history_sql_filter(generated_ats=generated_ats)
