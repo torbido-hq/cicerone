@@ -236,8 +236,12 @@ until an entry arrives and so holds buffered events on a quiet stream),
 `pip install 'cicerone-recommender[redis]'` or
 `pip install -r requirements-redis.txt` (same extra as the Redis lock).
 An entry whose ack the worker gives up on (after 10,000 queued retry acks)
-stays in the consumer's pending list until the process restarts, when
-`XAUTOCLAIM` hands it back.
+stays in this consumer's pending list, and this consumer skips it. Another
+consumer in the group can claim it with `XAUTOCLAIM` once it has been idle
+`claim_idle_ms`; after a restart it comes back only once idle that long.
+With Kafka the next successful offset commit on that partition covers such
+a message; with RabbitMQ it stays unacked until the channel closes, when the
+broker requeues it.
 
 Prefer Redis Streams when you already run Redis for the lock; Kafka and
 RabbitMQ are extras for shops that already have those brokers.

@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `build_experiment_backend`, instead of branching on the output kind.
 - Redis Streams treats an empty `consumer_name` or `group_start_id` as
   unset (host name / `0-0`), like Kafka, instead of rejecting it.
+- A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
+  with `events.options.<key> is required`, like Kafka, without the
+  `when events.kind = "redis_streams"` suffix.
 
 ### Fixed
 
