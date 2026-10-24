@@ -44,7 +44,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
 from cicerone.io.db_errors import is_missing_column_error
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import engine_for, quote_identifier, sql_source
 from cicerone.io.options import readonly_select, require_option, sql_identifier
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
@@ -126,7 +126,6 @@ def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> No
     if not inspector.has_table(table):
         return
     existing = {column["name"] for column in inspector.get_columns(table)}
-    quote = engine.dialect.identifier_preparer.quote
     for key, value in manifest.items():
         if key in existing:
             continue
@@ -135,7 +134,12 @@ def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> No
         logger.info("Adding column %r to manifest table %r", column, table)
         try:
             with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE {quote(table)} ADD COLUMN {quote(column)} {column_type}"))
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {quote_identifier(engine, table)} "
+                        f"ADD COLUMN {quote_identifier(engine, column)} {column_type}"
+                    )
+                )
         except _MISSING_TABLE_ERRORS:
             # A concurrent writer may have added the same column first.
             if column not in {column_info["name"] for column_info in inspect(engine).get_columns(table)}:
@@ -159,20 +163,14 @@ def _clear_table_for_replace(conn, table: str) -> None:
     savepoint and then appending would duplicate rows, so DELETE is tried next.
     If the table does not exist yet, both fail and ``to_sql`` creates it.
     """
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-        savepoint.commit()
-        return
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
-
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'DELETE FROM "{table}"'))
-        savepoint.commit()
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
+    for verb in ("TRUNCATE TABLE", "DELETE FROM"):
+        savepoint = conn.begin_nested()
+        try:
+            conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
+            savepoint.commit()
+            return
+        except _MISSING_TABLE_ERRORS:
+            savepoint.rollback()
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
@@ -196,12 +194,6 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     )
 
 
-def _sql_user_source(query: str | None, table: str) -> str:
-    if not query:
-        return f'"{table}"'
-    return f"({query.strip().rstrip(';').strip()}) AS _cicerone_user_rows"
-
-
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -214,7 +206,7 @@ class DatabaseInputSource:
         return readonly_select(query, option=f"input.options.{key}")
 
     def _read(self, query: str | None, table: str) -> pd.DataFrame:
-        sql = query or f'SELECT * FROM "{table}"'
+        sql = query or f"SELECT * FROM {quote_identifier(self._engine, table)}"
         logger.info("Reading from database: %s", "configured query" if query else f'table "{table}"')
         return pd.read_sql(text(sql), self._engine)
 
@@ -262,11 +254,11 @@ class DatabaseInputSource:
         limit: int | None = None,
         order_occurred_at: bool = False,
     ) -> pd.DataFrame:
-        source = _sql_user_source(query, table)
-        sql = f'SELECT * FROM {source} WHERE "user_id" = :user_id'
+        source = sql_source(self._engine, query, table, "_cicerone_user_rows")
+        sql = f"SELECT * FROM {source} WHERE {quote_identifier(self._engine, 'user_id')} = :user_id"
         params: dict[str, Any] = {"user_id": user_id}
         if order_occurred_at:
-            sql += f' ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST'
+            sql += f" ORDER BY {quote_identifier(self._engine, OCCURRED_AT_COLUMN)} DESC NULLS LAST"
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = int(limit)
@@ -448,10 +440,11 @@ class DatabaseOutputSink:
             self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
             option="manifest_table",
         )
-        quote = self._engine.dialect.identifier_preparer.quote
+        generated_at = quote_identifier(self._engine, "generated_at")
+        triggered_by = quote_identifier(self._engine, "triggered_by")
         query = text(
-            f"SELECT MAX({quote('generated_at')}) FROM {quote(table)} "
-            f"WHERE {quote('triggered_by')} IS NULL OR {quote('triggered_by')} <> 'incremental'"
+            f"SELECT MAX({generated_at}) FROM {quote_identifier(self._engine, table)} "
+            f"WHERE {triggered_by} IS NULL OR {triggered_by} <> 'incremental'"
         )
         try:
             with self._engine.connect() as conn:
@@ -510,11 +503,13 @@ class DatabaseOutputSink:
             table,
         )
         _require_optional_recommendation_columns(self._engine, table, df)
-        # Identifiers are sql_identifier-validated; match events.store SELECT quoting.
-        delete_sql = text(f"DELETE FROM {table} WHERE {user_col} IN :user_ids").bindparams(
+        # Quoted like to_sql creates the table, so an uppercase name hits the same table.
+        quoted_table = quote_identifier(self._engine, table)
+        quoted_user = quote_identifier(self._engine, user_col)
+        delete_sql = text(f"DELETE FROM {quoted_table} WHERE {quoted_user} IN :user_ids").bindparams(
             bindparam("user_ids", expanding=True)
         )
-        count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
+        count_sql = text(f"SELECT COUNT(DISTINCT {quoted_user}) FROM {quoted_table}")
         if applied_keys:
             self._create_applied_events_table()
         with self._engine.begin() as conn:
@@ -648,12 +643,16 @@ class DatabaseOutputSink:
         )
         if not inspect(self._engine).has_table(table_name):
             return None
+        quoted_table, payload = (
+            quote_identifier(self._engine, table_name),
+            quote_identifier(self._engine, "payload"),
+        )
         if self._engine.dialect.name == "sqlite":
-            sql = f'SELECT substr(payload, 1, :cap), length(payload) FROM "{table_name}" LIMIT 1'
+            sql = f"SELECT substr({payload}, 1, :cap), length({payload}) FROM {quoted_table} LIMIT 1"
         else:
             sql = (
-                f"SELECT substring(payload from 1 for :cap), octet_length(payload) "
-                f'FROM "{table_name}" LIMIT 1'
+                f"SELECT substring({payload} from 1 for :cap), octet_length({payload}) "
+                f"FROM {quoted_table} LIMIT 1"
             )
         with self._engine.connect() as conn:
             row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
@@ -674,7 +673,12 @@ class DatabaseOutputSink:
         if not inspect(self._engine).has_table(table_name):
             return None
         with self._engine.connect() as conn:
-            row = conn.execute(text(f'SELECT written_at FROM "{table_name}" LIMIT 1')).first()
+            row = conn.execute(
+                text(
+                    f"SELECT {quote_identifier(self._engine, 'written_at')} "
+                    f"FROM {quote_identifier(self._engine, table_name)} LIMIT 1"
+                )
+            ).first()
         if row is None or row[0] is None:
             return None
         written = row[0]
