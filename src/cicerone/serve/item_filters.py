@@ -24,18 +24,21 @@ def _availability_filters(feature_config: FeatureConfig | None) -> list[str]:
     return list(feature_config.item_availability_filters) if feature_config else []
 
 
-def prepare_reader_item_filters(settings: Settings, reader: RecommendationReader) -> FeatureConfig | None:
+def load_optional_feature_config(settings: Settings) -> FeatureConfig | None:
     feature_path = Path(settings.feature_config_path)
     if feature_path.is_file():
-        feature_config = load_feature_config(feature_path)
-    else:
-        logger.warning("feature config missing at %s; continuing without features.toml", feature_path)
-        feature_config = None
+        return load_feature_config(feature_path)
+    logger.warning("feature config missing at %s; continuing without features.toml", feature_path)
+    return None
+
+
+def configure_reader_item_filters(
+    settings: Settings, reader: RecommendationReader, feature_config: FeatureConfig | None
+) -> None:
     reader.configure_item_filters(
         category_column=settings.serve.category_column,
         availability_filters=_availability_filters(feature_config),
     )
-    return feature_config
 
 
 def build_items_cache(

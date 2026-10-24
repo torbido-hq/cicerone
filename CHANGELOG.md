@@ -21,8 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Deprecated
 
-- `dashboard.lookup_k` has no effect and logs a warning when set; it will
-  be removed in 0.9.0.
+- `dashboard.lookup_k` has no effect and is not validated; it logs a
+  warning when set with the dashboard enabled, and will be removed in 0.9.0.
 
 ### Fixed
 

@@ -1087,18 +1087,25 @@ def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path, caplog):
     assert settings.dashboard.host == "127.0.0.1"
 
 
-def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
+@pytest.mark.parametrize(("enabled", "warned"), [("true", True), ("false", False)])
+def test_load_settings_accepts_any_dashboard_lookup_k_and_warns_only_when_enabled(
+    tmp_path, caplog, enabled, warned
+):
     config_path = write_toml(
         tmp_path,
         f"""
         [dashboard]
+        enabled = {enabled}
         lookup_k = 0
         {_base_io_toml()}
         """,
     )
 
-    with pytest.raises(ConfigError, match="dashboard.lookup_k must be >= 1"):
-        load_settings(config_path)
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_k == 0
+    assert ("dashboard.lookup_k is deprecated" in caplog.text) is warned
 
 
 def test_load_settings_dashboard_lookup_events(tmp_path):

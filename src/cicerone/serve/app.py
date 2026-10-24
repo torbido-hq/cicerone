@@ -46,8 +46,8 @@ from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
 from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import build_items_cache, prepare_reader_item_filters
-from cicerone.serve.recommendations import RecommendationService, read_assignment_overlay
+from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
+from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
@@ -197,12 +197,7 @@ def create_app(
         if settings.track.enabled
         else None
     )
-    recommendation_service = RecommendationService(
-        settings,
-        reader,
-        items_cache=build_items_cache(settings, reader, feature_config),
-        assignment_overlay=overlay_cache.get,
-    )
+    recommendation_service = build_recommendation_service(settings, reader, feature_config, overlay_cache.get)
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):
@@ -394,7 +389,8 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_config = prepare_reader_item_filters(settings, reader)
+    feature_config = load_optional_feature_config(settings)
+    configure_reader_item_filters(settings, reader, feature_config)
     events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
     app = create_app(
         settings,

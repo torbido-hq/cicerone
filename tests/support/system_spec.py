@@ -235,10 +235,11 @@ def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
     from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
     from cicerone.serve import create_app
     from cicerone.serve.bootstrap_events import start_events_runtime
-    from cicerone.serve.item_filters import prepare_reader_item_filters
+    from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 
     reader = build_recommendation_reader(settings.output)
-    feature_config = prepare_reader_item_filters(settings, reader)
+    feature_config = load_optional_feature_config(settings)
+    configure_reader_item_filters(settings, reader, feature_config)
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,

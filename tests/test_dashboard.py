@@ -327,116 +327,123 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
         main()
 
 
-def test_main_starts_when_recommendation_reader_fails(monkeypatch):
+def _run_main(monkeypatch, *, settings=None, rec_reader=None, history_reader=object) -> dict[str, object]:
     captured: dict[str, object] = {}
 
     def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
-        captured["rec_reader"] = rec_reader
-        captured["history_reader"] = history_reader
-        captured["config_path"] = kwargs.get("config_path")
+        captured.update(rec_reader=rec_reader, history_reader=history_reader, **kwargs)
         return object()
 
-    def boom(_output):
-        raise OSError("bad store")
-
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: settings or _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
     monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
+    monkeypatch.setattr(
+        "cicerone.dashboard.build_recommendation_reader",
+        rec_reader or (lambda _output: FakeReader(pd.DataFrame())),
+    )
+    monkeypatch.setattr("cicerone.dashboard.build_input_source", lambda _input: history_reader())
     monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
     monkeypatch.setattr(
         "cicerone.dashboard.uvicorn",
         type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
     )
-
     main()
+    return captured
+
+
+def _raise(exc: Exception):
+    def boom(*_args, **_kwargs):
+        raise exc
+
+    return boom
+
+
+def _with_features(tmp_path, text: str) -> Settings:
+    features = tmp_path / "features.toml"
+    features.write_text(text)
+    return dataclasses.replace(_settings(), feature_config_path=str(features))
+
+
+_MALFORMED_FEATURES = '[[item_features]]\ncolumn = "style"\ntype = "bogus"\n'
+
+
+def test_main_starts_when_recommendation_reader_fails(monkeypatch):
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
+
+    captured = _run_main(monkeypatch, rec_reader=_raise(OSError("bad store")))
 
     assert captured["rec_reader"] is None
     assert captured["config_path"] == "/tmp/cicerone.dashboard.toml"
 
 
 def test_main_starts_when_history_reader_fails(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
-        captured["history_reader"] = history_reader
-        return object()
-
-    def boom(_input):
-        raise ValueError("bad events")
-
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr(
-        "cicerone.dashboard.build_recommendation_reader", lambda _output: FakeReader(pd.DataFrame())
-    )
-    monkeypatch.setattr("cicerone.dashboard.build_input_source", boom)
-    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
-    monkeypatch.setattr(
-        "cicerone.dashboard.uvicorn",
-        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
-    )
-
-    main()
+    captured = _run_main(monkeypatch, history_reader=_raise(ValueError("bad events")))
 
     assert captured["history_reader"] is None
 
 
 def test_main_propagates_unexpected_store_errors(monkeypatch):
-    def boom(_output):
-        raise RuntimeError("bug")
-
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
-
     with pytest.raises(RuntimeError, match="bug"):
-        main()
+        _run_main(monkeypatch, rec_reader=_raise(RuntimeError("bug")))
 
 
 def test_main_fails_on_a_malformed_feature_config(tmp_path, monkeypatch):
-    features = tmp_path / "features.toml"
-    features.write_text('[[item_features]]\ncolumn = "style"\ntype = "bogus"\n')
+    with pytest.raises(ValueError, match="Unknown feature type"):
+        _run_main(monkeypatch, settings=_with_features(tmp_path, _MALFORMED_FEATURES))
+
+
+def test_main_fails_on_a_malformed_feature_config_when_the_store_is_down(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="Unknown feature type"):
+        _run_main(
+            monkeypatch,
+            settings=_with_features(tmp_path, _MALFORMED_FEATURES),
+            rec_reader=_raise(OSError("bad store")),
+        )
+
+
+def test_main_passes_the_feature_config_to_create_app(tmp_path, monkeypatch):
+    configured: list[object] = []
+    rec_reader = FakeReader(pd.DataFrame())
     monkeypatch.setattr(
-        "cicerone.dashboard.load_settings",
-        lambda: dataclasses.replace(_settings(), feature_config_path=str(features)),
-    )
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr(
-        "cicerone.dashboard.build_recommendation_reader", lambda _output: FakeReader(pd.DataFrame())
+        rec_reader, "configure_item_filters", lambda **kw: configured.append(kw["availability_filters"])
     )
 
-    with pytest.raises(ValueError, match="Unknown feature type"):
-        main()
+    captured = _run_main(
+        monkeypatch,
+        settings=_with_features(tmp_path, 'item_availability_filters = ["in_stock"]\n'),
+        rec_reader=lambda _output: rec_reader,
+    )
+
+    assert captured["feature_config"].item_availability_filters == ["in_stock"]
+    assert captured["rec_reader"] is rec_reader
+    assert configured == [["in_stock"]]
+
+
+def test_main_warns_and_continues_without_a_feature_config(tmp_path, monkeypatch, caplog):
+    settings = dataclasses.replace(_settings(), feature_config_path=str(tmp_path / "missing.toml"))
+
+    with caplog.at_level("WARNING", logger="cicerone.serve.item_filters"):
+        captured = _run_main(monkeypatch, settings=settings)
+
+    assert captured["feature_config"] is None
+    assert captured["rec_reader"] is not None
+    assert "feature config missing" in caplog.text
+
+
+def test_main_disables_lookup_when_configuring_item_filters_fails(monkeypatch):
+    rec_reader = FakeReader(pd.DataFrame())
+    monkeypatch.setattr(rec_reader, "configure_item_filters", _raise(OSError("s3 blip")))
+
+    captured = _run_main(monkeypatch, rec_reader=lambda _output: rec_reader)
+
+    assert captured["rec_reader"] is None
 
 
 def test_main_uses_package_default_config_path(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
-        captured["config_path"] = kwargs.get("config_path")
-        return object()
-
     monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
     monkeypatch.setattr("cicerone.dashboard.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr(
-        "cicerone.dashboard.build_recommendation_reader", lambda _output: FakeReader(pd.DataFrame())
-    )
-    monkeypatch.setattr("cicerone.dashboard.build_input_source", lambda _input: object())
-    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
-    monkeypatch.setattr(
-        "cicerone.dashboard.uvicorn",
-        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
-    )
 
-    main()
+    captured = _run_main(monkeypatch)
 
     assert captured["config_path"] == "/patched/cicerone.toml"
 

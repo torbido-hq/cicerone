@@ -18,8 +18,7 @@ from cicerone.dashboard_lookup import (
     lookup_inspector,
     lookup_recommendations,
 )
-from cicerone.serve.item_filters import build_items_cache
-from cicerone.serve.recommendations import RecommendationService
+from cicerone.serve.recommendations import RecommendationService, build_recommendation_service
 
 
 class _BoomReader(FakeReader):
@@ -41,12 +40,7 @@ def _k_recs() -> pd.DataFrame:
 
 def _service(reader: FakeReader, settings: Settings | None = None) -> RecommendationService:
     settings = settings or make_settings(dashboard_enabled=True)
-    return RecommendationService(
-        settings,
-        reader,
-        items_cache=build_items_cache(settings, reader, None),
-        assignment_overlay=lambda: (None, None),
-    )
+    return build_recommendation_service(settings, reader, None, lambda: (None, None))
 
 
 class _History:
@@ -139,10 +133,10 @@ def test_lookup_recommendations_skips_snapshot_names_when_not_thompson():
 
 
 def test_lookup_recommendations_shows_serve_default_k_rows():
-    settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=5, serve_default_k=3)
+    settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=3, serve_default_k=5)
     result = lookup_recommendations(settings, _service(FakeReader(_k_recs()), settings), "u1")
 
-    assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3"]
+    assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3", "i4", "i5"]
 
 
 def test_format_recommendation_rows_uses_placeholders():
