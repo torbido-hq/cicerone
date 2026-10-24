@@ -21,7 +21,7 @@ from cicerone.io.db_errors import (
     is_missing_column_error,
 )
 from cicerone.io.db_store import DEFAULT_RECOMMENDATION_ITEMS_TABLE, DEFAULT_RECOMMENDATIONS_TABLE
-from cicerone.io.engines import engine_for
+from cicerone.io.engines import engine_for, quote_identifier
 from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.recommendation_reader_common import (
     RANK_COLUMN,
@@ -45,6 +45,17 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE
         )
         self._engine = engine_for(require_option(options, "database_url", "db"))
+        self._sql = {
+            name: quote_identifier(self._engine, name)
+            for name in (
+                self._table,
+                self._items_table,
+                USER_COLUMN,
+                VARIANT_COLUMN,
+                RANK_COLUMN,
+                SOURCE_COLUMN,
+            )
+        }
         self._variant_supported: bool | None = None
         self._present_variants: tuple[str, ...] | None = None
         self._init_item_filter_state()
@@ -68,16 +79,19 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             availability_filters=self._availability_filters,
         )
         if wanted is None:
-            return text(f'SELECT * FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
         try:
             existing = {col["name"] for col in inspect(self._engine).get_columns(self._items_table)}
         except SQLAlchemyError:
-            return text(f'SELECT * FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
         chosen = [name for name in wanted if name in existing]
         if not chosen:
-            return text(f'SELECT * FROM "{self._items_table}"')
-        quoted = ", ".join(f'"{sql_identifier(name, option="items snapshot column")}"' for name in chosen)
-        return text(f'SELECT {quoted} FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
+        quoted = ", ".join(
+            quote_identifier(self._engine, sql_identifier(name, option="items snapshot column"))
+            for name in chosen
+        )
+        return text(f"SELECT {quoted} FROM {self._sql[self._items_table]}")
 
     def _reload_items(self) -> bool:
         try:
@@ -149,7 +163,7 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             return ()
         try:
             frame = pd.read_sql(
-                text(f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}"'),
+                text(f"SELECT DISTINCT {self._sql[VARIANT_COLUMN]} FROM {self._sql[self._table]}"),
                 self._engine,
             )
         except SQL_READ_ERRORS as exc:
@@ -167,22 +181,22 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         prefer_fallback = assigned is None and self._supports_variant_column() is not False
         if assigned is not None:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'AND "{VARIANT_COLUMN}" = :variant '
-                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"AND {self._sql[VARIANT_COLUMN]} = :variant "
+                f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
             params: dict[str, Any] = {"user_id": user_id, "k": k, "variant": assigned}
         elif prefer_fallback:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'ORDER BY CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
-                f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"ORDER BY CASE WHEN {self._sql[VARIANT_COLUMN]} = :fallback THEN 0 ELSE 1 END, "
+                f"{self._sql[VARIANT_COLUMN]} ASC, {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
             params = {"user_id": user_id, "k": k, "fallback": _rec.FALLBACK_VARIANT}
         else:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
             params = {"user_id": user_id, "k": k}
         try:
@@ -202,8 +216,8 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                 )
                 rows = pd.read_sql(
                     text(
-                        f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                        f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                        f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                        f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
                     ),
                     self._engine,
                     params={"user_id": user_id, "k": k},
@@ -226,14 +240,14 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         if not sentinel.empty:
             return sentinel
         variant = self._assigned_variant(variant)
-        variant_clause = f'AND "{VARIANT_COLUMN}" = :variant ' if variant is not None else ""
+        variant_clause = f"AND {self._sql[VARIANT_COLUMN]} = :variant " if variant is not None else ""
         pick_sql = text(
-            f'SELECT "{USER_COLUMN}", "{SOURCE_COLUMN}" FROM "{self._table}" '
-            f'WHERE "{SOURCE_COLUMN}" IN (:popular, :latest) {variant_clause}'
+            f"SELECT {self._sql[USER_COLUMN]}, {self._sql[SOURCE_COLUMN]} FROM {self._sql[self._table]} "
+            f"WHERE {self._sql[SOURCE_COLUMN]} IN (:popular, :latest) {variant_clause}"
             f"ORDER BY "
-            f'CASE "{SOURCE_COLUMN}" '
+            f"CASE {self._sql[SOURCE_COLUMN]} "
             f"WHEN :popular THEN 0 WHEN :latest THEN 1 ELSE 99 END, "
-            f'"{USER_COLUMN}" ASC '
+            f"{self._sql[USER_COLUMN]} ASC "
             f"LIMIT 1"
         )
         params: dict[str, Any] = {"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE}

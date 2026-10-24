@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from pyarrow.lib import ArrowTypeError
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import postgresql
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
@@ -18,6 +19,20 @@ from cicerone.events.store import (
     load_recommendations_frame,
 )
 from cicerone.io.engines import dispose_engines
+
+
+class _FakeEngine:
+    dialect = postgresql.dialect()
+
+    def __init__(self, connect):
+        self.connect = connect
+
+
+def _raise(error: type[Exception]):
+    def connect():
+        raise error("engine")
+
+    return connect
 
 
 def test_load_recommendations_missing_file(tmp_path):
@@ -523,11 +538,7 @@ def test_count_recommendation_users_pandas_missing_table(tmp_path, monkeypatch):
         def execute(self, *_args, **_kwargs):
             raise DatabaseError("no such table: recommendations")
 
-    class _Engine:
-        def connect(self):
-            return _Conn()
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _Engine())
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
     assert count_recommendation_users(settings.output) == 0
 
 
@@ -548,11 +559,7 @@ def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
         def execute(self, *_args, **_kwargs):
             raise DatabaseError("connection refused")
 
-    class _Engine:
-        def connect(self):
-            return _Conn()
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _Engine())
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
     with pytest.raises(DatabaseError, match="connection refused"):
         count_recommendation_users(settings.output)
 
@@ -696,11 +703,7 @@ def test_load_items_catalog_size_sqlite_generic_error(tmp_path, monkeypatch):
     url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
 
-    class _Engine:
-        def connect(self):
-            raise RuntimeError("engine")
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _Engine())
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_raise(RuntimeError)))
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
     with pytest.raises(RuntimeError, match="engine"):
@@ -732,11 +735,8 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     url = f"sqlite+pysqlite:///{tmp_path / 'items.db'}"
     output = IOSettings(kind="db", options={"database_url": url})
 
-    class _Engine:
-        def connect(self):
-            raise SQLAlchemyError("engine")
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _Engine())
+    engine = _FakeEngine(_raise(SQLAlchemyError))
+    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: engine)
     monkeypatch.setattr("cicerone.events.store.is_missing_table_error", lambda _exc: False)
     monkeypatch.setattr("cicerone.events.store.is_missing_column_error", lambda _exc: False)
     with pytest.raises(SQLAlchemyError, match="engine"):

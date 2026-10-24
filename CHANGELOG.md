@@ -51,6 +51,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the filtered read.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
+- SQL statements quote table and column names the way the database dialect
+  does. On Postgres a mixed-case `recommendations_table` no longer keeps a
+  user's old rows on incremental replace, and the events worker's reads of
+  it (recommendations, user count, catalog size, guardrail rows) no longer
+  come back empty. Identifiers use backticks on MySQL instead of double
+  quotes. A configured table name now has to match the table's case: an
+  `events_table = "Events"` no longer finds a lowercase `events` table.
+- The db events source polls tables with mixed-case columns on Postgres.
+- Docs: the db events source and the track, eval and experiment-state
+  tables support Postgres and SQLite, not MySQL.
 
 ## [0.8.5] - 2026-10-14
 
