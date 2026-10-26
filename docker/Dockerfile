@@ -4,7 +4,7 @@
 # LightFM ships Cython extensions that must be compiled from source on most
 # platforms/architectures, so the build stage needs a toolchain. Kept out of
 # the final image to keep it small and reduce attack surface.
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -37,7 +37,7 @@ RUN npx tailwindcss -i ./tailwind.input.css -o ./tailwind.css --minify
 # --- package ---------------------------------------------------------------
 # sdist + wheel for PyPI and the runtime image. Reuses the frontend CSS
 # artifact; does not install the ML stack.
-FROM python:3.11-slim-bookworm AS package
+FROM python:3.15-slim-bookworm AS package
 
 WORKDIR /app
 RUN pip install --no-cache-dir \
@@ -56,7 +56,7 @@ RUN python -m build --no-isolation \
     && PYTHONPATH=src python -m cicerone.packaging
 
 # --- runtime -----------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.15-slim-bookworm AS runtime
 
 # libgomp1: OpenMP runtime required by the compiled LightFM extension.
 RUN apt-get update && apt-get install -y --no-install-recommends \
