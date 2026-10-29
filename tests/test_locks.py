@@ -728,8 +728,17 @@ def test_postgres_advisory_lock_acquire_error_closes(monkeypatch):
     lock = PostgresAdvisoryLock(_PG_URL)
     with pytest.raises(RuntimeError, match="db down"):
         lock.acquire()
-    conn.invalidate.assert_called_once()
-    conn.close.assert_called()
+    assert conn.mock_calls[-2:] == [call.invalidate(), call.close()]
+
+
+def test_postgres_advisory_lock_acquire_result_error_invalidates(monkeypatch):
+    _, conn = _mock_postgres_engine(monkeypatch)
+    conn.execute.return_value.scalar.side_effect = RuntimeError("result lost")
+
+    lock = PostgresAdvisoryLock(_PG_URL)
+    with pytest.raises(RuntimeError, match="result lost"):
+        lock.acquire()
+    assert conn.mock_calls[-2:] == [call.invalidate(), call.close()]
 
 
 def test_postgres_advisory_lock_release_error(monkeypatch):
@@ -739,8 +748,7 @@ def test_postgres_advisory_lock_release_error(monkeypatch):
     assert lock.acquire() is True
     conn.execute.side_effect = OperationalError("unlock failed", None, None)
     lock.release()
-    conn.invalidate.assert_called_once()
-    conn.close.assert_called()
+    assert conn.mock_calls[-2:] == [call.invalidate(), call.close()]
     assert lock._conn is None
 
 
@@ -752,8 +760,7 @@ def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
     conn.execute.side_effect = RuntimeError("unlock failed")
     with pytest.raises(RuntimeError, match="unlock failed"):
         lock.release()
-    conn.invalidate.assert_called_once()
-    conn.close.assert_called()
+    assert conn.mock_calls[-2:] == [call.invalidate(), call.close()]
     assert lock._conn is None
 
 
