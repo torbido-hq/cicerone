@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   strategy's block instead of across them, so a model with large raw scores
   (popularity counts) no longer jumps ahead of an earlier strategy. Weighted
   RRF and blending are unchanged.
+- Full recommendations and item-snapshot writes on MySQL or MariaDB empty
+  the table with `DELETE` instead of `TRUNCATE` (which commits implicitly
+  there), so a failed write no longer leaves the table empty.
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
@@ -62,6 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The dashboard user lookup on dataset storage (history pane, `get_user`)
   works when `user_id` is stored as an integer column instead of failing
   the filtered read.
+- Loading dataset recommendations for a set of users (event updates,
+  dashboard quality) finds integer `user_id` rows by their string id
+  instead of failing when a requested id is not numeric.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
 - Tracking conversion counts and CVR count each converted impression once,
