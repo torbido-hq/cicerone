@@ -163,7 +163,8 @@ def dashboard_users_path(settings: object, *, config_path: str | None = None) ->
 def _cmd_users(argv: list[str]) -> int:
     from cicerone.manage_dashboard_users import main as users_main
 
-    if os.environ.get("CICERONE_CONFIG_PATH") and not _has_flag(argv, "--users-path"):
+    skip_config = ("-h", "--help", "--users-path")
+    if os.environ.get("CICERONE_CONFIG_PATH") and not any(_has_flag(argv, flag) for flag in skip_config):
         from cicerone.config import load_settings
 
         config_path = os.environ.get("CICERONE_CONFIG_PATH")

@@ -265,3 +265,21 @@ def test_package_main_exports_cli_main():
     import cicerone.__main__ as package_main
 
     assert package_main.main is main
+
+
+@pytest.mark.parametrize("command", ["users", "export-openapi"])
+def test_forwarded_help_names_cicerone_subcommand(command, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([command, "--help"])
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.startswith(f"usage: cicerone {command} ")
+
+
+def test_users_help_skips_the_dashboard_config(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "cicerone.toml"
+    config.write_text("[dashboard]\nenabled = false\n")
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config))
+    with pytest.raises(SystemExit) as exc_info:
+        main(["users", "--help"])
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: cicerone users ")
