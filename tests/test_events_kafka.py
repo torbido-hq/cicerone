@@ -8,7 +8,7 @@ from support.events import event_payload
 from support.fake_kafka import install_fake_kafka
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSourceError, HeartbeatSource
+from cicerone.events.base import EventSourceError
 from cicerone.events.errors import KafkaException
 from cicerone.events.ha import ingest_is_fanout
 from cicerone.events.kafka import KafkaEventSource, validate_kafka_event_options
@@ -351,21 +351,6 @@ def test_poll_zero_and_empty_ack_nack(monkeypatch):
     assert source.health().connected is True
     source.close()
     assert source.health().connected is False
-
-
-def test_apply_starts_no_heartbeat_thread(monkeypatch):
-    import threading
-
-    from cicerone.events.worker_heartbeat import inflight_heartbeat
-
-    install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
-    source.connect()
-    assert not isinstance(source, HeartbeatSource)
-    with inflight_heartbeat(source, [], 0.01):
-        names = {thread.name for thread in threading.enumerate()}
-    assert "cicerone-events-heartbeat" not in names
-    source.close()
 
 
 def test_invalid_json_is_committed(monkeypatch):

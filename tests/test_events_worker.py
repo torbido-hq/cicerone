@@ -3569,6 +3569,38 @@ def _recording_worker(tmp_path, feature_config, source, applies: list[str], batc
     return EventWorker(source, MicroBatchBuffer(batch_size=batch_size, batch_window_seconds=60.0), updater)
 
 
+def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    import threading
+
+    from support.fake_kafka import install_fake_kafka
+
+    from cicerone.events.kafka import KafkaEventSource
+
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="k1", item_id="i1"))
+    source = KafkaEventSource(
+        {"bootstrap_servers": "localhost:9092", "topic": "cicerone.events", "group_id": "cicerone"}
+    )
+    source.connect()
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
+    started: list[str] = []
+    real_start = threading.Thread.start
+
+    def _record_start(thread: threading.Thread) -> None:
+        started.append(thread.name)
+        real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", _record_start)
+    worker._buffer.extend(source.poll(1))
+    assert worker._flush_ready(worker._buffer.flush()) == 1
+    assert applies == ["k1"]
+    assert "cicerone-events-heartbeat" not in started
+    source.close()
+
+
 def test_event_worker_acks_rejected_events_with_their_batch_without_applying(
     tmp_path, feature_config: FeatureConfig, caplog
 ):

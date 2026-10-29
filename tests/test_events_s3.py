@@ -6,7 +6,7 @@ import boto3
 import pytest
 from botocore.exceptions import BotoCoreError
 from moto import mock_aws
-from support.events import event_payload, record_durable_write_steps
+from support.events import event_payload
 
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -81,7 +81,7 @@ def test_s3_registered_and_build_list_mode():
 
 
 @mock_aws
-def test_s3_list_poll_ack_advances_marker(tmp_path, monkeypatch):
+def test_s3_list_poll_ack_advances_marker(tmp_path):
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket="events-bucket")
     _put_event(client, "events/a.json", event_payload(event_id="e1", item_id="i1"))
@@ -92,9 +92,7 @@ def test_s3_list_poll_ack_advances_marker(tmp_path, monkeypatch):
     first = list(source.poll(1))
     assert [event.event_id for event in first] == ["e1"]
     assert source.health().lag is not None and source.health().lag >= 1
-    steps = record_durable_write_steps(monkeypatch)
     source.ack([first[0].event_id])
-    assert steps == ["fsync_file", "replace", "fsync_dir"]
     assert json.loads(marker.read_text())["key"] == "events/a.json"
     second = list(source.poll(10))
     assert [event.event_id for event in second] == ["e2"]

@@ -46,9 +46,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
-- The db events watermark is renamed into place before its directory is
-  fsynced, so a crash cannot lose the update (shared with the s3 list
-  marker write).
 - Concurrent first use of the db experiment store checks out one shared
   engine instead of two.
 - The Kafka event source no longer starts an idle heartbeat thread on every
