@@ -3574,15 +3574,15 @@ def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
 ):
     import threading
 
-    from support.fake_kafka import install_fake_kafka
+    from support.fake_kafka import install_fake_kafka, kafka_options
 
+    from cicerone.events.base import HeartbeatSource
     from cicerone.events.kafka import KafkaEventSource
 
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="k1", item_id="i1"))
-    source = KafkaEventSource(
-        {"bootstrap_servers": "localhost:9092", "topic": "cicerone.events", "group_id": "cicerone"}
-    )
+    source = KafkaEventSource(kafka_options())
+    assert not isinstance(source, HeartbeatSource)
     source.connect()
     applies: list[str] = []
     worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
@@ -3597,7 +3597,7 @@ def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
     worker._buffer.extend(source.poll(1))
     assert worker._flush_ready(worker._buffer.flush()) == 1
     assert applies == ["k1"]
-    assert "cicerone-events-heartbeat" not in started
+    assert started == []
     source.close()
 
 
