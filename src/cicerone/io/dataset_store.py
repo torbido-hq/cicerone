@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from pyarrow.lib import ArrowException, ArrowNotImplementedError
 
 from cicerone.io.applied_events import APPLIED_EVENTS_ATTR, merge_applied_keys, unexpired_keys
 from cicerone.io.blob import (
@@ -45,6 +44,7 @@ from cicerone.io.options import (
     object_key,
     read_parquet,
     read_parquet_attrs,
+    read_parquet_pushdown,
     require_option,
     validate_storage_options,
 )
@@ -93,25 +93,7 @@ class DatasetInputSource:
         return self._read_optional(ITEMS_FILENAME, "item")
 
     def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
-        try:
-            frame = read_parquet(self._options, filename, filters=[("user_id", "==", user_id)])
-        except FileNotFoundError:
-            raise
-        except (OSError, ValueError, ArrowException) as exc:
-            message = str(exc).lower()
-            # A numeric user_id column has no kernel for the string filter value.
-            if (
-                isinstance(exc, ArrowNotImplementedError)
-                or "user_id" in message
-                or "fieldref" in message
-                or "filter" in message
-            ):
-                logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
-                frame = read_parquet(self._options, filename)
-            else:
-                raise
-        if USER_COLUMN not in frame.columns:
-            frame = read_parquet(self._options, filename)
+        frame = read_parquet_pushdown(self._options, filename, filters=[(USER_COLUMN, "==", user_id)])
         return filter_rows_for_user(frame, user_id)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
