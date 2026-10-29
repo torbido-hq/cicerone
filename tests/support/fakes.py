@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pandas as pd
 
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
+
+
+class RecordingConnection:
+    """Records executed SQL; ``begin`` and ``begin_nested`` are no-op transactions."""
+
+    def __init__(self, dialect: Any) -> None:
+        self.dialect = dialect
+        self.sql: list[str] = []
+
+    @contextmanager
+    def begin(self) -> Iterator[RecordingConnection]:
+        yield self
+
+    def begin_nested(self) -> RecordingConnection:
+        return self
+
+    def commit(self) -> None:
+        pass
+
+    def execute(self, statement: Any) -> None:
+        self.sql.append(str(statement))
 
 
 class FakeS3Body:

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 import threading
-from contextlib import contextmanager
 
 import pandas as pd
 import pytest
 from sqlalchemy import Table, create_engine, text
-from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import mysql, postgresql
+from sqlalchemy.dialects.mysql import mariadb
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.schema import CreateTable
+from support.fakes import RecordingConnection
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -471,21 +472,26 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
         def get_columns(self, _table):  # type: ignore[no-untyped-def]
             return [{"name": "generated_at"}]
 
-    class _Engine:
-        dialect = mysql.dialect()
-        sql: list[str] = []
-
-        @contextmanager
-        def begin(self):  # type: ignore[no-untyped-def]
-            yield self
-
-        def execute(self, statement):  # type: ignore[no-untyped-def]
-            self.sql.append(str(statement))
-
-    engine = _Engine()
+    engine = RecordingConnection(mysql.dialect())
     monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
     db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "statement"),
+    [
+        (mysql.dialect(), "DELETE FROM recommendations"),
+        (mariadb.MariaDBDialect(), "DELETE FROM recommendations"),
+        (postgresql.dialect(), "TRUNCATE TABLE recommendations"),
+    ],
+)
+def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement) -> None:  # type: ignore[no-untyped-def]
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(dialect)
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == [statement]
 
 
 def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
@@ -576,7 +582,7 @@ def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp
     assert sink.applied_event_keys(["k1"]) == {"k1"}
 
 
-def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch) -> None:
+def test_a_failed_full_write_keeps_the_rows_and_the_replay_keys(tmp_path, monkeypatch) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
@@ -588,4 +594,6 @@ def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch)
     with pytest.raises(OSError, match="insert failed"):
         sink.write_recommendations(rows)
     monkeypatch.undo()
-    assert sink.applied_event_keys(["k1"]) == set()
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    with sink._engine.connect() as conn:
+        assert conn.execute(text("SELECT user_id, item_id FROM recommendations")).all() == [("u1", "i1")]
