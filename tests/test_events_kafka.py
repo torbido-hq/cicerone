@@ -5,29 +5,19 @@ from typing import Any
 
 import pytest
 from support.events import event_payload
-from support.fake_kafka import install_fake_kafka
+from support.fake_kafka import install_fake_kafka, kafka_source_options
 
 from cicerone.config import ConfigError
-from cicerone.events.base import EventSourceError, HeartbeatSource
+from cicerone.events.base import EventSourceError
 from cicerone.events.errors import KafkaException
 from cicerone.events.ha import ingest_is_fanout
 from cicerone.events.kafka import KafkaEventSource, validate_kafka_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 
 
-def _options(**extra: Any) -> dict[str, Any]:
-    return {
-        "bootstrap_servers": "localhost:9092",
-        "topic": "cicerone.events",
-        "group_id": "cicerone",
-        "consumer_name": "test-consumer",
-        **extra,
-    }
-
-
 def test_kafka_registered():
     assert "kafka" in registered_event_source_kinds()
-    source = build_event_source("kafka", _options())
+    source = build_event_source("kafka", kafka_source_options())
     assert isinstance(source, KafkaEventSource)
     assert ingest_is_fanout("kafka") is True
 
@@ -40,9 +30,9 @@ def test_validate_requires_core_options():
     with pytest.raises(ConfigError, match="group_id"):
         validate_kafka_event_options({"bootstrap_servers": "h:9092", "topic": "t"})
     with pytest.raises(ConfigError, match="consumer_name"):
-        validate_kafka_event_options(_options(consumer_name="  "))
+        validate_kafka_event_options(kafka_source_options(consumer_name="  "))
     with pytest.raises(ConfigError, match="security_protocol"):
-        validate_kafka_event_options(_options(security_protocol="nope"))
+        validate_kafka_event_options(kafka_source_options(security_protocol="nope"))
 
 
 def test_optional_int_validation():
@@ -105,13 +95,13 @@ def test_optional_float_validation():
 
 def test_kafka_client_timeouts_default_and_override(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     assert source._consumer.config["socket.timeout.ms"] == 10000
     assert source._consumer.config["request.timeout.ms"] == 10000
     assert broker.list_topics_timeouts[-1] == 10.0
 
-    other = KafkaEventSource(_options(timeout_seconds=3))
+    other = KafkaEventSource(kafka_source_options(timeout_seconds=3))
     other.connect()
     assert other._consumer.config["socket.timeout.ms"] == 3000
     assert other._consumer.config["request.timeout.ms"] == 3000
@@ -120,11 +110,11 @@ def test_kafka_client_timeouts_default_and_override(monkeypatch):
 
 def test_validate_rejects_bad_timeout():
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        validate_kafka_event_options(_options(timeout_seconds=0))
+        validate_kafka_event_options(kafka_source_options(timeout_seconds=0))
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        validate_kafka_event_options(_options(timeout_seconds=1e308))
+        validate_kafka_event_options(kafka_source_options(timeout_seconds=1e308))
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        validate_kafka_event_options(_options(timeout_seconds=0.005))
+        validate_kafka_event_options(kafka_source_options(timeout_seconds=0.005))
     from cicerone.kafka_options import (
         MAX_TIMEOUT_MS,
         MIN_TIMEOUT_MS,
@@ -133,11 +123,11 @@ def test_validate_rejects_bad_timeout():
     )
     from cicerone.option_parse import MAX_BROKER_TIMEOUT_SECONDS
 
-    assert kafka_timeout_ms(_options(timeout_seconds=0.01), prefix="x") == MIN_TIMEOUT_MS
-    at_max = _options(timeout_seconds=MAX_BROKER_TIMEOUT_SECONDS)
+    assert kafka_timeout_ms(kafka_source_options(timeout_seconds=0.01), prefix="x") == MIN_TIMEOUT_MS
+    at_max = kafka_source_options(timeout_seconds=MAX_BROKER_TIMEOUT_SECONDS)
     assert kafka_timeout_ms(at_max, prefix="x") == MAX_TIMEOUT_MS
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        kafka_client_config(_options(timeout_seconds=1e308), prefix="events.options")
+        kafka_client_config(kafka_source_options(timeout_seconds=1e308), prefix="events.options")
 
 
 def test_kafka_timeout_ms_normalizes_conversion_overflow(monkeypatch):
@@ -145,17 +135,17 @@ def test_kafka_timeout_ms_normalizes_conversion_overflow(monkeypatch):
 
     monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 1e308)
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        kafka_options.kafka_timeout_ms(_options(), prefix="events.options")
+        kafka_options.kafka_timeout_ms(kafka_source_options(), prefix="events.options")
     monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 0.005)
     with pytest.raises(ConfigError, match="timeout_seconds"):
-        kafka_options.kafka_timeout_ms(_options(), prefix="events.options")
+        kafka_options.kafka_timeout_ms(kafka_source_options(), prefix="events.options")
 
 
 def test_poll_ack_and_health(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1", item_id="i1"))
     broker.add("cicerone.events", event_payload(event_id="e2", item_id="i2"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = list(source.poll(1))
     assert [event.event_id for event in first] == ["e1"]
@@ -172,7 +162,7 @@ def test_poll_ack_and_health(monkeypatch):
 def test_nack_allows_repoll(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = list(source.poll(10))
     assert len(first) == 1
@@ -189,7 +179,7 @@ def test_missing_event_id_uses_partition_offset(monkeypatch):
     payload = event_payload()
     payload.pop("event_id")
     broker.add("cicerone.events", payload)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
@@ -200,7 +190,7 @@ def test_poison_entry_is_committed(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", {"user_id": "u1"})
     broker.add("cicerone.events", event_payload(event_id="ok"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
@@ -210,7 +200,7 @@ def test_poison_entry_is_committed(monkeypatch):
 def test_bytes_json_payload(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", json.dumps(event_payload(event_id="e1")).encode())
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["e1"]
@@ -220,7 +210,7 @@ def test_message_error_is_skipped(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="bad"), error="boom")
     broker.add("cicerone.events", event_payload(event_id="ok"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
@@ -229,7 +219,7 @@ def test_message_error_is_skipped(monkeypatch):
 def test_duplicate_event_id_is_committed(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = list(source.poll(1))
     broker.add("cicerone.events", event_payload(event_id="e1", item_id="other"))
@@ -243,7 +233,7 @@ def test_ack_does_not_skip_earlier_offset(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
     broker.add("cicerone.events", event_payload(event_id="e2"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["e1", "e2"]
@@ -257,7 +247,7 @@ def test_ack_keeps_local_state_when_watermark_cannot_advance(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
     broker.add("cicerone.events", event_payload(event_id="e2"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     source.ack([events[1].event_id])
@@ -273,7 +263,7 @@ def test_ack_keeps_later_offset_when_earlier_offset_is_held(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     for index in range(4):
         broker.add("cicerone.events", event_payload(event_id=f"e{index}"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     source.ack([events[0].event_id, events[1].event_id])
@@ -289,7 +279,7 @@ def test_ack_keeps_later_offset_when_earlier_offset_is_held(monkeypatch):
 def test_ack_keeps_local_state_when_commit_fails(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     broker.commit_error = RuntimeError("commit fail")
@@ -304,7 +294,7 @@ def test_ack_keeps_local_state_when_commit_fails(monkeypatch):
 def test_sasl_options_in_consumer_config(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     source = KafkaEventSource(
-        _options(
+        kafka_source_options(
             security_protocol="SASL_SSL",
             sasl_mechanism="PLAIN",
             sasl_username="user",
@@ -330,20 +320,20 @@ def test_missing_confluent_kafka_package(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _import)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
         source.connect()
 
 
 def test_poll_before_connect_raises():
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     with pytest.raises(RuntimeError, match="not connected"):
         source.poll(1)
 
 
 def test_poll_zero_and_empty_ack_nack(monkeypatch):
     install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     assert list(source.poll(0)) == []
     source.ack([])
@@ -353,26 +343,11 @@ def test_poll_zero_and_empty_ack_nack(monkeypatch):
     assert source.health().connected is False
 
 
-def test_apply_starts_no_heartbeat_thread(monkeypatch):
-    import threading
-
-    from cicerone.events.worker_heartbeat import inflight_heartbeat
-
-    install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
-    source.connect()
-    assert not isinstance(source, HeartbeatSource)
-    with inflight_heartbeat(source, [], 0.01):
-        names = {thread.name for thread in threading.enumerate()}
-    assert "cicerone-events-heartbeat" not in names
-    source.close()
-
-
 def test_invalid_json_is_committed(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", b"not-json")
     broker.add("cicerone.events", event_payload(event_id="ok"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
@@ -380,7 +355,7 @@ def test_invalid_json_is_committed(monkeypatch):
 
 def test_reconnect_closes_previous(monkeypatch):
     install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = source._consumer
     source.connect()
@@ -391,7 +366,7 @@ def test_reconnect_closes_previous(monkeypatch):
 def test_reconnect_resets_ack_maps(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="old"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = list(source.poll(1))
     assert [event.event_id for event in first] == ["old"]
@@ -408,7 +383,7 @@ def test_reconnect_resets_ack_maps(monkeypatch):
 def test_poll_exception_returns_partial(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     first = list(source.poll(1))
     source.nack(first)
@@ -424,7 +399,7 @@ def test_poll_exception_returns_partial(monkeypatch):
 def test_poll_unexpected_error_propagates(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="e1"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
 
     def _boom(_timeout):
@@ -439,7 +414,7 @@ def test_connect_list_topics_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     created = _capture_consumers(monkeypatch)
     broker.list_topics_error = KafkaException("down")
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
     assert created[0].closed is True
@@ -449,7 +424,7 @@ def test_connect_list_topics_unexpected_error_propagates(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     created = _capture_consumers(monkeypatch)
     broker.list_topics_error = RuntimeError("bug")
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     with pytest.raises(RuntimeError, match="bug"):
         source.connect()
     assert created[0].closed is True
@@ -459,7 +434,7 @@ def test_commit_discard_tolerates_commit_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", b"not-json")
     broker.add("cicerone.events", event_payload(event_id="ok"))
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
 
     def _boom(**_kwargs):
@@ -473,7 +448,7 @@ def test_commit_discard_tolerates_commit_failure(monkeypatch):
 def test_commit_discard_propagates_unexpected_failure(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", b"not-json")
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
 
     def _boom(**_kwargs):
@@ -486,13 +461,13 @@ def test_commit_discard_propagates_unexpected_failure(monkeypatch):
 
 def test_close_only_absorbs_kafka_errors(monkeypatch, caplog):
     install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     source._consumer.close = lambda: (_ for _ in ()).throw(KafkaException("close down"))  # type: ignore[method-assign]
     source.close()
     assert "Kafka consumer close failed" in caplog.text
 
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     source._consumer.close = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="bug"):
@@ -501,7 +476,7 @@ def test_close_only_absorbs_kafka_errors(monkeypatch, caplog):
 
 def test_reconnect_only_absorbs_kafka_close_errors(monkeypatch):
     install_fake_kafka(monkeypatch)
-    source = KafkaEventSource(_options())
+    source = KafkaEventSource(kafka_source_options())
     source.connect()
     source._consumer.close = lambda: (_ for _ in ()).throw(KafkaException("close down"))  # type: ignore[method-assign]
     source.connect()
