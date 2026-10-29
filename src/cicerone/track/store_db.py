@@ -8,10 +8,9 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Column, Engine, Integer, MetaData, Table, Text, bindparam, text
-from sqlalchemy.schema import CreateTable
+from sqlalchemy import Engine, bindparam, text
 
-from cicerone.io.engines import TEXT_KEY, LazyEngine, insert_ignoring_duplicates, quote_identifier
+from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
 from cicerone.io.options import require_option, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
 from cicerone.locks import WriteFence
@@ -26,27 +25,18 @@ from cicerone.track.store_common import (
     unique_matching_rows,
 )
 
-
-def track_table(name: str) -> Table:
-    return Table(
-        name,
-        MetaData(),
-        Column("event_id", TEXT_KEY, primary_key=True),
-        Column("kind", Text, nullable=False),
-        Column("user_id", Text, nullable=False),
-        Column("item_id", Text, nullable=False),
-        Column("rank", Integer),
-        Column("occurred_at", Text, nullable=False),
-        Column("variant", Text),
-        Column("experiment_id", Text),
-        Column("generated_at", Text),
-    )
-
-
-def _eval_table(name: str) -> Table:
-    return Table(
-        name, MetaData(), Column("payload", Text, nullable=False), Column("written_at", Text, nullable=False)
-    )
+_TRACK_TABLE = (
+    ("event_id", "TEXT PRIMARY KEY"),
+    ("kind", "TEXT NOT NULL"),
+    ("user_id", "TEXT NOT NULL"),
+    ("item_id", "TEXT NOT NULL"),
+    ("rank", "INTEGER"),
+    ("occurred_at", "TEXT NOT NULL"),
+    ("variant", "TEXT"),
+    ("experiment_id", "TEXT"),
+    ("generated_at", "TEXT"),
+)
+_EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
 
 class TrackDbBackend:
@@ -86,9 +76,16 @@ class TrackDbBackend:
     def engine(self) -> Engine:
         return self._engine.get()
 
+    def _ensure_track_table(self, conn: Any, table: str) -> None:
+        conn.execute(text(create_table_sql(conn, table, _TRACK_TABLE)))
+
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self.engine()
+        row_sql = text(
+            insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
+            + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
+        )
         params: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
@@ -111,13 +108,13 @@ class TrackDbBackend:
                 }
             )
         with engine.begin() as conn:
-            conn.execute(CreateTable(track_table(table), if_not_exists=True))
+            self._ensure_track_table(conn, table)
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
             fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
             if not fresh:
                 return []
             self._fence.ensure()
-            conn.execute(insert_ignoring_duplicates(conn, track_table(table)), fresh)
+            conn.execute(row_sql, fresh)
             self._fence.ensure()
             return fresh
 
@@ -138,11 +135,10 @@ class TrackDbBackend:
     def _write_eval_db(self, encoded: str) -> None:
         table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
         engine = self.engine()
-        eval_table = _eval_table(table)
         with engine.begin() as conn:
-            conn.execute(CreateTable(eval_table, if_not_exists=True))
+            conn.execute(text(create_table_sql(conn, table, _EVAL_TABLE)))
             written_at = pd.Timestamp.now(tz="UTC").isoformat()
-            replace_rows_fenced(conn, eval_table, {"payload": encoded, "written_at": written_at}, self._fence)
+            replace_rows_fenced(conn, table, {"payload": encoded, "written_at": written_at}, self._fence)
 
     def _read_eval_db(self) -> dict[str, Any] | None:
         table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)

@@ -15,7 +15,6 @@ from cicerone.option_parse import as_int
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BLOCK_MS = 0
 _DEFAULT_CLAIM_IDLE_MS = 300_000
 _DEFAULT_GROUP_START_ID = "0-0"
 
@@ -30,8 +29,8 @@ def validate_redis_stream_options(options: dict[str, Any]) -> None:
         raise ConfigError("events.options.consumer_name must be non-empty when set")
     if "group_start_id" in options and str(options["group_start_id"]).strip() == "":
         raise ConfigError("events.options.group_start_id must be non-empty when set")
-    block_ms = _as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
-    if block_ms < 0:
+    block_ms = _block_ms(options)
+    if block_ms is not None and block_ms < 0:
         raise ConfigError(f"events.options.block_ms must be >= 0, got {block_ms}")
     claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
     if claim_idle_ms < 1:
@@ -40,6 +39,11 @@ def validate_redis_stream_options(options: dict[str, Any]) -> None:
 
 def _as_int(options: dict[str, Any], key: str, default: int) -> int:
     return as_int(options, key, default, prefix="events.options")
+
+
+def _block_ms(options: dict[str, Any]) -> int | None:
+    # Unset sends no BLOCK (non-blocking read). An explicit 0 keeps Redis's "wait forever".
+    return None if options.get("block_ms") is None else _as_int(options, "block_ms", 0)
 
 
 def _require_str(options: dict[str, Any], key: str) -> str:
@@ -64,7 +68,12 @@ class RedisStreamsEventSource(QueuedEventSource):
         )
         start = options.get("group_start_id", _DEFAULT_GROUP_START_ID)
         self._group_start_id = str(start).strip() or _DEFAULT_GROUP_START_ID
-        self._block_ms = _as_int(options, "block_ms", _DEFAULT_BLOCK_MS)
+        self._block_ms = _block_ms(options)
+        if self._block_ms == 0:
+            logger.warning(
+                "events.options.block_ms = 0 makes each read wait until an entry arrives; "
+                "buffered events are not flushed while the stream is quiet"
+            )
         self._claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
 
         self._client: Any | None = None

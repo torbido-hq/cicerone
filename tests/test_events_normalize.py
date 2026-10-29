@@ -98,3 +98,9 @@ def test_normalize_more_edge_cases():
     assert str(frame["occurred_at"].dtype).startswith("datetime64")
     assert frame["occurred_at"].dt.tz is not None
     assert len(normalize_events([event_payload(event_id="z")])) == 1
+
+
+@pytest.mark.parametrize("quantity", [float("inf"), float("-inf"), 1e400])
+def test_normalize_rejects_an_infinite_quantity(quantity):
+    with pytest.raises(EventNormalizeError, match="quantity"):
+        normalize_event(event_payload(quantity=quantity))

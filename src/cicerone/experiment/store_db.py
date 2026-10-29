@@ -8,12 +8,11 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Column, Engine, MetaData, Table, Text, inspect, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
-from sqlalchemy.schema import CreateTable
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import TEXT_KEY, LazyEngine, quote_identifier
+from cicerone.io.engines import LazyEngine, create_table_sql, quote_identifier
 from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, replace_rows_fenced
 from cicerone.locks import WriteFence
@@ -32,15 +31,12 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
 )
 
 
-def _state_schema(name: str) -> Table:
-    return Table(
-        name,
-        MetaData(),
-        Column("experiment_id", TEXT_KEY, primary_key=True),
-        Column("promoted_variant", Text),
-        Column("promoted_at", Text),
-        Column("payload", Text),
-    )
+_STATE_TABLE = (
+    ("experiment_id", "TEXT PRIMARY KEY"),
+    ("promoted_variant", "TEXT"),
+    ("promoted_at", "TEXT"),
+    ("payload", "TEXT"),
+)
 
 
 def _state_payload_json(state: Mapping[str, Any]) -> str:
@@ -119,7 +115,7 @@ class ExperimentDbBackend:
             promoted_variant = str(promoted_variant)
         if promoted_at is not None:
             promoted_at = str(promoted_at)
-        state_table = _state_schema(table)
+        create_sql = text(create_table_sql(engine, table, _STATE_TABLE))
         params = {
             "experiment_id": experiment_id,
             "promoted_variant": promoted_variant,
@@ -131,8 +127,8 @@ class ExperimentDbBackend:
             try:
                 with engine.begin() as conn:
                     self._fence.ensure()
-                    conn.execute(CreateTable(state_table, if_not_exists=True))
-                    replace_rows_fenced(conn, state_table, params, self._fence)
+                    conn.execute(create_sql)
+                    replace_rows_fenced(conn, table, params, self._fence)
             except SQLAlchemyError as exc:
                 if not is_missing_column_error(exc):
                     raise
@@ -140,7 +136,7 @@ class ExperimentDbBackend:
                     self._fence.ensure()
                     payload = quote_identifier(engine, "payload")
                     conn.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {payload} TEXT"))
-                    replace_rows_fenced(conn, state_table, params, self._fence)
+                    replace_rows_fenced(conn, table, params, self._fence)
 
         return _write
 

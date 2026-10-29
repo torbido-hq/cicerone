@@ -20,7 +20,7 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
-from cicerone.values import occurred_since, utc_stamp
+from cicerone.values import utc_stamp
 
 _EMPTY = np.array([], dtype=object)
 _EMPTY_REWARDS = np.array([], dtype=float)
@@ -112,13 +112,20 @@ def window_trials_from_slices(
 def track_rows_since(
     rows: Sequence[Mapping[str, Any]],
     started_at: str | None,
+    *,
+    until: datetime,
 ) -> list[dict[str, Any]]:
-    if not started_at:
-        return [dict(row) for row in rows]
-    stamp = utc_stamp(started_at)
-    if stamp is None:
+    """Rows with ``occurred_at`` in ``[started_at, until)``; ``until`` starts the next window."""
+    start = utc_stamp(started_at) if started_at else None
+    if started_at and start is None:
         return []
-    return [dict(row) for row in rows if occurred_since(row, stamp)]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        when = utc_stamp(row.get("occurred_at"))
+        if when is None or when >= until or (start is not None and when < start):
+            continue
+        out.append(dict(row))
+    return out
 
 
 def add_counts(base: ArmCounts, extra: ArmCounts) -> ArmCounts:

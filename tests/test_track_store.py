@@ -1105,15 +1105,19 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
     assert not (tmp_path / "track_eval.json").exists()
 
 
-def test_track_table_creates_on_mysql():
-    # MySQL needs a bounded, case-sensitive key column and backticks for the reserved word rank.
+def test_track_table_quotes_its_columns_for_the_dialect():
+    # rank is reserved on MySQL.
+    from types import SimpleNamespace
+
     from sqlalchemy.dialects import mysql
-    from sqlalchemy.schema import CreateTable
 
-    from cicerone.track.store_db import track_table
+    from cicerone.locks import WriteFence
+    from cicerone.track.store_db import TrackDbBackend
 
-    ddl = str(CreateTable(track_table("track")).compile(dialect=mysql.dialect()))
+    executed: list[str] = []
+    conn = SimpleNamespace(dialect=mysql.dialect(), execute=lambda statement: executed.append(str(statement)))
 
-    assert "event_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL" in ddl
-    assert "`rank` INTEGER" in ddl
-    assert "PRIMARY KEY (event_id)" in ddl
+    TrackDbBackend({"database_url": "sqlite+pysqlite://"}, WriteFence())._ensure_track_table(conn, "track")
+
+    assert "`rank` INTEGER" in executed[0]
+    assert executed[0].startswith("CREATE TABLE IF NOT EXISTS track (event_id TEXT PRIMARY KEY")

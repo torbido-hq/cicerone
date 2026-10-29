@@ -7,9 +7,10 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Connection, Engine, Table, TextClause
+from sqlalchemy import Connection, Engine, TextClause, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
+from cicerone.io.engines import insert_sql, quote_identifier
 from cicerone.locks.hold import WriteFence
 
 logger = logging.getLogger(__name__)
@@ -53,9 +54,9 @@ def append_frame_fenced(engine: Engine, table: str, frame: pd.DataFrame, fence: 
         fence.ensure()
 
 
-def replace_rows_fenced(conn: Connection, table: Table, params: Mapping[str, Any], fence: WriteFence) -> None:
+def replace_rows_fenced(conn: Connection, table: str, params: Mapping[str, Any], fence: WriteFence) -> None:
     fence.ensure()
-    conn.execute(table.delete())
+    conn.execute(text(f"DELETE FROM {quote_identifier(conn, table)}"))
     fence.ensure()
-    conn.execute(table.insert(), params)
+    conn.execute(text(insert_sql(conn, table, list(params))), params)
     fence.ensure()

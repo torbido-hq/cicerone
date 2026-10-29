@@ -104,9 +104,12 @@ unavailable or failing (any storage or database error) → **503**.
   `[experiment].primary_metric` when that is an event type), attributed to a
   prior impression (view-through) or click (click-through) with the same
   window and `(user_id, item_id)` match.
-- **CVR** — attributed conversions / impressions (capped so conversions cannot
-  exceed impressions). Experiment `primary_metric = "conversion"` scores this
-  **rate** per user, not a conversion count.
+- **CVR** — distinct converted impressions / impressions: repeat
+  conversions (or converting clicks) on one impression count once.
+  Experiment `primary_metric = "conversion"` scores this **rate** per user,
+  not a conversion count.
+- Impressions, clicks and conversions with a future `occurred_at` are left
+  out until that time has passed.
 
 `min_impressions` (default **100**) gates experiment **Promote** /
 Thompson volume when `primary_metric` is `ctr` or `conversion`. The
