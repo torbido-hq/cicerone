@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 import threading
-from contextlib import contextmanager
 
 import pandas as pd
 import pytest
 from sqlalchemy import Table, create_engine, text
-from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import mysql, postgresql
+from sqlalchemy.dialects.mysql import mariadb
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.schema import CreateTable
+from support.fakes import RecordingConnection
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -43,6 +44,7 @@ def _clean_tables():
             "custom_recommendations",
             "custom_manifest_runs",
             "custom_model_artifacts",
+            "Mixed_Case_Recs",
         ):
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
     yield
@@ -152,6 +154,30 @@ def test_database_output_replace_recommendations_for_users():
     assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
     assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_replace_recommendations_for_users_on_a_mixed_case_table():
+    # to_sql creates "Mixed_Case_Recs" quoted; an unquoted DELETE hit mixed_case_recs and left old rows.
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL, "recommendations_table": "Mixed_Case_Recs"})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.8, "source": "personalized"},
+            ]
+        )
+    )
+
+    replaced = sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+
+    assert replaced == 2
+    stored = pd.read_sql(
+        'SELECT user_id, item_id FROM "Mixed_Case_Recs" ORDER BY user_id', create_engine(TEST_DATABASE_URL)
+    )
+    assert stored.values.tolist() == [["u1", "new"], ["u2", "keep"]]
 
 
 def test_database_output_replace_recommendations_rejects_extra_users():
@@ -446,43 +472,26 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
         def get_columns(self, _table):  # type: ignore[no-untyped-def]
             return [{"name": "generated_at"}]
 
-    class _Engine:
-        dialect = mysql.dialect()
-        sql: list[str] = []
-
-        @contextmanager
-        def begin(self):  # type: ignore[no-untyped-def]
-            yield self
-
-        def execute(self, statement):  # type: ignore[no-untyped-def]
-            self.sql.append(str(statement))
-
-    engine = _Engine()
+    engine = RecordingConnection(mysql.dialect())
     monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
     db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
 
-def test_full_write_on_mysql_empties_the_table_with_delete_only() -> None:
+@pytest.mark.parametrize(
+    ("dialect", "statement"),
+    [
+        (mysql.dialect(), "DELETE FROM recommendations"),
+        (mariadb.MariaDBDialect(), "DELETE FROM recommendations"),
+        (postgresql.dialect(), "TRUNCATE TABLE recommendations"),
+    ],
+)
+def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement) -> None:  # type: ignore[no-untyped-def]
     from cicerone.io import db_store
 
-    class _Savepoint:
-        def commit(self) -> None:
-            pass
-
-    class _Conn:
-        dialect = mysql.dialect()
-        sql: list[str] = []
-
-        def begin_nested(self) -> _Savepoint:
-            return _Savepoint()
-
-        def execute(self, statement):  # type: ignore[no-untyped-def]
-            self.sql.append(str(statement))
-
-    conn = _Conn()
+    conn = RecordingConnection(dialect)
     db_store._clear_table_for_replace(conn, "recommendations")
-    assert conn.sql == ['DELETE FROM "recommendations"']
+    assert conn.sql == [statement]
 
 
 def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
@@ -573,7 +582,7 @@ def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp
     assert sink.applied_event_keys(["k1"]) == {"k1"}
 
 
-def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch) -> None:
+def test_a_failed_full_write_keeps_the_rows_and_the_replay_keys(tmp_path, monkeypatch) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
     sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
@@ -585,4 +594,6 @@ def test_a_failed_full_write_still_clears_the_replay_keys(tmp_path, monkeypatch)
     with pytest.raises(OSError, match="insert failed"):
         sink.write_recommendations(rows)
     monkeypatch.undo()
-    assert sink.applied_event_keys(["k1"]) == set()
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    with sink._engine.connect() as conn:
+        assert conn.execute(text("SELECT user_id, item_id FROM recommendations")).all() == [("u1", "i1")]
