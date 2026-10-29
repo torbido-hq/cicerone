@@ -3574,14 +3574,14 @@ def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
 ):
     import threading
 
-    from support.fake_kafka import install_fake_kafka, kafka_options
+    from support.fake_kafka import install_fake_kafka, kafka_source_options
 
     from cicerone.events.base import HeartbeatSource
     from cicerone.events.kafka import KafkaEventSource
 
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", event_payload(event_id="k1", item_id="i1"))
-    source = KafkaEventSource(kafka_options())
+    source = KafkaEventSource(kafka_source_options())
     assert not isinstance(source, HeartbeatSource)
     source.connect()
     applies: list[str] = []

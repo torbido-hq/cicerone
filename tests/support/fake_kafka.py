@@ -180,7 +180,7 @@ def install_fake_kafka(
     return broker
 
 
-def kafka_options(**extra: Any) -> dict[str, Any]:
+def kafka_source_options(**extra: Any) -> dict[str, Any]:
     return {
         "bootstrap_servers": "localhost:9092",
         "topic": "cicerone.events",
