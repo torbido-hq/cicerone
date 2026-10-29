@@ -45,6 +45,7 @@ class PostgresAdvisoryLock:
             if self._conn is not None:
                 return False
             conn = self._engine.connect()
+            got: bool | None = None
             try:
                 # No implicit transaction: the session idles for the whole hold.
                 conn.execution_options(isolation_level="AUTOCOMMIT")
@@ -60,6 +61,9 @@ class PostgresAdvisoryLock:
                 return True
             finally:
                 if self._conn is not conn:
+                    if got is None:
+                        # The lock may have been granted; never return the session to the pool.
+                        conn.invalidate()
                     conn.close()
 
     def owned(self, generation: int | None = None) -> bool:
@@ -124,15 +128,18 @@ class PostgresAdvisoryLock:
         with self._mutex:
             if self._conn is None:
                 return
+            conn, self._conn = self._conn, None
+            unlocked = False
             try:
-                self._conn.execute(
+                conn.execute(
                     text("SELECT pg_advisory_unlock(:k1, :k2)"),
                     {"k1": self._key1, "k2": self._key2},
                 )
+                unlocked = True
             except SQLAlchemyError:
                 logger.exception("Failed to release Postgres advisory lock")
-                # Never return a session that may still hold the lock to the pool.
-                self._conn.invalidate()
             finally:
-                self._conn.close()
-                self._conn = None
+                if not unlocked:
+                    # Never return a session that may still hold the lock to the pool.
+                    conn.invalidate()
+                conn.close()

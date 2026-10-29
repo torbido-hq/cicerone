@@ -717,6 +717,7 @@ def test_postgres_advisory_lock_contention_mocked(monkeypatch):
 
     lock = PostgresAdvisoryLock(_PG_URL)
     assert lock.acquire() is False
+    conn.invalidate.assert_not_called()
     conn.close.assert_called()
 
 
@@ -727,6 +728,7 @@ def test_postgres_advisory_lock_acquire_error_closes(monkeypatch):
     lock = PostgresAdvisoryLock(_PG_URL)
     with pytest.raises(RuntimeError, match="db down"):
         lock.acquire()
+    conn.invalidate.assert_called_once()
     conn.close.assert_called()
 
 
@@ -750,6 +752,8 @@ def test_postgres_advisory_lock_release_raises_unexpected(monkeypatch):
     conn.execute.side_effect = RuntimeError("unlock failed")
     with pytest.raises(RuntimeError, match="unlock failed"):
         lock.release()
+    conn.invalidate.assert_called_once()
+    conn.close.assert_called()
     assert lock._conn is None
 
 
