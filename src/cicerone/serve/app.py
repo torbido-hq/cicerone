@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 
 _APPEND_BUSY_ATTEMPTS = 3
+# Appends waiting for the writer thread; a request past this waits for a slot.
+_MAX_PENDING_APPENDS = 1000
 
 
 def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
@@ -183,6 +185,11 @@ def create_app(
 ) -> FastAPI:
     # One writer thread keeps appends ordered and off the request threadpool.
     append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
+    append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
+
+    def submit_append(fn: Any, *args: Any) -> None:
+        append_slots.acquire()
+        append_pool.submit(fn, *args).add_done_callback(lambda _done: append_slots.release())
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -325,7 +332,7 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                append_pool.submit(
+                submit_append(
                     _append_exposures_safe,
                     experiment_store,
                     [
@@ -354,7 +361,7 @@ def create_app(
                 }
                 for row in filtered.itertuples(index=False)
             ]
-            append_pool.submit(_append_impressions_safe, track_store, rows, user_id)
+            submit_append(_append_impressions_safe, track_store, rows, user_id)
 
         body = RecommendationsResponse(
             generated_at=generated_at,

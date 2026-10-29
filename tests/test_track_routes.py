@@ -486,6 +486,32 @@ def test_get_log_impressions_append_runs_on_dedicated_thread_and_drains(tmp_path
     assert appended[0].startswith("cicerone-serve-append")
 
 
+def test_get_log_impressions_waits_for_a_slot_when_appends_back_up(tmp_path, monkeypatch):
+    release = threading.Event()
+    appended: list[int] = []
+
+    def slow_append(*args, **kwargs):
+        del args, kwargs
+        release.wait(timeout=5)
+        appended.append(1)
+        return 1
+
+    monkeypatch.setattr("cicerone.serve.app._MAX_PENDING_APPENDS", 1)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    headers = {"Authorization": "Bearer secret"}
+    with TestClient(app) as client:
+        assert client.get("/recommendations/u1", headers=headers).status_code == 200
+        second = threading.Thread(target=lambda: client.get("/recommendations/u1", headers=headers))
+        second.start()
+        second.join(timeout=0.3)
+        assert second.is_alive()
+        release.set()
+        second.join(timeout=5)
+        assert not second.is_alive()
+    assert len(appended) == 2
+
+
 def test_attach_track_ingest_openapi_noop_without_post():
     from cicerone.serve.events_routes import attach_ingest_openapi
     from cicerone.track.routes import TRACK_INGEST
