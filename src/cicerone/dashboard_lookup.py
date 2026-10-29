@@ -14,7 +14,7 @@ import pandas as pd
 from cicerone.config import Settings
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.io.base import UserHistoryReader
-from cicerone.io.options import is_s3_not_found
+from cicerone.io.blob import is_storage_not_found
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -262,7 +262,7 @@ def _source_mix(items: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 
 def _history_unavailable(exc: BaseException) -> bool:
-    if isinstance(exc, FileNotFoundError) or is_s3_not_found(exc):
+    if is_storage_not_found(exc):
         return True
     message = str(exc).lower()
     return "no such table" in message or "does not exist" in message or "no such file" in message

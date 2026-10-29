@@ -1,9 +1,40 @@
+"""Shared test fakes."""
+
 from __future__ import annotations
+
+from typing import Any
 
 import pandas as pd
 
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
+
+
+class FakeS3Body:
+    def __init__(self, payload: bytes, *, fail: bool = False) -> None:
+        self._payload = payload
+        self._fail = fail
+        self.closed = False
+        self.reads: list[int | None] = []
+
+    def read(self, size: int | None = None) -> bytes:
+        self.reads.append(size)
+        if self._fail:
+            raise RuntimeError("read failed")
+        if size is None:
+            return self._payload
+        return self._payload[:size]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeS3Client:
+    def __init__(self, body: FakeS3Body) -> None:
+        self.body = body
+
+    def get_object(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"Body": self.body}
 
 
 class FakeReader:
@@ -52,3 +83,13 @@ class FakeManifest:
         del limit
         latest = self.read_latest()
         return [latest] if latest else []
+
+
+class FakeGuard:
+    def __init__(self, result: bool = True):
+        self.result = result
+        self.calls: list[str] = []
+
+    def trigger(self, triggered_by: str) -> bool:
+        self.calls.append(triggered_by)
+        return self.result

@@ -50,11 +50,12 @@ from cicerone.config.settings import (
 from cicerone.config.track import load_eval_settings, load_track_settings
 from cicerone.config.unknown_keys import warn_unknown_keys
 from cicerone.config.validation import (
+    float_field,
+    int_field,
     require_non_negative_int,
     require_positive_float,
     require_positive_int,
     resolve_epoch_metrics,
-    resolve_max_workers,
     validate_model_weights,
     validate_rrf_k,
 )
@@ -176,9 +177,7 @@ def _coerce_nested(
 
 
 def _serve_default_k(serve_raw: dict[str, Any]) -> int:
-    value = require_positive_int(
-        int(serve_raw.get("default_k", ServeSettings.default_k)), name="serve.default_k"
-    )
+    value = int_field(serve_raw, "serve.default_k", ServeSettings.default_k, require_positive_int)
     if value > DEFAULT_SERVE_MAX_K:
         raise ConfigError(f"serve.default_k must be <= {DEFAULT_SERVE_MAX_K}, got {value}")
     return value
@@ -406,13 +405,11 @@ def _warn_online_skipped_for_sequential(settings: Settings) -> None:
 def _load_explain_settings(raw: dict[str, Any]) -> ExplainSettings:
     return ExplainSettings(
         enabled=bool(raw.get("enabled", ExplainSettings.enabled)),
-        max_similar_items=require_non_negative_int(
-            int(raw.get("max_similar_items", ExplainSettings.max_similar_items)),
-            name="job.explain.max_similar_items",
+        max_similar_items=int_field(
+            raw, "job.explain.max_similar_items", ExplainSettings.max_similar_items, require_non_negative_int
         ),
-        max_attributes=require_non_negative_int(
-            int(raw.get("max_attributes", ExplainSettings.max_attributes)),
-            name="job.explain.max_attributes",
+        max_attributes=int_field(
+            raw, "job.explain.max_attributes", ExplainSettings.max_attributes, require_non_negative_int
         ),
     )
 
@@ -524,15 +521,12 @@ def load_settings(config_path: str | None = None) -> Settings:
         resolve_env=_resolve_env_placeholders,
     )
 
-    log_epoch_metrics = bool(job.get("log_epoch_metrics", False))
-
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
     sequential = job.get("sequential", {}) or {}
     legacy_k_explicit = "k_neighbors" in item_based
-    legacy_k_neighbors = require_positive_int(
-        int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
-        name="job.item_based.k_neighbors",
+    legacy_k_neighbors = int_field(
+        item_based, "job.item_based.k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS, require_positive_int
     )
 
     from cicerone.model_config import item_based_k_from_config, resolve_model_configs
@@ -578,43 +572,36 @@ def load_settings(config_path: str | None = None) -> Settings:
         input=input_settings,
         output=output_settings,
         feature_config_path=job.get("feature_config_path", DEFAULT_FEATURE_CONFIG_PATH),
-        top_k=require_positive_int(int(job.get("top_k", DEFAULT_TOP_K)), name="job.top_k"),
-        half_life_days=require_positive_float(
-            float(job.get("half_life_days", DEFAULT_HALF_LIFE_DAYS)), name="job.half_life_days"
-        ),
+        top_k=int_field(job, "job.top_k", DEFAULT_TOP_K, require_positive_int),
+        half_life_days=float_field(job, "job.half_life_days", DEFAULT_HALF_LIFE_DAYS, require_positive_float),
         cron_schedule=job.get("cron_schedule", DEFAULT_CRON_SCHEDULE),
         models=models,
         model_weights=model_weights,
         rrf_k=rrf_k,
         save_model_artifact=bool(job.get("save_model_artifact", False)),
-        max_workers=resolve_max_workers(job.get("max_workers")),
-        epoch_metrics=resolve_epoch_metrics(
-            log_epoch_metrics=log_epoch_metrics,
-            every=job.get("epoch_metrics_every"),
-            max_users=job.get("epoch_metrics_max_users"),
-            regression_drop=job.get("epoch_metrics_regression_drop"),
-            plateau_eps=job.get("epoch_metrics_plateau_eps"),
-            plateau_window=job.get("epoch_metrics_plateau_window"),
-        ),
+        max_workers=int_field(job, "job.max_workers", DEFAULT_MAX_WORKERS, require_positive_int),
+        epoch_metrics=resolve_epoch_metrics(job),
         item_based_k_neighbors=item_based_k_neighbors,
         model_configs=model_configs,
         content_fallback_enabled=bool(content_fallback.get("enabled", False)),
-        content_fallback_max_neighbors=require_positive_int(
-            int(content_fallback.get("max_neighbors", DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS)),
-            name="job.content_fallback.max_neighbors",
+        content_fallback_max_neighbors=int_field(
+            content_fallback,
+            "job.content_fallback.max_neighbors",
+            DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+            require_positive_int,
         ),
-        sequential_min_median_interactions=require_positive_int(
-            int(sequential.get("min_median_interactions", DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS)),
-            name="job.sequential.min_median_interactions",
+        sequential_min_median_interactions=int_field(
+            sequential,
+            "job.sequential.min_median_interactions",
+            DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
+            require_positive_int,
         ),
         explain=_load_explain_settings(job.get("explain", {}) or {}),
         automl=AutomlSettings(
             enabled=bool(automl.get("enabled", AutomlSettings.enabled)),
-            n_splits=require_positive_int(
-                int(automl.get("n_splits", AutomlSettings.n_splits)), name="job.automl.n_splits"
-            ),
-            test_days=require_positive_int(
-                int(automl.get("test_days", AutomlSettings.test_days)), name="job.automl.test_days"
+            n_splits=int_field(automl, "job.automl.n_splits", AutomlSettings.n_splits, require_positive_int),
+            test_days=int_field(
+                automl, "job.automl.test_days", AutomlSettings.test_days, require_positive_int
             ),
             primary_metric=automl.get("primary_metric", AutomlSettings.primary_metric),
             candidates=(
@@ -628,9 +615,11 @@ def load_settings(config_path: str | None = None) -> Settings:
             port=int(serve_raw.get("port", ServeSettings.port)),
             auth_token=serve_auth_token,
             default_k=_serve_default_k(serve_raw),
-            refresh_interval_seconds=require_positive_float(
-                float(serve_raw.get("refresh_interval_seconds", ServeSettings.refresh_interval_seconds)),
-                name="serve.refresh_interval_seconds",
+            refresh_interval_seconds=float_field(
+                serve_raw,
+                "serve.refresh_interval_seconds",
+                ServeSettings.refresh_interval_seconds,
+                require_positive_float,
             ),
             category_column=str(serve_raw.get("category_column", ServeSettings.category_column)),
             metrics_enabled=serve_metrics_enabled,
@@ -662,20 +651,24 @@ def load_settings(config_path: str | None = None) -> Settings:
             host=dashboard_raw.get("host", DashboardSettings.host),
             port=int(dashboard_raw.get("port", DashboardSettings.port)),
             users_path=dashboard_raw.get("users_path", DashboardSettings.users_path),
-            refresh_interval_seconds=require_positive_float(
-                float(
-                    dashboard_raw.get("refresh_interval_seconds", DashboardSettings.refresh_interval_seconds)
-                ),
-                name="dashboard.refresh_interval_seconds",
+            refresh_interval_seconds=float_field(
+                dashboard_raw,
+                "dashboard.refresh_interval_seconds",
+                DashboardSettings.refresh_interval_seconds,
+                require_positive_float,
             ),
-            history_limit=require_positive_int(
-                int(dashboard_raw.get("history_limit", DashboardSettings.history_limit)),
-                name="dashboard.history_limit",
+            history_limit=int_field(
+                dashboard_raw,
+                "dashboard.history_limit",
+                DashboardSettings.history_limit,
+                require_positive_int,
             ),
             lookup_k=int(dashboard_raw.get("lookup_k", DashboardSettings.lookup_k)),
-            lookup_events=require_positive_int(
-                int(dashboard_raw.get("lookup_events", DashboardSettings.lookup_events)),
-                name="dashboard.lookup_events",
+            lookup_events=int_field(
+                dashboard_raw,
+                "dashboard.lookup_events",
+                DashboardSettings.lookup_events,
+                require_positive_int,
             ),
             lookup_user_attrs=_load_lookup_user_attrs(dashboard_raw.get("lookup_user_attrs")),
         ),

@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from types import SimpleNamespace
 
+import boto3
 import pandas as pd
 import pytest
+from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from support.settings import make_settings
@@ -31,6 +33,19 @@ def _disable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _READ_S3_PARQUET_PYARROW)
+
+
+@pytest.fixture
+def s3_options() -> Iterator[dict[str, str]]:
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="test-bucket")
+        yield {
+            "storage_backend": "s3",
+            "access_key_id": "test",
+            "secret_access_key": "test",
+            "bucket": "test-bucket",
+            "prefix": "recommendations/latest",
+        }
 
 
 @pytest.fixture(autouse=True)
