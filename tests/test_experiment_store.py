@@ -138,6 +138,7 @@ def test_experiment_db_engine_checked_out_once_under_concurrent_first_use(tmp_pa
     for thread in threads:
         thread.join()
     assert calls == [url]
+    assert len(seen) == 4
     assert len({id(engine) for engine in seen}) == 1
 
 

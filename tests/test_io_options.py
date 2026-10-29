@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import errno
 
+import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 from pyarrow.lib import ArrowInvalid
-from support.fakes import FakeS3Body
+from support.fakes import FakeS3Body, patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.options import (
@@ -16,6 +17,7 @@ from cicerone.io.options import (
     exclusive_file_lock,
     is_s3_not_found,
     object_key,
+    read_parquet_pushdown,
     read_s3_body,
     readonly_select,
     storage_backend,
@@ -482,3 +484,34 @@ def test_build_s3_client_uses_configured_region(mocker):
         is client
     )
     assert ctor.call_args.kwargs["region_name"] == "eu-west-1"
+
+
+def test_read_parquet_pushdown_falls_back_to_a_full_read(tmp_path, monkeypatch):
+    pd.DataFrame({"item_id": ["a"], "extra": [1]}).to_parquet(tmp_path / "items.parquet", index=False)
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    calls = patch_parquet_reads(monkeypatch, pushdown_error=ValueError("no projection"))
+    frame = read_parquet_pushdown(options, "items.parquet", columns=["item_id"])
+    assert list(frame.columns) == ["item_id", "extra"]
+    assert calls == [{"columns": ["item_id"], "filters": None}, {"columns": None, "filters": None}]
+
+
+def test_read_parquet_pushdown_falls_back_on_a_missing_projected_column(tmp_path):
+    pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items.parquet", index=False)
+    options = {"storage_backend": "local", "path": str(tmp_path)}
+    frame = read_parquet_pushdown(options, "items.parquet", columns=["item_id", "variant"])
+    assert list(frame.columns) == ["item_id"]
+
+
+def test_read_parquet_pushdown_raises_errors_unrelated_to_pushdown(tmp_path, monkeypatch):
+    calls = []
+
+    def boom(*args, **_kwargs):
+        calls.append(args)
+        raise ValueError("file too large")
+
+    monkeypatch.setattr("cicerone.io.options.read_parquet", boom)
+    with pytest.raises(ValueError, match="file too large"):
+        read_parquet_pushdown(
+            {"storage_backend": "local", "path": str(tmp_path)}, "items.parquet", columns=["item_id"]
+        )
+    assert len(calls) == 1

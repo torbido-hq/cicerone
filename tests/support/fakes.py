@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pandas as pd
@@ -11,6 +12,27 @@ import pytest
 
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
+
+
+class RecordingConnection:
+    """Records executed SQL; ``begin`` and ``begin_nested`` are no-op transactions."""
+
+    def __init__(self, dialect: Any) -> None:
+        self.dialect = dialect
+        self.sql: list[str] = []
+
+    @contextmanager
+    def begin(self) -> Iterator[RecordingConnection]:
+        yield self
+
+    def begin_nested(self) -> RecordingConnection:
+        return self
+
+    def commit(self) -> None:
+        pass
+
+    def execute(self, statement: Any) -> None:
+        self.sql.append(str(statement))
 
 
 class FakeS3Body:
@@ -38,6 +60,25 @@ class FakeS3Client:
 
     def get_object(self, **_kwargs: Any) -> dict[str, Any]:
         return {"Body": self.body}
+
+
+def patch_parquet_reads(
+    monkeypatch: Any, *, pushdown_error: BaseException | None = None
+) -> list[dict[str, Any]]:
+    """Record ``read_parquet`` calls; raise ``pushdown_error`` on reads with columns or filters."""
+    from cicerone.io import options as io_options
+
+    real = io_options.read_parquet
+    calls: list[dict[str, Any]] = []
+
+    def read(options: dict[str, Any], filename: str, *, columns: Any = None, filters: Any = None) -> Any:
+        calls.append({"columns": columns, "filters": filters})
+        if pushdown_error is not None and (columns is not None or filters is not None):
+            raise pushdown_error
+        return real(options, filename, columns=columns, filters=filters)
+
+    monkeypatch.setattr(io_options, "read_parquet", read)
+    return calls
 
 
 def hide_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:

@@ -41,9 +41,10 @@ updates:
       # (rectools/lightfm/scipy pins) against the new interpreter first —
       # see PR #5, closed because rectools==0.19.0 requires Python<3.14.
       # Bump these manually alongside the pinned deps in
-      # requirements.txt instead of accepting an automated PR.
+      # requirements.txt instead of accepting an automated PR. Minor bumps
+      # too: #419 (3.11 -> 3.15) failed because rectools==0.19.0 needs <3.14.
       - dependency-name: "python"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

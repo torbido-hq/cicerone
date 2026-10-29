@@ -32,26 +32,3 @@ def dataset_updater(tmp_path, feature_config, **kwargs):  # type: ignore[no-unty
         sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
     )
     return settings, sink, updater
-
-
-def record_durable_write_steps(monkeypatch) -> list[str]:
-    """Record fsync(file) / replace / fsync(dir) order of state-file writes."""
-    import os
-    import stat
-    from pathlib import Path
-
-    steps: list[str] = []
-    real_fsync = os.fsync
-    real_replace = Path.replace
-
-    def _fsync(fd: int) -> None:
-        steps.append("fsync_dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "fsync_file")
-        real_fsync(fd)
-
-    def _replace(self: Path, target):
-        steps.append("replace")
-        return real_replace(self, target)
-
-    monkeypatch.setattr(os, "fsync", _fsync)
-    monkeypatch.setattr(Path, "replace", _replace)
-    return steps
