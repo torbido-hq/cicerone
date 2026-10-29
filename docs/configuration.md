@@ -53,6 +53,9 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 
 The db events source and the track, eval and experiment-state tables
 support Postgres and SQLite, not MySQL.
+On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
+must use a transactional engine (InnoDB): a full write empties them with
+`DELETE` and rolls back on failure.
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
@@ -121,7 +124,9 @@ Required `auth_token` when `job.mode = "serve"`.
 
 `GET /recommendations/{user_id}` is a lookup of materialized rows. It does
 not fit a model. **200** returns the object; **401** missing/invalid
-bearer; **404** no rows and no fallback. Dataset vs DB visibility:
+bearer; **404** no rows and no fallback. User ids containing `/` are
+not supported (an encoded `%2F` is decoded before routing and still
+404s). Dataset vs DB visibility:
 [how-it-works.md](how-it-works.md#what-get-recommendations-does).
 
 ## `[events]`
