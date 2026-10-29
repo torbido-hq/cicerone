@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from rectools import Columns
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.automl import (
     Candidate,
@@ -35,22 +35,6 @@ requires_sequential_extra = pytest.mark.skipif(
     not sequential_extra_available(),
     reason="requires cicerone-recommender[sequential] (rectools[torch])",
 )
-
-
-def _minimal_io_toml() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-    """
 
 
 def _sequence_events(n_items: int = 6, n_users: int = 4) -> pd.DataFrame:
@@ -198,7 +182,7 @@ def test_toml_architecture_selects_cls(tmp_path, architecture, expected_cls):
         loss = "softmax"
         session_max_len = 8
         train_min_user_interactions = 2
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)

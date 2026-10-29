@@ -230,16 +230,8 @@ def test_assignment_overlay_reraises_type_error(tmp_path, monkeypatch) -> None:
         store.assignment_overlay("exp")
 
 
-def test_append_exposures_rejects_object_store() -> None:
-    output = IOSettings(
-        kind="dataset",
-        options={
-            "storage_backend": "s3",
-            "bucket": "recs",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-        },
-    )
+def test_append_exposures_rejects_object_store(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
     store = ExperimentStore(output)
     with pytest.raises(ConfigError, match="not atomic"):
         store.append_exposures(
@@ -783,54 +775,30 @@ def test_append_exposures_empty_is_noop(tmp_path) -> None:
     assert not (tmp_path / "exposures.jsonl").exists()
 
 
-def test_experiment_store_state_roundtrip_s3() -> None:
-    import boto3
-    from moto import mock_aws
-
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-                "prefix": "out",
-            },
-        )
-        store = ExperimentStore(output)
-        assert store.read_state() is None
-        store.write_state(experiment_state("exp", promoted_variant="treatment"))
-        state = store.read_state()
-        assert state is not None
-        assert state["promoted_variant"] == "treatment"
+def test_experiment_store_state_roundtrip_s3(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
+    store = ExperimentStore(output)
+    assert store.read_state() is None
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
 
 
-def test_experiment_store_s3_unexpected_read_reraises(monkeypatch) -> None:
+def test_experiment_store_s3_unexpected_read_reraises(monkeypatch, s3_options) -> None:
     class _Boom:
         def get_object(self, **_kwargs):
             raise RuntimeError("network")
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
-    store = ExperimentStore(
-        IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-    )
+    store = ExperimentStore(IOSettings(kind="dataset", options=s3_options))
     with pytest.raises(RuntimeError, match="network"):
         store.read_state()
     with pytest.raises(RuntimeError, match="network"):
         store.read_exposures()
 
 
-def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
+def test_experiment_store_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
     from botocore.exceptions import ClientError
 
     class _Denied:
@@ -838,17 +806,7 @@ def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
-    store = ExperimentStore(
-        IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-    )
+    store = ExperimentStore(IOSettings(kind="dataset", options=s3_options))
     with pytest.raises(ClientError, match="AccessDenied"):
         store.read_state()
     with pytest.raises(ClientError, match="AccessDenied"):

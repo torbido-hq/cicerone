@@ -112,19 +112,19 @@ def window_trials_from_slices(
 def track_rows_since(
     rows: Sequence[Mapping[str, Any]],
     started_at: str | None,
+    *,
+    until: datetime,
 ) -> list[dict[str, Any]]:
-    if not started_at:
-        return [dict(row) for row in rows]
-    stamp = pd.to_datetime(started_at, utc=True, errors="coerce")
-    if pd.isna(stamp):
+    """Rows with ``occurred_at`` in ``[started_at, until)``; ``until`` starts the next window."""
+    stamp = pd.to_datetime(started_at, utc=True, errors="coerce") if started_at else None
+    if started_at and pd.isna(stamp):
         return []
     out: list[dict[str, Any]] = []
     for row in rows:
         when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if pd.isna(when):
+        if pd.isna(when) or when >= until or (stamp is not None and when < stamp):
             continue
-        if when >= stamp:
-            out.append(dict(row))
+        out.append(dict(row))
     return out
 
 

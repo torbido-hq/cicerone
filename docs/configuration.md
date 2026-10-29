@@ -51,6 +51,9 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `incremental_applied_events` (incremental event keys, see
 [incremental events](incremental-events.md)).
 
+The db events source and the track, eval and experiment-state tables
+support Postgres and SQLite, not MySQL.
+
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
 requires the table (use a placeholder path).
