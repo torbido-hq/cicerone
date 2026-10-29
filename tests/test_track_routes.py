@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
+from support.fakes import FakeReader, raising
 from support.settings import make_settings
-from test_serve import _FakeReader, _recs_df
+from test_serve import _recs_df
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.serve import create_app
 from cicerone.serve_schemas import ValidationErrorDetail
 from cicerone.track.store import TrackStore
@@ -37,7 +41,7 @@ def _impression(**overrides):
 
 
 def test_post_track_single_and_batch(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     single = client.post("/track", headers=headers, json=_impression())
@@ -73,7 +77,7 @@ def test_post_track_increments_prometheus(tmp_path):
         "cicerone_track_ingest_total",
         {"kind": "impression", "status": "accepted"},
     )
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     assert client.post("/track", headers=headers, json=_impression()).status_code == 202
@@ -95,7 +99,7 @@ def test_post_track_increments_prometheus(tmp_path):
 
 
 def test_post_track_auth_and_validation(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
     assert client.post("/track", json=_impression()).status_code == 401
     bad = client.post(
@@ -114,14 +118,14 @@ def test_post_track_counts_malformed_body_as_error_once(tmp_path):
 
     labels = {"kind": "other", "status": "error"}
     before = registry_metric_value("cicerone_track_ingest_total", labels)
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json="nope")
     assert response.status_code == 400
     assert registry_metric_value("cicerone_track_ingest_total", labels) == before + 1
 
 
 def test_post_track_normalization_error_returns_400(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
@@ -132,7 +136,7 @@ def test_post_track_normalization_error_returns_400(tmp_path):
 
 
 def test_post_track_idempotent(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     from prometheus_client import generate_latest
@@ -162,7 +166,7 @@ def test_post_track_counts_accepted_kinds_in_mixed_partial_batch(tmp_path):
     from prometheus_client import generate_latest
     from support.prometheus_metrics import metric_value
 
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     client.post("/track", headers=headers, json=_impression())
@@ -225,7 +229,7 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
         "cicerone_track_ingest_total",
         {"kind": "other", "status": "error"},
     )
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app, raise_server_exceptions=False).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
@@ -240,21 +244,31 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
     assert after == before + 1
 
 
-def test_post_track_returns_503_when_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.locks import WriterLockBusyError
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        (WriterLockBusyError("dataset writer lock busy"), "Writer lock is busy"),
+        (LockLostError("dataset writer lock lost before write", kind="writer"), "Writer lock was lost"),
+        (OSError("disk full"), "Track store unavailable"),
+        (OperationalError("INSERT", {}, Exception("db down")), "Track store unavailable"),
+    ],
+)
+def test_post_track_returns_503_when_store_unavailable(tmp_path, monkeypatch, error, detail):
+    from prometheus_client import generate_latest
+    from support.prometheus_metrics import metric_value
 
-    monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_accepted_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
-    )
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", raising(error))
+    labels = {"kind": "other", "status": "error"}
+    before = metric_value(generate_latest().decode(), "cicerone_track_ingest_total", labels)
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app, raise_server_exceptions=False).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
         json=_impression(),
     )
     assert response.status_code == 503
-    assert response.json()["detail"] == "Writer lock is busy"
+    assert response.json()["detail"] == detail
+    assert metric_value(generate_latest().decode(), "cicerone_track_ingest_total", labels) == before + 1
 
 
 def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
@@ -268,7 +282,7 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
         return [dict(row) for row in rows]
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _slow_append)
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
 
     @app.get("/__probe")
     async def _probe() -> dict[str, bool]:
@@ -289,25 +303,6 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
     asyncio.run(_run())
 
 
-def test_post_track_returns_503_when_writer_lock_lost(tmp_path, monkeypatch):
-    from cicerone.locks import LockLostError
-
-    monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_accepted_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            LockLostError("dataset writer lock lost before write", kind="writer")
-        ),
-    )
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
-    response = TestClient(app, raise_server_exceptions=False).post(
-        "/track",
-        headers={"Authorization": "Bearer secret"},
-        json=_impression(),
-    )
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Writer lock was lost"
-
-
 def test_track_route_absent_when_disabled(tmp_path):
     app = create_app(
         make_settings(
@@ -315,7 +310,7 @@ def test_track_route_absent_when_disabled(tmp_path):
             serve_auth_token="secret",
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         ),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
     )
     client = TestClient(app)
     denied = client.post("/track", headers={"Authorization": "Bearer secret"}, json=_impression())
@@ -326,7 +321,7 @@ def test_track_rows_never_enter_event_source(tmp_path):
     source = WebhookEventSource({})
     app = create_app(
         _settings(tmp_path, events=EventsSettings(enabled=True, kind="webhook")),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
         event_source=source,
     )
     response = TestClient(app).post(
@@ -340,7 +335,7 @@ def test_track_rows_never_enter_event_source(tmp_path):
 
 
 def test_track_openapi_documents_structured_validation_400(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     schema = TestClient(app).get("/openapi.json").json()
     assert "TrackEvent" in schema["components"]["schemas"]
     assert "TrackIngestRequest" in schema["components"]["schemas"]
@@ -359,7 +354,7 @@ def test_track_openapi_documents_structured_validation_400(tmp_path):
 
 
 def test_post_track_non_json_payload(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     resp = TestClient(app).post(
         "/track",
         headers={"Authorization": "Bearer secret", "Content-Type": "text/plain"},
@@ -372,7 +367,7 @@ def test_post_track_non_json_payload(tmp_path):
 def test_post_track_rejects_oversized_body(tmp_path):
     app = create_app(
         _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
     )
     response = TestClient(app).post(
         "/track",
@@ -384,7 +379,7 @@ def test_post_track_rejects_oversized_body(tmp_path):
 
 
 def test_post_track_rejects_deeply_nested_json(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     nested = b"[" * 3000 + b"0" + b"]" * 3000
     response = TestClient(app).post(
         "/track",
@@ -398,7 +393,7 @@ def test_post_track_rejects_deeply_nested_json(tmp_path):
 def test_post_track_rejects_oversized_content_length(tmp_path):
     app = create_app(
         _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
-        _FakeReader(_recs_df()),
+        FakeReader(_recs_df()),
     )
     response = TestClient(app).post(
         "/track",
@@ -413,13 +408,13 @@ def test_post_track_rejects_oversized_content_length(tmp_path):
 
 
 def test_get_does_not_log_impressions_by_default(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert TrackStore(_settings(tmp_path).output).read_rows() == []
 
 
 def test_get_log_impressions_when_enabled(tmp_path):
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     rows = TrackStore(_settings(tmp_path).output).read_rows()
     assert {row["kind"] for row in rows} == {"impression"}
@@ -429,7 +424,6 @@ def test_get_log_impressions_when_enabled(tmp_path):
 
 
 def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.locks import WriterLockBusyError
     from cicerone.serve import app as serve_app
 
     calls = {"n": 0}
@@ -443,7 +437,7 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
     monkeypatch.setattr(serve_app.time, "sleep", lambda _seconds: None)
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
     response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert calls["n"] == 3
@@ -454,7 +448,7 @@ def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):
         "cicerone.track.store.TrackStore.append_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("store")),
     )
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), _FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
     response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert response.json()["items"]

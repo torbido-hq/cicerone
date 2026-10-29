@@ -92,6 +92,13 @@ def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str
     return None
 
 
+def _promote_base_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+    # Thompson state must come from a fresh read: a fallback would overwrite it with stale or no arms.
+    if settings.experiment.allocation == ALLOCATION_THOMPSON:
+        return _fresh_matched_state(settings, store)
+    return _matched_state(settings, store)
+
+
 def _live_thompson_pair(
     state: Mapping[str, Any] | None,
     names: set[str],
@@ -438,11 +445,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return f"Winner is {report.winner!r}, not {variant!r}"
 
     def _payload(store: ExperimentStore) -> dict[str, Any]:
-        state = (
-            _fresh_matched_state(settings, store)
-            if settings.experiment.allocation == ALLOCATION_THOMPSON
-            else _matched_state(settings, store)
-        )
+        state = _promote_base_state(settings, store)
         if settings.experiment.allocation == ALLOCATION_THOMPSON:
             error = _thompson_promote_error(variant, state, pair_names)
             if error:
@@ -462,7 +465,7 @@ def clear_promotion(settings: Settings) -> str | None:
     return _publish_experiment_state(
         settings,
         lambda store: merge_experiment_state(
-            _matched_state(settings, store),
+            _promote_base_state(settings, store),
             experiment_id=settings.experiment.id,
             promoted_variant=None,
         ),

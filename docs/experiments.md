@@ -91,6 +91,12 @@ CVR (`primary_metric = "conversion"` with `attribution = "click"` or
 Serve still hashes the user onto the active pair (or 100% to a **Ship** /
 Promote winner).
 
+Each run adds the track rows with `occurred_at` in `[previous run, this run)`
+to the posteriors. A row stored after its window was counted (late delivery,
+or a conversion after its impression was counted) is not counted later.
+With no stored champion/challenger pair (first run) the window has no lower
+bound; a stored pair without `window_started_at` counts no rows that run.
+
 Requires `[track]` and `pip install 'cicerone-recommender[bandits]'` (Fidelity
 [MABWiser](https://github.com/fidelity/mabwiser) `LearningPolicy.ThompsonSampling()`).
 Config load is a `ConfigError` without the extra or with track off. At runtime
@@ -204,7 +210,9 @@ assigned list (no `/track`). See [evaluation.md](evaluation.md).
 The dashboard **Experiments** page (`GET /dashboard/experiments`) shows:
 
 - Approximate mixture CIs on the primary metric (a LIL-style radius for
-  peeking — not a full anytime-valid CS for heavy-tailed outcomes).
+  peeking — not a full anytime-valid CS for heavy-tailed outcomes). With
+  `[track]` on, the test does not decide until each arm has at least
+  `track.min_impressions` users.
   Intention-to-treat on users who appear in the event window, or
   exposure-conditional when `log_exposures` is on (rows must match this
   `experiment_id`).

@@ -210,7 +210,8 @@ delivered in cursor order as a rejected event: the worker does not apply it,
 logs it once by its identity columns only, and acks it with its batch, so the
 watermark moves past it like any other row. Fixing it in place later does not
 replay it. A row whose own `occurred_at` can't be parsed can't be placed on the
-cursor; it is logged each time it is fetched.
+cursor; it is logged each time it is fetched, and a fetch page made only of
+such rows stalls the source until they are fixed or given an offset.
 
 ### `s3`
 

@@ -51,11 +51,8 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `incremental_applied_events` (incremental event keys, see
 [incremental events](incremental-events.md)).
 
-On MySQL, run in strict SQL mode (the default since 5.7) so an over-long
-value errors instead of being truncated. Track and experiment-state keys
-are `VARCHAR(255)` with a binary (case-sensitive) collation. Tables
-cicerone creates are used as created; extra unique indexes on them are not
-supported.
+The db events source and the track, eval and experiment-state tables
+support Postgres and SQLite, not MySQL.
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
@@ -170,7 +167,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused) |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
-| `min_impressions` | `100` | Gates Promote / Thompson volume. Does **not** change the CTR formula |
+| `min_impressions` | `100` | Gates Promote / Thompson volume; the sequential test needs this many users per arm. Does **not** change the CTR formula |
 
 `kind` is `impression` or `click` only. Details:
 [evaluation.md](evaluation.md).

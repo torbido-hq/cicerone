@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
@@ -51,20 +54,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
-- Dataset user lookups (serve history, `get_user`) work when `user_id` is
-  stored as an integer column instead of failing the filtered read.
+- The dashboard user lookup on dataset storage (history pane, `get_user`)
+  works when `user_id` is stored as an integer column instead of failing
+  the filtered read.
 - `replace_model_artifact_if` on SQLite db output matches the artifact
   fingerprint it hands out instead of never swapping.
+- Tracking conversion counts and CVR count each converted impression once,
+  as CTR does, so repeat conversions or several converting clicks on one
+  recommendation no longer inflate them (overall, per rank/source/variant,
+  experiment outcomes and Thompson arms).
+- Tracking metrics, experiment outcomes and Thompson arms leave out
+  impressions, clicks and conversions with a future `occurred_at` until
+  that time has passed, so Thompson no longer counts them twice.
+- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
+  is unset, so a quiet stream no longer parks the event worker. An
+  explicit `block_ms = 0` keeps that behaviour and logs a warning.
+- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
+  rejected as invalid instead of stopping the event worker.
+- An invalid db event row no longer stops the worker: it is delivered in
+  order as a rejected event, logged once by its identity columns only, and
+  acked with its batch without being applied.
+- db source health no longer fails on a row with an unparseable
+  `occurred_at`.
 - SQL statements quote table and column names the way the database dialect
-  does. A mixed-case `recommendations_table` on Postgres no longer keeps a
-  user's old rows on incremental replace, and identifiers use backticks on
-  MySQL instead of double quotes. A full recommendations write on MySQL
-  empties the table with `DELETE` (a `TRUNCATE` commits implicitly there),
-  and the track, eval and experiment-state tables can be created and
-  written on MySQL (key columns of up to 255 characters; a longer key is
-  rejected, not truncated).
-- The db events source polls tables whose `occurred_at` / `event_id`
-  columns are mixed case on Postgres.
+  does. On Postgres a mixed-case `recommendations_table` no longer keeps a
+  user's old rows on incremental replace, and the events worker's reads of
+  it (recommendations, user count, catalog size, guardrail rows) no longer
+  come back empty. Identifiers use backticks on MySQL instead of double
+  quotes. A configured table name now has to match the table's case: an
+  `events_table = "Events"` no longer finds a lowercase `events` table.
+- The db events source polls tables with mixed-case columns on Postgres.
+- Docs: the db events source and the track, eval and experiment-state
+  tables support Postgres and SQLite, not MySQL.
 - The db events watermark is renamed into place before its directory is
   fsynced, so a crash cannot lose the update (shared with the s3 list
   marker write).
@@ -80,16 +101,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an `error` in `cicerone_track_ingest_total`.
 - The missing feature column warning names `user_features` or
   `item_features`.
-- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
-  is unset, so a quiet stream no longer parks the event worker. An
-  explicit `block_ms = 0` keeps that behaviour and logs a warning.
-- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
-  rejected as invalid instead of stopping the event worker.
-- An invalid db event row no longer stops the worker: it is delivered in
-  order as a rejected event, logged once by its identity columns only, and
-  acked with its batch without being applied.
-- db source health no longer fails on a row with an unparseable
-  `occurred_at`.
+- The experiment sequential test does not decide until each arm has at
+  least `track.min_impressions` users (with `[track]` on), instead of
+  deciding on two users per arm.
+- `POST /track` returns **503** "Track store unavailable" instead of
+  **500** when the track store is unavailable or failing (any storage or
+  database error).
 - The Kafka event source drops the deliveries of partitions revoked or lost
   in a group rebalance, so their acks no longer commit offsets for another
   member or fail every worker tick, and the redelivered messages are not

@@ -15,11 +15,11 @@ from cicerone.track.store_common import (
     HISTORY_COLUMNS,
     HISTORY_DIR,
     TRACK_FILENAME,
+    TRACK_LOG_BACKEND_ERROR,
     TRACK_LOG_HA_ERROR,
+    empty_history_frame,
     history_frame,
     iso_utc,
-    jsonish,
-    require_appendable_track_log,
     row_with_event_id,
 )
 from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
@@ -32,14 +32,13 @@ __all__ = [
     "HISTORY_COLUMNS",
     "HISTORY_DIR",
     "TRACK_FILENAME",
+    "TRACK_LOG_BACKEND_ERROR",
     "TRACK_LOG_HA_ERROR",
     "TrackBackend",
     "TrackStore",
     "build_track_backend",
     "history_frame",
     "history_part_name",
-    "jsonish",
-    "require_appendable_track_log",
 ]
 
 
@@ -125,5 +124,5 @@ class TrackStore:
         if wanted is not None:
             wanted.discard("")
             if not wanted:
-                return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+                return empty_history_frame()
         return self.backend.read_history(generated_ats=wanted, since=iso_utc(since))

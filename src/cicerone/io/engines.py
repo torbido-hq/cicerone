@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import sqlalchemy
-from sqlalchemy import Connection, Engine, Insert, String, Table, Text
-from sqlalchemy.dialects.mysql import insert as mysql_insert
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import Connection, Engine
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -32,21 +29,17 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
     return bind.dialect.identifier_preparer.quote(name)
 
 
-# MySQL can't index TEXT without a length; binary collation keeps keys case-sensitive as elsewhere.
-TEXT_KEY = Text().with_variant(String(255, collation="utf8mb4_bin"), "mysql")
+def create_table_sql(bind: Engine | Connection, table: str, columns: Sequence[tuple[str, str]]) -> str:
+    """``CREATE TABLE IF NOT EXISTS`` for ``(name, type)`` columns, every identifier quoted."""
+    spec = ", ".join(f"{quote_identifier(bind, name)} {kind}" for name, kind in columns)
+    return f"CREATE TABLE IF NOT EXISTS {quote_identifier(bind, table)} ({spec})"
 
 
-def insert_ignoring_duplicates(bind: Engine | Connection, table: Table) -> Insert:
-    """INSERT that skips rows whose primary key already exists, in the dialect's own syntax."""
-    dialect = bind.dialect.name
-    if dialect == "postgresql":
-        return postgresql_insert(table).on_conflict_do_nothing()
-    if dialect == "sqlite":
-        return sqlite_insert(table).on_conflict_do_nothing()
-    # Not INSERT IGNORE: that also turns truncation and other errors into warnings.
-    statement = mysql_insert(table)
-    key = next(iter(table.primary_key)).name
-    return statement.on_duplicate_key_update({key: statement.inserted[key]})
+def insert_sql(bind: Engine | Connection, table: str, names: Sequence[str]) -> str:
+    """``INSERT`` of one row bound by column name (``:name``), every identifier quoted."""
+    columns = ", ".join(quote_identifier(bind, name) for name in names)
+    values = ", ".join(f":{name}" for name in names)
+    return f"INSERT INTO {quote_identifier(bind, table)} ({columns}) VALUES ({values})"
 
 
 def sql_source(bind: Engine | Connection, query: str | None, table: str, alias: str) -> str:
