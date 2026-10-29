@@ -53,6 +53,9 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 
 The db events source and the track, eval and experiment-state tables
 support Postgres and SQLite, not MySQL.
+On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
+must use a transactional engine (InnoDB): a full write empties them with
+`DELETE` and rolls back on failure.
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
