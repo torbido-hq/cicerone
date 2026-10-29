@@ -1522,4 +1522,4 @@ def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
 
 def test_make_settings_rejects_unknown_mode():
     with pytest.raises(ConfigError, match="job.mode must be one of"):
-        make_settings(mode="Serve")
+        make_settings(mode="not_a_mode")
