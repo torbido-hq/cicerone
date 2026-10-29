@@ -248,6 +248,8 @@ def _load_io_settings(section: dict[str, Any] | None, section_name: str) -> IOSe
 
 def _load_sections(sections: dict[str, Any], mode: str) -> dict[str, Any]:
     """Settings sections from TOML-shaped tables, keyed by ``Settings`` field name."""
+    if mode not in MODES:
+        raise ConfigError(f"job.mode must be one of {list(MODES)}, got {mode!r}")
     serve = _load_serve_settings(sections["serve"], mode)
     return {
         "input": _load_io_settings(sections["input"], "input"),
@@ -479,8 +481,6 @@ def load_settings(config_path: str | None = None) -> Settings:
     validate_rrf_k(rrf_k, context="job.rrf_k")
 
     mode = str(job.get("mode", DEFAULT_MODE)).lower()
-    if mode not in MODES:
-        raise ConfigError(f"job.mode must be one of {list(MODES)}, got {mode!r}")
 
     sections = _load_sections(
         {

@@ -9,6 +9,7 @@ from cicerone.config import (
     ConfigError,
     EpochMetricsSettings,
     load_settings,
+    make_settings,
     resolve_epoch_metrics,
 )
 
@@ -1517,3 +1518,8 @@ def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
     config_path = write_toml(tmp_path, f"{_base_io_toml()}\n{toml}\n")
     with pytest.raises(ConfigError, match=message):
         load_settings(config_path)
+
+
+def test_make_settings_rejects_unknown_mode():
+    with pytest.raises(ConfigError, match="job.mode must be one of"):
+        make_settings(mode="Serve")
