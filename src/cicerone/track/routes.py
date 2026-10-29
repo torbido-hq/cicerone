@@ -89,8 +89,8 @@ def mount_track_routes(
         except HTTPException:
             record_track_ingest(kind="other", status="error")
             raise
-        payloads = payloads_from_body(body)
         try:
+            payloads = payloads_from_body(body)
             if isinstance(body, dict) and "events" in body:
                 TrackIngestRequest.model_validate(body)
             else:

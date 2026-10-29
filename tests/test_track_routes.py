@@ -110,6 +110,17 @@ def test_post_track_auth_and_validation(tmp_path):
     ValidationErrorDetail.model_validate({"detail": detail})
 
 
+def test_post_track_counts_malformed_body_as_error_once(tmp_path):
+    from support.prometheus_metrics import registry_metric_value
+
+    labels = {"kind": "other", "status": "error"}
+    before = registry_metric_value("cicerone_track_ingest_total", labels)
+    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json="nope")
+    assert response.status_code == 400
+    assert registry_metric_value("cicerone_track_ingest_total", labels) == before + 1
+
+
 def test_post_track_normalization_error_returns_400(tmp_path):
     app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     response = TestClient(app).post(

@@ -159,13 +159,16 @@ def _manifest_column_type(value: Any) -> Any:
 
 
 def _clear_table_for_replace(conn, table: str) -> None:
-    """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
+    """Empty ``table`` before a full rewrite: TRUNCATE then DELETE, or DELETE only on MySQL/MariaDB.
 
     Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
     savepoint and then appending would duplicate rows, so DELETE is tried next.
-    If the table does not exist yet, both fail and ``to_sql`` creates it.
+    MySQL/MariaDB TRUNCATE commits implicitly, so a failed rewrite could not roll back.
+    If the table does not exist yet, every attempt fails and ``to_sql`` creates it.
     """
-    for verb in ("TRUNCATE TABLE", "DELETE FROM"):
+    mysql_family = conn.dialect.name in ("mysql", "mariadb")
+    verbs = ("DELETE FROM",) if mysql_family else ("TRUNCATE TABLE", "DELETE FROM")
+    for verb in verbs:
         savepoint = conn.begin_nested()
         try:
             conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
@@ -331,13 +334,9 @@ class DatabaseOutputSink:
             )
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
-            # Keys go first, in their own commit: MySQL's TRUNCATE commits implicitly, so a failed insert
-            # after it could otherwise roll the key delete back while the rows stay gone.
             with self._engine.begin() as conn:
                 self._ensure_fence()
                 self._clear_applied_keys(conn, table)
-            with self._engine.begin() as conn:
-                self._ensure_fence()
                 _clear_table_for_replace(conn, table)
                 self._ensure_fence()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
