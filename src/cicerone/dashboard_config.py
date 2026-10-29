@@ -143,7 +143,6 @@ HINTS: dict[str, dict[str, str]] = {
         "text": "Write one impression row per returned GET item. Not a browser render.",
         "docs": f"{_DOCS}/evaluation/#auto-impressions",
     },
-    "serve.enabled": {"text": "Whether this config starts the serve API."},
     "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
     "serve.default_k": {"text": "Default number of rows when the client omits limit."},
     "serve.metrics_enabled": {"text": "Expose Prometheus metrics on the serve process."},
