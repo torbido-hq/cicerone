@@ -31,6 +31,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A Kafka message whose `event_id` is `0` gets the stable
+  partition-offset id like a missing one, instead of a random id that
+  broke duplicate detection on redelivery.
+- S3 and db events whose `event_id` is empty and whose
+  `idempotency_key` is `0` or `false` get their stable fallback id,
+  instead of all sharing the id `"0"` or `"False"` and being dropped as
+  duplicates.
+- The db events watermark file syncs its directory after the rename, as
+  the S3 list marker already did, and both sync a newly created
+  positions directory into its parent, so the saved position survives a
+  crash.
 - Dashboard **Resume split** under Thompson allocation fails with
   "Experiment state could not be read" when the state read fails, instead
   of overwriting the stored champion, challenger and arms.

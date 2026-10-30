@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import normalize_event, parse_occurred_at
+from cicerone.events.normalize import normalize_event, parse_occurred_at, supplied_event_id
 from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
@@ -140,9 +140,9 @@ def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[
 
 
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    if existing not in (None, ""):
-        return str(existing)
+    existing = supplied_event_id(payload)
+    if existing is not None:
+        return existing
     identity = _row_identity(payload)
     if identity is not None:
         return identity

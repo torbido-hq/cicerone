@@ -10,7 +10,7 @@ from typing import Any
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import RedisError
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
 from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 if entry_id in self._held_entries:
                     continue
             payload = {str(key): value for key, value in fields.items()}
-            if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
+            if supplied_event_id(payload) is None:
                 payload["event_id"] = entry_id
             try:
                 event = normalize_event(payload)
