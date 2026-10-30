@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,16 +30,44 @@ def _write_config(tmp_path, cron_schedule: str) -> str:
     return str(config_path)
 
 
-def test_seconds_until_next_run_is_positive_and_bounded():
+def test_next_run_is_positive_and_bounded():
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    seconds = scheduler._seconds_until_next_run("0 3 * * *", now)
+    seconds = (scheduler._next_run("0 3 * * *", now, now) - now).total_seconds()
     assert 0 < seconds <= 24 * 3600
 
 
-def test_seconds_until_next_run_at_exact_schedule_time_is_about_a_day():
+def test_next_run_at_exact_schedule_time_is_about_a_day():
     now = datetime(2026, 1, 1, 3, 0, 0, tzinfo=UTC)
-    seconds = scheduler._seconds_until_next_run("0 3 * * *", now)
+    seconds = (scheduler._next_run("0 3 * * *", now, now) - now).total_seconds()
     assert seconds == pytest.approx(24 * 3600, abs=1)
+
+
+def test_cron_loop_does_not_rerun_a_tick_after_the_clock_steps_back(monkeypatch):
+    fired = datetime(2026, 1, 1, 3, 0, 0, tzinfo=UTC)
+    clock = iter(
+        [fired - timedelta(minutes=1), fired - timedelta(minutes=1), fired - timedelta(milliseconds=5)]
+    )
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(clock)
+
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise SystemExit
+
+    runs: list[None] = []
+    monkeypatch.setattr(scheduler, "datetime", _Clock)
+    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        scheduler._cron_loop("0 3 * * *", lambda: runs.append(None))
+    assert runs == [None]
+    assert sleeps[0] == pytest.approx(60)
+    assert sleeps[1] == pytest.approx(24 * 3600, abs=1)
 
 
 def test_main_raises_on_invalid_cron_schedule(tmp_path, monkeypatch):
