@@ -17,7 +17,7 @@ from cicerone.config import (
     IOSettings,
     resolve_postgres_lock_url,
 )
-from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
+from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS, DEFAULT_LOCK_KEY
 from cicerone.locks import (
     REDIS_LOCK_TTL_MS,
     LockLostError,
@@ -119,16 +119,9 @@ def test_build_redis_lock_without_url_is_programming_error():
 
 
 def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
-    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2
-
-    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
-    assert advisory_keys_from_lock_key("other-job") != (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
+    default_keys = advisory_keys_from_lock_key(DEFAULT_LOCK_KEY)
+    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == default_keys
+    assert advisory_keys_from_lock_key("other-job") != default_keys
 
 
 def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):

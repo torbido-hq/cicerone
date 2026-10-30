@@ -335,11 +335,12 @@ def test_database_output_read_model_artifact_missing_returns_none():
     assert sink.model_artifact_fingerprint() is None
 
 
-def test_database_output_read_model_artifact_rejects_oversize():
+def test_database_output_read_model_artifact_rejects_oversize(monkeypatch):
+    monkeypatch.setattr("cicerone.io.db_store.DEFAULT_MAX_ARTIFACT_BYTES", 4)
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
     sink.write_model_artifact(b"123456")
     with pytest.raises(ValueError, match="max is 4"):
-        sink.read_model_artifact(max_bytes=4)
+        sink.read_model_artifact()
 
 
 def test_database_output_model_artifact_custom_table_name():

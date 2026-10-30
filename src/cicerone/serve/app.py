@@ -20,7 +20,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
@@ -56,7 +56,6 @@ from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationIt
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 

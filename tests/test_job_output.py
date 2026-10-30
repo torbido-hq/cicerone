@@ -9,7 +9,6 @@ from cicerone.job_output import (
     skip_stale_job_manifest,
     truncate_job_error,
     write_job_manifest,
-    write_manifest_accepts_skip,
 )
 from cicerone.locks import LockLostError, WriteFence
 
@@ -31,18 +30,6 @@ def test_ensure_publication_fence_raises_when_retrain_lost() -> None:
     assert exc_info.value.kind == "retrain"
     ensure_publication_fence(object(), retrain_fence(None, None))
     ensure_publication_fence(object(), retrain_fence(None, lambda: True))
-
-
-def test_write_job_manifest_legacy_and_skip() -> None:
-    written: list[dict] = []
-
-    class _Legacy:
-        def write_manifest(self, manifest: dict) -> None:
-            written.append(manifest)
-
-    assert write_job_manifest(_Legacy(), {"status": "failed"}, skip_if_newer_than="x") is True
-    assert written == [{"status": "failed"}]
-    assert write_manifest_accepts_skip(object()) is False
 
 
 def test_job_manifest_dict_compat() -> None:

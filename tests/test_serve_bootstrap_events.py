@@ -904,15 +904,3 @@ def test_start_events_runtime_assign_variant_caches_winner_within_ttl(tmp_path, 
     ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant="control"))
     assert assigned("u1") == "treatment"
     runtime.stop()
-
-
-def test_combine_busy_checks():
-    from cicerone.serve.bootstrap_events import _combine_busy_checks
-
-    assert _combine_busy_checks(None, None) is None
-    single = _combine_busy_checks(lambda: True)
-    assert single is not None
-    assert single() is True
-    both = _combine_busy_checks(lambda: False, lambda: True)
-    assert both is not None
-    assert both() is True

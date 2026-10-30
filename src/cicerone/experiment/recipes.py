@@ -388,7 +388,7 @@ def _recipe_blending(
         curve = str(overlay["curve"])
         if curve not in BLENDING_CURVES:
             raise ConfigError(f"experiment.variants[{variant.name}].blending.curve {curve!r} is invalid")
-        updates["curve"] = curve  # type: ignore[assignment]
+        updates["curve"] = curve
     for field in ("midpoint", "steepness", "saturate_at", "popular_share", "rrf_k"):
         if field in overlay:
             updates[field] = require_finite(float(overlay[field]), name=f"{label}.{field}")

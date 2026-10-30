@@ -67,15 +67,6 @@ class EventsRuntime:
                 self.publisher = None
 
 
-def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
-    active = [check for check in checks if check is not None]
-    if not active:
-        return None
-    if len(active) == 1:
-        return active[0]
-    return lambda: any(check() for check in active)
-
-
 def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
     if not settings.experiment.enabled:
         return None
@@ -139,7 +130,6 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
-    busy_check: Callable[[], bool] | None = None,
     start_worker: bool = True,
 ) -> EventsRuntime:
     if not settings.events.enabled:
@@ -171,10 +161,7 @@ def start_events_runtime(
             settings.events.ha,
         )
 
-    combined_busy = _combine_busy_checks(
-        busy_check,
-        (retrain_probe.is_locked if retrain_probe is not None else None),
-    )
+    combined_busy = retrain_probe.is_locked if retrain_probe is not None else None
 
     sink = build_output_sink(
         settings.output,

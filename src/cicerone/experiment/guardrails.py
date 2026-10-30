@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
-from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN
+from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN
 
 DEFAULT_MAX_FALLBACK_RATE = 0.5
 DEFAULT_MAX_TOP_ITEM_SHARE = 0.4
@@ -79,9 +79,3 @@ def evaluate_guardrails(
         ok=not failures,
         failures=tuple(failures),
     )
-
-
-def users_in_frame(recs: pd.DataFrame) -> set[str]:
-    if recs.empty or USER_COLUMN not in recs.columns:
-        return set()
-    return set(recs[USER_COLUMN].astype(str))

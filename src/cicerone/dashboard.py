@@ -47,7 +47,6 @@ from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 # ImportError: a missing optional DB driver.
@@ -389,4 +388,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     main()

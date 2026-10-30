@@ -108,8 +108,8 @@ COPY tests/ ./tests/
 COPY docs/openapi/ ./docs/openapi/
 # curl examples — asserted by tests/test_curl_examples.py
 COPY examples/serve/ ./examples/serve/
-# Canonical Postgres defaults — parsed by tests/support/postgres_defaults.py at runtime.
-COPY docker/postgres/defaults.env ./docker/postgres/defaults.env
+# Canonical Postgres defaults and the shell helpers tests/test_postgres_defaults.py checks against them.
+COPY docker/postgres/defaults.env docker/postgres/test-database-url.sh docker/postgres/init-test-db.sh ./docker/postgres/
 ENV PYTHONPATH=/app/src
 RUN pip install --no-cache-dir -r requirements-bandits.txt
 RUN chown -R cicerone:cicerone /app

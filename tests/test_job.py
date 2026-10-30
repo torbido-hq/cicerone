@@ -2420,7 +2420,7 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
             "triggered_by": "other",
             "generated_at": (ours - pd.Timedelta("1us")).isoformat(),
         }
-        real_write(sink, foreign)
+        real_write(sink, job.JobManifest(**foreign))
         return False
 
     class _Pub:
@@ -2529,17 +2529,6 @@ def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkey
     assert writes == ["failed"]
 
 
-def test_write_job_manifest_accepts_legacy_signature():
-    written: dict[str, object] = {}
-
-    class _LegacySink:
-        def write_manifest(self, manifest):
-            written["manifest"] = manifest
-
-    assert job.write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
-    assert written["manifest"] == {"status": "failed"}
-
-
 def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch, no_lock_wait):
     from cicerone.locks import WriterLockBusyError
 
@@ -2575,15 +2564,6 @@ def test_scheduler_job_skips_direct_retrain_lock(monkeypatch):
     monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
     job.run(fence_check=lambda: True)
     assert built["n"] == 0
-
-
-def test_write_job_manifest_reraises_implementation_type_error():
-    class _Sink:
-        def write_manifest(self, manifest, *, skip_if_newer_than=None):
-            raise TypeError("bad payload")
-
-    with pytest.raises(TypeError, match="bad payload"):
-        job.write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
 
 
 def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
