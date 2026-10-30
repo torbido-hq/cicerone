@@ -62,7 +62,7 @@ def _service(reader: _Reader, monkeypatch, variant: str | None, items_cache=None
         lambda *args, **kwargs: ("exp", variant) if variant else (None, None),
     )
     return RecommendationService(
-        make_settings(mode="serve"),
+        make_settings(mode="serve", serve_auth_token="secret"),
         reader,
         items_cache=items_cache or _NoItems(),
         assignment_overlay=lambda: (None, None),
