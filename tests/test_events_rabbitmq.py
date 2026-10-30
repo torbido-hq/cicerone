@@ -1750,7 +1750,7 @@ def test_ack_skips_when_io_replaced_before_resolve(monkeypatch):
     def _require() -> object:
         return old_io
 
-    source._require_io = _require  # type: ignore[method-assign]
+    source._require_ready = _require  # type: ignore[method-assign]
     source.ack(["e1"])
     assert source._delivery_tags.get("e1") == new_tag
     source.close()

@@ -47,7 +47,6 @@ from cicerone.io.engines import engine_for, quote_identifier, sql_source
 from cicerone.io.options import (
     readonly_select,
     reject_oversize,
-    require_max_bytes,
     require_option,
     sql_identifier,
     table_option,
@@ -612,8 +611,7 @@ class DatabaseOutputSink:
             self._fence.ensure()
         return True
 
-    def read_model_artifact(self, *, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> bytes | None:
-        require_max_bytes(max_bytes)
+    def read_model_artifact(self) -> bytes | None:
         table_name = table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE)
         if not inspect(self._engine).has_table(table_name):
             return None
@@ -629,10 +627,10 @@ class DatabaseOutputSink:
                 f"FROM {quoted_table} LIMIT 1"
             )
         with self._engine.connect() as conn:
-            row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
+            row = conn.execute(text(sql), {"cap": DEFAULT_MAX_ARTIFACT_BYTES + 1}).first()
         if row is None or row[1] is None:
             return None
-        reject_oversize(int(row[1]), max_bytes)
+        reject_oversize(int(row[1]), DEFAULT_MAX_ARTIFACT_BYTES)
         if row[0] is None:
             return None
         return bytes(row[0])

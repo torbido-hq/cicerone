@@ -16,7 +16,6 @@ from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.locks import LockBackend, build_lock_backend
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
@@ -93,4 +92,5 @@ def _run_with_trigger(settings: Settings, schedule: str) -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     main()

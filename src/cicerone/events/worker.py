@@ -360,7 +360,7 @@ class EventWorker:
             self._drop_retry_acks(live)
 
     def _rejected_nacks(
-        self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent] | None
+        self, leftover: list[NormalizedEvent], result: Sequence[NormalizedEvent]
     ) -> list[NormalizedEvent]:
         if not result:
             return []

@@ -42,7 +42,6 @@ from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
 from cicerone.refreshed_value import RefreshedValue
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 # ImportError: a missing optional DB driver.
@@ -366,4 +365,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
     main()

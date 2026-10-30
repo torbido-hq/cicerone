@@ -103,7 +103,7 @@ class RabbitMQEventSource(QueuedEventSource):
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
-        io = self._require_io()
+        io = self._require_ready()
         claimed: list[tuple[NormalizedEvent, int | None]] = []
         with self._lock:
             while self._pending and len(claimed) < max_events:
@@ -164,7 +164,7 @@ class RabbitMQEventSource(QueuedEventSource):
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         if not event_ids:
             return ()
-        io = self._require_io()
+        io = self._require_ready()
         confirmed: list[str] = []
         with self._lock:
             if self._io is not io:
@@ -329,9 +329,6 @@ class RabbitMQEventSource(QueuedEventSource):
 
     def _backend(self) -> Any:
         return self._io
-
-    def _require_io(self) -> PikaIo:
-        return self._require_ready()
 
     def _owns_io(self, io: PikaIo) -> bool:
         with self._lock:

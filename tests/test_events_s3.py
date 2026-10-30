@@ -60,13 +60,14 @@ def test_load_object_events_closes_body(mocker):
     body.close.assert_called_once()
 
 
-def test_load_object_events_rejects_oversize_and_closes(mocker):
+def test_load_object_events_rejects_oversize_and_closes(mocker, monkeypatch):
+    monkeypatch.setattr("cicerone.events.s3.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
     body = mocker.Mock()
     s3 = mocker.Mock()
     s3.get_object.return_value = {"Body": body, "ContentLength": 99, "ETag": '"abc"'}
     source = S3EventSource(_creds(mode="list"))
     with pytest.raises(ValueError, match="max is 8"):
-        source._load_object_events(s3, "events-bucket", "events/e.json", max_bytes=8)
+        source._load_object_events(s3, "events-bucket", "events/e.json")
     body.read.assert_not_called()
     body.close.assert_called_once()
 

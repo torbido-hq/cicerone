@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
   with `events.options.<key> is required`, like Kafka, without the
   `when events.kind = "redis_streams"` suffix.
+- Importing `cicerone.serve.app`, `cicerone.dashboard` or `cicerone.scheduler`
+  no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
+  still configure logging).
 
 ### Fixed
 

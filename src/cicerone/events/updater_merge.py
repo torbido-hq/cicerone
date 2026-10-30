@@ -291,17 +291,13 @@ class UpdaterMerge:
     def _cold_start_rows(
         self,
         prior: pd.DataFrame,
-        popular: pd.DataFrame,
-        latest: pd.DataFrame,
         allowed: frozenset[str] | None = None,
         allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
             prior = collapse_mixed_variants(prior)
-            return self._stamp_collapsed_variant(
-                self._cold_start_one_list(prior, popular, latest, allowed=allowed), prior
-            )
+            return self._stamp_collapsed_variant(self._cold_start_one_list(prior, allowed=allowed), prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []
@@ -312,7 +308,7 @@ class UpdaterMerge:
                 if has_variant
                 else (prior if variant == primary else empty_recommendations_frame())
             )
-            merged = self._cold_start_one_list(prior_slice, popular, latest, allowed=variant_allowed)
+            merged = self._cold_start_one_list(prior_slice, allowed=variant_allowed)
             if merged.empty:
                 merged = _restrict_items(prior_slice, variant_allowed)
                 if merged.empty:
@@ -327,9 +323,6 @@ class UpdaterMerge:
     def _cold_start_one_list(
         self,
         prior: pd.DataFrame,
-        popular: pd.DataFrame,
-        latest: pd.DataFrame,
         allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:
-        del popular, latest
         return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)
