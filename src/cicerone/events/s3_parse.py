@@ -11,7 +11,7 @@ from urllib.parse import unquote_plus
 
 from cicerone.config import ConfigError
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -74,8 +74,8 @@ def normalize_prefix(raw: Any) -> str:
 
 
 def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    if existing not in (None, ""):
+    existing = supplied_event_id(payload)
+    if existing:
         return str(existing)
     return f"{bucket}/{key}|{etag}|{index}"
 

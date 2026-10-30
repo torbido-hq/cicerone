@@ -175,10 +175,13 @@ def test_nack_allows_repoll(monkeypatch):
     assert list(source.poll(10)) == []
 
 
-def test_missing_event_id_uses_partition_offset(monkeypatch):
+@pytest.mark.parametrize("event_id", [None, 0, ""], ids=["absent", "zero", "empty"])
+def test_missing_event_id_uses_partition_offset(monkeypatch, event_id):
     broker = install_fake_kafka(monkeypatch)
     payload = event_payload()
     payload.pop("event_id")
+    if event_id is not None:
+        payload["event_id"] = event_id
     broker.add("cicerone.events", payload)
     source = KafkaEventSource(kafka_source_options())
     source.connect()

@@ -12,7 +12,7 @@ from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import KafkaException
 from cicerone.events.json_payload import decode_json_object
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
 from cicerone.option_parse import optional_nonempty_str, require_nonempty_str
 
@@ -206,7 +206,7 @@ class KafkaEventSource(QueuedEventSource):
             logger.warning("Skipping invalid Kafka message %s-%s: %s", partition, offset, exc)
             self._commit_discard(consumer, message)
             return None
-        if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
+        if not supplied_event_id(payload):
             payload["event_id"] = f"{partition}-{offset}"
         try:
             event = normalize_event(payload)
