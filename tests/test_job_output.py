@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
+from cicerone.job_eval import retrain_fence
 from cicerone.job_output import (
     JobManifest,
-    ensure_fence,
+    ensure_publication_fence,
     skip_stale_job_manifest,
     truncate_job_error,
     write_job_manifest,
@@ -22,15 +25,12 @@ def test_skip_stale_job_manifest_on_lock_loss() -> None:
     assert skip_stale_job_manifest(WriteFence()) is False
 
 
-def test_ensure_fence_raises_when_lost() -> None:
-    try:
-        ensure_fence(lambda: False)
-    except LockLostError as exc:
-        assert exc.kind == "retrain"
-    else:
-        raise AssertionError("expected LockLostError")
-    ensure_fence(None)
-    ensure_fence(lambda: True)
+def test_ensure_publication_fence_raises_when_retrain_lost() -> None:
+    with pytest.raises(LockLostError) as exc_info:
+        ensure_publication_fence(object(), retrain_fence(None, lambda: False))
+    assert exc_info.value.kind == "retrain"
+    ensure_publication_fence(object(), retrain_fence(None, None))
+    ensure_publication_fence(object(), retrain_fence(None, lambda: True))
 
 
 def test_write_job_manifest_legacy_and_skip() -> None:

@@ -16,7 +16,6 @@ from cicerone.experiment.store_dataset import (
     EXPOSURES_FILENAME,
     STATE_FILENAME,
     ExperimentDatasetBackend,
-    require_appendable_exposure_log,
 )
 from cicerone.experiment.store_db import (
     DEFAULT_EXPOSURES_TABLE,
@@ -49,7 +48,6 @@ __all__ = [
     "build_experiment_backend",
     "experiment_state",
     "merge_experiment_state",
-    "require_appendable_exposure_log",
 ]
 
 
@@ -192,16 +190,8 @@ class ExperimentStore:
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
         write = self.backend.state_writer(payload)
-
-        def _persist() -> None:
-            self._fence.ensure()
+        with self._fence.lease():
             write()
-
-        if self._fence.held_here():
-            _persist()
-        else:
-            with self._fence.hold():
-                _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
             self._promote_loaded = True
@@ -213,16 +203,8 @@ class ExperimentStore:
         if not rows:
             return
         write = self.backend.exposure_writer(rows)
-
-        def _persist() -> None:
-            self._fence.ensure()
+        with self._fence.lease():
             write()
-
-        if self._fence.held_here():
-            _persist()
-            return
-        with self._fence.hold():
-            _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         rows = self.backend.read_exposures(experiment_id=experiment_id)

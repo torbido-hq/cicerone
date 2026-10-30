@@ -24,6 +24,7 @@ from rectools.metrics import (
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config.constants import TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio
+from cicerone.evaluation.tracking import filter_events_by_types
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -326,8 +327,7 @@ def evaluate_served(
         start = pd.to_datetime(generated_at, utc=True, errors="coerce")
         if pd.notna(start):
             window_events = window_events[window_events[OCCURRED_AT] > start]
-    if event_types and "event_type" in window_events.columns:
-        window_events = window_events[window_events["event_type"].astype(str).isin(set(event_types))]
+    window_events = filter_events_by_types(window_events, event_types)
     if (
         not used_impressions
         and history is not None

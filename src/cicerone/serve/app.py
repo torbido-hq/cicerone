@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -84,22 +85,6 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
-
-
-def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_exposures(rows),
-        label="append experiment exposure",
-        user_id=user_id,
-    )
-
-
-def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_rows(rows),
-        label="append serve impressions",
-        user_id=user_id,
-    )
 
 
 SERVE_API_TITLE = "Cicerone Serve API"
@@ -180,9 +165,11 @@ def create_app(
     append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
     append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
 
-    def submit_append(fn: Any, *args: Any) -> None:
+    def submit_append(write: Any, *, label: str, user_id: str) -> None:
         append_slots.acquire()
-        append_pool.submit(fn, *args).add_done_callback(lambda _done: append_slots.release())
+        append_pool.submit(_append_with_busy_retry, write, label=label, user_id=user_id).add_done_callback(
+            lambda _done: append_slots.release()
+        )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -314,18 +301,16 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
+                exposure = exposure_row(
+                    user_id=user_id,
+                    experiment_id=experiment_id,
+                    variant=variant,
+                    generated_at=generated_at,
+                )
                 submit_append(
-                    _append_exposures_safe,
-                    experiment_store,
-                    [
-                        exposure_row(
-                            user_id=user_id,
-                            experiment_id=experiment_id,
-                            variant=variant,
-                            generated_at=generated_at,
-                        )
-                    ],
-                    user_id,
+                    partial(experiment_store.append_exposures, [exposure]),
+                    label="append experiment exposure",
+                    user_id=user_id,
                 )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
             occurred = datetime.now(UTC).isoformat()
@@ -343,7 +328,11 @@ def create_app(
                 }
                 for row in filtered.itertuples(index=False)
             ]
-            submit_append(_append_impressions_safe, track_store, rows, user_id)
+            submit_append(
+                partial(track_store.append_rows, rows),
+                label="append serve impressions",
+                user_id=user_id,
+            )
 
         body = RecommendationsResponse(
             generated_at=generated_at,

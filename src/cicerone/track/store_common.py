@@ -9,9 +9,6 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.config.constants import ConfigError
-from cicerone.config.settings import IOSettings
-from cicerone.io.options import storage_backend
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -20,6 +17,7 @@ from cicerone.io.recommendation_schema import (
     VARIANT_COLUMN,
 )
 from cicerone.track.normalize import assign_missing_event_id
+from cicerone.values import occurred_since, utc_stamp
 
 TRACK_FILENAME = "track.jsonl"
 EVAL_FILENAME = "track_eval.json"
@@ -55,12 +53,8 @@ HISTORY_COLUMNS: tuple[str, ...] = (
 )
 
 
-def require_appendable_track_log(output: IOSettings) -> None:
-    if output.kind == "db":
-        return
-    if output.kind == "dataset" and storage_backend(output.options) == "local":
-        return
-    raise ConfigError(TRACK_LOG_BACKEND_ERROR)
+def empty_history_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=list(HISTORY_COLUMNS))
 
 
 def row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -83,38 +77,22 @@ def history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFr
     return frame.loc[:, list(HISTORY_COLUMNS)]
 
 
-def jsonish(value: Any) -> Any:
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (ValueError, AttributeError):
-            pass
-    if pd.isna(value):  # type: ignore[arg-type]
-        return None
-    return value
-
-
 def iso_utc(value: str | None) -> str | None:
     if not value:
         return None
-    stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(stamp):
-        return value
-    return stamp.isoformat()
+    stamp = utc_stamp(value)
+    return value if stamp is None else stamp.isoformat()
 
 
 @lru_cache(maxsize=8)
 def _since_stamp(since: str) -> pd.Timestamp | None:
-    stamp = pd.to_datetime(since, utc=True, errors="coerce")
-    return None if pd.isna(stamp) else stamp
+    return utc_stamp(since)
 
 
 def _stamp_before(value: str, since: str) -> bool:
-    stamp = pd.to_datetime(value, utc=True, errors="coerce")
+    stamp = utc_stamp(value)
     start = _since_stamp(since)
-    if pd.isna(stamp) or start is None:
-        return False
-    return bool(stamp < start)
+    return stamp is not None and start is not None and bool(stamp < start)
 
 
 def lookback_since(*, window_hours: float, floor_hours: float = 0.0) -> str:
@@ -168,10 +146,8 @@ def row_matches(
         return False
     if not since:
         return True
-    occurred = str(row.get("occurred_at") or "")
     start = _since_stamp(since)
-    stamp = pd.to_datetime(occurred, utc=True, errors="coerce") if occurred else None
-    return not (start is None or stamp is None or bool(pd.isna(stamp)) or stamp < start)
+    return start is not None and occurred_since(row, start)
 
 
 def unique_matching_rows(
@@ -257,13 +233,6 @@ def history_sql_filter(
     return " WHERE " + " AND ".join(clauses), params
 
 
-def utc_stamp(value: object) -> pd.Timestamp | None:
-    stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(stamp):
-        return None
-    return stamp
-
-
 def _stamps_equal(left: object, right: object) -> bool:
     first = utc_stamp(left)
     second = utc_stamp(right)
@@ -285,7 +254,7 @@ def filter_history(
         return frame
     if "generated_at" not in frame.columns:
         if generated_ats is not None or since:
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+            return empty_history_frame()
         return frame
     keep = pd.Series(True, index=frame.index)
     if generated_ats is not None:

@@ -350,9 +350,10 @@ def _require_lock_backend(settings: Settings) -> None:
 def _require_exposure_log_backend(settings: Settings) -> None:
     if not settings.experiment.enabled or not settings.experiment.log_exposures:
         return
-    from cicerone.experiment.store import EXPOSURE_LOG_HA_ERROR, require_appendable_exposure_log
+    from cicerone.experiment.store import EXPOSURE_LOG_BACKEND_ERROR, EXPOSURE_LOG_HA_ERROR
+    from cicerone.io.blob import require_db_or_local_dataset
 
-    require_appendable_exposure_log(settings.output)
+    require_db_or_local_dataset(settings.output, EXPOSURE_LOG_BACKEND_ERROR)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
 
@@ -386,14 +387,9 @@ def _require_online_collaborative_lightfm(settings: Settings) -> None:
 def _require_online_output_backend(settings: Settings) -> None:
     if not settings.events.online.enabled:
         return
-    from cicerone.io.options import storage_backend
+    from cicerone.io.blob import require_db_or_local_dataset
 
-    output = settings.output
-    if output.kind == "db":
-        return
-    if output.kind == "dataset" and storage_backend(output.options) == "local":
-        return
-    raise ConfigError(ONLINE_OUTPUT_ERROR)
+    require_db_or_local_dataset(settings.output, ONLINE_OUTPUT_ERROR)
 
 
 def _require_track_backend(settings: Settings) -> None:
@@ -404,9 +400,10 @@ def _require_track_backend(settings: Settings) -> None:
         raise ConfigError("experiment.primary_metric 'ctr'/'conversion' requires track.enabled = true")
     if not settings.track.enabled:
         return
-    from cicerone.track.store import TRACK_LOG_HA_ERROR, require_appendable_track_log
+    from cicerone.io.blob import require_db_or_local_dataset
+    from cicerone.track.store import TRACK_LOG_BACKEND_ERROR, TRACK_LOG_HA_ERROR
 
-    require_appendable_track_log(settings.output)
+    require_db_or_local_dataset(settings.output, TRACK_LOG_BACKEND_ERROR)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(TRACK_LOG_HA_ERROR)
 

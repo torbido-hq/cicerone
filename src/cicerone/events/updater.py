@@ -30,8 +30,9 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
+from cicerone.io.recommendation_reader_common import group_by_user
 from cicerone.io.recommendation_schema import recommendation_output_columns
-from cicerone.locks import LockLostError, WriterLockBusyError
+from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,
     publish_recommendations,
@@ -114,7 +115,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._busy_check = busy_check
         self._write_busy_check = busy_check if write_busy_check is None else write_busy_check
         self._on_success = on_success
-        self._fence_check = fence_check
+        self._fence = WriteFence(check=fence_check, lost="events apply lock lost before write", kind="apply")
         self._online = online
         self._last_success_at: datetime | None = None
         self._events_applied = 0
@@ -174,7 +175,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 logger.info("Skipping online persist: full retrain in progress")
                 self.abort_online()
                 return
-            self._ensure_fence()
+            self._fence.ensure()
             self._commit_online()
 
     def apply(self, events: Sequence[NormalizedEvent], *, persist_online: bool = True) -> int:
@@ -231,7 +232,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if not self._ensure_write_allowed():
                 self.abort_online()
                 return 0
-            self._ensure_fence()
+            self._fence.ensure()
             user_ids = sorted(set(replace_ids))
             if isinstance(self._sink, AppliedEventLog):
                 keys = [key for event in events if (key := self._replay_key(event)) is not None]
@@ -266,7 +267,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             # A reader refresh returns False when it kept the previous recommendations.
             if self._on_success is None or self._on_success() is not False:
                 done.add("refresh")
-            self._ensure_fence()
+            self._fence.ensure()
             ensure_sink_writer_held(self._sink)
             self._sink.write_manifest(manifest)
             done.add("manifest")
@@ -326,7 +327,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
                 repair.refresh = self._on_success is not None and self._on_success() is False
             if repair.manifest is not None:
                 with recommendations_write_guard(self._sink):
-                    self._ensure_fence()
+                    self._fence.ensure()
                     ensure_sink_writer_held(self._sink)
                     generated_at = str(repair.manifest["generated_at"])
                     self._sink.write_manifest(repair.manifest, skip_if_newer_than=generated_at)
@@ -352,9 +353,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if self._publisher is None:
             return True
         try:
-            self._ensure_fence()
+            self._fence.ensure()
             self._publisher.connect()
-            self._ensure_fence()
+            self._fence.ensure()
             current: bool | None = True
             if generated_at is not None:
                 current = sidecar_generation_current(self._output_settings, generated_at)
@@ -506,29 +507,19 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:
         frame = result.rows
-        if frame is None or frame.empty or USER_COLUMN not in frame.columns:
+        if frame is None or frame.empty:
             return {}
-        keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
-        if SOURCE_COLUMN in keyed.columns:
-            mask = keyed[SOURCE_COLUMN].astype(str).map(is_preserved_source)
-            keyed = keyed.loc[mask]
-        if keyed.empty:
-            return {}
-        return {
-            user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
-        }
+        if SOURCE_COLUMN in frame.columns:
+            frame = frame.loc[frame[SOURCE_COLUMN].astype(str).map(is_preserved_source)]
+        return group_by_user(frame)
 
     def _ensure_write_allowed(self) -> bool:
         if self._write_busy_check is not None and self._write_busy_check():
             self.invalidate_cache()
             logger.info("Skipping incremental write: full retrain in progress")
             return False
-        self._ensure_fence()
+        self._fence.ensure()
         return True
-
-    def _ensure_fence(self) -> None:
-        if self._fence_check is not None and not self._fence_check():
-            raise LockLostError("events apply lock lost before write", kind="apply")
 
     def _needs_users_frame(self) -> bool:
         return incremental_needs_users_frame(self._feature_config, self._variant_feature_configs)

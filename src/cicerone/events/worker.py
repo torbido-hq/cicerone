@@ -317,19 +317,8 @@ class EventWorker:
                 self._deferred_acks.append(event)
             else:
                 to_ack.append(event)
-        if not to_ack:
-            return
-        completed = False
-        try:
-            live_ids = self._ack_live_ids([event.event_id for event in to_ack])
-            completed = True
-        finally:
-            if not completed:
-                self._retry_acks.extend(to_ack)
-        live = [event for event in to_ack if event.event_id in live_ids]
-        missing = [event for event in to_ack if event.event_id not in live_ids]
-        self._retry_acks.extend(missing)
-        self._drop_retry_acks(live)
+        if to_ack:
+            self._drop_retry_acks(self._ack_tracked(to_ack))
 
     def _ack_deferred_matching(self, applied: Sequence[NormalizedEvent]) -> None:
         if not self._deferred_acks:
@@ -346,33 +335,26 @@ class EventWorker:
             else:
                 keep.append(event)
         self._deferred_acks = keep
-        if not matched:
-            return
-        completed = False
-        try:
-            live_ids = self._ack_live_ids([event.event_id for event in matched])
-            completed = True
-        finally:
-            if not completed:
-                self._retry_acks.extend(matched)
-        live = [event for event in matched if event.event_id in live_ids]
-        self._retry_acks.extend(event for event in matched if event.event_id not in live_ids)
-        self._drop_retry_acks(live)
+        if matched:
+            self._drop_retry_acks(self._ack_tracked(matched))
 
     def _flush_retry_acks(self) -> None:
         if not self._retry_acks:
             return
         batch = self._retry_acks
         self._retry_acks = []
-        completed = False
+        self._settle_live(self._ack_tracked(batch))
+
+    def _ack_tracked(self, events: Sequence[NormalizedEvent]) -> list[NormalizedEvent]:
+        """Ack ``events`` and return those still live; failed acks are kept for retry."""
         try:
-            live_ids = self._ack_live_ids([event.event_id for event in batch])
-            completed = True
-        finally:
-            if not completed:
-                self._retry_acks.extend(batch)
-        live = [event for event in batch if event.event_id in live_ids]
-        self._retry_acks.extend(event for event in batch if event.event_id not in live_ids)
+            live_ids = self._ack_live_ids([event.event_id for event in events])
+        except BaseException:
+            self._retry_acks.extend(events)
+            raise
+        return [event for event in events if event.event_id in live_ids]
+
+    def _settle_live(self, live: Sequence[NormalizedEvent]) -> None:
         if live:
             self._ack_deferred_matching(live)
             self._drop_retry_acks(live)
@@ -594,15 +576,12 @@ class EventWorker:
         valid = [event for event in ready if event.rejected is None]
         try:
             replayed = self._updater.applied_before(valid)
-        except EVENT_APPLY_ERRORS:
+        except Exception as exc:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
             self._return_events(ready)
-            return 0
-        except Exception:
-            record_events_flush(status="error")
-            logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
-            self._return_events(ready)
+            if isinstance(exc, EVENT_APPLY_ERRORS):
+                return 0
             raise
         if replayed:
             ready = self._ack_replayed(ready, replayed)
@@ -637,66 +616,44 @@ class EventWorker:
                 applied = applied or len(valid)
                 post_write_failed = True
         except HeartbeatError:
-            record_events_flush(status="error")
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
+            return self._reject(ready, "error")
         except LockLostError as exc:
-            record_events_flush(status="error")
             if exc.kind == "apply":
                 update_events_leader(False)
             logger.error("%s; nacking %d event(s)", exc, len(ready))
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
+            return self._reject(ready, "error")
         except WriterLockBusyError as exc:
-            record_events_flush(status="busy")
             record_events_apply_busy(reason="lock")
             logger.info("%s; nacking %d event(s)", exc, len(ready))
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
-        except EVENT_APPLY_ERRORS:
-            record_events_flush(status="error")
+            return self._reject(ready, "busy")
+        except Exception as exc:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
-        except Exception:
-            record_events_flush(status="error")
-            logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
-            self._updater.abort_online()
-            self._return_events(ready)
+            self._reject(ready, "error")
+            if isinstance(exc, EVENT_APPLY_ERRORS):
+                return 0
             raise
         if applied and not post_write_failed and self._updater.last_publish_failed:
             # Written and acked; the publish is queued for repair, but this flush did not complete.
             record_events_tick_error()
             post_write_failed = True
         if applied == 0:
-            record_events_flush(status="busy")
             record_events_apply_busy(reason="retrain")
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
+            return self._reject(ready, "busy")
         if applied != len(valid):
-            record_events_flush(status="error")
             logger.error(
                 "Incremental apply returned %d for %d ready event(s); nacking batch",
                 applied,
                 len(valid),
             )
-            self._updater.abort_online()
-            self._return_events(ready)
-            return 0
+            return self._reject(ready, "error")
         self._remember_applied(valid)
         self._log_rejected(ready)
         try:
-            live_ids = self._ack_live_ids([event.event_id for event in ready])
+            live = self._ack_tracked(ready)
         except TimeoutError:
             record_events_flush(status="error")
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
-            self._retry_acks.extend(ready)
             self._persist_online_after_ack()
             if unexpected is not None:
                 raise unexpected from None
@@ -704,17 +661,10 @@ class EventWorker:
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; persisting without nack")
-            self._retry_acks.extend(ready)
             self._persist_online_after_ack()
             raise
-        live = [event for event in ready if event.event_id in live_ids]
-        missing = [event for event in ready if event.event_id not in live_ids]
-        if missing:
-            self._retry_acks.extend(missing)
         try:
-            if live:
-                self._ack_deferred_matching(live)
-                self._drop_retry_acks(live)
+            self._settle_live(live)
         except Exception:
             record_events_flush(status="error")
             logger.exception(
@@ -731,6 +681,12 @@ class EventWorker:
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
         return applied
+
+    def _reject(self, ready: list[NormalizedEvent], status: str) -> int:
+        record_events_flush(status=status)
+        self._updater.abort_online()
+        self._return_events(ready)
+        return 0
 
     def _ack_replayed(
         self, ready: list[NormalizedEvent], replayed: list[NormalizedEvent]

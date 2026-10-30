@@ -1273,22 +1273,6 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
     assert "://" not in location
 
 
-def test_experiments_redirect_stays_on_experiments_path():
-    from cicerone.dashboard import _experiments_redirect
-
-    response = _experiments_redirect(promote_error="x")
-    assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/experiments"
-
-
-def test_experiments_redirect_without_query_stays_on_path():
-    from cicerone.dashboard import _experiments_redirect
-
-    response = _experiments_redirect()
-    assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/experiments"
-
-
 def test_dashboard_promote_success_redirects(monkeypatch):
     import cicerone.dashboard as dash
     from cicerone.config.settings import ExperimentSettings, VariantSettings

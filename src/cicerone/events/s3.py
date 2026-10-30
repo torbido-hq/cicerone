@@ -24,18 +24,18 @@ from cicerone.events.s3_parse import (
     SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     Batch,
-    as_int,
     events_from_body,
     normalize_prefix,
     optional_aws_region,
-    positive_float,
-    positive_int,
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
 from cicerone.io.options import build_s3_client, read_s3_body, require_option
+from cicerone.option_parse import as_int, optional_float, optional_int
 
 logger = logging.getLogger(__name__)
+
+_EVENTS_PREFIX = "events.options"
 
 
 class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
@@ -50,14 +50,16 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._queue_url = str(options["queue_url"]) if self._mode == "sqs" else None
         self._marker_path = Path(options["marker_path"]) if options.get("marker_path") else None
         self._marker_key = str(options.get("initial_marker") or "")
-        self._wait_time_seconds = max(0, as_int(options, "wait_time_seconds", 0))
-        self._max_messages = max(1, min(10, as_int(options, "max_messages", 10)))
-        self._list_page_size = positive_int(options, "list_page_size", DEFAULT_LIST_PAGE_SIZE)
-        self._sqs_lag_cache_ttl_seconds = positive_float(
-            options, "sqs_lag_cache_ttl_seconds", DEFAULT_SQS_LAG_CACHE_TTL_SECONDS
+        self._wait_time_seconds = max(0, as_int(options, "wait_time_seconds", 0, prefix=_EVENTS_PREFIX))
+        self._max_messages = max(1, min(10, as_int(options, "max_messages", 10, prefix=_EVENTS_PREFIX)))
+        self._list_page_size = optional_int(
+            options, "list_page_size", DEFAULT_LIST_PAGE_SIZE, prefix=_EVENTS_PREFIX, minimum=1
         )
-        self._sqs_client_timeout_seconds = positive_float(
-            options, "sqs_client_timeout_seconds", DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS
+        self._sqs_lag_cache_ttl_seconds = optional_float(
+            options, "sqs_lag_cache_ttl_seconds", DEFAULT_SQS_LAG_CACHE_TTL_SECONDS, prefix=_EVENTS_PREFIX
+        )
+        self._sqs_client_timeout_seconds = optional_float(
+            options, "sqs_client_timeout_seconds", DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS, prefix=_EVENTS_PREFIX
         )
         self._s3 = None
         self._sqs = None

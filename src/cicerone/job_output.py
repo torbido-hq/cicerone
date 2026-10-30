@@ -95,13 +95,8 @@ def skip_stale_job_manifest(fence: WriteFence, *, exc: BaseException | None = No
     return False
 
 
-def ensure_fence(fence_check: Callable[[], bool] | None) -> None:
-    if fence_check is not None and not fence_check():
-        raise LockLostError("retrain lock lost before write", kind="retrain")
-
-
-def ensure_publication_fence(sink: object, fence_check: Callable[[], bool] | None) -> None:
-    ensure_fence(fence_check)
+def ensure_publication_fence(sink: object, retrain: WriteFence) -> None:
+    retrain.ensure()
     ensure_sink_writer_held(sink)
 
 

@@ -51,7 +51,10 @@ class EventSource(Protocol):
         ...
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        """Ack ids that still have a live delivery; return those ids."""
+        """Ack ids that still have a live delivery; return those ids.
+
+        A source may confirm only some ids (Kafka: offsets its commit passed); the rest are not retried.
+        """
         ...
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
@@ -133,6 +136,14 @@ class QueuedEventSource:
             return ()
         return self._commit_acks(backend, resolved)
 
+    def close(self) -> None:
+        with self._lock:
+            handle = self._detach_unlocked()
+            self._connected = False
+            self._clear_lifecycle()
+        if handle is not None:
+            self._release(handle)
+
     def _require_ready(self) -> Any:
         with self._lock:
             backend = self._backend()
@@ -150,6 +161,13 @@ class QueuedEventSource:
         raise NotImplementedError
 
     def _commit_acks(self, backend: Any, resolved: Sequence[tuple[str, Any]]) -> Sequence[str]:
+        raise NotImplementedError
+
+    def _detach_unlocked(self) -> Any | None:
+        """Drop the backend handle and its delivery maps; return the handle to release."""
+        raise NotImplementedError
+
+    def _release(self, handle: Any) -> None:
         raise NotImplementedError
 
     def _drain_pending(self, max_events: int) -> list[NormalizedEvent]:

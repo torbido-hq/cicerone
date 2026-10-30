@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
@@ -926,7 +926,9 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
     assert order == ["connect", "connect", "nack"]
 
 
-def test_event_worker_reconnect_keeps_retry_acks_until_live_delivery(tmp_path, feature_config: FeatureConfig):
+def test_event_worker_reconnect_acks_redelivery_of_a_dropped_retry_ack(
+    tmp_path, feature_config: FeatureConfig
+):
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -956,11 +958,13 @@ def test_event_worker_reconnect_keeps_retry_acks_until_live_delivery(tmp_path, f
     assert nacked == []
     assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
     worker._flush_retry_acks()
-    assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
-    source.ingest(event_payload(event_id="retry-live", item_id="i9"))
-    assert [item.event_id for item in source.poll(1)] == ["retry-live"]
-    worker._flush_retry_acks()
     assert worker._retry_acks == []
+    source.ingest(event_payload(event_id="retry-live", item_id="i9"))
+    worker._poll_into_buffer()
+    assert worker._buffer.flush() == []
+    assert source.ack(["retry-live"]) == ()
+    assert nacked == []
+    assert source.health().lag == 0
 
 
 def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
@@ -1407,6 +1411,51 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
         worker._poll_into_buffer()
     worker._flush_retry_acks()
     assert acked == ["already-1", "already-1"]
+
+
+def test_event_worker_drops_unconfirmed_acks(tmp_path, feature_config: FeatureConfig):
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(
+        WebhookEventSource({}), MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater
+    )
+    gone = [normalize_event(event_payload(event_id=f"gone-{n}")) for n in range(3)]
+    worker._ack_unbuffered(gone)
+    assert worker._retry_acks == []
+
+
+def test_event_worker_retries_failed_acks_until_success_but_not_unconfirmed_acks(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 1)
+    acked: list[list[str]] = []
+
+    class _AckDownTwice(WebhookEventSource):
+        failures = 2
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def,override]
+            acked.append(list(event_ids))
+            if self.failures:
+                self.failures -= 1
+                raise OSError("ack down")
+            return super().ack(event_ids)
+
+    source = _AckDownTwice({})
+    source.connect()
+    source.ingest(event_payload(event_id="held"))
+    held = list(source.poll(1))
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater)
+    gone = normalize_event(event_payload(event_id="gone"))
+
+    with pytest.raises(OSError, match="ack down"):
+        worker._ack_unbuffered([*held, gone])
+    with pytest.raises(OSError, match="ack down"):
+        worker._flush_retry_acks()
+    assert [event.event_id for event in worker._retry_acks] == ["held", "gone"]
+    worker._flush_retry_acks()
+    assert worker._retry_acks == []
+    worker._flush_retry_acks()
+    assert acked == [["held", "gone"]] * 3
 
 
 def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
@@ -3373,20 +3422,6 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
     assert "u1" in repaired
 
 
-def _dataset_updater(tmp_path, feature_config: FeatureConfig, **kwargs):  # type: ignore[no-untyped-def]
-    out = tmp_path / "out"
-    out.mkdir(exist_ok=True)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=3,
-    )
-    sink = build_output_sink(settings.output)
-    updater = IncrementalUpdater(
-        sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
-    )
-    return settings, sink, updater
-
-
 def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]
     written = load_recommendations_frame(settings.output)
     return set(written[written["user_id"] == user_id]["item_id"].astype(str))
@@ -3396,7 +3431,7 @@ def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_wri
     tmp_path, feature_config: FeatureConfig
 ):
     lost = {"after_write": False}
-    settings, sink, updater = _dataset_updater(
+    settings, sink, updater = dataset_updater(
         tmp_path, feature_config, fence_check=lambda: not lost["after_write"]
     )
     replace = sink.replace_recommendations_for_users
@@ -3423,7 +3458,7 @@ def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_wri
 def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendations(
     tmp_path, feature_config: FeatureConfig
 ):
-    settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+    settings, sink, updater = dataset_updater(tmp_path, feature_config)
 
     def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
         raise OSError("disk full")
@@ -3439,7 +3474,7 @@ def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendatio
 
 
 def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, feature_config: FeatureConfig):
-    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+    _settings, sink, updater = dataset_updater(tmp_path, feature_config)
 
     def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
         raise OSError("disk full")
@@ -3461,7 +3496,7 @@ def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, fea
 def test_event_worker_counts_a_post_write_failure_when_the_online_persist_raises(
     tmp_path, feature_config: FeatureConfig
 ):
-    _settings, sink, updater = _dataset_updater(tmp_path, feature_config)
+    _settings, sink, updater = dataset_updater(tmp_path, feature_config)
 
     def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
         raise OSError("disk full")

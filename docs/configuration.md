@@ -24,7 +24,7 @@ table below is optional unless a later rule says otherwise.
 | `cicerone scheduler` | Cron loop (and `[job.trigger]` if enabled). Does **not** run a job first; it sleeps until the next `cron_schedule` tick. |
 | `cicerone serve` | Read API. Requires `job.mode = "serve"`. |
 | `cicerone dashboard` | Basic-Auth status UI. Independent of `job.mode`. |
-| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. |
+| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. Passwords are at most 72 bytes (UTF-8). |
 | `cicerone export-openapi` | Write the serve OpenAPI document (`-o PATH`). |
 
 Global flags: `-c` / `--config`, `--log-level` (default `INFO`),
@@ -172,7 +172,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused) |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
-| `min_impressions` | `100` | Gates Promote / Thompson volume. Does **not** change the CTR formula |
+| `min_impressions` | `100` | Gates Promote / Thompson volume; the sequential test needs this many users per arm. Does **not** change the CTR formula |
 
 `kind` is `impression` or `click` only. Details:
 [evaluation.md](evaluation.md).

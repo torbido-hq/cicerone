@@ -307,7 +307,8 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
 
   (`--users-path` is optional when `--config` points at a dashboard TOML).
   Passwords are hashed with bcrypt; the file is plain TOML
-  (`username = "<bcrypt hash>"`).
+  (`username = "<bcrypt hash>"`). `add` rejects a password over 72 bytes
+  (UTF-8): "Password must be at most 72 bytes (UTF-8)."
 - Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
   use the standalone `config/cicerone.dashboard.toml` example config). See
   the `dashboard` service in `docker-compose.yml` for how it's wired up

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, TypeVar
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pandas as pd
 
 from cicerone.config import Settings
-from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught, try_load
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -24,7 +24,6 @@ from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
-_T = TypeVar("_T")
 _TRACK_REC_COLUMNS = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN, "generated_at")
 
 
@@ -95,14 +94,6 @@ def _replay_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
     return names
 
 
-def _future_or(future: Future[_T], label: str, default: _T) -> _T:
-    try:
-        return future.result()
-    except OPTIONAL_IO_ERRORS as exc:
-        log_caught(f"Failed to {label}", exc, log=logger)
-        return default
-
-
 def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
     if not track_eval:
         return True
@@ -159,13 +150,21 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             return store.read_history(generated_ats=wanted)
 
         with ThreadPoolExecutor(max_workers=3) as pool:
-            conv_f = pool.submit(_load_conversions)
-            recs_f = pool.submit(_load_recs)
-            hist_f = pool.submit(_load_history)
-            conversions = _future_or(conv_f, "load conversions for live Quality metrics", pd.DataFrame())
-            current = _future_or(recs_f, "load recommendations for live Quality metrics", None)
-            history = _future_or(hist_f, "read recommendation history for Quality", None)
-            recs = prefer_history(history, current)
+            conv_f = pool.submit(
+                try_load,
+                "load conversions for live Quality metrics",
+                _load_conversions,
+                pd.DataFrame(),
+                log=logger,
+            )
+            recs_f = pool.submit(
+                try_load, "load recommendations for live Quality metrics", _load_recs, None, log=logger
+            )
+            hist_f = pool.submit(
+                try_load, "read recommendation history for Quality", _load_history, None, log=logger
+            )
+            conversions = conv_f.result()
+            recs = prefer_history(hist_f.result(), recs_f.result())
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to load conversions for live Quality metrics", exc, log=logger)
     try:

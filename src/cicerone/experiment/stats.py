@@ -63,6 +63,7 @@ def compare_variants(
     treatment: VariantMetric,
     *,
     alpha: float,
+    min_users: int,
 ) -> ComparisonResult:
     difference = treatment.mean - control.mean
     radius = math.hypot(
@@ -71,7 +72,8 @@ def compare_variants(
     )
     ci_low = difference - radius
     ci_high = difference + radius
-    decided = math.isfinite(radius) and (ci_high < 0 or ci_low > 0)
+    enough = min(control.n_users, treatment.n_users) >= min_users
+    decided = enough and math.isfinite(radius) and (ci_high < 0 or ci_low > 0)
     winner: str | None = None
     if decided:
         winner = treatment.name if difference > 0 else control.name

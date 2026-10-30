@@ -18,6 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ExperimentStore` delegates to a db or dataset backend
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
+- Redis Streams treats an empty `consumer_name` or `group_start_id` as
+  unset (host name / `0-0`), like Kafka, instead of rejecting it.
+- A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
+  with `events.options.<key> is required`, like Kafka, without the
+  `when events.kind = "redis_streams"` suffix.
 
 ### Deprecated
 
@@ -26,6 +31,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
@@ -76,6 +84,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   forking the threaded scheduler, which could deadlock the workers.
 - An escaped `$${NAME}` in `events.options.auth_token` stays the literal
   `${NAME}` instead of being expanded by a second placeholder pass.
+- `cicerone users add` rejects a password over 72 bytes (UTF-8, the bcrypt
+  limit) with a clear error instead of crashing.
 - The dashboard user lookup on dataset storage (history pane, `get_user`)
   works when `user_id` is stored as an integer column instead of failing
   the filtered read.
@@ -129,6 +139,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Flat `make_settings` overrides (`make_settings(serve_port=…)`), deprecated
   in 0.8.5 ahead of 0.9.0, now raise `TypeError`. Use
   `make_settings(serve=ServeSettings(…))`.
+- The experiment sequential test does not decide until each arm has at
+  least `track.min_impressions` users (with `[track]` on), instead of
+  deciding on two users per arm.
+- `POST /track` returns **503** "Track store unavailable" instead of
+  **500** when the track store is unavailable or failing (any storage or
+  database error).
+- The Kafka event source drops the deliveries of partitions revoked or lost
+  in a group rebalance, so their acks no longer commit offsets for another
+  member or fail every worker tick, and the redelivered messages are not
+  skipped when the partition comes back.
+- The event worker no longer retries forever an ack the source does not
+  confirm (Kafka commits it with a later offset, RabbitMQ requeues it when
+  the channel closes). A failed ack is still retried until it succeeds.
+- The db events source compares a naive `occurred_at` on Postgres in UTC,
+  as it reads it, instead of the session time zone, which skipped or
+  re-read rows when the server zone was not UTC.
+- The Kafka publisher serves delivery callbacks after each message, so a
+  large publish no longer fills the producer queue.
+- A RabbitMQ publish that fails after some messages were confirmed raises
+  `PublishError`, like Kafka, instead of logging and reporting success.
+  The incremental sidecar retry then republishes every affected user with
+  the same `message_id`, which consumers dedupe on.
 
 ## [0.8.5] - 2026-10-14
 
