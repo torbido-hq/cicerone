@@ -42,7 +42,7 @@ from sqlalchemy import (
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
-from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error
+from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error, is_missing_table_error
 from cicerone.io.engines import engine_for, quote_identifier, sql_source
 from cicerone.io.options import (
     readonly_select,
@@ -164,7 +164,7 @@ def _clear_table_for_replace(conn, table: str) -> None:
     Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
     savepoint and then appending would duplicate rows, so DELETE is tried next.
     MySQL/MariaDB TRUNCATE commits implicitly, so a failed rewrite could not roll back.
-    If the table does not exist yet, every attempt fails and ``to_sql`` creates it.
+    If the table does not exist yet, every attempt fails and ``to_sql`` creates it; other DELETE errors raise.
     """
     mysql_family = conn.dialect.name in ("mysql", "mariadb")
     verbs = ("DELETE FROM",) if mysql_family else ("TRUNCATE TABLE", "DELETE FROM")
@@ -174,8 +174,10 @@ def _clear_table_for_replace(conn, table: str) -> None:
             conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
             savepoint.commit()
             return
-        except MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS as exc:
             savepoint.rollback()
+            if verb == verbs[-1] and not is_missing_table_error(exc):
+                raise
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
@@ -313,7 +315,6 @@ class DatabaseOutputSink:
         self._engine = engine_for(require_option(options, "database_url", "db"))
         self._fence = fence or WriteFence()
         self._applied_table_seen = False
-        self._applied_table_checked = False
         self._check_applied_events_table_name()
 
     @contextmanager
@@ -405,10 +406,8 @@ class DatabaseOutputSink:
         table = self._applied_events_table()
         if not wanted:
             return set()
-        if not self._applied_table_seen:
-            if not inspect(self._engine).has_table(table.name):
-                return set()
-            self._applied_table_seen = True
+        if not self._applied_events_table_exists():
+            return set()
         scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
         found: dict[str, str] = {}
@@ -453,8 +452,8 @@ class DatabaseOutputSink:
         return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
     def _applied_events_table_exists(self) -> bool:
-        if not self._applied_table_seen and not self._applied_table_checked:
-            self._applied_table_checked = True
+        # Only "exists" is cached: another output sharing the database may create the table later.
+        if not self._applied_table_seen:
             self._applied_table_seen = inspect(self._engine).has_table(self._applied_events_table().name)
         return self._applied_table_seen
 
@@ -543,7 +542,7 @@ class DatabaseOutputSink:
                 except MISSING_TABLE_ERRORS:
                     # The table was dropped: skip pruning, never the rows write; check again later.
                     prune.rollback()
-                    self._applied_table_seen = self._applied_table_checked = False
+                    self._applied_table_seen = False
             self._fence.ensure()
             count_savepoint = conn.begin_nested()
             try:

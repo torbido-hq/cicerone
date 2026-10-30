@@ -31,6 +31,9 @@ class RecordingConnection:
     def commit(self) -> None:
         pass
 
+    def rollback(self) -> None:
+        pass
+
     def execute(self, statement: Any) -> None:
         self.sql.append(str(statement))
 

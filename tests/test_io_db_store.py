@@ -494,6 +494,20 @@ def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, stateme
     assert conn.sql == [statement]
 
 
+@pytest.mark.parametrize("dialect", [mysql.dialect(), postgresql.dialect()])
+def test_full_write_clear_raises_errors_other_than_a_missing_table(dialect, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(dialect)
+
+    def _lock_timeout(statement):  # type: ignore[no-untyped-def]
+        raise OperationalError(str(statement), {}, Exception("lock wait timeout exceeded"))
+
+    monkeypatch.setattr(conn, "execute", _lock_timeout)
+    with pytest.raises(OperationalError, match="lock wait timeout"):
+        db_store._clear_table_for_replace(conn, "recommendations")
+
+
 def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     assert sink._applied_scope("Recs") == sink._applied_scope("recs")
