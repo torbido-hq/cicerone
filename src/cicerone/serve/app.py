@@ -42,6 +42,7 @@ from cicerone.metrics import (
     record_experiment_served,
     record_recommendations_served,
     record_request,
+    record_serve_append_dropped,
     update_cache_age_gauge,
     update_events_source_health,
 )
@@ -61,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 _APPEND_BUSY_ATTEMPTS = 3
-# Appends waiting for the writer thread; a request past this waits for a slot.
+# Appends waiting for the writer thread; a request past this drops its append.
 _MAX_PENDING_APPENDS = 1000
 
 
@@ -165,8 +166,11 @@ def create_app(
     append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
     append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
 
-    def submit_append(write: Any, *, label: str, user_id: str) -> None:
-        append_slots.acquire()
+    def submit_append(write: Any, *, kind: str, label: str, user_id: str) -> None:
+        if not append_slots.acquire(blocking=False):
+            record_serve_append_dropped(kind)
+            logger.warning("Dropped %s append for user_id=%r: append queue is full", kind, user_id)
+            return
         append_pool.submit(_append_with_busy_retry, write, label=label, user_id=user_id).add_done_callback(
             lambda _done: append_slots.release()
         )
@@ -309,6 +313,7 @@ def create_app(
                 )
                 submit_append(
                     partial(experiment_store.append_exposures, [exposure]),
+                    kind="exposure",
                     label="append experiment exposure",
                     user_id=user_id,
                 )
@@ -330,6 +335,7 @@ def create_app(
             ]
             submit_append(
                 partial(track_store.append_rows, rows),
+                kind="impression",
                 label="append serve impressions",
                 user_id=user_id,
             )
