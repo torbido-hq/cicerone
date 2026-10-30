@@ -62,6 +62,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an `error` in `cicerone_track_ingest_total`.
 - The missing feature column warning names `user_features` or
   `item_features`.
+- The Postgres advisory lock holds its session in autocommit, so it no
+  longer idles in a transaction for the whole run, and a failed unlock
+  discards the session instead of returning it, still locked, to the pool.
+- The cron loop no longer runs a tick twice when the wall clock steps back
+  just after it fired.
+- AutoML runs its parallel folds in spawned worker processes instead of
+  forking the threaded scheduler, which could deadlock the workers.
 - `cicerone users add` rejects a password over 72 bytes (UTF-8, the bcrypt
   limit) with a clear error instead of crashing.
 - The dashboard user lookup on dataset storage (history pane, `get_user`)

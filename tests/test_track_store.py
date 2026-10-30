@@ -6,7 +6,7 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
-from support.fakes import FakeS3Body, FakeS3Client
+from support.fakes import FakeLock, FakeS3Body, FakeS3Client
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.job_eval import retrain_fence
@@ -505,23 +505,9 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
-def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_track_jsonl_append_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = TrackStore(output, fence=WriteFence(_Busy()))
+    store = TrackStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_rows([_row()])
 

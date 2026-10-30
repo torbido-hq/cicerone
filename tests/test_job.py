@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from support.fakes import FakeLock
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
@@ -2185,21 +2186,7 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.build_dataset_writer_lock", lambda _settings: None)
     monkeypatch.setattr("cicerone.job.build_output_writer_lock", lambda _settings: None)
 
-    class _Held:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Held())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: FakeLock())
 
     job.run(triggered_by="cron")
 
@@ -2553,53 +2540,26 @@ def test_write_job_manifest_accepts_legacy_signature():
     assert written["manifest"] == {"status": "failed"}
 
 
-def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch):
+def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch, no_lock_wait):
     from cicerone.locks import WriterLockBusyError
 
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
     monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Busy())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: False)
+    monkeypatch.setattr(
+        "cicerone.job.build_lock_backend", lambda _settings: FakeLock(acquires=False, owned=False)
+    )
     monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
     with pytest.raises(WriterLockBusyError, match="retrain lock busy"):
         job.run()
 
 
 def test_direct_job_releases_retrain_lock_after_run(monkeypatch):
-    released = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            released["n"] += 1
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
+    lock = FakeLock()
     monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Lock())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: lock)
     monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
     monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
     job.run()
-    assert released["n"] == 1
+    assert lock.events.count("release") == 1
 
 
 def test_scheduler_job_skips_direct_retrain_lock(monkeypatch):
