@@ -58,7 +58,7 @@ class _GenreItems:
 
 def _service(reader: _Reader, monkeypatch, variant: str | None, items_cache=None) -> RecommendationService:
     monkeypatch.setattr(
-        "cicerone.serve.recommendations.resolve_assignment",
+        "cicerone.serve.recommendations.assign_user",
         lambda *args, **kwargs: ("exp", variant) if variant else (None, None),
     )
     return RecommendationService(
