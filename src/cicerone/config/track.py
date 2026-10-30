@@ -22,7 +22,7 @@ from cicerone.config.validation import (
 def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
     if raw is None:
         return ()
-    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+    if not isinstance(raw, list | tuple) or not all(isinstance(item, str) and item.strip() for item in raw):
         raise ConfigError(f"{name} must be a list of non-empty strings")
     return tuple(item.strip() for item in raw)
 
@@ -30,7 +30,7 @@ def _load_string_tuple(raw: object, *, name: str) -> tuple[str, ...]:
 def _load_positive_int_tuple(raw: object, *, name: str) -> tuple[int, ...]:
     if raw is None:
         return ()
-    if not isinstance(raw, list):
+    if not isinstance(raw, list | tuple):
         raise ConfigError(f"{name} must be a list of positive integers")
     values: list[int] = []
     for item in raw:

@@ -27,6 +27,8 @@ _FLASH_ERR_COOKIE = {
         "err:No%20active%20champion%2Fchallenger%20pair%20is%20available"
     ),
     "Experiment state could not be read": "err:Experiment%20state%20could%20not%20be%20read",
+    "Writer lock is busy": "err:Writer%20lock%20is%20busy",
+    "Writer lock was lost": "err:Writer%20lock%20was%20lost",
 }
 FLASH_OK = frozenset(_FLASH_OK_COOKIE)
 FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)

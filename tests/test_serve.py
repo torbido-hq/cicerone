@@ -12,11 +12,12 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
 from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.feature_config import FeatureConfig
+from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
     _assignment_overlay,
-    _AssignmentOverlayCache,
-    _GeneratedAtCache,
+    _read_generated_at,
+    _refresh_step,
     _start_refresh_loop,
 )
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
@@ -517,7 +518,8 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
             return [latest] if latest else []
 
     manifest = MutableManifest()
-    cache = _GeneratedAtCache(manifest)
+    cache = RefreshedValue(lambda: _read_generated_at(manifest))
+    cache.refresh()
     assert cache.get() == "2026-08-01T00:00:00+00:00"
 
     manifest.payload = {"generated_at": "2026-08-12T12:00:00+00:00"}
@@ -528,39 +530,6 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
     manifest.payload = None
     cache.refresh()
     assert cache.get() is None
-
-
-def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
-    reader = FakeReader(_recs_df())
-    calls = {"sleep": 0}
-    cache_refreshes = {"generated": 0, "overlay": 0}
-
-    class FakeCache:
-        def __init__(self, key: str) -> None:
-            self._key = key
-
-        def refresh(self) -> None:
-            cache_refreshes[self._key] += 1
-
-    def fake_sleep(_seconds):
-        calls["sleep"] += 1
-        if calls["sleep"] >= 3:
-            raise SystemExit("stop after three ticks")
-
-    monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
-    monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
-
-    with pytest.raises(SystemExit):
-        _start_refresh_loop(
-            reader,
-            interval_seconds=0.01,
-            generated_at_cache=FakeCache("generated"),
-            overlay_cache=FakeCache("overlay"),
-        )
-
-    assert reader.refresh_calls >= 2
-    assert cache_refreshes["generated"] >= 2
-    assert cache_refreshes["overlay"] >= 2
 
 
 def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
@@ -588,6 +557,14 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
             overlay_cache=FakeCache("overlay"),
         )
     return calls
+
+
+def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
+    reader = FakeReader(_recs_df())
+    calls = _run_refresh_ticks(monkeypatch, reader, ticks=2)
+    assert reader.refresh_calls == 2
+    assert calls["generated"] == 2
+    assert calls["overlay"] == 2
 
 
 def test_start_refresh_loop_survives_a_failing_step(monkeypatch, caplog):
@@ -623,8 +600,7 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
     settings = _settings()
-    cache = _AssignmentOverlayCache(settings, None)
-    assert cache.get() == (None, None)
+    assert RefreshedValue(lambda: _assignment_overlay(settings, None)).get() == (None, None)
     assert _assignment_overlay(settings, None) == (None, None)
 
     enabled = _settings(
@@ -650,9 +626,10 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
             return "treatment", ("control", "treatment")
 
     store = _Store()
-    cache = _AssignmentOverlayCache(enabled, store)
-    assert cache.get() == ("treatment", ("control", "treatment"))
+    cache = RefreshedValue(lambda: _assignment_overlay(enabled, store))
     cache.refresh()
+    assert cache.get() == ("treatment", ("control", "treatment"))
+    assert _refresh_step(cache) is False
     assert cache.get() == ("treatment", ("control", "treatment"))
 
 

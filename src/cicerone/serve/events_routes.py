@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +16,7 @@ from cicerone.events.base import EventBackpressureError
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.http_auth import optional_bearer_deps
+from cicerone.serve.code_samples import EVENTS_PATH
 from cicerone.serve_schemas import (
     ErrorDetail,
     EventsIngestRequest,
@@ -25,7 +27,18 @@ from cicerone.serve_schemas import (
 
 logger = logging.getLogger(__name__)
 
-EVENTS_PATH = "/events"
+
+@dataclass(frozen=True)
+class IngestSpec:
+    """An ingest route: one event, a list, or ``{"events": [...]}`` of ``event_model``."""
+
+    path: str
+    event_model: type[BaseModel]
+    request_model: type[BaseModel]
+    title: str
+
+
+EVENTS_INGEST = IngestSpec(EVENTS_PATH, InteractionEvent, EventsIngestRequest, "EventsIngestBody")
 
 
 def max_body_bytes(settings: Settings) -> int:
@@ -77,32 +90,24 @@ def put_pydantic_schema(components: dict[str, Any], model: type[BaseModel]) -> N
     components[model.__name__] = _rewrite_json_schema_defs(generated)
 
 
-def attach_ingest_openapi(
-    schema: dict[str, Any],
-    path: str,
-    *,
-    event_model: type[BaseModel],
-    request_model: type[BaseModel],
-    title: str,
-) -> None:
-    """Document a flexible ingest body: one event, a list, or ``{"events": [...]}``."""
-    post = schema.get("paths", {}).get(path, {}).get("post")
+def attach_ingest_openapi(schema: dict[str, Any], spec: IngestSpec) -> None:
+    post = schema.get("paths", {}).get(spec.path, {}).get("post")
     if not isinstance(post, dict):
         return
     components = schema.setdefault("components", {}).setdefault("schemas", {})
-    put_pydantic_schema(components, event_model)
-    put_pydantic_schema(components, request_model)
-    event_ref = f"#/components/schemas/{event_model.__name__}"
+    put_pydantic_schema(components, spec.event_model)
+    put_pydantic_schema(components, spec.request_model)
+    event_ref = f"#/components/schemas/{spec.event_model.__name__}"
     post["requestBody"] = {
         "required": True,
         "content": {
             "application/json": {
                 "schema": {
-                    "title": title,
+                    "title": spec.title,
                     "oneOf": [
                         {"$ref": event_ref},
                         {"type": "array", "items": {"$ref": event_ref}},
-                        {"$ref": f"#/components/schemas/{request_model.__name__}"},
+                        {"$ref": f"#/components/schemas/{spec.request_model.__name__}"},
                     ],
                 }
             }
@@ -110,17 +115,21 @@ def attach_ingest_openapi(
     }
 
 
-def attach_events_ingest_openapi(schema: dict[str, Any]) -> None:
-    attach_ingest_openapi(
-        schema,
-        EVENTS_PATH,
-        event_model=InteractionEvent,
-        request_model=EventsIngestRequest,
-        title="EventsIngestBody",
-    )
+async def read_ingest(request: Request, settings: Settings, spec: IngestSpec) -> list[object]:
+    body = await read_limited_json(request, max_body_bytes(settings))
+    payloads = _payloads_from_body(body)
+    try:
+        if isinstance(body, dict) and "events" in body:
+            spec.request_model.model_validate(body)
+        else:
+            for payload in payloads:
+                spec.event_model.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+    return payloads
 
 
-def payloads_from_body(body: object) -> list[object]:
+def _payloads_from_body(body: object) -> list[object]:
     if isinstance(body, list):
         return list(body)
     if isinstance(body, dict) and isinstance(body.get("events"), list):
@@ -157,7 +166,7 @@ def mount_events_routes(
     events_dependencies = optional_bearer_deps(str(events_token) if events_token else None)
 
     @app.post(
-        EVENTS_PATH,
+        EVENTS_INGEST.path,
         response_model=EventsIngestResponse,
         dependencies=events_dependencies,
         status_code=202,
@@ -181,18 +190,9 @@ def mount_events_routes(
         },
     )
     async def post_events(request: Request) -> EventsIngestResponse:
-        body = await read_limited_json(request, max_body_bytes(settings))
-        payloads = payloads_from_body(body)
+        payloads = await read_ingest(request, settings, EVENTS_INGEST)
         try:
-            # Validate shape with the OpenAPI models (single or batch).
-            if isinstance(body, dict) and "events" in body:
-                EventsIngestRequest.model_validate(body)
-            else:
-                for payload in payloads:
-                    InteractionEvent.model_validate(payload)
             accepted = webhook_source.ingest(payloads)
-        except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=exc.errors()) from exc
         except EventBackpressureError as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         except EventNormalizeError as exc:

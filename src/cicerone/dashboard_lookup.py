@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -14,11 +13,7 @@ import pandas as pd
 
 from cicerone.config import Settings
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
-from cicerone.experiment.assignment import (
-    assignment_needs_snapshot,
-    resolve_assignment,
-    snapshot_variant_names,
-)
+from cicerone.experiment.assignment import assign_user, snapshot_variant_names
 from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import RecommendationReader, UserHistoryReader
 from cicerone.io.blob import is_storage_not_found
@@ -39,8 +34,6 @@ LOOKUP_FAILED = "Could not load recommendations."
 HISTORY_UNAVAILABLE = "Event history is not available."
 HISTORY_FAILED = "Could not load event history."
 MISSING = "—"
-_LOOKUP_REFRESH_TTL_SECONDS = 5.0
-_last_lookup_refresh: tuple[int, float] | None = None
 _MAX_USER_ATTRS = 12
 _EVENT_TYPE_COLUMN = "event_type"
 _QUANTITY_COLUMN = "quantity"
@@ -118,33 +111,14 @@ def lookup_recommendations(
             error="Recommendation store is not available.",
         )
 
-    global _last_lookup_refresh
-    try:
-        global _last_lookup_refresh
-        key = id(recommendation_reader)
-        now = time.monotonic()
-        last_key, last_at = _last_lookup_refresh if _last_lookup_refresh is not None else (0, 0.0)
-        if key != last_key or now - last_at >= _LOOKUP_REFRESH_TTL_SECONDS:
-            recommendation_reader.refresh()
-            _last_lookup_refresh = (key, now)
-    except OPTIONAL_IO_ERRORS as exc:
-        log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
-
     k = lookup_k(settings.top_k, settings.dashboard.lookup_k)
     experiment_id, variant = None, None
     if settings.experiment.enabled:
-        promoted, active_pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
-        snapshot = (
-            snapshot_variant_names(recommendation_reader)
-            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
-        experiment_id, variant = resolve_assignment(
+        experiment_id, variant = assign_user(
             settings,
             user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
+            ExperimentStore(settings.output).assignment_overlay(settings.experiment.id),
+            lambda: snapshot_variant_names(recommendation_reader),
         )
     try:
         recs, used_fallback = _load_rows(recommendation_reader, user_id, k, variant=variant)
