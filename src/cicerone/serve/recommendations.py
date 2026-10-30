@@ -9,18 +9,12 @@ from dataclasses import dataclass
 import pandas as pd
 
 from cicerone.config import Settings
-from cicerone.experiment.assignment import (
-    assignment_needs_snapshot,
-    resolve_assignment,
-    snapshot_variant_names,
-)
+from cicerone.experiment.assignment import AssignmentOverlay, assign_user, snapshot_variant_names
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
 from cicerone.serve.item_filters import ItemsFilterCache, filter_recommendations
 
 logger = logging.getLogger(__name__)
-
-AssignmentOverlay = tuple[str | None, tuple[str, str] | None]
 
 
 @dataclass(frozen=True)
@@ -62,7 +56,9 @@ class RecommendationService:
             and (category is not None or (exclude_unavailable and self._items_cache.availability_filters))
         )
         fetch_k = top_k * 5 if can_filter else top_k
-        experiment_id, variant = self._assign(user_id)
+        experiment_id, variant = assign_user(
+            self._settings, user_id, self._assignment_overlay(), lambda: snapshot_variant_names(self._reader)
+        )
         recs, variant = self._fetch_with_variant_fallback(
             lambda v: self._reader.get_recommendations(user_id, fetch_k, variant=v), variant
         )
@@ -96,21 +92,6 @@ class RecommendationService:
             used_fallback=used_fallback,
             experiment_id=experiment_id,
             variant=variant,
-        )
-
-    def _assign(self, user_id: str) -> tuple[str | None, str | None]:
-        promoted, active_pair = self._assignment_overlay()
-        snapshot = (
-            snapshot_variant_names(self._reader)
-            if assignment_needs_snapshot(self._settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
-        return resolve_assignment(
-            self._settings,
-            user_id,
-            promoted_variant=promoted,
-            active_pair=active_pair,
-            snapshot_names=snapshot,
         )
 
     @staticmethod

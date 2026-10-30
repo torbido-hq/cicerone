@@ -203,16 +203,6 @@ def test_load_settings_rejects_log_exposures_with_ha_on_local_dataset(tmp_path):
                 enabled = true
                 kind = "webhook"
                 ha = true
-                [input]
-                kind = "dataset"
-                [input.options]
-                storage_backend = "local"
-                path = "/tmp/in"
-                [output]
-                kind = "dataset"
-                [output.options]
-                storage_backend = "local"
-                path = "/tmp/out"
                 [experiment]
                 enabled = true
                 id = "exp"
@@ -223,7 +213,8 @@ def test_load_settings_rejects_log_exposures_with_ha_on_local_dataset(tmp_path):
                 [[experiment.variants]]
                 name = "treatment"
                 traffic = 0.5
-                """,
+                """
+                + MINIMAL_IO_TOML,
             )
         )
 

@@ -128,9 +128,9 @@ by variant). The dashboard **Quality** page reads it.
 On each `GET /recommendations/{user_id}` it writes one `kind=impression`
 row per **item in the HTTP response** (after filters / `limit`). That is
 a returned recommendation, not a browser render and not proof a shopper
-saw the item. Each row gets a new `uuid4` `event_id`. Writes run on a
-FastAPI background task: the **200 can return before the track row
-exists**, and store errors are swallowed so GET still succeeds. Clicks
+saw the item. Each row gets a new `uuid4` `event_id`. Writes run on one
+serve append thread, drained at shutdown: the **200 can return before the
+track row exists**, and store errors are swallowed so GET still succeeds. Clicks
 are always host-reported via `POST /track`.
 
 Storage is the same track store (`track.jsonl` or
