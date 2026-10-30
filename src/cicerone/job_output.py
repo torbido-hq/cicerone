@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields
-from typing import Any, Protocol
+from typing import Any
 
-from cicerone.io.base import ensure_sink_writer_held
+from cicerone.io.base import OutputSink, ensure_sink_writer_held
 from cicerone.locks import LockLostError, WriteFence
 
 logger = logging.getLogger(__name__)
@@ -100,26 +99,7 @@ def ensure_publication_fence(sink: object, retrain: WriteFence) -> None:
     ensure_sink_writer_held(sink)
 
 
-class ManifestWriter(Protocol):
-    # A property, so legacy write_manifest signatures (no skip_if_newer_than, None return) still match.
-    @property
-    def write_manifest(self) -> Callable[..., object]: ...
-
-
-def write_manifest_accepts_skip(write: Any) -> bool:
-    try:
-        return "skip_if_newer_than" in inspect.signature(write).parameters
-    except (TypeError, ValueError):
-        return False
-
-
 def write_job_manifest(
-    sink: ManifestWriter, manifest: JobManifest | Mapping[str, Any], *, skip_if_newer_than: str | None = None
+    sink: OutputSink, manifest: JobManifest, *, skip_if_newer_than: str | None = None
 ) -> bool:
-    payload = manifest.as_dict() if isinstance(manifest, JobManifest) else dict(manifest)
-    write = sink.write_manifest
-    if write_manifest_accepts_skip(write):
-        result = write(payload, skip_if_newer_than=skip_if_newer_than)
-        return result is not False
-    write(payload)
-    return True
+    return sink.write_manifest(manifest.as_dict(), skip_if_newer_than=skip_if_newer_than) is not False
