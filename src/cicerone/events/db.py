@@ -9,9 +9,11 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from time import monotonic
+from typing import Any, Literal, TypeVar
 
 from sqlalchemy import Connection, Engine, text
 
@@ -104,6 +106,13 @@ def _log_unplaceable_row(payload: dict[str, Any], exc: EventNormalizeError) -> N
     logger.warning("Skipping invalid event row %s", _rejection(payload, exc))
 
 
+@dataclass(slots=True)
+class _Delivery:
+    event: NormalizedEvent
+    state: Literal["pending", "acked", "nacked"]
+    polled_at: float
+
+
 class DbEventSource(EventSource):
     """Poll ``events`` (or trusted ``events_query``) after a watermark; advance on ``ack``.
 
@@ -126,7 +135,8 @@ class DbEventSource(EventSource):
         self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
         self._engine: Engine | None = None
         self._lock = threading.Lock()
-        self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
+        # Polled events in cursor order; the watermark advances over the leading acked run.
+        self._in_flight: OrderedDict[str, _Delivery] = OrderedDict()
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -170,59 +180,90 @@ class DbEventSource(EventSource):
                 raise EventSourceError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
             watermark_event_id = self._watermark_event_id
-            in_flight_count = len(self._in_flight)
+            limit = max_events + len(self._in_flight) + 8
             engine = self._engine
-        rows = self._fetch_rows(
-            engine,
-            watermark_at,
-            watermark_event_id,
-            limit=max_events + in_flight_count + 8,
-        )
+        rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=limit)
         candidates = sorted(_parsed_rows(rows, _row_event, _log_unplaceable_row), key=cursor_key)
 
         out: list[NormalizedEvent] = []
         with self._lock:
+            self._drop_vanished_heads_unlocked(candidates, complete=len(rows) < limit)
             cursor = cursor_tuple(self._watermark_at, self._watermark_event_id)
             for event in candidates:
                 if len(out) >= max_events:
                     break
                 if cursor_key(event) <= cursor:
                     continue
-                if event.event_id in self._in_flight:
+                delivery = self._in_flight.get(event.event_id)
+                if delivery is None:
+                    self._in_flight[event.event_id] = _Delivery(event, "pending", monotonic())
+                elif delivery.state == "nacked":
+                    delivery.event, delivery.state = event, "pending"
+                else:
                     continue
-                self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
                 out.append(event)
+            if out:
+                ordered = sorted(self._in_flight.items(), key=lambda item: cursor_key(item[1].event))
+                self._in_flight = OrderedDict(ordered)
         return out
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
             for event in events:
-                self._in_flight.pop(event.event_id, None)
+                delivery = self._in_flight.get(event.event_id)
+                if delivery is not None and delivery.state == "pending":
+                    delivery.state = "nacked"
         return ()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
         with self._lock:
-            advanced = False
             for event_id in event_ids:
                 eid = str(event_id)
-                event = self._in_flight.pop(eid, None)
-                if event is None:
+                delivery = self._in_flight.get(eid)
+                if delivery is None or delivery.state != "pending":
                     continue
+                delivery.state = "acked"
                 confirmed.append(eid)
-                key = cursor_key(event)
-                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
-                    self._watermark_at = event.occurred_at
-                    self._watermark_event_id = event.event_id
-                    advanced = True
-            if advanced:
-                self._persist_watermark_unlocked()
+            self._advance_unlocked()
         return tuple(confirmed)
+
+    def _advance_unlocked(self) -> None:
+        advanced = False
+        while self._in_flight and next(iter(self._in_flight.values())).state == "acked":
+            _eid, delivery = self._in_flight.popitem(last=False)
+            self._watermark_at = delivery.event.occurred_at
+            self._watermark_event_id = delivery.event.event_id
+            advanced = True
+        if advanced:
+            self._persist_watermark_unlocked()
+
+    def _drop_vanished_heads_unlocked(self, candidates: Sequence[NormalizedEvent], *, complete: bool) -> None:
+        # A page cut short before the head's timestamp says nothing about the head's row.
+        returned = {(event.event_id, cursor_key(event)) for event in candidates}
+        reached = candidates[-1].occurred_at if candidates else None
+        while self._in_flight:
+            head = next(iter(self._in_flight.values())).event
+            if (head.event_id, cursor_key(head)) in returned:
+                return
+            if not complete and (reached is None or reached <= head.occurred_at):
+                return
+            logger.warning(
+                "Dropping in-flight event %s at %s: its row is no longer returned after the watermark",
+                head.event_id,
+                head.occurred_at.isoformat(),
+            )
+            del self._in_flight[head.event_id]
+            self._advance_unlocked()
 
     def health(self) -> EventSourceHealth:
         with self._lock:
             detail = f"db watermark={self._watermark_at.isoformat()}"
+            if self._in_flight:
+                head = next(iter(self._in_flight.values()))
+                acked = sum(1 for delivery in self._in_flight.values() if delivery.state == "acked")
+                detail += f" acked_behind_head={acked} head_wait={monotonic() - head.polled_at:.0f}s"
             connected = self._connected
             last_event_at = self._last_event_at
             engine = self._engine

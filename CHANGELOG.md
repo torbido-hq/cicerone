@@ -133,6 +133,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- The db events source no longer loses earlier events on restart when a
+  later one was acked first: the watermark moves only over the leading run
+  of acked events. A nacked event holds it until redelivered and acked; an
+  in-flight event whose row is gone is dropped with a warning.
 
 ### Removed
 

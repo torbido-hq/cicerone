@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -953,3 +954,98 @@ def test_db_rows_with_a_garbage_occurred_at_never_stall_the_source(tmp_path):
 
     assert [event.event_id for event in source.poll(2)] == ["e1"]
     assert source.health().lag == 1
+
+
+def _watermarked_source(tmp_path, rows: list[dict]) -> tuple[DbEventSource, dict]:
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, rows)
+    options = {"database_url": url, "watermark_path": str(tmp_path / "wm.json")}
+    source = DbEventSource(options)
+    source.connect()
+    return source, options
+
+
+def _restarted_ids(options: dict) -> list[str]:
+    restarted = DbEventSource(options)
+    restarted.connect()
+    return [event.event_id for event in restarted.poll(10)]
+
+
+def _saved_event_id(tmp_path) -> str | None:
+    watermark = tmp_path / "wm.json"
+    return json.loads(watermark.read_text())["event_id"] if watermark.exists() else None
+
+
+def test_db_out_of_order_ack_does_not_lose_earlier_events_on_restart(tmp_path):
+    source, options = _watermarked_source(tmp_path, [_event_row(f"e{n}", n) for n in (1, 2, 3)])
+    assert [event.event_id for event in source.poll(10)] == ["e1", "e2", "e3"]
+    assert source.ack(["e3"]) == ("e3",)
+    assert _saved_event_id(tmp_path) is None
+    assert _restarted_ids(options) == ["e1", "e2", "e3"]
+    assert source.ack(["e1"]) == ("e1",)
+    assert _saved_event_id(tmp_path) == "e1"
+    assert source.ack(["e2", "e3"]) == ("e2",)
+    assert _saved_event_id(tmp_path) == "e3"
+    assert _restarted_ids(options) == []
+
+
+def test_db_nacked_head_is_redelivered_and_holds_the_watermark(tmp_path):
+    source, options = _watermarked_source(tmp_path, [_event_row(f"e{n}", n) for n in (1, 2, 3)])
+    first, *_rest = source.poll(10)
+    assert source.nack([first]) == ()
+    assert source.ack(["e1", "e2", "e3"]) == ("e2", "e3")
+    assert _saved_event_id(tmp_path) is None
+    assert [event.event_id for event in source.poll(10)] == ["e1"]
+    assert source.ack(["e1"]) == ("e1",)
+    assert _saved_event_id(tmp_path) == "e3"
+    assert _restarted_ids(options) == []
+
+
+def test_db_vanished_head_row_is_dropped_so_the_watermark_moves(tmp_path, caplog):
+    import logging
+
+    source, options = _watermarked_source(tmp_path, [_event_row(f"e{n}", n) for n in (1, 2, 3)])
+    first, *_rest = source.poll(10)
+    source.nack([first])
+    source.ack(["e2"])
+    _seed_events(options["database_url"], [_event_row(f"e{n}", n) for n in (2, 3)])
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.db"):
+        assert list(source.poll(10)) == []
+    assert any("e1" in record.getMessage() for record in caplog.records)
+    assert _saved_event_id(tmp_path) == "e2"
+    assert source.ack(["e3"]) == ("e3",)
+    assert _restarted_ids(options) == []
+
+
+def test_db_head_beyond_a_truncated_page_is_not_dropped(tmp_path):
+    source, options = _watermarked_source(tmp_path, [_event_row("e9", 9)])
+    assert [event.event_id for event in source.poll(10)] == ["e9"]
+    late = [_event_row(f"late{n:02d}", 1, item_id=f"l{n}") for n in range(20)]
+    _seed_events(options["database_url"], [*late, _event_row("e9", 9)])
+    assert len(source.poll(1)) == 1
+    assert source.ack(["e9"]) == ("e9",)
+
+
+def test_db_same_timestamp_watermark_follows_event_id_order(tmp_path):
+    source, options = _watermarked_source(tmp_path, [_event_row(f"e{n}", 0) for n in (3, 2)])
+    assert [event.event_id for event in source.poll(10)] == ["e2", "e3"]
+    _seed_events(options["database_url"], [_event_row(f"e{n}", 0) for n in (3, 1, 2)])
+    assert [event.event_id for event in source.poll(10)] == ["e1"]
+    assert source.ack(["e3", "e2"]) == ("e3", "e2")
+    assert _saved_event_id(tmp_path) is None
+    assert _restarted_ids(options) == ["e1", "e2", "e3"]
+    source.ack(["e1"])
+    assert _saved_event_id(tmp_path) == "e3"
+
+
+def test_db_health_reports_acked_events_stuck_behind_the_head(tmp_path, monkeypatch):
+    import cicerone.events.db as db_mod
+
+    monkeypatch.setattr(db_mod, "monotonic", lambda: 100.0)
+    source, _options = _watermarked_source(tmp_path, [_event_row(f"e{n}", n) for n in (1, 2, 3)])
+    source.poll(10)
+    source.ack(["e2", "e3"])
+    monkeypatch.setattr(db_mod, "monotonic", lambda: 130.0)
+    assert "acked_behind_head=2 head_wait=30s" in (source.health().detail or "")
+    source.ack(["e1"])
+    assert "acked_behind_head" not in (source.health().detail or "")
