@@ -91,13 +91,20 @@ def test_resolve_postgres_lock_url_falls_back_to_output_db():
     assert resolve_postgres_lock_url(settings) == "postgresql+psycopg://output/db"
 
 
+def _unvalidated_postgres_lock_settings():
+    from dataclasses import replace
+
+    settings = make_settings()
+    return replace(settings, trigger=replace(settings.trigger, lock_backend="postgres"))
+
+
 def test_resolve_postgres_lock_url_none_for_dataset_without_explicit():
-    settings = make_settings(trigger_lock_backend="postgres")
+    settings = _unvalidated_postgres_lock_settings()
     assert resolve_postgres_lock_url(settings) is None
 
 
 def test_build_postgres_lock_without_url_is_programming_error():
-    settings = make_settings(trigger_lock_backend="postgres")
+    settings = _unvalidated_postgres_lock_settings()
     with pytest.raises(AssertionError, match="validated at config load"):
         build_lock_backend(settings)
 

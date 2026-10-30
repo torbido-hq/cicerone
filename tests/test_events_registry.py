@@ -24,7 +24,6 @@ def test_config_kind_validation_uses_registry():
         {"enabled": True, "kind": "webhook", "options": {"auth_token": "t"}},
         mode="serve",
         serve_auth_token=None,
-        resolve_env=lambda value, _path: value,
     )
     assert settings.kind == "webhook"
 
