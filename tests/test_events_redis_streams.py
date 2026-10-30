@@ -8,10 +8,10 @@ import pytest
 from support.events import dataset_updater, event_payload
 from support.fakes import hide_module
 
+from cicerone.broker_errors import RedisError
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
-from cicerone.events.errors import RedisError
 from cicerone.events.redis_streams import RedisStreamsEventSource, validate_redis_stream_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.worker import EventWorker

@@ -133,6 +133,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- The RabbitMQ and Kafka publishers retry or wrap as `PublishError` only
+  broker and client errors. A programming error (e.g. `TypeError`) after
+  part of a publish was sent now propagates unchanged instead of being
+  retried or reported as a publish failure.
+- Unexpected errors are no longer logged and swallowed in the S3/SQS
+  events source (object load, ack delete, nack visibility, lag lookup),
+  the trigger input poller, the serve `X-Generated-At` manifest read,
+  serve exposure/impression writes, RabbitMQ handle close, publisher
+  close on serve startup failure and the Redis lock refresh thread; only
+  storage and broker errors are.
 
 ### Removed
 

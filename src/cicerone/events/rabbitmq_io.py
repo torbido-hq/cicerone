@@ -9,12 +9,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
+from cicerone.amqp_options import close_amqp_handle
+from cicerone.broker_errors import RABBITMQ_IO_ERRORS
 from cicerone.events.base import EventSourceError
-from cicerone.events.errors import AMQPError
 
 logger = logging.getLogger(__name__)
-
-RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -199,9 +198,9 @@ class PikaIo:
         self._abandon_connection = None
         close_handles(channel, connection)
         if leftover_channel is not None and leftover_channel is not channel:
-            _close_quietly(leftover_channel, "channel")
+            close_amqp_handle(leftover_channel, "channel")
         if leftover_connection is not None and leftover_connection is not connection:
-            _close_quietly(leftover_connection, "connection")
+            close_amqp_handle(leftover_connection, "connection")
 
     def _loop(self) -> None:
         while True:
@@ -220,7 +219,7 @@ class PikaIo:
                     self._busy += 1
                 try:
                     self._pump()
-                except Exception:
+                except Exception:  # noqa: BLE001 - I/O thread's top level; failing it releases blocked callers
                     self._mark_failed()
                     logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
@@ -241,8 +240,7 @@ class PikaIo:
                 return
             try:
                 result = job.fn()
-            except Exception as exc:
-                # The caller is blocked on this reply.
+            except Exception as exc:  # noqa: BLE001 - handed to the blocked caller, which re-raises it
                 payload: tuple[str, Any] = ("err", exc)
             else:
                 payload = ("err", abandoned_error()) if self._failed else ("ok", result)
@@ -303,17 +301,7 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
 
 
 def close_handles(channel: Any, connection: Any) -> None:
-    _close_quietly(channel, "channel")
-    _close_quietly(connection, "connection")
-
-
-def _close_quietly(handle: Any, label: str) -> None:
-    if handle is None:
-        return
-    closer = getattr(handle, "close", None)
-    if not callable(closer):
-        return
     try:
-        closer()
-    except Exception:
-        logger.exception("Failed to close RabbitMQ %s", label)
+        close_amqp_handle(channel, "channel")
+    finally:
+        close_amqp_handle(connection, "connection")

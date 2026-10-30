@@ -487,23 +487,23 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
     def _refresh_online(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
         if self._online is None or self._variant_names:
             return OnlineRefreshResult(rows=empty_online_rows())
+        refreshed = False
         try:
-            return self._online.refresh(events)
+            result = self._online.refresh(events)
+            refreshed = True
+            return result
         except LockLostError as exc:
-            self.abort_online()
             logger.error("%s; aborting pending online fit", exc)
             raise
         except WriterLockBusyError as exc:
-            self.abort_online()
             logger.info("%s; aborting pending online fit", exc)
             raise
         except _ONLINE_REFRESH_ERRORS:
-            self.abort_online()
             logger.exception("Online collaborative refresh failed; aborting pending fit")
             raise
-        except Exception:
-            self.abort_online()
-            raise
+        finally:
+            if not refreshed:
+                self.abort_online()
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:
         frame = result.rows

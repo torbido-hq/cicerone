@@ -2140,7 +2140,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     def _start() -> None:
         try:
             worker.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             errors.append(exc)
 
     starter = threading.Thread(target=_start)

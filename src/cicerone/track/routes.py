@@ -70,26 +70,24 @@ def mount_track_routes(
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
+        accepted = False
         try:
             payloads = await read_ingest(request, settings, TRACK_INGEST)
             rows = [normalize_track(payload).as_row() for payload in payloads]
             accepted_rows = await asyncio.to_thread(track_store.append_accepted_rows, rows)
+            accepted = True
         except TrackNormalizeError as exc:
-            record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except WriterLockBusyError as exc:
-            record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=503, detail="Writer lock is busy") from exc
         except LockLostError as exc:
-            record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=503, detail="Writer lock was lost") from exc
         except STORE_UNAVAILABLE_ERRORS as exc:
-            record_track_ingest(kind="other", status="error")
             log_caught("Track store unavailable", exc, log=logger)
             raise HTTPException(status_code=503, detail="Track store unavailable") from exc
-        except Exception:
-            record_track_ingest(kind="other", status="error")
-            raise
+        finally:
+            if not accepted:
+                record_track_ingest(kind="other", status="error")
         _record_accepted_ingest(accepted_rows)
         return TrackIngestResponse(
             accepted=len(accepted_rows),

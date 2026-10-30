@@ -8,9 +8,9 @@ from collections import deque
 from collections.abc import Sequence, Set
 from typing import Any
 
+from cicerone.broker_errors import KafkaException
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
-from cicerone.events.errors import KafkaException
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds

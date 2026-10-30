@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from cicerone.broker_errors import KafkaException
 from cicerone.config.constants import ConfigError, import_extra
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
 from cicerone.option_parse import require_nonempty_str
@@ -17,20 +18,13 @@ from cicerone.publish.payload import user_recommendation_messages
 logger = logging.getLogger(__name__)
 
 _PREFIX = "publish.options"
-
-
-def _kafka_publish_errors() -> tuple[type[BaseException], ...]:
-    # Imported lazily: events.errors loads this package while it is initializing.
-    from cicerone.events.errors import KafkaException
-
-    return (KafkaException, BufferError)
+_KAFKA_CLIENT_ERRORS: tuple[type[BaseException], ...] = (KafkaException, BufferError)
 
 
 def _flush_quietly(producer: Any, timeout: float) -> None:
     try:
         producer.flush(timeout)
-    except Exception:
-        # Connect's original error must still propagate.
+    except _KAFKA_CLIENT_ERRORS:
         logger.exception("Kafka publisher flush after connect failure")
 
 
@@ -57,7 +51,7 @@ class KafkaPublisher:
             producer = confluent_kafka.Producer(self._conf)
             producer.list_topics(timeout=self._timeout_seconds)
             connected = True
-        except _kafka_publish_errors() as exc:
+        except _KAFKA_CLIENT_ERRORS as exc:
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
         finally:
             if producer is not None and not connected:
@@ -73,7 +67,6 @@ class KafkaPublisher:
                 errors.append(str(err))
 
         messages = user_recommendation_messages(df, user_ids=user_ids)
-        produced = False
         try:
             for user_id, body, _message_id in messages:
                 producer.produce(
@@ -82,16 +75,10 @@ class KafkaPublisher:
                     key=user_id.encode("utf-8"),
                     on_delivery=on_delivery,
                 )
-                produced = True
                 # Serve delivery callbacks as we go so the local queue drains during large publishes.
                 producer.poll(0)
             remaining = producer.flush(self._timeout_seconds)
-        except _kafka_publish_errors() as exc:
-            raise PublishError(f"Kafka publish failed: {exc}") from exc
-        except Exception as exc:
-            if not produced:
-                raise
-            # The broker may already have these records. Callers must not retry them.
+        except _KAFKA_CLIENT_ERRORS as exc:
             raise PublishError(f"Kafka publish failed: {exc}") from exc
         if remaining:
             raise PublishError(f"Kafka publish timed out with {remaining} message(s) in queue")
@@ -105,11 +92,7 @@ class KafkaPublisher:
             return
         try:
             producer.flush(self._timeout_seconds)
-        except _kafka_publish_errors() as exc:
-            raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
-        except Exception as exc:
-            if isinstance(exc, RuntimeError) and not isinstance(exc, PublishError):
-                raise
+        except _KAFKA_CLIENT_ERRORS as exc:
             raise PublishError(f"Kafka publisher flush on close failed: {exc}") from exc
 
     def _require(self) -> Any:

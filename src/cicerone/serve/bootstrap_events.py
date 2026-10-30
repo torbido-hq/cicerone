@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -61,8 +60,7 @@ class EventsRuntime:
             return True
         finally:
             try:
-                # A pending worker-stop error must still propagate.
-                _close_publisher(self.publisher, quiet=sys.exception() is not None)
+                _close_publisher(self.publisher)
             finally:
                 self.publisher = None
 
@@ -116,21 +114,16 @@ def _stop_worker_quietly(worker: EventWorker | None) -> None:
         return
     try:
         worker.stop()
-    except Exception:
-        # The startup error must still propagate.
+    except Exception:  # noqa: BLE001 - runs while the startup error propagates; that error must win
         logger.exception("Event worker stop after startup failure")
 
 
-def _close_publisher(publisher: RecommendationPublisher | None, *, quiet: bool = False) -> None:
+def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
     try:
         publisher.close()
     except PUBLISH_ERRORS:
-        logger.exception("Recommendation publisher close failed")
-    except Exception:
-        if not quiet:
-            raise
         logger.exception("Recommendation publisher close failed")
 
 
@@ -282,4 +275,4 @@ def start_events_runtime(
     finally:
         if not ready:
             _stop_worker_quietly(worker)
-            _close_publisher(publisher, quiet=True)
+            _close_publisher(publisher)

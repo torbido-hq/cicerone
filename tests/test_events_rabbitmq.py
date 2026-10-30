@@ -10,9 +10,9 @@ from support.events import event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
 from support.fakes import hide_module
 
+from cicerone.broker_errors import AMQPError
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
-from cicerone.events.errors import AMQPError
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
 from cicerone.events.rabbitmq import RabbitMQEventSource, validate_rabbitmq_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -134,7 +134,7 @@ def test_abandoned_io_does_not_return_late_ok():
     def _caller() -> None:
         try:
             result["value"] = io.submit(_job)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             result["err"] = exc
 
     waiter = threading.Thread(target=_caller)
@@ -177,7 +177,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -231,7 +231,7 @@ def test_pika_io_timeout_does_not_run_job_held_at_a_step(step: str, hold_after: 
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -289,7 +289,7 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -351,7 +351,7 @@ def test_pika_io_timeout_does_not_run_dispatched_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -395,7 +395,7 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     def _caller() -> None:
         try:
             io.submit(_late_ack)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -478,16 +478,22 @@ def test_close_handles_closes_connection_when_channel_close_fails():
             if self.error is not None:
                 raise self.error
 
-    channel = _Handle(RuntimeError("channel"))
+    channel = _Handle(AMQPError("channel"))
     connection = _Handle()
     close_handles(channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle(RuntimeError("connection"))
+    channel = _Handle(AMQPError("channel"))
+    connection = _Handle(OSError("connection"))
     close_handles(channel, connection)
     assert channel.closed is True
+    assert connection.closed is True
+
+    channel = _Handle(RuntimeError("channel bug"))
+    connection = _Handle()
+    with pytest.raises(RuntimeError, match="channel bug"):
+        close_handles(channel, connection)
     assert connection.closed is True
 
 
@@ -541,7 +547,7 @@ def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
         state.close = _close
         return state
 
-    channel = _handle(RuntimeError("channel"))
+    channel = _handle(AMQPError("channel"))
     connection = _handle()
     io = PikaIo(timeout_seconds=0.05)
     io._abandon_channel = channel
@@ -1781,7 +1787,7 @@ def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
     def _ack() -> None:
         try:
             source.ack(["e1"])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             errors.append(exc)
 
     waiter = threading.Thread(target=_ack)

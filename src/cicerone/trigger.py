@@ -12,9 +12,10 @@ from typing import Any, Protocol
 from fastapi import FastAPI, HTTPException
 
 from cicerone import job
-from cicerone.config import IOSettings, Settings
+from cicerone.config import ConfigError, IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
@@ -83,7 +84,7 @@ class RunGuard:
                 self._run_fn(triggered_by=triggered_by)
             else:
                 self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - run thread's top level; the guard records the error
             logger.exception("Triggered run (%s) failed", triggered_by)
             with self._lock:
                 self._last_error = exc
@@ -111,7 +112,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
         key = object_key(options, EVENTS_FILENAME)
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
-    except Exception:
+    except (ConfigError, OSError, *S3_READ_ERRORS):
         logger.exception("Failed to check input source for changes; treating as unchanged")
         return None
 

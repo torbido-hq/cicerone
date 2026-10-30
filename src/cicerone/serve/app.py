@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
+from cicerone.errors import OPTIONAL_IO_ERRORS, SINK_WRITE_ERRORS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
@@ -30,6 +31,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.locks import (
     WriteFence,
@@ -81,7 +83,7 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
                 _APPEND_BUSY_ATTEMPTS,
             )
             time.sleep(0.05 * attempt)
-        except Exception:
+        except SINK_WRITE_ERRORS:
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
@@ -110,10 +112,9 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 
 
 def _refresh_step(step: RecommendationReader | RefreshedValue[Any]) -> bool:
-    # Readers are pluggable; one failed step must not end the loop.
     try:
         return step.refresh() is not False
-    except Exception:
+    except Exception:  # noqa: BLE001 - refresh thread's top level; readers are pluggable, the loop must go on
         logger.exception("Background refresh of %s failed; retrying next tick", type(step).__name__)
         return False
 
@@ -143,7 +144,7 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
         return None
     try:
         latest = manifest_reader.read_latest()
-    except Exception:
+    except (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS):
         logger.exception("Failed to read latest manifest for generated_at; omitting header")
         return None
     if not latest:
