@@ -34,7 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of all sharing the id `"0"` or `"False"` and being dropped as
   duplicates.
 - The db events watermark file syncs its directory after the rename, as
-  the S3 list marker already did, so the saved position survives a crash.
+  the S3 list marker already did, and both sync a newly created
+  positions directory into its parent, so the saved position survives a
+  crash.
 - Dashboard **Resume split** under Thompson allocation fails with
   "Experiment state could not be read" when the state read fails, instead
   of overwriting the stored champion, challenger and arms.

@@ -21,7 +21,19 @@ def read_json_object_file(path: Path) -> dict[str, Any] | None:
     return raw
 
 
+def _fsync_dir(directory: Path) -> None:
+    try:
+        dir_fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def write_json_object_file(path: Path, payload: dict[str, Any]) -> None:
+    created = [directory for directory in (path.parent, *path.parent.parents) if not directory.exists()]
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
     with tmp.open("w", encoding="utf-8") as handle:
@@ -29,12 +41,6 @@ def write_json_object_file(path: Path, payload: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     tmp.replace(path)
-    # Sync the directory after the rename so the rename itself survives a crash.
-    try:
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    # Sync after the rename, and each new directory into its parent, so both survive a crash.
+    for directory in (path.parent, *(new.parent for new in created)):
+        _fsync_dir(directory)
