@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError
 
-from cicerone.config.settings import IOSettings
+from cicerone.config.settings import IOSettings, Settings
 from cicerone.experiment.store_dataset import (
     EXPOSURE_LOG_BACKEND_ERROR,
     EXPOSURES_FILENAME,
@@ -25,7 +25,7 @@ from cicerone.experiment.store_db import (
     ExperimentDbBackend,
 )
 from cicerone.io.db_errors import SQL_READ_ERRORS
-from cicerone.locks import WriteFence
+from cicerone.locks import WriteFence, build_output_writer_lock
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ __all__ = [
     "ExperimentStore",
     "active_pair_from_state",
     "build_experiment_backend",
+    "build_experiment_store",
     "experiment_state",
     "merge_experiment_state",
 ]
@@ -136,8 +137,8 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
-        self._fence = fence or WriteFence()
-        self.backend = build_experiment_backend(output, self._fence)
+        self.fence = fence or WriteFence()
+        self.backend = build_experiment_backend(output, self.fence)
 
     def read_state(self) -> dict[str, Any] | None:
         state = self.backend.read_state()
@@ -190,7 +191,7 @@ class ExperimentStore:
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
         write = self.backend.state_writer(payload)
-        with self._fence.lease():
+        with self.fence.lease():
             write()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
@@ -203,7 +204,7 @@ class ExperimentStore:
         if not rows:
             return
         write = self.backend.exposure_writer(rows)
-        with self._fence.lease():
+        with self.fence.lease():
             write()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
@@ -212,3 +213,9 @@ class ExperimentStore:
             return rows
         # Backends filter too; this keeps the string match the db filter may not (a legacy numeric column).
         return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]
+
+
+def build_experiment_store(settings: Settings) -> ExperimentStore | None:
+    if not settings.experiment.enabled:
+        return None
+    return ExperimentStore(settings.output, fence=WriteFence(build_output_writer_lock(settings)))

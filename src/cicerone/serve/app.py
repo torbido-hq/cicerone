@@ -25,7 +25,7 @@ from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
-from cicerone.experiment.store import ExperimentStore
+from cicerone.experiment.store import build_experiment_store
 from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
@@ -35,7 +35,6 @@ from cicerone.locks import (
     WriteFence,
     WriterLockBusyError,
     build_dataset_writer_lock,
-    build_output_writer_lock,
 )
 from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
@@ -190,11 +189,7 @@ def create_app(
     generated_at_cache.refresh()
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
-    experiment_store = (
-        ExperimentStore(settings.output, fence=WriteFence(build_output_writer_lock(settings)))
-        if settings.experiment.enabled
-        else None
-    )
+    experiment_store = build_experiment_store(settings)
     overlay_cache: RefreshedValue[AssignmentOverlay] = RefreshedValue(
         lambda: read_assignment_overlay(settings, experiment_store), initial=(None, None)
     )

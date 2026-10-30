@@ -133,6 +133,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- When the experiment state read fails, the dashboard experiments page and
+  a non-Thompson promote fall back to that dashboard's own last read or
+  written state, instead of an unlocked process-wide copy.
 
 ### Removed
 

@@ -25,7 +25,7 @@ from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
-from cicerone.experiment.store import ExperimentStore
+from cicerone.experiment.store import build_experiment_store
 from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
@@ -242,6 +242,7 @@ def create_app(
             "incremental": _incremental_status(history),
         }
 
+    experiment_store = build_experiment_store(settings)
     reader_refresh = (
         RefreshedValue(recommendation_reader.refresh, ttl_seconds=_LOOKUP_REFRESH_TTL_SECONDS)
         if recommendation_reader is not None
@@ -252,11 +253,7 @@ def create_app(
             settings,
             recommendation_reader,
             feature_config,
-            partial(
-                read_assignment_overlay,
-                settings,
-                ExperimentStore(settings.output) if settings.experiment.enabled else None,
-            ),
+            partial(read_assignment_overlay, settings, experiment_store),
         )
         if recommendation_reader is not None
         else None
@@ -304,7 +301,7 @@ def create_app(
 
     @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
     def experiments(request: Request):
-        context = experiment_context(settings)
+        context = experiment_context(settings, experiment_store)
         message, promote_error = parse_flash_cookie(request.cookies.get(FLASH_COOKIE))
         context["message"] = message
         context["promote_error"] = promote_error
@@ -327,7 +324,9 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        return _promotion_redirect(request, promote_winner(settings, variant.strip()), "Promoted")
+        return _promotion_redirect(
+            request, promote_winner(settings, experiment_store, variant.strip()), "Promoted"
+        )
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote(
@@ -335,7 +334,7 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        return _promotion_redirect(request, clear_promotion(settings), "Resumed split")
+        return _promotion_redirect(request, clear_promotion(settings, experiment_store), "Resumed split")
 
     @app.get("/dashboard/config", dependencies=[Depends(auth)])
     def config_page(request: Request):
