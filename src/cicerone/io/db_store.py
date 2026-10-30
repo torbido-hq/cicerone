@@ -158,6 +158,10 @@ def _manifest_column_type(value: Any) -> Any:
     return Text()
 
 
+def _mysql_family(bind: Any) -> bool:
+    return bind.dialect.name in ("mysql", "mariadb")
+
+
 def _clear_table_for_replace(conn, table: str) -> None:
     """Empty ``table`` before a full rewrite: TRUNCATE then DELETE, or DELETE only on MySQL/MariaDB.
 
@@ -166,8 +170,7 @@ def _clear_table_for_replace(conn, table: str) -> None:
     MySQL/MariaDB TRUNCATE commits implicitly, so a failed rewrite could not roll back.
     If the table does not exist yet, every attempt fails and ``to_sql`` creates it; other DELETE errors raise.
     """
-    mysql_family = conn.dialect.name in ("mysql", "mariadb")
-    verbs = ("DELETE FROM",) if mysql_family else ("TRUNCATE TABLE", "DELETE FROM")
+    verbs = ("DELETE FROM",) if _mysql_family(conn) else ("TRUNCATE TABLE", "DELETE FROM")
     for verb in verbs:
         savepoint = conn.begin_nested()
         try:
@@ -395,9 +398,7 @@ class DatabaseOutputSink:
 
     def _applied_scope(self, recommendations_table: str) -> str:
         # Unquoted names ignore case on SQLite and Postgres; MySQL table-name case depends on the server.
-        name = (
-            recommendations_table if self._engine.dialect.name == "mysql" else recommendations_table.lower()
-        )
+        name = recommendations_table if _mysql_family(self._engine) else recommendations_table.lower()
         # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
         return hashlib.sha256(name.encode()).hexdigest()
 

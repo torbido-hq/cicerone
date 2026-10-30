@@ -64,6 +64,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   timeout, missing permissions), instead of appending over the old rows.
 - A db output that found no `incremental_applied_events` table checks again
   on later writes, so it prunes expired keys once another output creates it.
+- On `mariadb://` URLs the replay keys' recommendations-table scope keeps
+  the table name's case, as on `mysql://`, so two case-distinct tables no
+  longer share keys.
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.

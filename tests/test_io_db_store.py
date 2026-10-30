@@ -515,6 +515,12 @@ def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monke
     assert sink._applied_scope("Recs") != sink._applied_scope("recs")
 
 
+def test_applied_event_scope_keeps_the_table_name_case_on_mariadb(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    monkeypatch.setattr(sink._engine.dialect, "name", "mariadb")
+    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
+
+
 def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:
     from cicerone.io import db_store
 
