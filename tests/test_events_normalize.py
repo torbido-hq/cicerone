@@ -9,7 +9,24 @@ from cicerone.events.normalize import (
     events_to_dataframe,
     normalize_event,
     normalize_events,
+    supplied_event_id,
 )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, None),
+        ({"event_id": 0}, None),
+        ({"event_id": "", "idempotency_key": 0}, None),
+        ({"event_id": None, "idempotency_key": False}, None),
+        ({"event_id": 0, "idempotency_key": "k"}, "k"),
+        ({"event_id": "0"}, "0"),
+        ({"event_id": 7}, "7"),
+    ],
+)
+def test_supplied_event_id_treats_every_empty_value_as_missing(payload, expected):
+    assert supplied_event_id(payload) == expected
 
 
 def test_event_fingerprint_does_not_collide_on_pipe_in_fields():

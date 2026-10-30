@@ -175,16 +175,29 @@ def test_nack_allows_repoll(monkeypatch):
     assert list(source.poll(10)) == []
 
 
-def test_missing_event_id_uses_partition_offset(monkeypatch):
+@pytest.mark.parametrize(
+    ("ids", "expected"),
+    [
+        ({}, "0-0"),
+        ({"event_id": 0}, "0-0"),
+        ({"event_id": ""}, "0-0"),
+        ({"event_id": "", "idempotency_key": 0}, "0-0"),
+        ({"event_id": 0, "idempotency_key": "k"}, "k"),
+        ({"event_id": "0"}, "0"),
+    ],
+    ids=["absent", "zero", "empty", "empty-key-zero", "zero-with-key", "string-zero"],
+)
+def test_missing_event_id_uses_partition_offset(monkeypatch, ids, expected):
     broker = install_fake_kafka(monkeypatch)
     payload = event_payload()
     payload.pop("event_id")
+    payload.update(ids)
     broker.add("cicerone.events", payload)
     source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
-    assert events[0].event_id == "0-0"
+    assert events[0].event_id == expected
 
 
 def test_poison_entry_is_committed(monkeypatch):
