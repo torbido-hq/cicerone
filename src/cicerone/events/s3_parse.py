@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote_plus
 
-from cicerone import option_parse
 from cicerone.config import ConfigError
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import EventNormalizeError, normalize_event
@@ -17,7 +16,6 @@ from cicerone.events.normalize import EventNormalizeError, normalize_event
 logger = logging.getLogger("cicerone.events.s3")
 
 _MODES = frozenset({"sqs", "list"})
-_EVENTS_PREFIX = "events.options"
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_SQS_LAG_CACHE_TTL_SECONDS = 5.0
 DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS = 2.0
@@ -51,18 +49,6 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
         if not options.get("queue_url"):
             raise ConfigError('events.options.queue_url is required when events.options.mode = "sqs"')
     return resolved
-
-
-def as_int(options: dict[str, Any], key: str, default: int) -> int:
-    return option_parse.as_int(options, key, default, prefix=_EVENTS_PREFIX)
-
-
-def positive_int(options: dict[str, Any], key: str, default: int) -> int:
-    return option_parse.optional_int(options, key, default, prefix=_EVENTS_PREFIX, minimum=1)
-
-
-def positive_float(options: dict[str, Any], key: str, default: float) -> float:
-    return option_parse.optional_float(options, key, default, prefix=_EVENTS_PREFIX)
 
 
 # One SQS message / S3 object → _Batch. Events go pending → (on poll) in_flight;

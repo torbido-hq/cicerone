@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
@@ -77,6 +79,11 @@ def patch_parquet_reads(
 
     monkeypatch.setattr(io_options, "read_parquet", read)
     return calls
+
+
+def hide_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make ``import name`` fail as if its optional extra were not installed."""
+    monkeypatch.setitem(sys.modules, name, None)
 
 
 class FakeReader:

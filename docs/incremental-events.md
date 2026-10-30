@@ -236,6 +236,12 @@ until an entry arrives and so holds buffered events on a quiet stream),
 `event_id` uses the stream entry id. Requires
 `pip install 'cicerone-recommender[redis]'` or
 `pip install -r requirements-redis.txt` (same extra as the Redis lock).
+The worker retries a failed ack until it succeeds. An ack the source does
+not confirm is not retried: Kafka commits it with a later offset, and
+RabbitMQ requeues it when the channel closes. After a restart, unacked
+Redis Streams entries come back through `XAUTOCLAIM` once idle
+`claim_idle_ms`. The worker acks a redelivery through its applied-event
+dedupe or replay key instead of applying it again.
 
 Prefer Redis Streams when you already run Redis for the lock; Kafka and
 RabbitMQ are extras for shops that already have those brokers.
@@ -293,7 +299,9 @@ optional `routing_key` (empty is valid, e.g. fanout; omitted queue-mode
 key is the queue name).
 Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score,
 source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
-(also set on RabbitMQ properties). Kafka key is `user_id`. Publish failures
+(also set on RabbitMQ properties). Kafka key is `user_id`. A publish that
+fails partway raises, and a retry sends every affected user again with the
+same `message_id`, so consumers should dedupe on it. Publish failures
 after a successful write are logged and do not fail the job or incremental
 flush. A lost retrain fence after the write still fails the job. In an
 incremental flush, any failure after the recommendations write (a manifest

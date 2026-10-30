@@ -7,50 +7,37 @@ import socket
 from collections.abc import Sequence
 from typing import Any
 
-from cicerone.config import ConfigError
+from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import RedisError
 from cicerone.events.normalize import EventNormalizeError, normalize_event
-from cicerone.option_parse import as_int
+from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
 
+_EVENTS_PREFIX = "events.options"
 _DEFAULT_CLAIM_IDLE_MS = 300_000
 _DEFAULT_GROUP_START_ID = "0-0"
 
 
 def validate_redis_stream_options(options: dict[str, Any]) -> None:
-    """Validate ``events.options`` for ``kind=redis_streams``."""
     for key in ("redis_url", "stream", "consumer_group"):
-        value = options.get(key)
-        if value in (None, "") or (isinstance(value, str) and not value.strip()):
-            raise ConfigError(f'events.options.{key} is required when events.kind = "redis_streams"')
-    if "consumer_name" in options and str(options["consumer_name"]).strip() == "":
-        raise ConfigError("events.options.consumer_name must be non-empty when set")
-    if "group_start_id" in options and str(options["group_start_id"]).strip() == "":
-        raise ConfigError("events.options.group_start_id must be non-empty when set")
-    block_ms = _block_ms(options)
-    if block_ms is not None and block_ms < 0:
-        raise ConfigError(f"events.options.block_ms must be >= 0, got {block_ms}")
-    claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
-    if claim_idle_ms < 1:
-        raise ConfigError(f"events.options.claim_idle_ms must be >= 1, got {claim_idle_ms}")
-
-
-def _as_int(options: dict[str, Any], key: str, default: int) -> int:
-    return as_int(options, key, default, prefix="events.options")
+        require_nonempty_str(options, key, prefix=_EVENTS_PREFIX)
+    optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
+    optional_nonempty_str(options, "group_start_id", prefix=_EVENTS_PREFIX)
+    _block_ms(options)
+    _claim_idle_ms(options)
 
 
 def _block_ms(options: dict[str, Any]) -> int | None:
     # Unset sends no BLOCK (non-blocking read). An explicit 0 keeps Redis's "wait forever".
-    return None if options.get("block_ms") is None else _as_int(options, "block_ms", 0)
+    if options.get("block_ms") is None:
+        return None
+    return optional_int(options, "block_ms", 0, prefix=_EVENTS_PREFIX, minimum=0)
 
 
-def _require_str(options: dict[str, Any], key: str) -> str:
-    value = str(options[key]).strip()
-    if not value:
-        raise ConfigError(f'events.options.{key} is required when events.kind = "redis_streams"')
-    return value
+def _claim_idle_ms(options: dict[str, Any]) -> int:
+    return optional_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS, prefix=_EVENTS_PREFIX, minimum=1)
 
 
 class RedisStreamsEventSource(QueuedEventSource):
@@ -59,22 +46,20 @@ class RedisStreamsEventSource(QueuedEventSource):
     def __init__(self, options: dict[str, Any]):
         validate_redis_stream_options(options)
         super().__init__()
-        self._redis_url = _require_str(options, "redis_url")
-        self._stream = _require_str(options, "stream")
-        self._group = _require_str(options, "consumer_group")
-        raw_name = options.get("consumer_name")
-        self._consumer = (
-            str(raw_name).strip() if raw_name not in (None, "") else socket.gethostname() or "cicerone"
-        )
-        start = options.get("group_start_id", _DEFAULT_GROUP_START_ID)
-        self._group_start_id = str(start).strip() or _DEFAULT_GROUP_START_ID
+        self._redis_url = require_nonempty_str(options, "redis_url", prefix=_EVENTS_PREFIX)
+        self._stream = require_nonempty_str(options, "stream", prefix=_EVENTS_PREFIX)
+        self._group = require_nonempty_str(options, "consumer_group", prefix=_EVENTS_PREFIX)
+        raw_name = optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
+        self._consumer = raw_name or socket.gethostname() or "cicerone"
+        start = optional_nonempty_str(options, "group_start_id", prefix=_EVENTS_PREFIX)
+        self._group_start_id = start or _DEFAULT_GROUP_START_ID
         self._block_ms = _block_ms(options)
         if self._block_ms == 0:
             logger.warning(
                 "events.options.block_ms = 0 makes each read wait until an entry arrives; "
                 "buffered events are not flushed while the stream is quiet"
             )
-        self._claim_idle_ms = _as_int(options, "claim_idle_ms", _DEFAULT_CLAIM_IDLE_MS)
+        self._claim_idle_ms = _claim_idle_ms(options)
 
         self._client: Any | None = None
         self._entry_ids: dict[str, str] = {}  # event_id → stream entry id (until XACK)
@@ -82,14 +67,7 @@ class RedisStreamsEventSource(QueuedEventSource):
         self._claim_cursor = "0-0"
 
     def connect(self) -> None:
-        try:
-            import redis
-        except ImportError as exc:
-            raise ConfigError(
-                'events.kind = "redis_streams" requires the redis package; '
-                "install with: pip install 'cicerone-recommender[redis]'"
-            ) from exc
-
+        redis = import_extra("redis", "redis", 'events.kind = "redis_streams"')
         from cicerone.redis_client import redis_from_url
 
         client = redis_from_url(self._redis_url, decode_responses=True)
@@ -114,25 +92,21 @@ class RedisStreamsEventSource(QueuedEventSource):
             self._client = client
             self._connected = True
             self._claim_cursor = "0-0"
-        if previous is not None and previous is not client:
-            try:
-                previous.close()
-            except RedisError:
-                logger.exception("Failed to close previous Redis Streams client")
+        if previous is not None:
+            self._release(previous)
 
-    def close(self) -> None:
-        with self._lock:
-            client = self._client
-            self._client = None
-            self._connected = False
-            self._clear_lifecycle()
-            self._entry_ids.clear()
-            self._held_entries.clear()
-        if client is not None:
-            try:
-                client.close()
-            except RedisError:
-                logger.exception("Redis Streams client close failed")
+    def _detach_unlocked(self) -> Any | None:
+        client = self._client
+        self._client = None
+        self._entry_ids.clear()
+        self._held_entries.clear()
+        return client
+
+    def _release(self, client: Any) -> None:
+        try:
+            client.close()
+        except RedisError:
+            logger.exception("Redis Streams client close failed")
 
     def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
         if not events:

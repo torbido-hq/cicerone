@@ -18,6 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ExperimentStore` delegates to a db or dataset backend
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
+- Redis Streams treats an empty `consumer_name` or `group_start_id` as
+  unset (host name / `0-0`), like Kafka, instead of rejecting it.
+- A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
+  with `events.options.<key> is required`, like Kafka, without the
+  `when events.kind = "redis_streams"` suffix.
 
 ### Fixed
 
@@ -130,6 +135,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `POST /track` returns **503** "Track store unavailable" instead of
   **500** when the track store is unavailable or failing (any storage or
   database error).
+- The Kafka event source drops the deliveries of partitions revoked or lost
+  in a group rebalance, so their acks no longer commit offsets for another
+  member or fail every worker tick, and the redelivered messages are not
+  skipped when the partition comes back.
+- The event worker no longer retries forever an ack the source does not
+  confirm (Kafka commits it with a later offset, RabbitMQ requeues it when
+  the channel closes). A failed ack is still retried until it succeeds.
+- The db events source compares a naive `occurred_at` on Postgres in UTC,
+  as it reads it, instead of the session time zone, which skipped or
+  re-read rows when the server zone was not UTC.
+- The Kafka publisher serves delivery callbacks after each message, so a
+  large publish no longer fills the producer queue.
+- A RabbitMQ publish that fails after some messages were confirmed raises
+  `PublishError`, like Kafka, instead of logging and reporting success.
+  The incremental sidecar retry then republishes every affected user with
+  the same `message_id`, which consumers dedupe on.
 
 ## [0.8.5] - 2026-10-14
 
