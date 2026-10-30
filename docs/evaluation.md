@@ -88,7 +88,8 @@ http.request(request)
 ```
 
 Clicks use the same contract with `kind: "click"`. Invalid body → **400**.
-Missing bearer → **401**. Writer lock busy or lost → **503**.
+Missing bearer → **401**. Writer lock busy or lost → **503**. Track store
+unavailable or failing (any storage or database error) → **503**.
 
 ## Metrics
 
@@ -111,8 +112,10 @@ Missing bearer → **401**. Writer lock busy or lost → **503**.
   out until that time has passed.
 
 `min_impressions` (default **100**) gates experiment **Promote** /
-Thompson volume when `primary_metric` is `ctr` or `conversion`. It does
-not change the CTR formula and does not hide the Quality page.
+Thompson volume when `primary_metric` is `ctr` or `conversion`. The
+experiment's sequential test also stays undecided until each arm has at
+least `min_impressions` **users** (any `primary_metric`). It does not
+change the CTR formula and does not hide the Quality page.
 
 The job writes a compact `track_eval` report (overall, by rank, by `source`,
 by variant). The dashboard **Quality** page reads it.

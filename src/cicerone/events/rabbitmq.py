@@ -15,13 +15,14 @@ from cicerone.amqp_options import (
     require_amqp_url,
     require_queue,
 )
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
     RABBITMQ_IO_ERRORS,
     PikaIo,
+    abandoned_error,
     close_handles,
     release_io,
 )
@@ -36,13 +37,6 @@ def validate_rabbitmq_event_options(options: dict[str, Any]) -> None:
     require_queue(options, prefix=_EVENTS_PREFIX)
     prefetch_count(options, prefix=_EVENTS_PREFIX)
     amqp_timeout_seconds(options, prefix=_EVENTS_PREFIX)
-
-
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'events.kind = "rabbitmq" requires the pika package; '
-        "install with: pip install 'cicerone-recommender[rabbitmq]'"
-    )
 
 
 class RabbitMQEventSource(QueuedEventSource):
@@ -66,11 +60,7 @@ class RabbitMQEventSource(QueuedEventSource):
         self._event_io: dict[int, tuple[PikaIo, str]] = {}
 
     def connect(self) -> None:
-        try:
-            import pika
-        except ImportError as exc:
-            raise _missing_extra() from exc
-
+        pika = import_extra("pika", "rabbitmq", 'events.kind = "rabbitmq"')
         io = PikaIo(self._timeout_seconds)
         io.start()
         opened = False
@@ -84,40 +74,31 @@ class RabbitMQEventSource(QueuedEventSource):
                 io.abandon(None, io._connection)
 
         with self._lock:
-            previous_io = self._io
-            previous_channel = self._channel
-            previous_connection = self._connection
+            previous = self._detach_unlocked()
             carried = list(self._pending)
             self._io = io
             self._connection = connection
             self._channel = channel
             self._connected = True
             self._clear_lifecycle()
-            self._delivery_tags.clear()
-            self._held_tags.clear()
-            self._event_io.clear()
             for event in carried:
                 self._pending.append(event)
                 self._pending_ids.add(event.event_id)
-        if previous_io is not None:
-            release_io(previous_io, previous_channel, previous_connection)
+        if previous is not None:
+            self._release(previous)
 
-    def close(self) -> None:
-        with self._lock:
-            io = self._io
-            channel = self._channel
-            connection = self._connection
-            self._io = None
-            self._channel = None
-            self._connection = None
-            self._connected = False
-            self._clear_lifecycle()
-            self._delivery_tags.clear()
-            self._held_tags.clear()
-            self._event_io.clear()
-        if io is None:
-            return
-        release_io(io, channel, connection)
+    def _detach_unlocked(self) -> tuple[PikaIo, Any, Any] | None:
+        io, channel, connection = self._io, self._channel, self._connection
+        self._io = None
+        self._channel = None
+        self._connection = None
+        self._delivery_tags.clear()
+        self._held_tags.clear()
+        self._event_io.clear()
+        return None if io is None else (io, channel, connection)
+
+    def _release(self, handle: tuple[PikaIo, Any, Any]) -> None:
+        release_io(*handle)
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
@@ -318,7 +299,7 @@ class RabbitMQEventSource(QueuedEventSource):
 
     def _open(self, pika: Any, io: PikaIo) -> tuple[Any, Any]:
         if io.failed:
-            raise EventSourceError("RabbitMQ I/O worker abandoned")
+            raise abandoned_error()
         connection = pika.BlockingConnection(
             apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
         )

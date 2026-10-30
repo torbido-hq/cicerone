@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 from sqlalchemy.exc import OperationalError
-from support.fakes import FakeLock
+from support.fakes import FakeLock, hide_module
 from support.settings import make_settings
 
 from cicerone import locks as locks_mod
@@ -184,16 +184,7 @@ def test_redis_lock_contention(monkeypatch):
 
 
 def test_redis_lock_missing_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "redis":
-            raise ImportError("no redis")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
+    hide_module(monkeypatch, "redis")
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         RedisLock("redis://localhost:6379/0")
 

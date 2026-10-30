@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
@@ -21,6 +20,7 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
+from cicerone.values import utc_stamp
 
 _EMPTY = np.array([], dtype=object)
 _EMPTY_REWARDS = np.array([], dtype=float)
@@ -116,13 +116,13 @@ def track_rows_since(
     until: datetime,
 ) -> list[dict[str, Any]]:
     """Rows with ``occurred_at`` in ``[started_at, until)``; ``until`` starts the next window."""
-    stamp = pd.to_datetime(started_at, utc=True, errors="coerce") if started_at else None
-    if started_at and pd.isna(stamp):
+    start = utc_stamp(started_at) if started_at else None
+    if started_at and start is None:
         return []
     out: list[dict[str, Any]] = []
     for row in rows:
-        when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if pd.isna(when) or when >= until or (stamp is not None and when < stamp):
+        when = utc_stamp(row.get("occurred_at"))
+        if when is None or when >= until or (start is not None and when < start):
             continue
         out.append(dict(row))
     return out

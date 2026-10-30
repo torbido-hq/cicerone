@@ -8,8 +8,9 @@ from typing import Any
 
 import pandas as pd
 
-from cicerone.config.constants import ConfigError
-from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds, require_nonempty_str
+from cicerone.config.constants import ConfigError, import_extra
+from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
+from cicerone.option_parse import require_nonempty_str
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -38,13 +39,6 @@ def validate_kafka_publish_options(options: dict[str, Any]) -> None:
     require_nonempty_str(options, "topic", prefix=_PREFIX)
 
 
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'publish.kind = "kafka" requires the confluent-kafka package; '
-        "install with: pip install 'cicerone-recommender[kafka]'"
-    )
-
-
 class KafkaPublisher:
     def __init__(self, options: dict[str, Any]):
         validate_kafka_publish_options(options)
@@ -56,14 +50,11 @@ class KafkaPublisher:
     def connect(self) -> None:
         if self._producer is not None:
             return
-        try:
-            from confluent_kafka import Producer
-        except ImportError as exc:
-            raise _missing_extra() from exc
+        confluent_kafka = import_extra("confluent_kafka", "kafka", 'publish.kind = "kafka"')
         producer = None
         connected = False
         try:
-            producer = Producer(self._conf)
+            producer = confluent_kafka.Producer(self._conf)
             producer.list_topics(timeout=self._timeout_seconds)
             connected = True
         except _kafka_publish_errors() as exc:
@@ -92,6 +83,8 @@ class KafkaPublisher:
                     on_delivery=on_delivery,
                 )
                 produced = True
+                # Serve delivery callbacks as we go so the local queue drains during large publishes.
+                producer.poll(0)
             remaining = producer.flush(self._timeout_seconds)
         except _kafka_publish_errors() as exc:
             raise PublishError(f"Kafka publish failed: {exc}") from exc

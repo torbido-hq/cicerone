@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import pytest
 from botocore.exceptions import ClientError
+from support.settings import local_output
 
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
+from cicerone.config import ConfigError, IOSettings
+from cicerone.io.blob import (
+    append_storage_bytes,
+    read_storage_bytes,
+    require_db_or_local_dataset,
+    write_storage_bytes,
+)
 
 
 def test_local_read_write_append_round_trip(tmp_path) -> None:
@@ -75,3 +82,10 @@ def test_s3_read_missing_returns_none(mocker) -> None:
         "bucket": "bucket",
     }
     assert read_storage_bytes(options, "file.bin") is None
+
+
+def test_require_db_or_local_dataset(tmp_path, s3_options) -> None:
+    require_db_or_local_dataset(IOSettings(kind="db", options={"database_url": "sqlite://"}), "nope")
+    require_db_or_local_dataset(local_output(tmp_path), "nope")
+    with pytest.raises(ConfigError, match="nope"):
+        require_db_or_local_dataset(IOSettings(kind="dataset", options=s3_options), "nope")

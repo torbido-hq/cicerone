@@ -30,6 +30,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
+from cicerone.io.recommendation_reader_common import group_by_user
 from cicerone.io.recommendation_schema import recommendation_output_columns
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import (
@@ -506,17 +507,11 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:
         frame = result.rows
-        if frame is None or frame.empty or USER_COLUMN not in frame.columns:
+        if frame is None or frame.empty:
             return {}
-        keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
-        if SOURCE_COLUMN in keyed.columns:
-            mask = keyed[SOURCE_COLUMN].astype(str).map(is_preserved_source)
-            keyed = keyed.loc[mask]
-        if keyed.empty:
-            return {}
-        return {
-            user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
-        }
+        if SOURCE_COLUMN in frame.columns:
+            frame = frame.loc[frame[SOURCE_COLUMN].astype(str).map(is_preserved_source)]
+        return group_by_user(frame)
 
     def _ensure_write_allowed(self) -> bool:
         if self._write_busy_check is not None and self._write_busy_check():

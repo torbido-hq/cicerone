@@ -15,14 +15,14 @@ from cicerone.publish.base import PublishError
 
 logger = logging.getLogger(__name__)
 
+# Storage that can't be reached or written; a retry may succeed.
+STORE_UNAVAILABLE_ERRORS: tuple[type[BaseException], ...] = (OSError, SQLAlchemyError, BotoCoreError)
 # No bare TypeError: those are bugs and must fail the job. ArrowTypeError is a data/schema mismatch.
 OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,
+    *STORE_UNAVAILABLE_ERRORS,
     ValueError,
-    SQLAlchemyError,
     ArrowInvalid,
     ArrowTypeError,
-    BotoCoreError,
     RecommendationSchemaError,
 )
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)

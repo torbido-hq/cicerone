@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 
 from cicerone.config import Settings
+from cicerone.errors import STORE_UNAVAILABLE_ERRORS, log_caught
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.metrics import record_track_ingest
@@ -65,7 +66,7 @@ def mount_track_routes(
             },
             401: {"model": ErrorDetail, "description": "Missing or invalid bearer token"},
             413: {"model": ErrorDetail, "description": "Request body too large"},
-            503: {"model": ErrorDetail, "description": "Writer lock busy or lost"},
+            503: {"model": ErrorDetail, "description": "Writer lock busy or lost, or store unavailable"},
         },
     )
     async def post_track(request: Request) -> TrackIngestResponse:
@@ -82,6 +83,10 @@ def mount_track_routes(
         except LockLostError as exc:
             record_track_ingest(kind="other", status="error")
             raise HTTPException(status_code=503, detail="Writer lock was lost") from exc
+        except STORE_UNAVAILABLE_ERRORS as exc:
+            record_track_ingest(kind="other", status="error")
+            log_caught("Track store unavailable", exc, log=logger)
+            raise HTTPException(status_code=503, detail="Track store unavailable") from exc
         except Exception:
             record_track_ingest(kind="other", status="error")
             raise

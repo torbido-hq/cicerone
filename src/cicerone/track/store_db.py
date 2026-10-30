@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -11,23 +10,20 @@ from typing import Any
 import pandas as pd
 from sqlalchemy import Engine, bindparam, text
 
-from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
 from cicerone.io.options import require_option, table_option
+from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
     DEFAULT_HISTORY_TABLE,
     DEFAULT_TRACK_TABLE,
-    HISTORY_COLUMNS,
+    empty_history_frame,
     filter_history,
     history_sql_filter,
-    jsonish,
     track_row_sql_filter,
     unique_matching_rows,
 )
-
-logger = logging.getLogger(__name__)
 
 _TRACK_TABLE = (
     ("event_id", "TEXT PRIMARY KEY"),
@@ -77,7 +73,7 @@ class TrackDbBackend:
         frame = self._read_history_db(generated_ats=generated_ats)
         return filter_history(frame, generated_ats=generated_ats, since=since)
 
-    def _db_engine(self) -> Engine:
+    def engine(self) -> Engine:
         return self._engine.get()
 
     def _ensure_track_table(self, conn: Any, table: str) -> None:
@@ -85,7 +81,7 @@ class TrackDbBackend:
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
-        engine = self._db_engine()
+        engine = self.engine()
         row_sql = text(
             insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
             + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
@@ -130,49 +126,28 @@ class TrackDbBackend:
         since: str | None = None,
     ) -> list[dict[str, Any]]:
         table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
-        engine = self._db_engine()
+        engine = self.engine()
         quoted = quote_identifier(engine, table)
         clause, params = track_row_sql_filter(kind=kind, experiment_id=experiment_id, since=since)
-        try:
-            frame = pd.read_sql(text(f"SELECT * FROM {quoted}{clause}"), engine, params=params)
-        except SQL_READ_ERRORS as exc:
-            if is_missing_table_error(exc):
-                return []
-            logger.exception("Failed to read track table %r", table)
-            raise
-        if frame.empty:
-            return []
-        records = frame.to_dict(orient="records")
-        return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
+        frame = read_sql_or_missing(engine, text(f"SELECT * FROM {quoted}{clause}"), table, params)
+        return frame_records(frame)
 
     def _write_eval_db(self, encoded: str) -> None:
         table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
-        engine = self._db_engine()
-        quoted = quote_identifier(engine, table)
+        engine = self.engine()
         with engine.begin() as conn:
             conn.execute(text(create_table_sql(conn, table, _EVAL_TABLE)))
-            conn.execute(text(f"DELETE FROM {quoted}"))
-            self._fence.ensure()
-            conn.execute(
-                text(insert_sql(conn, table, [name for name, _kind in _EVAL_TABLE])),
-                {"payload": encoded, "written_at": pd.Timestamp.now(tz="UTC").isoformat()},
-            )
-            self._fence.ensure()
+            written_at = pd.Timestamp.now(tz="UTC").isoformat()
+            replace_rows_fenced(conn, table, {"payload": encoded, "written_at": written_at}, self._fence)
 
     def _read_eval_db(self) -> dict[str, Any] | None:
         table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
-        engine = self._db_engine()
+        engine = self.engine()
         quoted = quote_identifier(engine, table)
-        try:
-            frame = pd.read_sql(
-                text(f"SELECT {quote_identifier(engine, 'payload')} FROM {quoted} LIMIT 1"), engine
-            )
-        except SQL_READ_ERRORS as exc:
-            if is_missing_table_error(exc):
-                return None
-            logger.exception("Failed to read eval table %r", table)
-            raise
-        if frame.empty:
+        frame = read_sql_or_missing(
+            engine, text(f"SELECT {quote_identifier(engine, 'payload')} FROM {quoted} LIMIT 1"), table
+        )
+        if frame is None or frame.empty:
             return None
         raw = frame.iloc[0]["payload"]
         try:
@@ -183,10 +158,7 @@ class TrackDbBackend:
 
     def _append_history_db(self, frame: pd.DataFrame) -> None:
         table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
-        with self._db_engine().begin() as conn:
-            self._fence.ensure()
-            frame.to_sql(table, conn, if_exists="append", index=False)
-            self._fence.ensure()
+        append_frame_fenced(self.engine(), table, frame, self._fence)
 
     def _read_history_db(
         self,
@@ -194,21 +166,14 @@ class TrackDbBackend:
         generated_ats: set[str] | None,
     ) -> pd.DataFrame:
         table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
-        engine = self._db_engine()
+        engine = self.engine()
         quoted = quote_identifier(engine, table)
         clause, params = history_sql_filter(generated_ats=generated_ats)
-        try:
-            if params:
-                stmt = text(f"SELECT * FROM {quoted}{clause}")
-                if generated_ats:
-                    stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
-                return pd.read_sql(stmt, engine, params=params)
-            return pd.read_sql(text(f"SELECT * FROM {quoted}"), engine)
-        except SQL_READ_ERRORS as exc:
-            if is_missing_table_error(exc):
-                return pd.DataFrame(columns=list(HISTORY_COLUMNS))
-            logger.exception("Failed to read history table %r", table)
-            raise
+        stmt = text(f"SELECT * FROM {quoted}{clause}")
+        if generated_ats:
+            stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
+        frame = read_sql_or_missing(engine, stmt, table, params)
+        return empty_history_frame() if frame is None else frame
 
 
 def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[str]:

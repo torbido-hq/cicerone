@@ -8,7 +8,7 @@ from cicerone.track.normalize import (
     TrackNormalizeError,
     normalize_track,
 )
-from cicerone.track.store import TrackStore, require_appendable_track_log
+from cicerone.track.store import TrackStore
 
 __all__ = [
     "TRACK_KIND_CLICK",
@@ -16,5 +16,4 @@ __all__ = [
     "TrackNormalizeError",
     "TrackStore",
     "normalize_track",
-    "require_appendable_track_log",
 ]
