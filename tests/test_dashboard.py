@@ -875,6 +875,27 @@ def test_recommendations_partial_without_reader_shows_error():
     assert "Recommendation store is not available." in response.text
 
 
+def test_recommendations_partial_refreshes_reader_once_per_ttl(refresh_clock):
+    from cicerone.dashboard import _LOOKUP_REFRESH_TTL_SECONDS
+
+    rec_reader = _FakeRecReader(_recs_df())
+    client = _recs_client(rec_reader)
+
+    def lookup(user_id: str) -> None:
+        response = client.get(
+            "/partials/recommendations", params={"user_id": user_id}, auth=("alice", "s3cret")
+        )
+        assert response.status_code == 200
+
+    lookup("u1")
+    lookup("u1")
+    lookup("")
+    assert rec_reader.refresh_calls == 1
+    refresh_clock.now += _LOOKUP_REFRESH_TTL_SECONDS
+    lookup("u1")
+    assert rec_reader.refresh_calls == 2
+
+
 def test_recommendations_partial_refresh_error_still_looks_up():
     rec_reader = _FakeRecReader(_recs_df(), refresh_error=OSError("cache boom"))
     response = _recs_client(rec_reader).get(
@@ -1119,6 +1140,40 @@ def test_dashboard_promote_unknown_variant_redirects():
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard/experiments"
     assert _flash_cookie(response).startswith("err:")
+
+
+@pytest.mark.parametrize(
+    ("error", "cookie"),
+    [
+        ("Writer lock is busy", "err:Writer%20lock%20is%20busy"),
+        ("Writer lock was lost", "err:Writer%20lock%20was%20lost"),
+    ],
+)
+def test_dashboard_promote_lock_error_flashes_the_lock_message(monkeypatch, error, cookie):
+    import cicerone.dashboard as dash
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: error)
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    client = _recs_client(experiment=experiment)
+    response = client.post(
+        "/dashboard/experiments/promote",
+        data={"variant": "control", "csrf_token": _csrf_token(client)},
+        auth=("alice", "s3cret"),
+        headers=_same_origin(),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert _flash_cookie(response) == cookie
+    page = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert error in page.text
 
 
 def test_dashboard_promote_hostile_variant_stays_on_experiments():

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
@@ -17,6 +19,47 @@ from cicerone.config.constants import (
 from cicerone.config.settings import EpochMetricsSettings
 
 _T = TypeVar("_T")
+
+_ENV_PLACEHOLDER = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def resolve_env_placeholders(value: Any, path: str = "") -> Any:
+    if isinstance(value, str):
+
+        def _replace(match: re.Match[str]) -> str:
+            escaped, name = match.group(1), match.group(2)
+            if escaped:
+                return f"${{{name}}}"
+            if name not in os.environ:
+                location = f" (at '{path}')" if path else ""
+                raise RuntimeError(
+                    f"Config references ${{{name}}}{location} but that environment variable is not set"
+                )
+            return os.environ[name]
+
+        return _ENV_PLACEHOLDER.sub(_replace, value)
+    if isinstance(value, dict):
+        return {
+            key: resolve_env_placeholders(item, f"{path}.{key}" if path else str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [resolve_env_placeholders(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    return value
+
+
+def load_kind_section(
+    raw: Mapping[str, Any], section: str, default_kind: str, kinds: Sequence[str]
+) -> tuple[bool, str, dict[str, Any]]:
+    """``enabled``, ``kind`` and resolved ``options`` of an ``[events]``/``[publish]``-style table."""
+    enabled = bool(raw.get("enabled", False))
+    kind = str(raw.get("kind", default_kind)).lower()
+    if enabled and kind not in kinds:
+        raise ConfigError(f"{section}.kind must be one of {list(kinds)}, got {kind!r}")
+    options = resolve_env_placeholders(raw.get("options", {}), f"{section}.options")
+    if not isinstance(options, dict):
+        raise ConfigError(f"{section}.options must be a table")
+    return enabled, kind, options
 
 
 def int_field(raw: Mapping[str, Any], name: str, default: int, require: Callable[..., int]) -> int:

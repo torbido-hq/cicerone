@@ -23,7 +23,7 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
-from cicerone.errors import OPTIONAL_IO_ERRORS
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -40,6 +40,7 @@ from cicerone.http_security import (
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
+from cicerone.refreshed_value import RefreshedValue
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
 _TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
 _EXPERIMENTS_PATH = "/dashboard/experiments"
+_LOOKUP_REFRESH_TTL_SECONDS = 5.0
 _LOGOUT_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -234,6 +236,20 @@ def create_app(
             "incremental": _incremental_status(history),
         }
 
+    reader_refresh = (
+        RefreshedValue(recommendation_reader.refresh, ttl_seconds=_LOOKUP_REFRESH_TTL_SECONDS)
+        if recommendation_reader is not None
+        else None
+    )
+
+    def _lookup(user_id: str) -> dict[str, Any]:
+        if reader_refresh is not None and user_id.strip():
+            try:
+                reader_refresh.get()
+            except OPTIONAL_IO_ERRORS as exc:
+                log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
+        return lookup_inspector(settings, recommendation_reader, history_reader, user_id)
+
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
         return _TEMPLATES.TemplateResponse(request, "_status.html", _status_context())
@@ -243,14 +259,14 @@ def create_app(
         return _TEMPLATES.TemplateResponse(
             request,
             "_recommendations.html",
-            lookup_inspector(settings, recommendation_reader, history_reader, user_id),
+            _lookup(user_id),
         )
 
     @app.get("/dashboard", dependencies=[Depends(auth)])
     def dashboard(request: Request, user_id: str = Query(default="")):
         context = _status_context()
         context["refresh_interval_seconds"] = settings.dashboard.refresh_interval_seconds
-        context.update(lookup_inspector(settings, recommendation_reader, history_reader, user_id))
+        context.update(_lookup(user_id))
         context["page_title"] = page_title(
             user_id=str(context.get("user_id") or ""),
             manifest=context["manifest"],

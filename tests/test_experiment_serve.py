@@ -227,7 +227,8 @@ def test_recommendations_log_exposures_when_enabled(tmp_path):
         manifest_reader=FakeManifest(),
         feature_config=_feature_config(),
     )
-    TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
+    with TestClient(app) as client:
+        client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     lines = (tmp_path / "exposures.jsonl").read_text().strip().splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])
@@ -244,7 +245,8 @@ def test_recommendations_exposure_generated_at_matches_response(tmp_path):
         manifest_reader=FakeManifest(),
         feature_config=_feature_config(),
     )
-    body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
+    with TestClient(app) as client:
+        body = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     row = json.loads((tmp_path / "exposures.jsonl").read_text().strip().splitlines()[0])
     assert row["generated_at"] == body["generated_at"]
     assert body["generated_at"] == "2026-08-04T12:00:00+00:00"
@@ -492,10 +494,10 @@ def test_serve_assignment_does_not_import_mabwiser():
     import sys
 
     before = {name for name in sys.modules if name.split(".")[0] == "mabwiser"}
-    from cicerone.experiment.assignment import resolve_assignment
+    from cicerone.experiment.assignment import assign_user
     from cicerone.serve.app import create_app as _create_app
 
-    _ = resolve_assignment
+    _ = assign_user
     _ = _create_app
     after = {name for name in sys.modules if name.split(".")[0] == "mabwiser"}
     assert after == before

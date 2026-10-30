@@ -9,6 +9,7 @@ from conftest import make_settings
 from fastapi.testclient import TestClient
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
+from support.fakes import FakeReader
 from support.prometheus_metrics import metric_samples, metric_value, registry_metric_value
 
 from cicerone.config import Settings
@@ -32,32 +33,6 @@ def _metrics_headers() -> dict[str, str]:
     return {METRICS_TOKEN_HEADER: "metrics-secret"}
 
 
-class _FakeReader:
-    def __init__(self, recs: pd.DataFrame):
-        self._recs = recs
-
-    def refresh(self) -> None:
-        pass
-
-    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
-        if variant is not None and "variant" in rows.columns:
-            rows = rows[rows["variant"].astype(str) == str(variant)]
-        return rows.head(k).reset_index(drop=True)
-
-    def get_items(self):
-        return None
-
-    def items_version(self) -> int:
-        return 0
-
-    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return self._recs.iloc[0:0]
-
-    def configure_item_filters(self, *, category_column=None, availability_filters=()) -> None:
-        del category_column, availability_filters
-
-
 def _recs_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -68,7 +43,7 @@ def _recs_df() -> pd.DataFrame:
 
 
 def test_metrics_returns_prometheus_text_format():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(CONTENT_TYPE_LATEST)
@@ -80,13 +55,13 @@ def test_metrics_returns_prometheus_text_format():
 
 
 def test_metrics_disabled_returns_not_found():
-    app = create_app(_settings(serve_metrics_enabled=False), _FakeReader(_recs_df()))
+    app = create_app(_settings(serve_metrics_enabled=False), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 404
 
 
 def test_metrics_token_required_when_configured():
-    app = create_app(_settings(serve_metrics_token="metrics-secret"), _FakeReader(_recs_df()))
+    app = create_app(_settings(serve_metrics_token="metrics-secret"), FakeReader(_recs_df()))
     client = TestClient(app)
     assert client.get("/metrics").status_code == 401
     response = client.get("/metrics", headers=_metrics_headers())
@@ -94,13 +69,13 @@ def test_metrics_token_required_when_configured():
 
 
 def test_metrics_does_not_require_bearer_token():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
 
 
 def test_metrics_endpoint_excluded_from_request_counters():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     client = TestClient(app)
     before = client.get("/metrics", headers=_metrics_headers()).text
     before_metrics_requests = sum(
@@ -123,7 +98,7 @@ def test_metrics_endpoint_excluded_from_request_counters():
 
 
 def test_recommend_request_increments_request_and_source_metrics():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     client = TestClient(app)
     before = client.get("/metrics", headers=_metrics_headers()).text
     before_requests = metric_value(
@@ -157,7 +132,7 @@ def test_recommend_request_increments_request_and_source_metrics():
 
 
 def test_request_metrics_bound_unmatched_paths_and_unknown_methods():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     client = TestClient(app)
     unmatched = {"endpoint": "unmatched", "method": "GET", "status": "404"}
     other_method = {"endpoint": "/health", "method": "other", "status": "405"}
@@ -188,7 +163,7 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
 
     # Snapshot counters before constructing the reader (its __init__ calls refresh).
     probe = (
-        TestClient(create_app(_settings(), _FakeReader(_recs_df())))
+        TestClient(create_app(_settings(), FakeReader(_recs_df())))
         .get("/metrics", headers=_metrics_headers())
         .text
     )
@@ -348,7 +323,7 @@ def test_metrics_endpoint_refreshes_events_source_health():
         updater,
     )
     worker.refresh_source_health_metrics()
-    app = create_app(settings, _FakeReader(_recs_df()), events_worker=worker)
+    app = create_app(settings, FakeReader(_recs_df()), events_worker=worker)
     body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert "cicerone_events_source_lag" in body
     assert metric_value(body, "cicerone_events_source_connected") == 1.0
@@ -356,7 +331,7 @@ def test_metrics_endpoint_refreshes_events_source_health():
 
 
 def test_metrics_endpoint_resets_events_gauges_without_worker():
-    app = create_app(_settings(), _FakeReader(_recs_df()), events_worker=None)
+    app = create_app(_settings(), FakeReader(_recs_df()), events_worker=None)
     from cicerone import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=True, lag=9)

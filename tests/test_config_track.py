@@ -145,19 +145,10 @@ def test_load_settings_rejects_track_with_ha_on_local_dataset(tmp_path):
                 enabled = true
                 kind = "webhook"
                 ha = true
-                [input]
-                kind = "dataset"
-                [input.options]
-                storage_backend = "local"
-                path = "/tmp/in"
-                [output]
-                kind = "dataset"
-                [output.options]
-                storage_backend = "local"
-                path = "/tmp/out"
                 [track]
                 enabled = true
-                """,
+                """
+                + MINIMAL_IO_TOML,
             )
         )
 

@@ -69,6 +69,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   just after it fired.
 - AutoML runs its parallel folds in spawned worker processes instead of
   forking the threaded scheduler, which could deadlock the workers.
+- An escaped `$${NAME}` in `events.options.auth_token` stays the literal
+  `${NAME}` instead of being expanded by a second placeholder pass.
 - `cicerone users add` rejects a password over 72 bytes (UTF-8, the bcrypt
   limit) with a clear error instead of crashing.
 - The dashboard user lookup on dataset storage (history pane, `get_user`)
@@ -106,6 +108,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The db events source polls tables with mixed-case columns on Postgres.
 - Docs: the db events source and the track, eval and experiment-state
   tables support Postgres and SQLite, not MySQL.
+- Concurrent dashboard lookups refresh the recommendation reader once per
+  5-second window instead of each racing their own refresh; a failed
+  refresh is retried on the next lookup.
+- A dashboard promote or unpromote that hits a busy or lost writer lock
+  shows "Writer lock is busy" / "Writer lock was lost" instead of
+  "Experiment report is not available".
+- Serve writes exposures and impressions on one dedicated thread instead
+  of the request threadpool, so busy-lock retries no longer hold request
+  workers; pending writes finish on shutdown.
+
+### Removed
+
+- Flat `make_settings` overrides (`make_settings(serve_port=…)`), deprecated
+  in 0.8.5 ahead of 0.9.0, now raise `TypeError`. Use
+  `make_settings(serve=ServeSettings(…))`.
 
 ## [0.8.5] - 2026-10-14
 

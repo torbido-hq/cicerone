@@ -24,7 +24,7 @@ from cicerone.evaluation import (
 )
 from cicerone.evaluation.context import concat_history, stamp_recommendations
 from cicerone.events.store import load_recommendations_frame
-from cicerone.experiment.assignment import resolve_assignment
+from cicerone.experiment.assignment import assign_user
 from cicerone.experiment.store import ExperimentStore
 from cicerone.io.base import InputSource
 from cicerone.io.factory import build_manifest_reader
@@ -89,18 +89,13 @@ def replay_assignments(
     for _key, user_id, variant in sorted(timed, key=lambda item: item[0]):
         assigned.setdefault(user_id, variant)
     if settings.experiment.enabled:
-        promoted, pair = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
+        overlay = ExperimentStore(settings.output).assignment_overlay(settings.experiment.id)
+        snapshot = tuple(sorted(names))
         for raw_user in recs[USER_COLUMN].astype(str).unique():
             user_id = str(raw_user)
             if user_id in assigned or user_id == COLD_START_USER_ID:
                 continue
-            _experiment_id, assigned_variant = resolve_assignment(
-                settings,
-                user_id,
-                promoted_variant=promoted,
-                active_pair=pair,
-                snapshot_names=tuple(sorted(names)),
-            )
+            _experiment_id, assigned_variant = assign_user(settings, user_id, overlay, lambda: snapshot)
             if assigned_variant:
                 assigned[user_id] = assigned_variant
     else:
