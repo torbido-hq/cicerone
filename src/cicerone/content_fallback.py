@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import threading
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -23,7 +22,7 @@ from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from cicerone.feature_config import FeatureColumn
-from cicerone.ids import interactions_item_column, interactions_user_column, items_id_column
+from cicerone.ids import interactions_item_column, items_id_column, user_item_history
 from cicerone.values import is_missing as _is_missing
 
 logger = logging.getLogger(__name__)
@@ -168,22 +167,10 @@ class ContentFallbackModel:
 
     def fit(self, dataset: Dataset) -> ContentFallbackModel:
         del dataset  # history/cold set come from interactions + items frames
-        self._user_history = defaultdict(list)
-        if self.interactions is not None and not self.interactions.empty:
-            frame = self.interactions
-            if Columns.Datetime in frame.columns:
-                frame = frame.sort_values(Columns.Datetime, kind="mergesort")
-            user_col = interactions_user_column(frame)
-            item_col = interactions_item_column(frame)
-            for user_id, item_id in zip(
-                frame[user_col].astype(str).tolist(),
-                frame[item_col].astype(str).tolist(),
-                strict=True,
-            ):
-                self._user_history[user_id].append(item_id)
-            for user_id, item_ids in self._user_history.items():
-                if len(item_ids) > _MAX_HISTORY_ITEMS:
-                    self._user_history[user_id] = item_ids[-_MAX_HISTORY_ITEMS:]
+        self._user_history = {
+            user_id: item_ids[-_MAX_HISTORY_ITEMS:]
+            for user_id, item_ids in user_item_history(self.interactions).items()
+        }
 
         if self.items is None or self.items.empty or not self.feature_columns:
             logger.info("Content fallback: no items/features — strategy will emit no rows")

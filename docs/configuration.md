@@ -24,7 +24,7 @@ table below is optional unless a later rule says otherwise.
 | `cicerone scheduler` | Cron loop (and `[job.trigger]` if enabled). Does **not** run a job first; it sleeps until the next `cron_schedule` tick. |
 | `cicerone serve` | Read API. Requires `job.mode = "serve"`. |
 | `cicerone dashboard` | Basic-Auth status UI. Independent of `job.mode`. |
-| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. |
+| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. Passwords are at most 72 bytes (UTF-8). |
 | `cicerone export-openapi` | Write the serve OpenAPI document (`-o PATH`). |
 
 Global flags: `-c` / `--config`, `--log-level` (default `INFO`),

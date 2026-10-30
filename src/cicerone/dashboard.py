@@ -104,15 +104,12 @@ def _flash_error(error: str) -> str:
     return "Experiment report is not available"
 
 
-def _experiments_redirect(
-    request: Request | None = None,
-    *,
-    message: str = "",
-    promote_error: str = "",
-) -> RedirectResponse:
+def _promotion_redirect(request: Request, error: str | None, message: str) -> RedirectResponse:
     response = RedirectResponse(url=_EXPERIMENTS_PATH, status_code=303)
-    if request is not None and (message or promote_error):
-        set_flash_cookie(request, response, ok=message or None, error=promote_error or None)
+    if error:
+        set_flash_cookie(request, response, error=_flash_error(error))
+    else:
+        set_flash_cookie(request, response, ok=message)
     return response
 
 
@@ -310,10 +307,7 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        error = promote_winner(settings, variant.strip())
-        if error:
-            return _experiments_redirect(request, promote_error=_flash_error(error))
-        return _experiments_redirect(request, message="Promoted")
+        return _promotion_redirect(request, promote_winner(settings, variant.strip()), "Promoted")
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote(
@@ -321,10 +315,7 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        error = clear_promotion(settings)
-        if error:
-            return _experiments_redirect(request, promote_error=_flash_error(error))
-        return _experiments_redirect(request, message="Resumed split")
+        return _promotion_redirect(request, clear_promotion(settings), "Resumed split")
 
     @app.get("/dashboard/config", dependencies=[Depends(auth)])
     def config_page(request: Request):

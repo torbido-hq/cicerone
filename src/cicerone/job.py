@@ -22,6 +22,7 @@ from cicerone.errors import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
 from cicerone.errors import PUBLISH_ERRORS as _PUBLISH_ERRORS
 from cicerone.errors import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
 from cicerone.errors import log_caught as _log_caught
+from cicerone.errors import try_load as _try_load
 from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
 from cicerone.experiment import (
@@ -48,11 +49,9 @@ from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
 from cicerone.job_eval import read_input as _read_input
 from cicerone.job_eval import retrain_fence
 from cicerone.job_eval import score_previous_run as _score_previous_run
-from cicerone.job_eval import try_load as _try_load
 from cicerone.job_eval import try_load_pair as _try_load_pair
 from cicerone.job_output import (
     JobManifest,
-    ensure_fence,
     ensure_publication_fence,
     skip_stale_job_manifest,
     truncate_job_error,
@@ -203,7 +202,7 @@ def _select_thompson_recipes(
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
     failed = object()
-    raw_state = _try_load("read experiment state", store.read_state, failed)
+    raw_state = _try_load("read experiment state", store.read_state, failed, log=logger)
     if preloaded_track is None:
         raw_track = _try_load(
             "read track rows",
@@ -212,6 +211,7 @@ def _select_thompson_recipes(
                 since=_job_track_since(settings),
             ),
             failed,
+            log=logger,
         )
     else:
         raw_track = [row for row in preloaded_track if str(row.get("experiment_id") or "") == experiment.id]
@@ -245,6 +245,7 @@ def _select_thompson_recipes(
                 "load catalog size for Thompson guardrails",
                 lambda: load_items_catalog_size(settings.output),
                 None,
+                log=logger,
             )
         else:
             recs, catalog_size = _try_load_pair(
@@ -391,6 +392,7 @@ def _select_job_recipes(
             "read last manifest for experiment recipes",
             lambda: build_manifest_reader(settings.output).read_latest(),
             None,
+            log=logger,
         )
     recipes = resolve_recipes(
         settings,
@@ -529,7 +531,8 @@ def _write_job_outputs(
     automl_result: CandidateResult | None,
     feature_config: FeatureConfig,
 ) -> JobWriteResult:
-    settings, sink, manifest, fence_check = run.settings, run.sink, run.manifest, run.fence.check
+    settings, sink, manifest = run.settings, run.sink, run.manifest
+    retrain = retrain_fence(None, run.fence.check)
     recommendations, fitted = scored.recommendations, scored.fitted
     weights, rrf_k = scored.weights, scored.rrf_k
     run_models = list(scored.run_plan.recommend_models)
@@ -557,12 +560,12 @@ def _write_job_outputs(
     result = run.written
     # Artifact → snapshot → recommendations; success only after all writes.
     outputs_written = False
-    ensure_fence(fence_check)
+    retrain.ensure()
     try:
         with recommendations_write_guard(sink):
             try:
                 if artifact_bytes is not None:
-                    ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, retrain)
                     # Set before each write: a store can commit and still raise (e.g. a response timeout).
                     outputs_written = True
                     sink.write_model_artifact(artifact_bytes)
@@ -570,18 +573,18 @@ def _write_job_outputs(
                     manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
 
                 if items is not None and not items.empty:
-                    ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, retrain)
                     outputs_written = True
                     sink.write_items_snapshot(items)
 
-                ensure_publication_fence(sink, fence_check)
+                ensure_publication_fence(sink, retrain)
                 outputs_written = True
                 sink.write_recommendations(recommendations)
                 if run.pending_thompson is not None:
-                    ensure_publication_fence(sink, fence_check)
+                    ensure_publication_fence(sink, retrain)
                     store = ExperimentStore(settings.output, fence=run.fence)
                     store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
-                ensure_publication_fence(sink, fence_check)
+                ensure_publication_fence(sink, retrain)
                 manifest.update(
                     {
                         "status": "success",
@@ -605,7 +608,7 @@ def _write_job_outputs(
                     }
                 )
                 manifest["generated_at"] = datetime.now(UTC).isoformat()
-                ensure_publication_fence(sink, fence_check)
+                ensure_publication_fence(sink, retrain)
                 # Set before writing, so a failure rewrite can replace a manifest that committed then raised.
                 result.success_generated_at = str(manifest.get("generated_at") or "")
                 if write_job_manifest(sink, manifest):
@@ -640,13 +643,14 @@ def _write_job_outputs(
 
 
 def _publish_job_sidecar(run: JobRun) -> None:
-    publisher, manifest, fence_check = run.publisher, run.manifest, run.fence.check
+    publisher, manifest = run.publisher, run.manifest
     if publisher is None or manifest.get("status") != "success":
         return
+    retrain = retrain_fence(None, run.fence.check)
     try:
-        ensure_fence(fence_check)
+        retrain.ensure()
         publisher.connect()
-        ensure_fence(fence_check)
+        retrain.ensure()
         current = sidecar_generation_current(run.settings.output, str(manifest.get("generated_at") or ""))
         if current:
             publisher.publish(run.recommendations)

@@ -9,11 +9,10 @@ from typing import Any, TypeVar
 
 import pandas as pd
 
-from cicerone import errors
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
-from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, try_load
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -38,29 +37,10 @@ from cicerone.values import utc_stamp
 logger = logging.getLogger(__name__)
 
 
-def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
-    """0.8 entry point: without ``log=`` it still logs on ``cicerone.job_eval``."""
-    errors.log_caught(message, exc, log=log or logger)
-
-
 T = TypeVar("T")
 U = TypeVar("U")
 D = TypeVar("D")
 E = TypeVar("E")
-
-
-def try_load(
-    label: str,
-    fn: Callable[[], T],
-    default: D,
-    *,
-    errors: tuple[type[BaseException], ...] = OPTIONAL_IO_ERRORS,
-) -> T | D:
-    try:
-        return fn()
-    except errors as exc:
-        log_caught(f"Failed to {label}", exc, log=logger)
-        return default
 
 
 def try_load_pair(
@@ -74,10 +54,13 @@ def try_load_pair(
     parallel: bool,
 ) -> tuple[T | D, U | E]:
     if not parallel:
-        return try_load(left_label, left, left_default), try_load(right_label, right, right_default)
+        return (
+            try_load(left_label, left, left_default, log=logger),
+            try_load(right_label, right, right_default, log=logger),
+        )
     with ThreadPoolExecutor(max_workers=2) as pool:
-        left_f = pool.submit(try_load, left_label, left, left_default)
-        right_f = pool.submit(try_load, right_label, right, right_default)
+        left_f = pool.submit(try_load, left_label, left, left_default, log=logger)
+        right_f = pool.submit(try_load, right_label, right, right_default, log=logger)
         return left_f.result(), right_f.result()
 
 
@@ -150,7 +133,7 @@ def persist_track_outputs(
 
     def _run_serial() -> None:
         for label, fn in tasks:
-            try_load(label, fn, None)
+            try_load(label, fn, None, log=logger)
 
     if fence is not None and fence.lock is not None:
         with fence.hold():
@@ -160,7 +143,7 @@ def persist_track_outputs(
         _run_serial()
         return
     with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
-        futures = [pool.submit(try_load, label, fn, None) for label, fn in tasks]
+        futures = [pool.submit(try_load, label, fn, None, log=logger) for label, fn in tasks]
         for future in futures:
             future.result()
 
@@ -232,13 +215,13 @@ def score_previous_run(
         )
     else:
         if preloaded_recs is None:
-            previous_recs = try_load("load previous recommendations for eval", _load_recs, None)
+            previous_recs = try_load("load previous recommendations for eval", _load_recs, None, log=logger)
         else:
             previous_recs = None if preloaded_recs.empty else preloaded_recs
         if not settings.track.enabled:
             track_rows = []
         elif preloaded_track is None:
-            track_rows = try_load("read track rows", _load_track, [])
+            track_rows = try_load("read track rows", _load_track, [], log=logger)
         else:
             track_rows = list(preloaded_track)
     wanted = generated_ats_from_track(track_rows, previous_generated_at)
@@ -251,7 +234,7 @@ def score_previous_run(
                 return None
             return loaded
 
-        history = try_load("read recommendation history", _load_history, None)
+        history = try_load("read recommendation history", _load_history, None, log=logger)
     recs_for_track = concat_history(history, stamp_recommendations(previous_recs, previous_generated_at))
     assigned: dict[str, str] | None = None
     replay_failed = False
@@ -261,6 +244,7 @@ def score_previous_run(
             "compute served eval",
             lambda: (replay_assignments(settings, previous_recs, track_rows),),
             None,
+            log=logger,
             errors=OPTIONAL_EVAL_ERRORS,
         )
         if replayed is None:
@@ -281,7 +265,7 @@ def score_previous_run(
                 window_hours=settings.track.attribution_window_hours,
             ).as_dict()
 
-        return try_load("compute track eval", _track, None, errors=OPTIONAL_EVAL_ERRORS)
+        return try_load("compute track eval", _track, None, log=logger, errors=OPTIONAL_EVAL_ERRORS)
 
     def _compute_served() -> dict[str, Any] | None:
         if replay_failed or not settings.eval.enabled or previous_recs is None or not previous_generated_at:
@@ -310,7 +294,7 @@ def score_previous_run(
             )
             return report.as_dict() if report is not None else None
 
-        return try_load("compute served eval", _served, None, errors=OPTIONAL_EVAL_ERRORS)
+        return try_load("compute served eval", _served, None, log=logger, errors=OPTIONAL_EVAL_ERRORS)
 
     run_both = bool(
         settings.track.enabled
@@ -338,6 +322,7 @@ def read_input(
             "read last manifest",
             lambda: build_manifest_reader(output).read_latest(),
             None,
+            log=logger,
         )
         return (
             events_future.result(),

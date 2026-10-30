@@ -322,9 +322,6 @@ class DatabaseOutputSink:
             yield
 
     def ensure_writer_held(self) -> None:
-        self._ensure_fence()
-
-    def _ensure_fence(self) -> None:
         self._fence.ensure()
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
@@ -335,12 +332,12 @@ class DatabaseOutputSink:
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
             with self._engine.begin() as conn:
-                self._ensure_fence()
+                self._fence.ensure()
                 self._clear_applied_keys(conn, table)
                 _clear_table_for_replace(conn, table)
-                self._ensure_fence()
+                self._fence.ensure()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-                self._ensure_fence()
+                self._fence.ensure()
 
     def replace_recommendations_for_users(
         self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
@@ -512,7 +509,7 @@ class DatabaseOutputSink:
         if applied_keys:
             self._create_applied_events_table()
         with self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             savepoint = conn.begin_nested()
             try:
                 conn.execute(delete_sql, {"user_ids": ids})
@@ -530,15 +527,15 @@ class DatabaseOutputSink:
                         f"Recommendations schema mismatch for table {table!r}; refusing replace"
                     ) from exc
             if not df.empty:
-                self._ensure_fence()
+                self._fence.ensure()
                 df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
             if applied_keys:
                 # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
-                self._ensure_fence()
+                self._fence.ensure()
                 self._record_applied_keys(conn, applied_keys)
             elif self._applied_events_table_exists():
                 # Batches without durable keys still prune, so expired rows never pile up.
-                self._ensure_fence()
+                self._fence.ensure()
                 prune = conn.begin_nested()
                 try:
                     self._prune_applied_keys(conn, datetime.now(UTC))
@@ -547,7 +544,7 @@ class DatabaseOutputSink:
                     # The table was dropped: skip pruning, never the rows write; check again later.
                     prune.rollback()
                     self._applied_table_seen = self._applied_table_checked = False
-            self._ensure_fence()
+            self._fence.ensure()
             count_savepoint = conn.begin_nested()
             try:
                 value = conn.execute(count_sql).scalar()
@@ -566,14 +563,14 @@ class DatabaseOutputSink:
         table = table_option(self._options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         logger.info("Appending run manifest to database table %r", table)
         with self.recommendations_write():
-            self._ensure_fence()
+            self._fence.ensure()
             _add_missing_manifest_columns(self._engine, table, manifest)
             with self._engine.begin() as conn:
                 if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
                     return False
-                self._ensure_fence()
+                self._fence.ensure()
                 pd.DataFrame([manifest]).to_sql(table, conn, if_exists="append", index=False)
-                self._ensure_fence()
+                self._fence.ensure()
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:
@@ -581,13 +578,13 @@ class DatabaseOutputSink:
         artifacts = self._model_artifacts_table()
         logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), artifacts.name)
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             artifacts.create(conn, checkfirst=True)
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(artifacts.delete())
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._ensure_fence()
+            self._fence.ensure()
 
     def _model_artifacts_table(self) -> Table:
         return Table(
@@ -600,19 +597,19 @@ class DatabaseOutputSink:
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
         artifacts = self._model_artifacts_table()
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             artifacts.create(conn, checkfirst=True)
             row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
             if row is None or _artifact_fingerprint(row[0]) != expected_fingerprint:
                 return False
             written = row[0]
-            self._ensure_fence()
+            self._fence.ensure()
             deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
             if deleted.rowcount < 1:
                 return False
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._ensure_fence()
+            self._fence.ensure()
         return True
 
     def read_model_artifact(self, *, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> bytes | None:
@@ -652,8 +649,8 @@ class DatabaseOutputSink:
         table = table_option(self._options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE)
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             _clear_table_for_replace(conn, table)
-            self._ensure_fence()
+            self._fence.ensure()
             df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-            self._ensure_fence()
+            self._fence.ensure()

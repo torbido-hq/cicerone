@@ -50,3 +50,20 @@ def interacting_external_user_ids(built: BuiltDataset) -> set[Hashable]:
         return set()
     user_col = interactions_user_column(interactions)
     return set(interactions[user_col].astype(str).unique())
+
+
+def user_item_history(interactions: pd.DataFrame | None) -> dict[str, list[str]]:
+    """Each user's item ids (as strings) in ``Columns.Datetime`` order when present."""
+    if interactions is None or interactions.empty:
+        return {}
+    ordered = interactions
+    if Columns.Datetime in ordered.columns:
+        ordered = ordered.sort_values(Columns.Datetime, kind="mergesort")
+    history: dict[str, list[str]] = {}
+    for user_id, item_id in zip(
+        ordered[interactions_user_column(ordered)].astype(str).tolist(),
+        ordered[interactions_item_column(ordered)].astype(str).tolist(),
+        strict=True,
+    ):
+        history.setdefault(user_id, []).append(item_id)
+    return history

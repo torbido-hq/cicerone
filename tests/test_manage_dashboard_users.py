@@ -19,21 +19,22 @@ def test_add_user_prompts_for_password_and_stores_bcrypt_hash(tmp_path, monkeypa
     assert bcrypt.checkpw(b"s3cret", users["alice"].encode("ascii"))
 
 
-def test_add_user_rejects_mismatched_confirmation(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("passwords", "match"),
+    [
+        (["s3cret", "different"], "do not match"),
+        ([""], "must not be empty"),
+        (["é" * 37], "at most 72 bytes"),
+    ],
+)
+def test_add_user_rejects_bad_password(tmp_path, monkeypatch, passwords, match):
     users_path = tmp_path / "dashboard_users.toml"
-    passwords = iter(["s3cret", "different"])
-    monkeypatch.setattr("getpass.getpass", lambda *_args, **_kwargs: next(passwords))
+    prompts = iter(passwords)
+    monkeypatch.setattr("getpass.getpass", lambda *_args, **_kwargs: next(prompts))
 
-    with pytest.raises(SystemExit, match="do not match"):
+    with pytest.raises(SystemExit, match=match):
         main(["--users-path", str(users_path), "add", "alice"])
-
-
-def test_add_user_rejects_empty_password(tmp_path, monkeypatch):
-    users_path = tmp_path / "dashboard_users.toml"
-    monkeypatch.setattr("getpass.getpass", lambda *_args, **_kwargs: "")
-
-    with pytest.raises(SystemExit, match="must not be empty"):
-        main(["--users-path", str(users_path), "add", "alice"])
+    assert not users_path.exists()
 
 
 def test_add_user_rejects_invalid_username(tmp_path):

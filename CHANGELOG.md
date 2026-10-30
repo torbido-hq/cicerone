@@ -79,6 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   forking the threaded scheduler, which could deadlock the workers.
 - An escaped `$${NAME}` in `events.options.auth_token` stays the literal
   `${NAME}` instead of being expanded by a second placeholder pass.
+- `cicerone users add` rejects a password over 72 bytes (UTF-8, the bcrypt
+  limit) with a clear error instead of crashing.
 - The dashboard user lookup on dataset storage (history pane, `get_user`)
   works when `user_id` is stored as an integer column instead of failing
   the filtered read.
