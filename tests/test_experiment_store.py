@@ -278,10 +278,9 @@ def test_append_exposures_serializes_concurrent_local_writers(tmp_path) -> None:
     assert sorted(row["user_id"] for row in store.read_exposures()) == ["u1", "u2"]
 
 
-def test_append_exposures_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_append_exposures_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     output = local_output(tmp_path)
-    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquire=False, owned=False)))
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
@@ -317,15 +316,13 @@ def test_write_state_skips_acquire_when_held_here(tmp_path) -> None:
     store = ExperimentStore(output, fence=WriteFence(lock))
     with WriteFence(lock).hold():
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    assert lock.acquires == 1
+    assert lock.events.count("acquire") == 1
     assert store.read_state() is not None
 
 
-def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
-
+def test_write_state_other_thread_does_not_skip_acquire(tmp_path, no_lock_wait) -> None:
     output = local_output(tmp_path)
-    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquire=False)))
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False)))
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
@@ -1017,7 +1014,7 @@ def test_object_store_exposures_are_rejected_before_taking_the_writer_lock() -> 
         output,
         fence=WriteFence(
             FakeLock(
-                acquire=raising(
+                acquires=raising(
                     AssertionError("the writer lock must not be taken for a rejected exposure log")
                 ),
                 owned=False,
@@ -1034,7 +1031,7 @@ def test_dataset_writes_encode_before_taking_the_writer_lock(tmp_path) -> None:
         output,
         fence=WriteFence(
             FakeLock(
-                acquire=raising(AssertionError("encoding must fail before the writer lock is taken")),
+                acquires=raising(AssertionError("encoding must fail before the writer lock is taken")),
                 owned=False,
             )
         ),
@@ -1055,7 +1052,7 @@ def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) 
         output,
         fence=WriteFence(
             FakeLock(
-                acquire=raising(
+                acquires=raising(
                     AssertionError("preparing the write must fail before the writer lock is taken")
                 ),
                 owned=False,
