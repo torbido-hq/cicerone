@@ -26,10 +26,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Kafka and Redis Streams messages whose `event_id` is `0` (or another
-  empty value) get the stable partition-offset / stream entry id like a
-  missing `event_id`, instead of a random id that broke duplicate
-  detection on redelivery.
+- A Kafka message whose `event_id` is `0` gets the stable
+  partition-offset id like a missing one, instead of a random id that
+  broke duplicate detection on redelivery.
 - The db events watermark file syncs its directory after the rename, as
   the S3 list marker already did, so the saved position survives a crash.
 - Dashboard **Resume split** under Thompson allocation fails with

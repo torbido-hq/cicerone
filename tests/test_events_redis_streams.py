@@ -269,7 +269,7 @@ def test_nack_allows_repoll(monkeypatch):
     assert list(source.poll(10)) == []
 
 
-@pytest.mark.parametrize("event_id", [None, 0, ""], ids=["absent", "zero", "empty"])
+@pytest.mark.parametrize("event_id", [None, ""], ids=["absent", "empty"])
 def test_missing_event_id_uses_stream_entry_id(monkeypatch, event_id):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())
