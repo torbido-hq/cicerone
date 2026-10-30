@@ -53,8 +53,8 @@ from cicerone.config.validation import (
     require_positive_int,
     resolve_env_placeholders,
     resolve_epoch_metrics,
-    validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,19 +302,26 @@ def make_settings(**overrides: Any) -> Settings:
     )
     base.update(overrides)
     if base.get("model_configs") is None:
-        from cicerone.model_config import item_based_k_from_config, resolve_model_configs
-
-        k_neighbors = int(base["item_based_k_neighbors"])
-        k_explicit = "item_based_k_neighbors" in overrides
-        configs = resolve_model_configs(
-            legacy_k_neighbors=k_neighbors,
-            legacy_k_neighbors_explicit=k_explicit,
+        base["model_configs"], base["item_based_k_neighbors"] = _resolve_model_configs(
+            None, int(base["item_based_k_neighbors"]), k_explicit="item_based_k_neighbors" in overrides
         )
-        base["model_configs"] = configs
-        k_from_cfg = item_based_k_from_config(configs["item_based"])
-        if k_from_cfg is not None:
-            base["item_based_k_neighbors"] = k_from_cfg
     return _finalize_settings(Settings(**base))
+
+
+def _resolve_model_configs(
+    raw_model: dict[str, Any] | None, k_neighbors: int, *, k_explicit: bool
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """``model_configs`` and the effective item_based ``K``."""
+    from cicerone.model_config import item_based_k_from_config, resolve_model_configs
+
+    require_positive_int(k_neighbors, name="job.item_based.k_neighbors")
+    configs = resolve_model_configs(
+        raw_model, legacy_k_neighbors=k_neighbors, legacy_k_neighbors_explicit=k_explicit
+    )
+    resolved_k = item_based_k_from_config(configs["item_based"])
+    if resolved_k is None:
+        return configs, k_neighbors
+    return configs, require_positive_int(resolved_k, name="model.item_based.model.K")
 
 
 def _finalize_settings(settings: Settings) -> Settings:
@@ -468,12 +475,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             raise ConfigError(
                 f"job.models contains unknown model(s) {unknown_models}; available: {list(STRATEGY_NAMES)}"
             )
-    model_weights = (
-        {name: float(weight) for name, weight in job["model_weights"].items()}
-        if "model_weights" in job
-        else None
-    )
-    validate_model_weights(model_weights, context="job.model_weights")
+    model_weights = weights_field(job, "model_weights", context="job.model_weights")
     if model_weights is not None and models is not None:
         unknown_weights = [name for name in model_weights if name not in models]
         if unknown_weights:
@@ -503,23 +505,10 @@ def load_settings(config_path: str | None = None) -> Settings:
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
     sequential = job.get("sequential", {}) or {}
-    legacy_k_explicit = "k_neighbors" in item_based
-    legacy_k_neighbors = int_field(
-        item_based, "job.item_based.k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS, require_positive_int
-    )
-
-    from cicerone.model_config import item_based_k_from_config, resolve_model_configs
-
-    model_configs = resolve_model_configs(
+    model_configs, item_based_k_neighbors = _resolve_model_configs(
         raw.get("model"),
-        legacy_k_neighbors=legacy_k_neighbors,
-        legacy_k_neighbors_explicit=legacy_k_explicit,
-    )
-    resolved_k = item_based_k_from_config(model_configs["item_based"])
-    item_based_k_neighbors = (
-        require_positive_int(resolved_k, name="model.item_based.model.K")
-        if resolved_k is not None
-        else legacy_k_neighbors
+        int(item_based.get("k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS)),
+        k_explicit="k_neighbors" in item_based,
     )
 
     settings = Settings(

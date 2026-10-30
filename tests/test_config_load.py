@@ -264,6 +264,11 @@ def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
         load_settings(config_path)
 
 
+def test_make_settings_rejects_invalid_item_based_k_neighbors():
+    with pytest.raises(ConfigError, match="job.item_based.k_neighbors must be >= 1, got 0"):
+        make_settings(item_based_k_neighbors=0)
+
+
 def test_load_settings_rejects_unknown_model(tmp_path):
     config_path = write_toml(
         tmp_path,

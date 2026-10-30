@@ -86,6 +86,18 @@ def test_load_experiment_rejects_traffic_over_one():
         )
 
 
+def test_load_experiment_variant_weights_prefer_weights_over_model_weights():
+    variants = [
+        {"name": "a", "weights": {"popular": 2}, "model_weights": {"popular": 9}},
+        {"name": "b", "model_weights": {"latest": 1}},
+    ]
+    a, b = load_experiment_settings({"variants": variants}).variants
+    assert a.model_weights == {"popular": 2.0}
+    assert b.model_weights == {"latest": 1.0}
+    with pytest.raises(ConfigError, match=r"variants\[b\].weights value\(s\) must be non-negative"):
+        load_experiment_settings({"variants": [{"name": "b", "model_weights": {"latest": -1}}]})
+
+
 def test_load_experiment_requires_id_and_two_variants():
     with pytest.raises(ConfigError, match="experiment.id"):
         load_experiment_settings({"enabled": True, "variants": [{"name": "a"}, {"name": "b"}]})

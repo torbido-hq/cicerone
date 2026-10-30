@@ -115,6 +115,15 @@ def validate_model_weights(weights: dict[str, float] | None, *, context: str = "
         raise ConfigError(f"{context} value(s) must be non-negative, got {negative_weights}")
 
 
+def weights_field(raw: Mapping[str, Any], key: str, *, context: str) -> dict[str, float] | None:
+    """``raw[key]`` as validated per-model weights, or ``None`` when unset."""
+    if key not in raw:
+        return None
+    weights = {str(name): float(weight) for name, weight in raw[key].items()}
+    validate_model_weights(weights, context=context)
+    return weights
+
+
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
     if rrf_k is not None:
         require_finite(rrf_k, name=context)
