@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
+  impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings
   (`max_workers`, `epoch_metrics`, `item_based_k_neighbors`,
   `model_configs`, `content_fallback_max_neighbors`). `fit_strategies` and
@@ -26,12 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Serve no longer stalls when its exposure and impression append queue
-  (1000 pending writes) is full: the request is answered at once, the
-  append is dropped with a warning and counted in the new
-  `cicerone_serve_appends_dropped_total` (`kind` = `exposure` or
-  `impression`). Before, each such request held a server thread until a
-  slot freed, which could stop every route, `/health` included.
+- Serve answers at once when its append queue (1000 pending) is full,
+  dropping the exposure or impression append, instead of stalling.
 - Dashboard **Resume split** under Thompson allocation fails with
   "Experiment state could not be read" when the state read fails, instead
   of overwriting the stored champion, challenger and arms.

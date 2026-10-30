@@ -176,7 +176,7 @@ def create_app(
     def submit_append(write: Any, *, kind: str, label: str, user_id: str) -> None:
         if not append_slots.acquire(blocking=False):
             record_serve_append_dropped(kind)
-            logger.warning("Dropped %s for user_id=%r: append queue is full", label, user_id)
+            logger.warning("Dropped %s append for user_id=%r: append queue is full", kind, user_id)
             return
         append_pool.submit(_append_with_busy_retry, write, label=label, user_id=user_id).add_done_callback(
             lambda _done: append_slots.release()
@@ -353,7 +353,7 @@ def create_app(
             ]
             submit_append(
                 partial(track_store.append_rows, rows),
-                kind=TRACK_KIND_IMPRESSION,
+                kind="impression",
                 label="append serve impressions",
                 user_id=user_id,
             )

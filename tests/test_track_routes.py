@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from test_serve import _recs_df
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.locks import LockLostError, WriterLockBusyError
+from cicerone.serve import app as serve_app
 from cicerone.serve import create_app
 from cicerone.serve_schemas import ValidationErrorDetail
 from cicerone.track.store import TrackStore
@@ -429,8 +431,6 @@ def test_get_log_impressions_when_enabled(tmp_path):
 
 
 def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.serve import app as serve_app
-
     calls = {"n": 0}
 
     def flaky(*args, **kwargs):
@@ -491,6 +491,16 @@ def test_get_log_impressions_drops_the_append_when_the_queue_is_full(tmp_path, m
         appended.append(1)
         return 1
 
+    slot_freed = threading.Event()
+
+    class _RecordingSlots(threading.BoundedSemaphore):
+        def release(self, n: int = 1) -> None:
+            super().release(n)
+            slot_freed.set()
+
+    monkeypatch.setattr(
+        serve_app, "threading", SimpleNamespace(**{**vars(threading), "BoundedSemaphore": _RecordingSlots})
+    )
     monkeypatch.setattr("cicerone.serve.app._MAX_PENDING_APPENDS", 1)
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
     dropped_metric = ("cicerone_serve_appends_dropped_total", {"kind": "impression"})
@@ -502,9 +512,11 @@ def test_get_log_impressions_drops_the_append_when_the_queue_is_full(tmp_path, m
         with caplog.at_level(logging.WARNING, logger="cicerone.serve.app"):
             assert client.get("/recommendations/u1", headers=headers).status_code == 200
         release.set()
-    assert appended == [1]
+        assert slot_freed.wait(timeout=5)
+        assert client.get("/recommendations/u1", headers=headers).status_code == 200
+    assert appended == [1, 1]
     assert registry_metric_value(*dropped_metric) == dropped + 1
-    assert "Dropped append serve impressions for user_id='u1': append queue is full" in caplog.text
+    assert "Dropped impression append for user_id='u1': append queue is full" in caplog.text
 
 
 def test_attach_track_ingest_openapi_noop_without_post():
