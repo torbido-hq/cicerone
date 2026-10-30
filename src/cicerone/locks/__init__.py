@@ -14,7 +14,7 @@ from cicerone.locks.hold import (
     LockLostError,
     WriteFence,
     WriterLockBusyError,
-    acquire_blocking,
+    acquire_until,
     writer_lock_held_here,
 )
 from cicerone.locks.keys import (
@@ -40,7 +40,7 @@ __all__ = [
     "REDIS_LOCK_KEY",
     "REDIS_LOCK_TTL_MS",
     "RedisLock",
-    "acquire_blocking",
+    "acquire_until",
     "advisory_keys_from_lock_key",
     "build_dataset_writer_lock",
     "build_output_writer_lock",

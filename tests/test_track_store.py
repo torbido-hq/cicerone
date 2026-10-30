@@ -486,10 +486,9 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
 
-def test_track_jsonl_append_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_track_jsonl_append_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     output = local_output(tmp_path)
-    store = TrackStore(output, fence=WriteFence(FakeLock(acquire=False, owned=False)))
+    store = TrackStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_rows([_row()])
 
@@ -598,7 +597,7 @@ def test_write_eval_and_history_skip_acquire_when_held_here(tmp_path) -> None:
         store.write_eval({"ok": True})
         store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
         store.append_accepted_rows([_row(event_id="held-1")])
-    assert lock.acquires == 1
+    assert lock.events.count("acquire") == 1
     assert store.read_eval() == {"ok": True}
     assert len(store.read_history()) == 1
     assert any(row["event_id"] == "held-1" for row in store.read_rows())
@@ -1095,7 +1094,7 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
         output,
         fence=WriteFence(
             FakeLock(
-                acquire=raising(AssertionError("encoding must fail before the writer lease is taken")),
+                acquires=raising(AssertionError("encoding must fail before the writer lease is taken")),
                 owned=False,
             )
         ),

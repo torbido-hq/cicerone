@@ -218,6 +218,11 @@ class ItemFilterMixin:
                 availability_filters=self._availability_filters,
             )
             self._items_version += 1
+        self._reload_items()
+
+    def _reload_items(self) -> object:
+        """Re-read the items snapshot after the filters change."""
+        return None
 
     def items_version(self) -> int:
         self._ensure_item_filter_state()

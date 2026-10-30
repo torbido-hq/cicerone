@@ -145,24 +145,28 @@ class FakeGuard:
 
 
 class FakeLock:
-    """Writer lock whose ``acquire`` / ``owned`` answers are fixed values or callables."""
+    """LockBackend that records ``acquire`` / ``owned`` / ``release`` calls in ``events``.
+
+    ``acquires`` and ``owned`` are fixed answers or callables.
+    """
 
     def __init__(
-        self, *, acquire: bool | Callable[[], bool] = True, owned: bool | Callable[[], bool] = True
+        self, *, acquires: bool | Callable[[], bool] = True, owned: bool | Callable[[], bool] = True
     ) -> None:
-        self._acquire = acquire
-        self._owned = owned
-        self.acquires = 0
+        self.acquires = acquires
+        self.is_owned = owned
+        self.events: list[str] = []
 
     def acquire(self) -> bool:
-        self.acquires += 1
-        return self._acquire() if callable(self._acquire) else self._acquire
+        self.events.append("acquire")
+        return self.acquires() if callable(self.acquires) else self.acquires
 
     def release(self) -> None:
-        return None
+        self.events.append("release")
 
     def owned(self) -> bool:
-        return self._owned() if callable(self._owned) else self._owned
+        self.events.append("owned")
+        return self.is_owned() if callable(self.is_owned) else self.is_owned
 
     def is_locked(self) -> bool:
         return True

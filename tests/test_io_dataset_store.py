@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 from pyarrow.lib import ArrowTypeError
-from support.fakes import patch_parquet_reads
+from support.fakes import FakeLock, patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
@@ -205,24 +205,10 @@ def test_local_write_and_replace_recommendations_share_lock(tmp_path):
     assert by_user["u1"] in (["job1"], ["new1"])
 
 
-def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_write_recommendations_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        fence=WriteFence(_Busy()),
+        fence=WriteFence(FakeLock(acquires=False, owned=False)),
     )
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         sink.write_recommendations(
