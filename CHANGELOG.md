@@ -74,6 +74,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   just after it fired.
 - AutoML runs its parallel folds in spawned worker processes instead of
   forking the threaded scheduler, which could deadlock the workers.
+- An escaped `$${NAME}` in `events.options.auth_token` stays the literal
+  `${NAME}` instead of being expanded by a second placeholder pass.
 - The dashboard user lookup on dataset storage (history pane, `get_user`)
   works when `user_id` is stored as an integer column instead of failing
   the filtered read.
@@ -121,6 +123,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+
+### Removed
+
+- Flat `make_settings` overrides (`make_settings(serve_port=…)`), deprecated
+  in 0.8.5 ahead of 0.9.0, now raise `TypeError`. Use
+  `make_settings(serve=ServeSettings(…))`.
 
 ## [0.8.5] - 2026-10-14
 

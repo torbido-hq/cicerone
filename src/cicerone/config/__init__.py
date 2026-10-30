@@ -58,7 +58,7 @@ from cicerone.config.lock_url import (
     resolve_postgres_lock_url,
     resolve_postgres_lock_url_parts,
 )
-from cicerone.config.publish import coerce_publish_settings, load_publish_settings
+from cicerone.config.publish import load_publish_settings
 from cicerone.config.settings import (
     AutomlSettings,
     DashboardSettings,
@@ -148,11 +148,9 @@ __all__ = [
     "TrackSettings",
     "TriggerSettings",
     "VariantSettings",
-    "coerce_events_settings",
     "load_eval_settings",
     "load_events_settings",
     "load_publish_settings",
-    "coerce_publish_settings",
     "load_experiment_settings",
     "load_settings",
     "load_track_settings",
@@ -166,7 +164,6 @@ __all__ = [
 ]
 
 _LAZY = {
-    "coerce_events_settings": "cicerone.config.events",
     "load_events_settings": "cicerone.config.events",
     "load_eval_settings": "cicerone.config.track",
     "load_experiment_settings": "cicerone.config.experiment",
