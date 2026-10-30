@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -84,6 +86,13 @@ def patch_parquet_reads(
 def hide_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     """Make ``import name`` fail as if its optional extra were not installed."""
     monkeypatch.setitem(sys.modules, name, None)
+
+
+def patch_module_ref(monkeypatch: pytest.MonkeyPatch, target: str, **overrides: Any) -> None:
+    """Replace ``target`` (``"pkg.mod.time"``) with a copy carrying ``overrides``; the real module stays."""
+    owner, name = target.rsplit(".", 1)
+    real = getattr(importlib.import_module(owner), name)
+    monkeypatch.setattr(target, SimpleNamespace(**{**vars(real), **overrides}))
 
 
 class FakeReader:

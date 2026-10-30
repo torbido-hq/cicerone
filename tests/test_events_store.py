@@ -8,7 +8,7 @@ import pytest
 from pyarrow.lib import ArrowNotImplementedError, ArrowTypeError
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects import postgresql
-from support.fakes import patch_parquet_reads
+from support.fakes import patch_module_ref, patch_parquet_reads
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
@@ -458,7 +458,7 @@ def test_load_recommendation_guardrail_rows_raises_hard_sql(tmp_path, monkeypatc
     def _boom(*_args, **_kwargs):
         raise OperationalError("SELECT 1", {}, Exception("connection refused"))
 
-    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=_boom)
     with pytest.raises(OperationalError, match="connection refused"):
         load_recommendation_guardrail_rows(settings.output)
 
@@ -473,7 +473,7 @@ def test_load_recommendation_guardrail_rows_pandas_missing_table(tmp_path, monke
     def _boom(*_args, **_kwargs):
         raise DatabaseError("no such table: recommendations")
 
-    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=_boom)
     frame = load_recommendation_guardrail_rows(settings.output)
     assert frame is not None
     assert frame.empty
@@ -489,7 +489,7 @@ def test_load_recommendation_guardrail_rows_pandas_hard_sql(tmp_path, monkeypatc
     def _boom(*_args, **_kwargs):
         raise DatabaseError("connection refused")
 
-    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=_boom)
     with pytest.raises(DatabaseError, match="connection refused"):
         load_recommendation_guardrail_rows(settings.output)
 
@@ -504,7 +504,7 @@ def test_load_recommendations_frame_pandas_missing_table(tmp_path, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise DatabaseError("no such table: recommendations")
 
-    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=_boom)
     frame = load_recommendations_frame(settings.output)
     assert frame.empty
     assert list(frame.columns) == list(empty_recommendations_frame().columns)
@@ -520,7 +520,7 @@ def test_load_recommendations_frame_pandas_hard_sql(tmp_path, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise DatabaseError("connection refused")
 
-    monkeypatch.setattr("cicerone.events.store.pd.read_sql_query", _boom)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=_boom)
     with pytest.raises(DatabaseError, match="connection refused"):
         load_recommendations_frame(settings.output)
 

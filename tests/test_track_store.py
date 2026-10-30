@@ -6,7 +6,7 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
-from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, raising
+from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
@@ -741,9 +741,10 @@ def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
     from cicerone.track.store_dataset import _s3_parquet_frame
 
     body = FakeS3Body(b"parquet")
-    monkeypatch.setattr(
-        "cicerone.track.store_dataset.pd.read_parquet",
-        lambda _buf: pd.DataFrame({"x": [1]}),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.track.store_dataset.pd",
+        read_parquet=lambda _buf: pd.DataFrame({"x": [1]}),
     )
     frame = _s3_parquet_frame(FakeS3Client(body), "recs", "history/part.parquet")
     assert frame is not None

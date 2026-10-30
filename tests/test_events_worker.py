@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import dataset_updater, event_payload
+from support.events import dataset_updater, event_payload, wait_until
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
@@ -348,7 +348,6 @@ def test_event_worker_health_config_error_raises(tmp_path, feature_config: Featu
 
 
 def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -375,9 +374,7 @@ def test_event_worker_loop_survives_source_error(tmp_path, feature_config: Featu
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and polls["n"] < 2:
-        time.sleep(0.01)
+    assert wait_until(lambda: polls["n"] >= 2)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert polls["n"] >= 2
@@ -496,7 +493,6 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
 
 
 def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -528,9 +524,7 @@ def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_conf
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 3:
-        time.sleep(0.01)
+    assert wait_until(lambda: connects["n"] >= 3)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert connects["n"] >= 3
@@ -742,7 +736,6 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
 
 def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -778,9 +771,7 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     poll_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "poll-start" in order
     assert "close" in order
     assert order.index("poll-start") < order.index("close")
@@ -834,7 +825,6 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
 
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -879,9 +869,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     ack_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "ack-done" in order
     assert "close" in order
     assert order.index("ack-done") < order.index("close")
@@ -1648,7 +1636,6 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -1680,16 +1667,13 @@ def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and not polls_at_connect:
-        time.sleep(0.01)
+    assert wait_until(lambda: polls_at_connect)
     worker.stop(join_timeout_seconds=2.0)
     assert polls_at_connect
     assert polls_at_connect[0] >= 2
 
 
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -1716,9 +1700,7 @@ def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 2:
-        time.sleep(0.01)
+    assert wait_until(lambda: connects["n"] >= 2)
     worker.stop(join_timeout_seconds=2.0)
     assert connects["n"] >= 2
 
@@ -1765,10 +1747,7 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert time.monotonic() - began < 0.4
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
@@ -1807,10 +1786,14 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     assert worker._thread is not None and worker._thread.is_alive() is False
     starter = threading.Thread(target=worker.start)
     starter.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and worker._source_guard.acquire(blocking=False):
+
+    def _source_guard_held() -> bool:
+        if not worker._source_guard.acquire(blocking=False):
+            return True
         worker._source_guard.release()
-        time.sleep(0.01)
+        return False
+
+    assert wait_until(_source_guard_held)
     began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert time.monotonic() - began < 0.4
@@ -2032,15 +2015,11 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     release.set()
     starter.join(timeout=2)
     assert worker._thread is None or worker._thread.is_alive() is False
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -2084,9 +2063,7 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert closes["n"] == 1
     assert worker._finalized is True
     frame = pd.read_parquet(out / "recommendations.parquet")
@@ -2097,7 +2074,6 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
 
 def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -2149,9 +2125,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert errors
     assert closes["n"] == 1
     assert worker._finalized is True
@@ -2289,26 +2263,20 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
     worker.start()
     assert reconnect_started.wait(timeout=2)
     worker.stop(join_timeout_seconds=0.05)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config: FeatureConfig):
-    import threading
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    reconnect_started = threading.Event()
     polls = {"n": 0}
+    polls_at_reconnect: list[int] = []
 
     class _FailReconnect(WebhookEventSource):
         def connect(self) -> None:
             if polls["n"] > 0:
-                reconnect_started.set()
+                polls_at_reconnect.append(polls["n"])
                 raise OSError("broker down")
             super().connect()
 
@@ -2331,11 +2299,10 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
         poll_interval_seconds=0.02,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    after = polls["n"]
-    time.sleep(0.08)
-    assert polls["n"] == after
+    # A tick between failed reconnects would poll, so every reconnect would see a new count.
+    assert wait_until(lambda: len(polls_at_reconnect) >= 3)
     worker.stop(join_timeout_seconds=1.0)
+    assert len(set(polls_at_reconnect)) == 1
 
 
 def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):
@@ -2367,7 +2334,6 @@ def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureC
 
 def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -2404,9 +2370,7 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     health_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "health-start" in order
     assert "close" in order
     assert order.index("health-start") < order.index("close")
@@ -3104,7 +3068,6 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
 
 def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -3151,9 +3114,7 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
 
     stopper = threading.Thread(target=_stop)
     stopper.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and first.is_alive():
-        time.sleep(0.01)
+    assert wait_until(lambda: not first.is_alive())
     assert first.is_alive() is False
     worker.start()
     second = worker._thread
@@ -3229,7 +3190,6 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -3264,10 +3224,7 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
         worker.start()
     finally:
         threading.Thread.start = original_start  # type: ignore[method-assign]
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
     assert worker._thread is None or worker._thread.is_alive() is False
     assert worker._tick_guard.acquire(blocking=False)
     worker._tick_guard.release()

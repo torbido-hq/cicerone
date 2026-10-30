@@ -427,8 +427,6 @@ def test_get_log_impressions_when_enabled(tmp_path):
 
 
 def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
-    from cicerone.serve import app as serve_app
-
     calls = {"n": 0}
 
     def flaky(*args, **kwargs):
@@ -439,7 +437,6 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
         return 1
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
-    monkeypatch.setattr(serve_app.time, "sleep", lambda _seconds: None)
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
     with TestClient(app) as client:
         response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from support.fakes import patch_module_ref
 
 from cicerone import scheduler
 
@@ -62,7 +63,7 @@ def test_cron_loop_does_not_rerun_a_tick_after_the_clock_steps_back(monkeypatch)
 
     runs: list[None] = []
     monkeypatch.setattr(scheduler, "datetime", _Clock)
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     with pytest.raises(SystemExit):
         scheduler._cron_loop("0 3 * * *", lambda: runs.append(None))
     assert runs == [None]
@@ -91,7 +92,7 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
         assert triggered_by == "cron"
         raise ValueError("boom")  # main() must log and keep looping, not crash
 
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     monkeypatch.setattr(scheduler.job, "run", fake_run)
 
     with pytest.raises(SystemExit):
@@ -137,7 +138,7 @@ def test_main_with_distributed_lock_uses_locked_cron_path(tmp_path, monkeypatch)
     def fake_locked():
         calls["locked"] += 1
 
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     monkeypatch.setattr(scheduler, "build_lock_backend", lambda _settings: object())
     monkeypatch.setattr(scheduler, "_cron_run_with_lock", lambda _backend: fake_locked())
 

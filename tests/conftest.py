@@ -86,6 +86,14 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
 
 
 @pytest.fixture
+def isolated_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset ``CICERONE_CONFIG_PATH`` and restore it after ``cli.main`` sets it."""
+    # setenv first so monkeypatch records the restore even when the variable was unset.
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "")
+    monkeypatch.delenv("CICERONE_CONFIG_PATH")
+
+
+@pytest.fixture
 def refresh_clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Monotonic clock for ``RefreshedValue`` TTLs; advance ``refresh_clock.now``."""
     clock = SimpleNamespace(now=0.0)

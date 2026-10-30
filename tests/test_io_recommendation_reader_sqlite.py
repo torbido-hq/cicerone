@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from support.fakes import patch_module_ref
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
@@ -124,7 +125,7 @@ def test_sqlite_db_reader_keeps_items_on_pandas_database_error(tmp_path, monkeyp
     def boom(*_args, **_kwargs):
         raise DatabaseError("no such table: recommendation_items")
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     reader.refresh()
     assert list(reader.get_items()["item_id"]) == ["i1"]
     assert reader.items_version() == version_before
@@ -154,7 +155,7 @@ def test_sqlite_db_reader_lists_variants_on_pandas_database_error(tmp_path, monk
     def boom(*_args, **_kwargs):
         raise DatabaseError("connection reset")
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     assert reader.present_variant_names() is None
 
 
@@ -182,7 +183,7 @@ def test_sqlite_db_reader_assigned_variant_pandas_database_error_reraises(tmp_pa
     def boom(*_args, **_kwargs):
         raise DatabaseError("connection reset")
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", boom)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     with pytest.raises(DatabaseError, match="connection reset"):
         reader.get_recommendations("u1", k=1, variant="control")
 
@@ -213,7 +214,7 @@ def test_sqlite_db_reader_cold_start_pandas_database_error_returns_empty(tmp_pat
             raise DatabaseError("connection reset")
         return original(sql, *args, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=fake_read_sql)
     assert reader.get_cold_start_fallback(k=1).empty
 
 
@@ -449,7 +450,7 @@ def test_sqlite_db_reader_skips_distinct_when_unassigned(tmp_path, monkeypatch):
         seen.append(str(sql))
         return original(sql, *args, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", tracking)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=tracking)
     rows = reader.get_recommendations("u1", k=10)
     assert list(rows["item_id"]) == ["control-item"]
     assert not any("DISTINCT" in sql.upper() for sql in seen)
@@ -521,9 +522,10 @@ def test_sqlite_db_reader_caches_missing_variant_after_query_error(tmp_path, mon
     reader = DbRecommendationReader({"database_url": url})
     reader._variant_supported = True
     variant_queries = {"n": 0}
-    monkeypatch.setattr(
-        "cicerone.io.db_recommendation_reader.pd.read_sql",
-        _raise_on_variant_sql(pd.read_sql, variant_queries),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.io.db_recommendation_reader.pd",
+        read_sql=_raise_on_variant_sql(pd.read_sql, variant_queries),
     )
     assert list(reader.get_recommendations("u1", k=10, variant="treatment")["item_id"]) == ["i1"]
     assert reader._variant_supported is False
@@ -548,9 +550,10 @@ def test_sqlite_db_reader_cold_start_caches_missing_variant_after_query_error(tm
     reader = DbRecommendationReader({"database_url": url})
     reader._variant_supported = True
     variant_queries = {"n": 0}
-    monkeypatch.setattr(
-        "cicerone.io.db_recommendation_reader.pd.read_sql",
-        _raise_on_variant_sql(pd.read_sql, variant_queries),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.io.db_recommendation_reader.pd",
+        read_sql=_raise_on_variant_sql(pd.read_sql, variant_queries),
     )
     cold = reader.get_cold_start_fallback(k=1, variant="treatment")
     assert list(cold["item_id"]) == ["i1"]
@@ -584,7 +587,7 @@ def test_sqlite_db_reader_unassigned_probe_error_falls_back(tmp_path, monkeypatc
             raise SQLAlchemyError("prefer leftover down")
         return original(sql, *args, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=fake_read_sql)
     rows = reader.get_recommendations("u1", k=10)
     assert list(rows["item_id"]) == ["control-item"]
 
@@ -607,7 +610,7 @@ def test_sqlite_db_reader_does_not_cache_unrelated_missing_column(tmp_path, monk
             raise ProgrammingError("SELECT", {}, Exception('column "user_id" does not exist'))
         return original(sql, *args, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.db_recommendation_reader.pd.read_sql", fake_read_sql)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=fake_read_sql)
     with pytest.raises(ProgrammingError, match="user_id"):
         reader.get_recommendations("u1", k=10, variant="treatment")
     assert reader._variant_supported is True

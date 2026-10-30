@@ -8,7 +8,7 @@ import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
-from support.fakes import FakeGuard
+from support.fakes import FakeGuard, patch_module_ref
 from support.prometheus_metrics import metric_value
 
 from cicerone.config import IOSettings, Settings
@@ -246,7 +246,7 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
         if sleep_calls["n"] >= 2:
             raise SystemExit("stop after two ticks")
 
-    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.trigger.time", sleep=fake_sleep)
 
     with pytest.raises(SystemExit):
         poll_input_forever(input_settings, guard, interval_seconds=0.01)

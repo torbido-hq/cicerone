@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from conftest import make_settings
 from fastapi.testclient import TestClient
-from support.fakes import FakeManifest, FakeReader
+from support.fakes import FakeManifest, FakeReader, patch_module_ref
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import Settings
@@ -547,7 +547,7 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
         if calls["sleep"] > ticks:
             raise SystemExit("stop")
 
-    monkeypatch.setattr("cicerone.serve.app.time.sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.serve.app.time", sleep=fake_sleep)
     monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
     with pytest.raises(SystemExit):
         _start_refresh_loop(
