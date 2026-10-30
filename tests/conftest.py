@@ -15,6 +15,7 @@ from support.system_spec import SKIP_NO_TEST_DB
 from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
 from cicerone.io.engines import dispose_engines
+from cicerone.locks import hold as lock_hold
 
 # Re-export for existing `from conftest import make_settings` call sites.
 __all__ = ["make_settings"]
@@ -33,6 +34,12 @@ def _disable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _READ_S3_PARQUET_PYARROW)
+
+
+@pytest.fixture
+def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A busy writer lock fails at once instead of after the acquire timeout."""
+    monkeypatch.setattr(lock_hold, "DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.0)
 
 
 @pytest.fixture
