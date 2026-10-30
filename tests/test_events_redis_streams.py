@@ -365,6 +365,24 @@ def test_connect_ping_failure(monkeypatch):
         source.connect()
 
 
+def test_connect_failure_closes_new_client(monkeypatch):
+    client = FakeRedis()
+    client.ping = lambda: (_ for _ in ()).throw(RedisError("down"))  # type: ignore[method-assign]
+    _install_fake_redis(monkeypatch, client)
+    source = RedisStreamsEventSource(_options())
+    with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert client.closed is True
+
+    client = FakeRedis()
+    client.xgroup_create = lambda *_a, **_k: (_ for _ in ()).throw(_ResponseError("NOPERM"))  # type: ignore[method-assign]
+    _install_fake_redis(monkeypatch, client)
+    source = RedisStreamsEventSource(_options())
+    with pytest.raises(_ResponseError, match="NOPERM"):
+        source.connect()
+    assert client.closed is True
+
+
 def test_connect_ping_unexpected_error_propagates(monkeypatch):
     client = FakeRedis()
     client.ping = lambda: (_ for _ in ()).throw(RuntimeError("bug"))  # type: ignore[method-assign]

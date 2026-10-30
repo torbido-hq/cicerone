@@ -71,21 +71,21 @@ class RedisStreamsEventSource(QueuedEventSource):
         from cicerone.redis_client import redis_from_url
 
         client = redis_from_url(self._redis_url, decode_responses=True)
-        try:
-            client.ping()
-        except RedisError as exc:
-            raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
-
-        try:
-            client.xgroup_create(
-                self._stream,
-                self._group,
-                id=self._group_start_id,
-                mkstream=True,
-            )
-        except redis.ResponseError as exc:
-            if "BUSYGROUP" not in str(exc):
-                raise
+        with self._release_on_error(client):
+            try:
+                client.ping()
+            except RedisError as exc:
+                raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
+            try:
+                client.xgroup_create(
+                    self._stream,
+                    self._group,
+                    id=self._group_start_id,
+                    mkstream=True,
+                )
+            except redis.ResponseError as exc:
+                if "BUSYGROUP" not in str(exc):
+                    raise
 
         with self._lock:
             previous = self._client

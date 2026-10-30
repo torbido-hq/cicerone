@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from support.events import event_payload
-from support.fake_kafka import install_fake_kafka, kafka_source_options
+from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
 from support.fakes import hide_module
 
 from cicerone.config import ConfigError
@@ -436,6 +436,18 @@ def test_connect_list_topics_failure(monkeypatch):
     broker.list_topics_error = KafkaException("down")
     source = KafkaEventSource(kafka_source_options())
     with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert created[0].closed is True
+
+
+def test_connect_subscribe_failure_closes_consumer(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    created = _capture_consumers(monkeypatch)
+    monkeypatch.setattr(
+        FakeConsumer, "subscribe", lambda *_args, **_kwargs: (_ for _ in ()).throw(KafkaException("sub"))
+    )
+    source = KafkaEventSource(kafka_source_options())
+    with pytest.raises(KafkaException, match="sub"):
         source.connect()
     assert created[0].closed is True
 

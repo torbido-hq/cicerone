@@ -99,9 +99,13 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
 
     def close(self) -> None:
         with self._lock:
+            clients = (self._s3, self._sqs)
             self._s3 = None
             self._sqs = None
             self._connected = False
+        for client in clients:
+            if client is not None:
+                client.close()
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
