@@ -15,12 +15,12 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
-    _assignment_overlay,
     _read_generated_at,
     _refresh_step,
     _start_refresh_loop,
 )
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
+from cicerone.serve.recommendations import read_assignment_overlay
 
 
 def _settings(**overrides) -> Settings:
@@ -600,8 +600,8 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
     settings = _settings()
-    assert RefreshedValue(lambda: _assignment_overlay(settings, None)).get() == (None, None)
-    assert _assignment_overlay(settings, None) == (None, None)
+    assert RefreshedValue(lambda: read_assignment_overlay(settings, None)).get() == (None, None)
+    assert read_assignment_overlay(settings, None) == (None, None)
 
     enabled = _settings(
         experiment=ExperimentSettings(
@@ -613,7 +613,7 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
             ),
         )
     )
-    assert _assignment_overlay(enabled, None) == (None, None)
+    assert read_assignment_overlay(enabled, None) == (None, None)
 
     class _Store:
         n = 0
@@ -626,7 +626,7 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
             return "treatment", ("control", "treatment")
 
     store = _Store()
-    cache = RefreshedValue(lambda: _assignment_overlay(enabled, store))
+    cache = RefreshedValue(lambda: read_assignment_overlay(enabled, store))
     cache.refresh()
     assert cache.get() == ("treatment", ("control", "treatment"))
     assert _refresh_step(cache) is False

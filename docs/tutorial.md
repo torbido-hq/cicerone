@@ -842,8 +842,9 @@ or clear saved passwords. The **Inspect user** form shows that `user_id`'s
 recent `[input]` events beside current top-K (including cold-start
 fallback). Shared item ids are highlighted. When `reasons` is present, a
 Why column summarizes source labels and the top similar history item.
-Recs row count is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
-defaults to 20, so 10 with the default `top_k`); events use
+Recs match `GET /recommendations/{user_id}` with default parameters
+(`serve.default_k` rows; `dashboard.lookup_k` is deprecated and has no
+effect); events use
 `dashboard.lookup_events` (default 20). User attributes show only when
 `dashboard.lookup_user_attrs` lists columns. The
 incremental-events panel is gated on the `[events]` block of the config the
