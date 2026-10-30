@@ -73,30 +73,15 @@ def acquire_once(lock: LockBackend) -> tuple[bool, int | None]:
     return False, None
 
 
-def acquire_until(
-    lock: LockBackend,
-    *,
-    timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
-    interval_seconds: float = 0.05,
-) -> tuple[bool, int | None]:
-    deadline = time.monotonic() + timeout_seconds
+def acquire_until(lock: LockBackend) -> tuple[bool, int | None]:
+    deadline = time.monotonic() + DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS
     while True:
         ok, generation = acquire_once(lock)
         if ok:
             return True, generation
         if time.monotonic() >= deadline:
             return False, None
-        time.sleep(interval_seconds)
-
-
-def acquire_blocking(
-    lock: LockBackend,
-    *,
-    timeout_seconds: float = DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
-    interval_seconds: float = 0.05,
-) -> bool:
-    ok, _generation = acquire_until(lock, timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
-    return ok
+        time.sleep(0.05)
 
 
 writer_hold = threading.local()
