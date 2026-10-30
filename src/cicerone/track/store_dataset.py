@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Callable, Iterator
@@ -18,8 +17,13 @@ from cicerone.config.settings import IOSettings
 from cicerone.io.blob import (
     S3_READ_ERRORS,
     append_storage_bytes,
+    encode_jsonl,
+    iter_jsonl_objects,
+    json_file_writer,
+    read_json_object,
     read_parquet_if_exists,
     read_storage_bytes,
+    require_db_or_local_dataset,
     write_storage_bytes,
 )
 from cicerone.io.options import (
@@ -34,14 +38,14 @@ from cicerone.io.options import (
 from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
     EVAL_FILENAME,
-    HISTORY_COLUMNS,
     HISTORY_DIR,
     HISTORY_FILENAME,
     TRACK_FILENAME,
+    TRACK_LOG_BACKEND_ERROR,
+    empty_history_frame,
     filter_history,
     history_part_matches,
     history_stem_before,
-    require_appendable_track_log,
     row_matches,
     unique_matching_rows,
 )
@@ -75,7 +79,7 @@ class TrackDatasetBackend:
         self._append_lock = threading.Lock()
 
     def append_accepted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        require_appendable_track_log(self._output)
+        require_db_or_local_dataset(self._output, TRACK_LOG_BACKEND_ERROR)
         with self._dataset_append_lock(), self._fence.lease():
             known = self._refresh_known_ids()
             fresh: list[dict[str, Any]] = []
@@ -89,9 +93,9 @@ class TrackDatasetBackend:
                     seen.add(event_id)
             if not fresh:
                 return []
-            encoded = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in fresh).encode("utf-8")
+            encoded = encode_jsonl(fresh)
             self._fence.ensure()
-            self._append_bytes(TRACK_FILENAME, encoded)
+            append_storage_bytes(self._options, TRACK_FILENAME, encoded)
             known.update(seen)
             self._track_size = (self._track_size or 0) + len(encoded)
             return fresh
@@ -104,26 +108,21 @@ class TrackDatasetBackend:
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=None)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
-        encoded = json.dumps(payload, indent=2).encode("utf-8")
-        return lambda: self._write_bytes(EVAL_FILENAME, encoded, "application/json")
+        return json_file_writer(self._options, EVAL_FILENAME, payload)
 
     def read_eval(self) -> dict[str, Any] | None:
-        raw = self._read_bytes(EVAL_FILENAME)
-        if raw is None:
-            return None
         try:
-            parsed = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
+            return read_json_object(self._options, EVAL_FILENAME)
+        except ValueError:
             logger.warning("Invalid track_eval.json; ignoring")
             return None
-        return parsed if isinstance(parsed, dict) else None
 
     def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
         buf = BytesIO()
         frame.to_parquet(buf, index=False)
         part = f"{HISTORY_DIR}/{history_part_name(generated_at)}"
         payload = buf.getvalue()
-        return lambda: self._write_bytes(part, payload, "application/octet-stream")
+        return lambda: write_storage_bytes(self._options, part, payload, "application/octet-stream")
 
     def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
         frames = []
@@ -131,7 +130,7 @@ class TrackDatasetBackend:
             frames.extend(self._read_legacy_history())
         frames.extend(self._read_history_parts(generated_ats=generated_ats, since=since))
         if not frames:
-            return pd.DataFrame(columns=list(HISTORY_COLUMNS))
+            return empty_history_frame()
         return filter_history(pd.concat(frames, ignore_index=True), generated_ats=generated_ats, since=since)
 
     def _read_legacy_history(self) -> list[pd.DataFrame]:
@@ -180,7 +179,7 @@ class TrackDatasetBackend:
             with path.open("rb") as handle:
                 yield from handle
             return
-        raw = self._read_bytes(TRACK_FILENAME)
+        raw = read_storage_bytes(self._options, TRACK_FILENAME)
         if raw is None:
             return
         yield from raw.splitlines()
@@ -188,16 +187,7 @@ class TrackDatasetBackend:
     def _read_rows_dataset(self, *, since: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         known: set[str] | None = set() if self._known_ids is None else None
-        for raw_line in self._iter_track_lines():
-            line = raw_line.decode("utf-8").strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
+        for parsed in iter_jsonl_objects(self._iter_track_lines()):
             if known is not None:
                 event_id = str(parsed.get("event_id") or "")
                 if event_id:
@@ -230,15 +220,6 @@ class TrackDatasetBackend:
         path = Path(require_option(self._options, "path", "local")) / ".track.jsonl.lock"
         with self._append_lock, exclusive_file_lock(path):
             yield
-
-    def _read_bytes(self, filename: str) -> bytes | None:
-        return read_storage_bytes(self._options, filename)
-
-    def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
-        write_storage_bytes(self._options, filename, payload, content_type)
-
-    def _append_bytes(self, filename: str, payload: bytes) -> None:
-        append_storage_bytes(self._options, filename, payload)
 
 
 def history_part_name(generated_at: str) -> str:

@@ -12,8 +12,9 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
+from cicerone.io.engines import LazyEngine, create_table_sql, quote_identifier
 from cicerone.io.options import require_option, sql_identifier, table_option
+from cicerone.io.sql_rows import append_frame_fenced, frame_records, replace_rows_fenced
 from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
@@ -62,17 +63,6 @@ def _hydrate_state_row(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def jsonish(value: Any) -> Any:
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (ValueError, AttributeError):
-            pass
-    if pd.isna(value):  # type: ignore[arg-type]
-        return None
-    return value
-
-
 class ExperimentDbBackend:
     """Promote state in one table (one row), exposures in another."""
 
@@ -110,14 +100,8 @@ class ExperimentDbBackend:
             else:
                 logger.exception("Failed to read experiment state table %r", table)
                 raise
-        if frame.empty:
-            return None
-        return _hydrate_state_row(
-            {str(key): jsonish(value) for key, value in frame.iloc[0].to_dict().items()}
-        )
-
-    def write_state(self, state: dict[str, Any]) -> None:
-        self.state_writer(state)()
+        rows = frame_records(frame)
+        return _hydrate_state_row(rows[0]) if rows else None
 
     def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
         # Encode before the caller takes the fence; only the SQL runs under it.
@@ -138,32 +122,21 @@ class ExperimentDbBackend:
             "promoted_at": promoted_at,
             "payload": _state_payload_json(state),
         }
-        row_sql = text(insert_sql(engine, table, list(params)))
-
-        def _fence() -> None:
-            self._fence.ensure()
-
-        def _replace_row(conn: Any) -> None:
-            _fence()
-            conn.execute(text(f"DELETE FROM {quoted_table}"))
-            _fence()
-            conn.execute(row_sql, params)
-            _fence()
 
         def _write() -> None:
             try:
                 with engine.begin() as conn:
-                    _fence()
+                    self._fence.ensure()
                     conn.execute(create_sql)
-                    _replace_row(conn)
+                    replace_rows_fenced(conn, table, params, self._fence)
             except SQLAlchemyError as exc:
                 if not is_missing_column_error(exc):
                     raise
                 with engine.begin() as conn:
-                    _fence()
+                    self._fence.ensure()
                     payload = quote_identifier(engine, "payload")
                     conn.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {payload} TEXT"))
-                    _replace_row(conn)
+                    replace_rows_fenced(conn, table, params, self._fence)
 
         return _write
 
@@ -171,17 +144,7 @@ class ExperimentDbBackend:
         table = table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE)
         engine = self.engine()
         frame = pd.DataFrame(list(rows))
-
-        def _append() -> None:
-            with engine.begin() as conn:
-                self._fence.ensure()
-                frame.to_sql(table, conn, if_exists="append", index=False)
-                self._fence.ensure()
-
-        return _append
-
-    def append_exposures(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        self.exposure_writer(rows)()
+        return lambda: append_frame_fenced(engine, table, frame, self._fence)
 
     def stored_exposure_columns(self, engine: Engine, table: str) -> list[str] | None:
         try:
@@ -235,7 +198,4 @@ class ExperimentDbBackend:
                 return []
             logger.exception("Failed to read exposures table %r", table)
             raise
-        if frame.empty:
-            return []
-        records = frame.to_dict(orient="records")
-        return [{str(key): jsonish(value) for key, value in row.items()} for row in records]
+        return frame_records(frame)

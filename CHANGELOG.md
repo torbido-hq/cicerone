@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
@@ -121,6 +124,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Flat `make_settings` overrides (`make_settings(serve_port=…)`), deprecated
   in 0.8.5 ahead of 0.9.0, now raise `TypeError`. Use
   `make_settings(serve=ServeSettings(…))`.
+- The experiment sequential test does not decide until each arm has at
+  least `track.min_impressions` users (with `[track]` on), instead of
+  deciding on two users per arm.
+- `POST /track` returns **503** "Track store unavailable" instead of
+  **500** when the track store is unavailable or failing (any storage or
+  database error).
 
 ## [0.8.5] - 2026-10-14
 

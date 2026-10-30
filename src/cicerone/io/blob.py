@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
 
-from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES
+from cicerone.config.constants import DEFAULT_MAX_STORAGE_READ_BYTES, ConfigError
+from cicerone.config.settings import IOSettings
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
@@ -18,6 +21,7 @@ from cicerone.io.options import (
     read_s3_body,
     require_max_bytes,
     require_option,
+    storage_backend,
     validate_storage_options,
 )
 
@@ -85,3 +89,47 @@ def append_storage_bytes(options: dict[str, Any], filename: str, payload: bytes)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("ab") as handle:
         handle.write(payload)
+
+
+def require_db_or_local_dataset(output: IOSettings, error: str) -> None:
+    if output.kind == "db":
+        return
+    if output.kind == "dataset" and storage_backend(output.options) == "local":
+        return
+    raise ConfigError(error)
+
+
+def encode_jsonl(rows: Iterable[Mapping[str, Any]]) -> bytes:
+    return "".join(json.dumps(dict(row), separators=(",", ":")) + "\n" for row in rows).encode("utf-8")
+
+
+def iter_jsonl_objects(lines: Iterable[bytes]) -> Iterator[dict[str, Any]]:
+    """JSON objects from ``lines``; blank, invalid and non-object lines are skipped."""
+    for raw_line in lines:
+        line = raw_line.decode("utf-8").strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            yield parsed
+
+
+def read_json_object(options: dict[str, Any], filename: str) -> dict[str, Any] | None:
+    """``None`` when ``filename`` is missing; ``ValueError`` when it is not a JSON object."""
+    raw = read_storage_bytes(options, filename)
+    if raw is None:
+        return None
+    parsed = json.loads(raw.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{filename} is not an object")
+    return parsed
+
+
+def json_file_writer(
+    options: dict[str, Any], filename: str, payload: Mapping[str, Any]
+) -> Callable[[], None]:
+    encoded = json.dumps(payload, indent=2).encode("utf-8")
+    return lambda: write_storage_bytes(options, filename, encoded, "application/json")

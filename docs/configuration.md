@@ -172,7 +172,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused) |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
-| `min_impressions` | `100` | Gates Promote / Thompson volume. Does **not** change the CTR formula |
+| `min_impressions` | `100` | Gates Promote / Thompson volume; the sequential test needs this many users per arm. Does **not** change the CTR formula |
 
 `kind` is `impression` or `click` only. Details:
 [evaluation.md](evaluation.md).

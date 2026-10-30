@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -138,23 +138,47 @@ class FakeGuard:
 
 
 class FakeLock:
-    """LockBackend that records ``acquire`` / ``owned`` / ``release`` calls in ``events``."""
+    """LockBackend that records ``acquire`` / ``owned`` / ``release`` calls in ``events``.
 
-    def __init__(self, *, acquires: bool = True, owned: bool = True) -> None:
+    ``acquires`` and ``owned`` are fixed answers or callables.
+    """
+
+    def __init__(
+        self, *, acquires: bool | Callable[[], bool] = True, owned: bool | Callable[[], bool] = True
+    ) -> None:
         self.acquires = acquires
         self.is_owned = owned
         self.events: list[str] = []
 
     def acquire(self) -> bool:
         self.events.append("acquire")
-        return self.acquires
+        return self.acquires() if callable(self.acquires) else self.acquires
 
     def release(self) -> None:
         self.events.append("release")
 
     def owned(self) -> bool:
         self.events.append("owned")
-        return self.is_owned
+        return self.is_owned() if callable(self.is_owned) else self.is_owned
 
     def is_locked(self) -> bool:
         return True
+
+
+class FenceCheck:
+    """Fence check that passes for the first ``fail_at - 1`` calls, then fails."""
+
+    def __init__(self, fail_at: int) -> None:
+        self.fail_at = fail_at
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return self.calls < self.fail_at
+
+
+def raising(exc: BaseException) -> Callable[..., Any]:
+    def _raise(*_args: Any, **_kwargs: Any) -> Any:
+        raise exc
+
+    return _raise
