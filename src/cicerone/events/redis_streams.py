@@ -263,7 +263,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 if entry_id in self._held_entries:
                     continue
             payload = {str(key): value for key, value in fields.items()}
-            if not supplied_event_id(payload):
+            if supplied_event_id(payload) is None:
                 payload["event_id"] = entry_id
             try:
                 event = normalize_event(payload)

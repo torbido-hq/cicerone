@@ -74,10 +74,7 @@ def normalize_prefix(raw: Any) -> str:
 
 
 def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
-    existing = supplied_event_id(payload)
-    if existing:
-        return str(existing)
-    return f"{bucket}/{key}|{etag}|{index}"
+    return supplied_event_id(payload) or f"{bucket}/{key}|{etag}|{index}"
 
 
 def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:

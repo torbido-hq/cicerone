@@ -206,7 +206,7 @@ class KafkaEventSource(QueuedEventSource):
             logger.warning("Skipping invalid Kafka message %s-%s: %s", partition, offset, exc)
             self._commit_discard(consumer, message)
             return None
-        if not supplied_event_id(payload):
+        if supplied_event_id(payload) is None:
             payload["event_id"] = f"{partition}-{offset}"
         try:
             event = normalize_event(payload)

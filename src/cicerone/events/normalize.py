@@ -87,8 +87,9 @@ def event_fingerprint(event: NormalizedEvent) -> str:
     return sha256(payload).hexdigest()
 
 
-def supplied_event_id(payload: Mapping[str, Any]) -> Any:
-    return payload.get("event_id") or payload.get("idempotency_key")
+def supplied_event_id(payload: Mapping[str, Any]) -> str | None:
+    value = payload.get("event_id") or payload.get("idempotency_key")
+    return str(value) if value else None
 
 
 def normalize_event(payload: Any) -> NormalizedEvent:
@@ -104,8 +105,8 @@ def normalize_event(payload: Any) -> NormalizedEvent:
         raise EventNormalizeError("user_id, item_id, and event_type must be non-empty")
 
     supplied = supplied_event_id(raw)
-    generated = not supplied
-    event_id = str(supplied) if supplied else str(uuid4())
+    generated = supplied is None
+    event_id = supplied or str(uuid4())
     return NormalizedEvent(
         user_id=user_id,
         item_id=item_id,

@@ -141,8 +141,8 @@ def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[
 
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
     existing = supplied_event_id(payload)
-    if existing:
-        return str(existing)
+    if existing is not None:
+        return existing
     identity = _row_identity(payload)
     if identity is not None:
         return identity
