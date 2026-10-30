@@ -1003,7 +1003,7 @@ def _base_io_toml() -> str:
         """
 
 
-def test_load_settings_dashboard_lookup_k(tmp_path):
+def test_load_settings_dashboard_lookup_k(tmp_path, caplog):
     config_path = write_toml(
         tmp_path,
         f"""
@@ -1014,31 +1014,41 @@ def test_load_settings_dashboard_lookup_k(tmp_path):
         """,
     )
 
-    settings = load_settings(config_path)
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(config_path)
 
     assert settings.dashboard.lookup_k == 8
-    assert settings.dashboard.lookup_k == 8
+    assert "dashboard.lookup_k is deprecated" in caplog.text
 
 
-def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path):
-    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path, caplog):
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(write_toml(tmp_path, _base_io_toml()))
 
     assert settings.dashboard.lookup_k == 20
+    assert "dashboard.lookup_k" not in caplog.text
     assert settings.dashboard.host == "127.0.0.1"
 
 
-def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
+@pytest.mark.parametrize(("enabled", "warned"), [("true", True), ("false", False)])
+def test_load_settings_accepts_any_dashboard_lookup_k_and_warns_only_when_enabled(
+    tmp_path, caplog, enabled, warned
+):
     config_path = write_toml(
         tmp_path,
         f"""
         [dashboard]
+        enabled = {enabled}
         lookup_k = 0
         {_base_io_toml()}
         """,
     )
 
-    with pytest.raises(ConfigError, match="dashboard.lookup_k must be >= 1"):
-        load_settings(config_path)
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_k == 0
+    assert ("dashboard.lookup_k is deprecated" in caplog.text) is warned
 
 
 def test_load_settings_dashboard_lookup_events(tmp_path):

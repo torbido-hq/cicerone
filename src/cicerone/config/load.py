@@ -178,8 +178,14 @@ def _load_lookup_user_attrs(raw: object) -> tuple[str, ...]:
 
 
 def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings:
+    enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
+    if enabled and "lookup_k" in dashboard_raw:
+        logger.warning(
+            "dashboard.lookup_k is deprecated, has no effect and will be removed in 0.9.0; "
+            "Inspect user shows serve.default_k rows"
+        )
     return DashboardSettings(
-        enabled=bool(dashboard_raw.get("enabled", DashboardSettings.enabled)),
+        enabled=enabled,
         host=dashboard_raw.get("host", DashboardSettings.host),
         port=int(dashboard_raw.get("port", DashboardSettings.port)),
         users_path=dashboard_raw.get("users_path", DashboardSettings.users_path),
@@ -192,9 +198,7 @@ def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings
         history_limit=int_field(
             dashboard_raw, "dashboard.history_limit", DashboardSettings.history_limit, require_positive_int
         ),
-        lookup_k=int_field(
-            dashboard_raw, "dashboard.lookup_k", DashboardSettings.lookup_k, require_positive_int
-        ),
+        lookup_k=int(dashboard_raw.get("lookup_k", DashboardSettings.lookup_k)),
         lookup_events=int_field(
             dashboard_raw, "dashboard.lookup_events", DashboardSettings.lookup_events, require_positive_int
         ),

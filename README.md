@@ -276,8 +276,8 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   beside their current precomputed top-K (cold-start fallback when they
   have no personal rows). Shared item ids are highlighted; a source-mix
   badge and optional user attributes (`dashboard.lookup_user_attrs`) sit above the two panes. Recs show
-  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so
-  10 with the default `top_k`); events show `dashboard.lookup_events`
+  `serve.default_k` rows (default 10), like `GET /recommendations/{user_id}`
+  without `limit`; events show `dashboard.lookup_events`
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**

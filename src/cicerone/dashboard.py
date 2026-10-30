@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
+from cicerone.experiment.store import ExperimentStore
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -41,6 +44,8 @@ from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryRe
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
 from cicerone.refreshed_value import RefreshedValue
+from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
+from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 
 logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -194,6 +199,7 @@ def create_app(
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
     config_path: str | None = None,
+    feature_config: FeatureConfig | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="cicerone-dashboard",
@@ -241,6 +247,20 @@ def create_app(
         if recommendation_reader is not None
         else None
     )
+    recommendation_service = (
+        build_recommendation_service(
+            settings,
+            recommendation_reader,
+            feature_config,
+            partial(
+                read_assignment_overlay,
+                settings,
+                ExperimentStore(settings.output) if settings.experiment.enabled else None,
+            ),
+        )
+        if recommendation_reader is not None
+        else None
+    )
 
     def _lookup(user_id: str) -> dict[str, Any]:
         if reader_refresh is not None and user_id.strip():
@@ -248,7 +268,7 @@ def create_app(
                 reader_refresh.get()
             except OPTIONAL_IO_ERRORS as exc:
                 log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
-        return lookup_inspector(settings, recommendation_reader, history_reader, user_id)
+        return lookup_inspector(settings, recommendation_service, history_reader, user_id)
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
@@ -343,8 +363,10 @@ def main() -> None:
         )
 
     reader = build_manifest_reader(settings.output)
+    feature_config = load_optional_feature_config(settings)
     try:
         rec_reader = build_recommendation_reader(settings.output)
+        configure_reader_item_filters(settings, rec_reader, feature_config)
     except _STORE_OPEN_ERRORS:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
@@ -361,6 +383,7 @@ def main() -> None:
         rec_reader,
         history_reader,
         config_path=loaded_config_path,
+        feature_config=feature_config,
     )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
