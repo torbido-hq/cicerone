@@ -1149,6 +1149,7 @@ def test_dashboard_inspect_matches_serve_response(tmp_path):
     )
     settings = _settings(
         mode="serve",
+        serve_auth_token="secret",
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         experiment=ExperimentSettings(
             enabled=True,
@@ -1157,7 +1158,7 @@ def test_dashboard_inspect_matches_serve_response(tmp_path):
         ),
     )
     served = TestClient(create_serve_app(settings, reader, feature_config=feature_config)).get(
-        f"/recommendations/{user_id}"
+        f"/recommendations/{user_id}", headers={"Authorization": "Bearer secret"}
     )
     inspect = TestClient(
         create_app(
