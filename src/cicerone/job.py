@@ -135,9 +135,6 @@ class JobRun:
     pending_thompson: dict[str, Any] | None = None
     recommendations: pd.DataFrame | None = None
     written: JobWriteResult = field(default_factory=JobWriteResult)
-    # Snapshot of ``written`` taken when the write step returns or fails.
-    manifest_written: bool = False
-    success_generated_at: str | None = None
     replace_success_manifest: bool = False
 
 
@@ -662,7 +659,7 @@ def _publish_job_sidecar(run: JobRun) -> None:
 
 def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     settings, manifest = run.settings, run.manifest
-    manifest_written = run.manifest_written
+    manifest_written = run.written.manifest_written
     replace_success_manifest = run.replace_success_manifest
     persist_exc: BaseException | None = None
     close_exc: BaseException | None = None
@@ -706,7 +703,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     if isinstance(close_exc, LockLostError) and persist_exc is not None:
         leftover_exc = close_exc
     skip_if_newer_than = (
-        (run.success_generated_at or run.started_at) if replace_success_manifest else run.started_at
+        (run.written.success_generated_at or run.started_at) if replace_success_manifest else run.started_at
     )
     if not manifest_written and not skip_stale_job_manifest(run.fence, exc=leftover_exc):
         manifest["generated_at"] = datetime.now(UTC).isoformat()
@@ -748,8 +745,6 @@ def _record_run_failure(run: JobRun, exc: BaseException) -> None:
         run.manifest["status"] = "failed"
         run.written.manifest_written = False
         run.replace_success_manifest = True
-    run.manifest_written = run.written.manifest_written
-    run.success_generated_at = run.written.success_generated_at
 
 
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
@@ -837,8 +832,6 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
             automl_result=automl.result,
             feature_config=feature_config,
         )
-        run.manifest_written = run.written.manifest_written
-        run.success_generated_at = run.written.success_generated_at
         _publish_job_sidecar(run)
     except BaseException as exc:
         error = exc
