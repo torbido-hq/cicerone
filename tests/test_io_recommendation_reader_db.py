@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from support.fakes import patch_module_ref
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -67,7 +68,7 @@ def test_db_reader_keeps_items_on_transient_refresh_error(monkeypatch):
     def boom(*_args, **_kwargs):
         raise SQLAlchemyError("connection reset")
 
-    monkeypatch.setattr(pd, "read_sql", boom)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     reader.refresh()
 
     assert list(reader.get_items()["item_id"]) == ["i1"]
@@ -86,7 +87,7 @@ def test_db_reader_keeps_items_on_pandas_database_error(monkeypatch):
     def boom(*_args, **_kwargs):
         raise DatabaseError("no such table: recommendation_items")
 
-    monkeypatch.setattr(pd, "read_sql", boom)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     reader.refresh()
     assert list(reader.get_items()["item_id"]) == ["i1"]
     assert reader.items_version() == version_before
@@ -100,7 +101,11 @@ def test_db_reader_refresh_propagates_unexpected_errors(monkeypatch):
     class Boom(Exception):
         pass
 
-    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")))
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.io.db_recommendation_reader.pd",
+        read_sql=lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+    )
     with pytest.raises(Boom, match="bug"):
         reader.refresh()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -93,6 +94,22 @@ def patch_module_ref(monkeypatch: pytest.MonkeyPatch, target: str, **overrides: 
     owner, name = target.rsplit(".", 1)
     real = getattr(importlib.import_module(owner), name)
     monkeypatch.setattr(target, SimpleNamespace(**{**vars(real), **overrides}))
+
+
+def hold_threads(monkeypatch: pytest.MonkeyPatch, target: str) -> list[dict[str, Any]]:
+    """Patch ``target`` (``"pkg.mod.threading"``) so started threads are recorded (their kwargs), not run."""
+    started: list[dict[str, Any]] = []
+
+    class _HeldThread(threading.Thread):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._held_kwargs = kwargs
+
+        def start(self) -> None:
+            started.append(self._held_kwargs)
+
+    patch_module_ref(monkeypatch, target, Thread=_HeldThread)
+    return started
 
 
 class FakeReader:

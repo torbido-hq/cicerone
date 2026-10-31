@@ -216,7 +216,7 @@ def test_load_recommendations_for_users_db_empty_user_ids(tmp_path, monkeypatch)
         calls["n"] += 1
         return real_read(*args, **kwargs)
 
-    monkeypatch.setattr(pd, "read_sql_query", spy_read_sql_query)
+    patch_module_ref(monkeypatch, "cicerone.events.store.pd", read_sql_query=spy_read_sql_query)
     frame = load_recommendations_for_users(settings.output, [])
     assert frame.empty
     assert list(frame.columns) == list(empty_recommendations_frame().columns)

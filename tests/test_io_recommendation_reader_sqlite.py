@@ -671,5 +671,5 @@ def test_sqlite_db_reader_refresh_reports_a_failed_items_reload(tmp_path, monkey
     def _read_fails(*_args, **_kwargs):
         raise PoolTimeout("pool exhausted")
 
-    monkeypatch.setattr(pd, "read_sql", _read_fails)
+    patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=_read_fails)
     assert reader.refresh() is False

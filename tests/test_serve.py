@@ -548,7 +548,12 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
             raise SystemExit("stop")
 
     patch_module_ref(monkeypatch, "cicerone.serve.app.time", sleep=fake_sleep)
-    monkeypatch.setattr(threading.Thread, "start", lambda self: self.run())
+
+    class _InlineThread(threading.Thread):
+        def start(self) -> None:
+            self.run()
+
+    patch_module_ref(monkeypatch, "cicerone.serve.app.threading", Thread=_InlineThread)
     with pytest.raises(SystemExit):
         _start_refresh_loop(
             reader,

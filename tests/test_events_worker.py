@@ -6,6 +6,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 from support.events import dataset_updater, event_payload, wait_until
+from support.fakes import hold_threads, patch_module_ref
 from support.prometheus_metrics import registry_metric_value
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
@@ -1707,12 +1708,13 @@ def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feat
 
 def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
+    reconnect_done = threading.Event()
     connects = {"n": 0}
     closes = {"n": 0}
 
@@ -1721,7 +1723,8 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(1.0)
+                release.wait(timeout=5)
+                reconnect_done.set()
             super().connect()
 
         def close(self) -> None:
@@ -1744,9 +1747,10 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     )
     worker.start()
     assert reconnect_started.wait(timeout=2)
-    began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
+    # stop returned while the reconnect was still blocked.
+    assert not reconnect_done.is_set()
+    release.set()
     assert wait_until(lambda: closes["n"] >= 1)
 
 
@@ -1754,18 +1758,19 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     started = threading.Event()
     release = threading.Event()
+    second_connect_done = threading.Event()
 
     class _SlowSecondConnect(WebhookEventSource):
         def connect(self) -> None:
             if started.is_set():
-                release.wait(timeout=2)
+                release.wait(timeout=5)
+                second_connect_done.set()
                 return
             started.set()
             super().connect()
@@ -1794,9 +1799,9 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
         return False
 
     assert wait_until(_source_guard_held)
-    began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
+    # stop returned while the restart's connect was still blocked.
+    assert not second_connect_done.is_set()
     release.set()
     starter.join(timeout=2)
 
@@ -1976,19 +1981,20 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
 
 def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     started = threading.Event()
     release = threading.Event()
+    connect_done = threading.Event()
     closes = {"n": 0}
 
     class _SlowStart(WebhookEventSource):
         def connect(self) -> None:
             started.set()
-            release.wait(timeout=2)
+            release.wait(timeout=5)
+            connect_done.set()
             super().connect()
 
         def close(self) -> None:
@@ -2009,9 +2015,9 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     starter = threading.Thread(target=worker.start)
     starter.start()
     assert started.wait(timeout=2)
-    began = time.monotonic()
     assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
+    # stop returned while start's connect was still blocked.
+    assert not connect_done.is_set()
     release.set()
     starter.join(timeout=2)
     assert worker._thread is None or worker._thread.is_alive() is False
@@ -2224,12 +2230,12 @@ def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, featur
 
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
     closes = {"n": 0}
     connects = {"n": 0}
 
@@ -2238,7 +2244,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(0.2)
+                release.wait(timeout=5)
                 raise OSError("broker down")
             super().connect()
 
@@ -2263,6 +2269,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
     worker.start()
     assert reconnect_started.wait(timeout=2)
     worker.stop(join_timeout_seconds=0.05)
+    release.set()
     assert wait_until(lambda: closes["n"] >= 1)
 
 
@@ -3211,19 +3218,17 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
         ),
         poll_interval_seconds=0.01,
     )
-    original_start = threading.Thread.start
 
-    def _start(self: threading.Thread) -> None:
-        if self.name == "cicerone-events":
-            worker._stop.set()
-            worker._stop_epoch += 1
-        original_start(self)
+    class _StopOnStart(threading.Thread):
+        def start(self) -> None:
+            if self.name == "cicerone-events":
+                worker._stop.set()
+                worker._stop_epoch += 1
+            super().start()
 
-    threading.Thread.start = _start  # type: ignore[method-assign]
-    try:
+    with pytest.MonkeyPatch.context() as patch:
+        patch_module_ref(patch, "cicerone.events.worker.threading", Thread=_StopOnStart)
         worker.start()
-    finally:
-        threading.Thread.start = original_start  # type: ignore[method-assign]
     assert wait_until(lambda: closes["n"] >= 1)
     assert worker._thread is None or worker._thread.is_alive() is False
     assert worker._tick_guard.acquire(blocking=False)
@@ -3564,7 +3569,6 @@ def _recording_worker(tmp_path, feature_config, source, applies: list[str], batc
 def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
-    import threading
 
     from support.fake_kafka import install_fake_kafka, kafka_source_options
 
@@ -3578,18 +3582,14 @@ def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
     source.connect()
     applies: list[str] = []
     worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
-    started: list[str] = []
-    real_start = threading.Thread.start
-
-    def _record_start(thread: threading.Thread) -> None:
-        started.append(thread.name)
-        real_start(thread)
-
-    monkeypatch.setattr(threading.Thread, "start", _record_start)
+    # The worker and its heartbeat helper each start threads through their own module reference.
+    worker_threads = hold_threads(monkeypatch, "cicerone.events.worker.threading")
+    heartbeat_threads = hold_threads(monkeypatch, "cicerone.events.worker_heartbeat.threading")
     worker._buffer.extend(source.poll(1))
     assert worker._flush_ready(worker._buffer.flush()) == 1
     assert applies == ["k1"]
-    assert started == []
+    assert worker_threads == []
+    assert heartbeat_threads == []
     source.close()
 
 
