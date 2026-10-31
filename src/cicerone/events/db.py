@@ -338,7 +338,12 @@ class DbEventSource(EventSource):
         """WHERE and ORDER BY for rows after the (occurred_at, event_id) cursor, and their params."""
         occurred_at = self._source_column(engine, "occurred_at")
         event_id = self._source_column(engine, "event_id")
-        identity_sort = identity_sql_sort_expr(engine.dialect.name, event_id)
+        present = {column.lower() for column in self._source_columns or ()}
+        idempotency_key, row_id = (
+            self._source_column(engine, name) if name in present else None
+            for name in ("idempotency_key", "id")
+        )
+        identity_sort = identity_sql_sort_expr(engine.dialect.name, event_id, idempotency_key, row_id)
         if identity_sort is not None:
             later, same, occurred_order = occurred_at_predicates(engine.dialect.name, occurred_at)
             return (

@@ -199,7 +199,11 @@ Watermark poll over `events_table` / `events_query`. No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
 flush `ack`. When an `event_id` column exists, poll orders by
-`(occurred_at, event_id)` so same-timestamp pages cannot skip rows.
+`(occurred_at, event_id)` so same-timestamp pages cannot skip rows, and
+every row must have a non-empty `event_id` or `idempotency_key` (an
+`event_id` of `0` counts as empty and falls back to `idempotency_key`). A row
+with neither is rejected like an invalid row below and never holds the
+watermark.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from

@@ -1049,3 +1049,43 @@ def test_db_health_reports_acked_events_stuck_behind_the_head(tmp_path, monkeypa
     assert "acked_behind_head=2 head_wait=30s" in (source.health().detail or "")
     source.ack(["e1"])
     assert "acked_behind_head" not in (source.health().detail or "")
+
+
+def _polled_one_by_one(source: DbEventSource) -> list[str]:
+    seen: list[str] = []
+    while batch := list(source.poll(1)):
+        seen.append(batch[0].event_id)
+        assert source.ack([batch[0].event_id]) == (batch[0].event_id,)
+    return seen
+
+
+def test_db_idempotency_key_rows_at_the_watermark_timestamp_are_not_skipped(tmp_path):
+    rows = [
+        _event_row("e1", 0, idempotency_key=None),
+        _event_row("k2", 0, event_id=None, idempotency_key="k2"),
+        _event_row("k3", 0, event_id="", idempotency_key="k3"),
+        _event_row("e4", 0, idempotency_key=None),
+    ]
+    source, _options = _watermarked_source(tmp_path, rows)
+    assert _polled_one_by_one(source) == ["e1", "e4", "k2", "k3"]
+
+
+def test_db_zero_event_id_falls_back_to_idempotency_key_in_sql_too(tmp_path):
+    rows = [
+        _event_row("k0", 0, event_id=0, idempotency_key="k0"),
+        _event_row("k5", 0, event_id=5, idempotency_key="k5"),
+    ]
+    source, _options = _watermarked_source(tmp_path, rows)
+    assert _polled_one_by_one(source) == ["5", "k0"]
+
+
+def test_db_row_without_event_id_or_idempotency_key_is_rejected_without_blocking(tmp_path):
+    rows = [_event_row("e1", 0), _event_row("bad", 0, event_id=None), _event_row("e3", 1)]
+    source, options = _watermarked_source(tmp_path, rows)
+    first = list(source.poll(1))
+    assert [event.event_id for event in first] == [""]
+    assert "event_id or idempotency_key is required" in (first[0].rejected or "")
+    assert source.ack([""]) == ("",)
+    assert _polled_one_by_one(source) == ["e1", "e3"]
+    assert _saved_event_id(tmp_path) == "e3"
+    assert _restarted_ids(options) == []
