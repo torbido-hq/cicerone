@@ -6,6 +6,7 @@ import logging
 import os
 import tomllib
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,8 +50,10 @@ from cicerone.config.validation import (
     float_field,
     int_field,
     require_non_negative_int,
+    require_port,
     require_positive_float,
     require_positive_int,
+    require_positive_int_at_most,
     resolve_env_placeholders,
     resolve_epoch_metrics,
     validate_rrf_k,
@@ -82,13 +85,6 @@ def _optional_env(raw: dict[str, Any], key: str, path: str) -> Any:
     return resolve_env_placeholders(raw[key], path) if key in raw else None
 
 
-def _serve_default_k(serve_raw: dict[str, Any]) -> int:
-    value = int_field(serve_raw, "serve.default_k", ServeSettings.default_k, require_positive_int)
-    if value > DEFAULT_SERVE_MAX_K:
-        raise ConfigError(f"serve.default_k must be <= {DEFAULT_SERVE_MAX_K}, got {value}")
-    return value
-
-
 def _load_serve_settings(serve_raw: dict[str, Any], mode: str) -> ServeSettings:
     auth_token = _optional_env(serve_raw, "auth_token", "serve.auth_token")
     if mode == "serve" and not auth_token:
@@ -105,9 +101,14 @@ def _load_serve_settings(serve_raw: dict[str, Any], mode: str) -> ServeSettings:
         raise ConfigError("serve.metrics_token is required when serve.metrics_enabled = true")
     return ServeSettings(
         host=serve_raw.get("host", ServeSettings.host),
-        port=int(serve_raw.get("port", ServeSettings.port)),
+        port=int_field(serve_raw, "serve.port", ServeSettings.port, require_port),
         auth_token=auth_token,
-        default_k=_serve_default_k(serve_raw),
+        default_k=int_field(
+            serve_raw,
+            "serve.default_k",
+            ServeSettings.default_k,
+            partial(require_positive_int_at_most, maximum=DEFAULT_SERVE_MAX_K),
+        ),
         refresh_interval_seconds=float_field(
             serve_raw,
             "serve.refresh_interval_seconds",
@@ -141,7 +142,7 @@ def _load_trigger_settings(trigger_raw: dict[str, Any]) -> TriggerSettings:
     return TriggerSettings(
         enabled=enabled,
         host=trigger_raw.get("host", TriggerSettings.host),
-        port=int(trigger_raw.get("port", TriggerSettings.port)),
+        port=int_field(trigger_raw, "job.trigger.port", TriggerSettings.port, require_port),
         auth_token=auth_token,
         debounce_seconds=float_field(
             trigger_raw,
@@ -187,7 +188,7 @@ def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings
     return DashboardSettings(
         enabled=enabled,
         host=dashboard_raw.get("host", DashboardSettings.host),
-        port=int(dashboard_raw.get("port", DashboardSettings.port)),
+        port=int_field(dashboard_raw, "dashboard.port", DashboardSettings.port, require_port),
         users_path=dashboard_raw.get("users_path", DashboardSettings.users_path),
         refresh_interval_seconds=float_field(
             dashboard_raw,

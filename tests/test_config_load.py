@@ -1538,3 +1538,18 @@ def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
 def test_make_settings_rejects_unknown_mode():
     with pytest.raises(ConfigError, match="job.mode must be one of"):
         make_settings(mode="not_a_mode")
+
+
+@pytest.mark.parametrize(
+    ("section", "name"), [("serve", "serve"), ("trigger", "job.trigger"), ("dashboard", "dashboard")]
+)
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_make_settings_rejects_out_of_range_port(section, name, port):
+    with pytest.raises(ConfigError, match=rf"{name}.port must be (>= 1|<= 65535), got {port}"):
+        make_settings(**{section: {"port": port}})
+
+
+@pytest.mark.parametrize("section", ["serve", "trigger", "dashboard"])
+@pytest.mark.parametrize("port", [1, 65535])
+def test_make_settings_accepts_port_range_bounds(section, port):
+    assert getattr(make_settings(**{section: {"port": port}}), section).port == port

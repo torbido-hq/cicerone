@@ -133,6 +133,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- `serve.port`, `job.trigger.port` and `dashboard.port` must be in
+  1–65535; 0, negative and larger values are rejected at config load.
 
 ### Removed
 

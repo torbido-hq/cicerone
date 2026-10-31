@@ -14,6 +14,7 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_PLATEAU_EPS,
     DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
+    MAX_PORT,
     ConfigError,
 )
 from cicerone.config.settings import EpochMetricsSettings
@@ -135,6 +136,17 @@ def require_positive_int(value: int, *, name: str) -> int:
     if value < 1:
         raise ConfigError(f"{name} must be >= 1, got {value}")
     return value
+
+
+def require_positive_int_at_most(value: int, *, name: str, maximum: int) -> int:
+    require_positive_int(value, name=name)
+    if value > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}, got {value}")
+    return value
+
+
+def require_port(value: int, *, name: str) -> int:
+    return require_positive_int_at_most(value, name=name, maximum=MAX_PORT)
 
 
 def require_non_negative_int(value: int, *, name: str) -> int:
