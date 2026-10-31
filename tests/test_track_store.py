@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from io import BytesIO
 
 import pandas as pd
@@ -10,6 +11,7 @@ from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, raisin
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
+from cicerone.io import blob
 from cicerone.job_eval import retrain_fence
 from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
@@ -304,6 +306,27 @@ def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
     rows = TrackStore(output).read_rows()
     assert len(rows) == 1
     assert rows[0]["event_id"] == "imp-1"
+
+
+def test_track_jsonl_read_rejects_file_over_storage_cap(tmp_path, monkeypatch) -> None:
+    output = local_output(tmp_path)
+    (tmp_path / "track.jsonl").write_text(json.dumps(_row()) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "cicerone.track.store_dataset.read_storage_bytes", partial(blob.read_storage_bytes, max_bytes=8)
+    )
+    with pytest.raises(ValueError, match="max is 8"):
+        TrackStore(output).read_rows()
+
+
+def test_track_jsonl_append_streams_file_over_storage_cap(tmp_path, monkeypatch) -> None:
+    output = local_output(tmp_path)
+    (tmp_path / "track.jsonl").write_text(json.dumps(_row()) + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "cicerone.track.store_dataset.read_storage_bytes", partial(blob.read_storage_bytes, max_bytes=8)
+    )
+    store = TrackStore(output)
+    assert store.append_rows([_row()]) == 0
+    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
 
 
 def test_track_eval_roundtrip_s3(s3_options) -> None:

@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   generated ids instead of all sharing `"0"` and being dropped as
   duplicates. Supplied ids are kept as sent: whitespace is no longer
   trimmed, and a whitespace-only id is not replaced.
+- Reading track rows from a local `track.jsonl` (eval job, dashboard)
+  fails over the 512 MiB storage read limit, as on S3, instead of loading
+  any size into memory. `POST /track` keeps accepting rows past the limit.
 - The db events watermark file syncs its directory after the rename, as
   the S3 list marker already did, and both sync a newly created
   positions directory into its parent, so the saved position survives a
