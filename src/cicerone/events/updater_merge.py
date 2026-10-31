@@ -291,8 +291,8 @@ class UpdaterMerge:
     def _cold_start_rows(
         self,
         prior: pd.DataFrame,
-        allowed: frozenset[str] | None = None,
-        allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
+        allowed: frozenset[str] | None,
+        allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
     ) -> pd.DataFrame:
         variants = self._variants_for()
         if not variants:
@@ -323,6 +323,6 @@ class UpdaterMerge:
     def _cold_start_one_list(
         self,
         prior: pd.DataFrame,
-        allowed: frozenset[str] | None = None,
+        allowed: frozenset[str] | None,
     ) -> pd.DataFrame:
         return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)

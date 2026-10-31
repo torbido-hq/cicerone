@@ -250,6 +250,25 @@ def test_s3_sqs_receive_sets_apply_visibility(monkeypatch):
 
 
 @mock_aws
+def test_s3_sqs_receive_caps_max_messages_at_ten(monkeypatch):
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    queue_url = sqs.create_queue(QueueName="events-max-messages")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url, max_messages=50))
+    source.connect()
+    assert source._sqs is not None
+    requested: list[int] = []
+    real = source._sqs.receive_message
+
+    def recording(**kwargs):  # type: ignore[no-untyped-def]
+        requested.append(kwargs["MaxNumberOfMessages"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(source._sqs, "receive_message", recording)
+    assert list(source.poll(100)) == []
+    assert requested == [10]
+
+
+@mock_aws
 def test_s3_sqs_nack_requeues_and_ack_still_deletes():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")

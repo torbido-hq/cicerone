@@ -102,4 +102,4 @@ def ensure_publication_fence(sink: object, retrain: WriteFence) -> None:
 def write_job_manifest(
     sink: OutputSink, manifest: JobManifest, *, skip_if_newer_than: str | None = None
 ) -> bool:
-    return sink.write_manifest(manifest.as_dict(), skip_if_newer_than=skip_if_newer_than) is not False
+    return sink.write_manifest(manifest.as_dict(), skip_if_newer_than=skip_if_newer_than)

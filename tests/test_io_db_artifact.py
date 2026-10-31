@@ -29,17 +29,17 @@ def test_database_read_model_artifact_uses_one_select(tmp_path, monkeypatch):
 
     sink = DatabaseOutputSink({"database_url": f"sqlite:///{tmp_path}/artifacts.sqlite"})
     sink.write_model_artifact(b"123456")
-    statements: list[str] = []
+    statements: list[tuple[str, object]] = []
 
     def _capture(
         _conn: object,
         _cursor: object,
         statement: str,
-        _parameters: object,
+        parameters: object,
         _context: object,
         _executemany: bool,
     ) -> None:
-        statements.append(statement)
+        statements.append((statement, parameters))
 
     event.listen(sink._engine, "before_cursor_execute", _capture)
     try:
@@ -47,9 +47,11 @@ def test_database_read_model_artifact_uses_one_select(tmp_path, monkeypatch):
             sink.read_model_artifact()
     finally:
         event.remove(sink._engine, "before_cursor_execute", _capture)
-    payload_selects = [sql for sql in statements if "payload" in sql.lower()]
+    payload_selects = [(sql, params) for sql, params in statements if "payload" in sql.lower()]
     assert len(payload_selects) == 1
-    assert "substr" in payload_selects[0].lower()
+    sql, params = payload_selects[0]
+    assert "substr" in sql.lower()
+    assert params == (5,)
 
 
 def test_database_replace_model_artifact_if_matches_the_sqlite_fingerprint(tmp_path):

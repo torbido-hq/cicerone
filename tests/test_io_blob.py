@@ -38,20 +38,16 @@ def test_s3_read_closes_body(mocker) -> None:
     body.close.assert_called_once()
 
 
-def test_read_rejects_nonpositive_max_bytes(tmp_path) -> None:
-    options = {"storage_backend": "local", "path": str(tmp_path)}
-    with pytest.raises(ValueError, match="max_bytes"):
-        read_storage_bytes(options, "note.txt", max_bytes=0)
-
-
-def test_local_read_rejects_oversize(tmp_path) -> None:
+def test_local_read_rejects_oversize(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 4)
     options = {"storage_backend": "local", "path": str(tmp_path)}
     write_storage_bytes(options, "big.bin", b"123456", "application/octet-stream")
     with pytest.raises(ValueError, match="max is 4"):
-        read_storage_bytes(options, "big.bin", max_bytes=4)
+        read_storage_bytes(options, "big.bin")
 
 
-def test_s3_read_rejects_content_length(mocker) -> None:
+def test_s3_read_rejects_content_length(mocker, monkeypatch) -> None:
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
     body = mocker.Mock()
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body, "ContentLength": 99}
@@ -63,7 +59,7 @@ def test_s3_read_rejects_content_length(mocker) -> None:
         "bucket": "bucket",
     }
     with pytest.raises(ValueError, match="max is 8"):
-        read_storage_bytes(options, "file.bin", max_bytes=8)
+        read_storage_bytes(options, "file.bin")
     body.read.assert_not_called()
     body.close.assert_called_once()
 

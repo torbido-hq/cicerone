@@ -51,6 +51,18 @@ def test_job_manifest_dict_compat() -> None:
     assert written[0]["generated_at"] == "t"
 
 
+def test_write_job_manifest_returns_false_when_sink_skips() -> None:
+    seen: list[str | None] = []
+
+    class _SkippingSink:
+        def write_manifest(self, payload: dict, *, skip_if_newer_than=None) -> bool:
+            seen.append(skip_if_newer_than)
+            return False
+
+    assert write_job_manifest(_SkippingSink(), JobManifest(), skip_if_newer_than="t0") is False
+    assert seen == ["t0"]
+
+
 def test_job_manifest_unknown_keys_raise_keyerror() -> None:
     manifest = JobManifest()
     try:
