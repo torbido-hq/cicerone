@@ -164,26 +164,22 @@ def test_post_track_idempotent(tmp_path):
     assert after_second == after_first
 
 
-@pytest.mark.parametrize("supplied", [{"event_id": 0}, {"event_id": "", "idempotency_key": 0}])
-def test_post_track_falsy_supplied_id_gets_generated_ids(tmp_path, supplied):
+def test_post_track_trims_supplied_event_ids(tmp_path):
     app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)
-    rows = [{**_impression(item_id=f"i{rank}", rank=rank), **supplied} for rank in (1, 2)]
+    rows = [
+        _impression(item_id="i1", rank=1, event_id=" abc "),
+        _impression(item_id="i2", rank=2, event_id=" ", idempotency_key="k"),
+        _impression(item_id="i3", rank=3, event_id=" "),
+    ]
     response = client.post("/track", headers={"Authorization": "Bearer secret"}, json=rows)
     assert response.status_code == 202
-    assert response.json()["accepted"] == 2
-    ids = response.json()["event_ids"]
-    assert len(set(ids)) == 2
-    assert "0" not in ids
-
-
-def test_post_track_keeps_whitespace_event_id(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
-    client = TestClient(app)
-    response = client.post(
-        "/track", headers={"Authorization": "Bearer secret"}, json=_impression(event_id=" ")
-    )
-    assert response.json()["event_ids"] == [" "]
+    trimmed, keyed, generated = response.json()["event_ids"]
+    assert (trimmed, keyed) == ("abc", "k")
+    assert generated.strip()
+    assert generated not in {"abc", "k"}
+    stored = {row["item_id"]: row["event_id"] for row in TrackStore(_settings(tmp_path).output).read_rows()}
+    assert stored == {"i1": "abc", "i2": "k", "i3": generated}
 
 
 def test_post_track_counts_accepted_kinds_in_mixed_partial_batch(tmp_path):

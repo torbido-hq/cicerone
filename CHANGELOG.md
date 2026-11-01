@@ -41,11 +41,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `idempotency_key` is `0` or `false` get their stable fallback id,
   instead of all sharing the id `"0"` or `"False"` and being dropped as
   duplicates.
-- `POST /track` treats an `event_id` or `idempotency_key` of `0` or
-  `false` as missing, like event sources, so such rows get their own
-  generated ids instead of all sharing `"0"` and being dropped as
-  duplicates. Supplied ids are kept as sent: whitespace is no longer
-  trimmed, and a whitespace-only id is not replaced.
 - Reading track rows from a local `track.jsonl` (eval job, dashboard)
   fails over the 512 MiB storage read limit, as on S3, instead of loading
   any size into memory. `POST /track` keeps accepting rows past the limit.
