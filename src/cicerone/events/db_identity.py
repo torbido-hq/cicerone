@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event, parse_occurred_at
+from cicerone.events.normalize import (
+    EventNormalizeError,
+    normalize_event,
+    parse_occurred_at,
+    supplied_event_id,
+)
 from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
@@ -158,13 +163,8 @@ def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[
     return (occurred_at, _identity_sort_key(event_id))
 
 
-def _event_key(payload: dict[str, Any]) -> str | None:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    return None if existing in (None, "") else str(existing)
-
-
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
-    existing = _event_key(payload)
+    existing = supplied_event_id(payload)
     if existing is not None:
         return existing
     identity = _row_identity(payload)
@@ -200,7 +200,7 @@ def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[st
 
 
 def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
-    if "event_id" in payload and _event_key(payload) is None:
+    if "event_id" in payload and supplied_event_id(payload) is None:
         raise EventNormalizeError("event_id or idempotency_key is required when the source has event_id")
     occurred_at = db_occurred_at(payload.get("occurred_at"))
     return normalize_event(
