@@ -907,11 +907,12 @@ def test_db_connect_keeps_existing_engine_when_watermark_fails(tmp_path, monkeyp
     assert released == [url]
 
 
-def _event_row(event_id: str, minute: int, **overrides) -> dict:
+def _event_row(name: str, minute: int, **overrides) -> dict:
+    """Row ``name`` (its event_id unless ``event_id=`` overrides it) at 12:``minute``."""
     defaults = {
-        "item_id": f"i{event_id}",
+        "item_id": f"i{name}",
         "occurred_at": f"2026-08-13T12:{minute:02d}:00Z",
-        "event_id": event_id,
+        "event_id": name,
     }
     return event_payload(**{**defaults, **overrides})
 
@@ -1065,9 +1066,11 @@ def test_db_idempotency_key_rows_at_the_watermark_timestamp_are_not_skipped(tmp_
         _event_row("k2", 0, event_id=None, idempotency_key="k2"),
         _event_row("k3", 0, event_id="", idempotency_key="k3"),
         _event_row("e4", 0, idempotency_key=None),
+        _event_row("e2", 0, event_id=" e2\t", idempotency_key=None),
+        _event_row("k5", 0, event_id="  ", idempotency_key=" k5 "),
     ]
     source, _options = _watermarked_source(tmp_path, rows)
-    assert _polled_one_by_one(source) == ["e1", "e4", "k2", "k3"]
+    assert _polled_one_by_one(source) == ["e1", "e2", "e4", "k2", "k3", "k5"]
 
 
 def test_db_zero_event_id_falls_back_to_idempotency_key_in_sql_too(tmp_path):

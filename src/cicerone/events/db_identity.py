@@ -62,13 +62,19 @@ _POSTGRES_IDENTITY_SORT = (
     " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
     " ELSE chr(31) || event_id END"
 )
-# SQL test for an event_id value Python treats as missing (falsy) besides NULL and ''.
-_NUMERIC_ZERO = {
-    "sqlite": "typeof({col}) IN ('integer', 'real') AND {col} = 0",
+# Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
+ID_WHITESPACE = "".join(char for char in map(chr, range(0x3001)) if char.isspace())
+# `supplied_event_id` for one column: numeric 0 is missing, text is stripped, empty is missing.
+_SUPPLIED_ID_SQL = {
+    "sqlite": (
+        "CASE WHEN typeof({col}) IN ('integer', 'real') AND {col} = 0 THEN NULL"
+        " ELSE NULLIF(trim(CAST({col} AS TEXT), :id_whitespace), '') END"
+    ),
     "postgresql": (
-        "pg_typeof({col}) IN ('smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,"
+        "CASE WHEN pg_typeof({col}) IN ('smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,"
         " 'numeric'::regtype, 'real'::regtype, 'double precision'::regtype)"
-        " AND CAST({col} AS TEXT) ~ '^-?0+(\\.0+)?$'"
+        " AND CAST({col} AS TEXT) ~ '^-?0+(\\.0+)?$' THEN NULL"
+        " ELSE NULLIF(btrim(CAST({col} AS TEXT), :id_whitespace), '') END"
     ),
 }
 
@@ -138,12 +144,8 @@ def identity_sql_sort_expr(
     templates = {"sqlite": _SQLITE_IDENTITY_SORT, "postgresql": _POSTGRES_IDENTITY_SORT}
     if dialect not in templates:
         return None
-    zero = _NUMERIC_ZERO[dialect].format(col=event_id)
-    terms = [
-        f"CASE WHEN CAST({event_id} AS TEXT) = '' OR ({zero}) THEN NULL ELSE CAST({event_id} AS TEXT) END"
-    ]
-    if idempotency_key is not None:
-        terms.append(f"NULLIF(CAST({idempotency_key} AS TEXT), '')")
+    supplied = (column for column in (event_id, idempotency_key) if column is not None)
+    terms = [_SUPPLIED_ID_SQL[dialect].format(col=column) for column in supplied]
     if row_id is not None:
         terms.append(f"'id:' || NULLIF(CAST({row_id} AS TEXT), '')")
     return templates[dialect].replace("event_id", f"COALESCE({', '.join(terms)}, '')")

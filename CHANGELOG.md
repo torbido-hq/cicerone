@@ -152,8 +152,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   of acked events. A nacked event holds it until redelivered and acked; an
   in-flight event whose row is gone is dropped with a warning.
 - The db events source no longer skips rows whose `event_id` is NULL,
-  empty or `0` at the watermark's timestamp: it orders them by
-  `idempotency_key` in SQL too. With an `event_id` column, a row
+  blank, `0` or padded at the watermark's timestamp: SQL orders them by
+  the same trimmed id as Python. With an `event_id` column, a row
   with neither `event_id` nor `idempotency_key` is now rejected (logged,
   acked, not applied) instead of keyed by `id` or its payload.
 

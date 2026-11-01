@@ -19,6 +19,7 @@ from sqlalchemy import Connection, Engine, text
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
+    ID_WHITESPACE,
     ROW_IDENTITY_KEYS,
     cursor_key,
     cursor_key_from_payload,
@@ -348,7 +349,11 @@ class DbEventSource(EventSource):
             return (
                 f"{later} OR ({same} AND ({identity_sort}) > :watermark_sort)",
                 f"{occurred_order}, ({identity_sort}) ASC",
-                {"watermark_at": watermark_at, "watermark_sort": identity_bind_sort_key(watermark_event_id)},
+                {
+                    "watermark_at": watermark_at,
+                    "watermark_sort": identity_bind_sort_key(watermark_event_id),
+                    "id_whitespace": ID_WHITESPACE,
+                },
             )
         # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
         return (
