@@ -430,20 +430,20 @@ def test_experiment_context_clears_promote_cache_when_store_returns_other_experi
     ExperimentStore(settings.output).write_state(experiment_state("exp-cache", promoted_variant="treatment"))
     assert experiment_context(settings, store)["promoted_variant"] == "treatment"
 
-    def _other(_self):
+    def _other():
         return {
             "experiment_id": "other-exp",
             "promoted_variant": "control",
             "promoted_at": "2026-09-02T00:00:00Z",
         }
 
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _other)
+    monkeypatch.setattr(store.backend, "read_state", _other)
     assert experiment_context(settings, store)["promoted_variant"] is None
 
     def _boom(*_args, **_kwargs):
         raise OSError("store down")
 
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    monkeypatch.setattr(store.backend, "read_state", _boom)
     assert experiment_context(settings, store)["promoted_variant"] is None
 
 
