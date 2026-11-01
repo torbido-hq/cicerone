@@ -88,8 +88,12 @@ def event_fingerprint(event: NormalizedEvent) -> str:
 
 
 def supplied_event_id(payload: Mapping[str, Any]) -> str | None:
-    value = payload.get("event_id") or payload.get("idempotency_key")
-    return str(value) if value else None
+    for key in ("event_id", "idempotency_key"):
+        value = payload.get(key)
+        text = str(value).strip() if value else ""
+        if text:
+            return text
+    return None
 
 
 def normalize_event(payload: Any) -> NormalizedEvent:
