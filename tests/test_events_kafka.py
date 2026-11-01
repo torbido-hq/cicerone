@@ -443,13 +443,16 @@ def test_connect_list_topics_failure(monkeypatch):
 def test_connect_subscribe_failure_closes_consumer(monkeypatch):
     install_fake_kafka(monkeypatch)
     created = _capture_consumers(monkeypatch)
+    source = KafkaEventSource(kafka_source_options())
+    source.connect()
+    assert created[0].closed is False
     monkeypatch.setattr(
         FakeConsumer, "subscribe", lambda *_args, **_kwargs: (_ for _ in ()).throw(KafkaException("sub"))
     )
-    source = KafkaEventSource(kafka_source_options())
     with pytest.raises(KafkaException, match="sub"):
         source.connect()
-    assert created[0].closed is True
+    assert created[1].closed is True
+    assert created[0].closed is False
 
 
 def test_connect_list_topics_unexpected_error_propagates(monkeypatch):

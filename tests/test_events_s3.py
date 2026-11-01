@@ -429,6 +429,20 @@ def test_s3_close_closes_clients(mocker):
     source.close()
     s3_close.assert_called_once()
     sqs_close.assert_called_once()
+    source.close()
+    s3_close.assert_called_once()
+
+
+@mock_aws
+def test_s3_list_close_closes_s3_client(mocker):
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    assert source._sqs is None
+    s3_close = mocker.spy(source._s3, "close")
+    source.close()
+    s3_close.assert_called_once()
+    source.close()
+    s3_close.assert_called_once()
 
 
 def test_s3_tuning_options_and_rejects_non_positive():

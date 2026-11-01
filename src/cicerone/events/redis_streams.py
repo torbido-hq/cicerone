@@ -71,7 +71,8 @@ class RedisStreamsEventSource(QueuedEventSource):
         from cicerone.redis_client import redis_from_url
 
         client = redis_from_url(self._redis_url, decode_responses=True)
-        with self._release_on_error(client):
+        ready = False
+        try:
             try:
                 client.ping()
             except RedisError as exc:
@@ -86,6 +87,10 @@ class RedisStreamsEventSource(QueuedEventSource):
             except redis.ResponseError as exc:
                 if "BUSYGROUP" not in str(exc):
                     raise
+            ready = True
+        finally:
+            if not ready:
+                self._release(client)
 
         with self._lock:
             previous = self._client

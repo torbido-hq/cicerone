@@ -57,12 +57,17 @@ class KafkaEventSource(QueuedEventSource):
             "auto.offset.reset": "earliest",
         }
         consumer = confluent_kafka.Consumer(conf)
-        with self._release_on_error(consumer):
-            try:
-                consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
-            except KafkaException as exc:
-                raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+        ready = False
+        try:
+            consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
+        except KafkaException as exc:
+            raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+        else:
             consumer.subscribe([self._topic], on_revoke=self._on_revoke, on_lost=self._on_revoke)
+            ready = True
+        finally:
+            if not ready:
+                self._release(consumer)
 
         with self._lock:
             previous = self._detach_unlocked()

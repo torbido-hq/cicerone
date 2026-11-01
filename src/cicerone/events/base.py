@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -144,17 +143,6 @@ class QueuedEventSource:
             self._clear_lifecycle()
         if handle is not None:
             self._release(handle)
-
-    @contextmanager
-    def _release_on_error(self, handle: Any) -> Iterator[None]:
-        """Release a freshly created ``handle`` if the setup calls in the block fail."""
-        ready = False
-        try:
-            yield
-            ready = True
-        finally:
-            if not ready:
-                self._release(handle)
 
     def _require_ready(self) -> Any:
         with self._lock:
