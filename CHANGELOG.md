@@ -34,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
+- Event sources trim whitespace around a supplied `event_id` or
+  `idempotency_key`, as `/track` already did: `" abc "` is the id
+  `"abc"`, and a blank id counts as missing.
 - S3 and db events whose `event_id` is empty and whose
   `idempotency_key` is `0` or `false` get their stable fallback id,
   instead of all sharing the id `"0"` or `"False"` and being dropped as

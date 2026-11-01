@@ -23,6 +23,9 @@ from cicerone.events.normalize import (
         ({"event_id": 0, "idempotency_key": "k"}, "k"),
         ({"event_id": "0"}, "0"),
         ({"event_id": 7}, "7"),
+        ({"event_id": " abc "}, "abc"),
+        ({"event_id": " ", "idempotency_key": " k "}, "k"),
+        ({"event_id": " "}, None),
     ],
 )
 def test_supplied_event_id_treats_every_empty_value_as_missing(payload, expected):
