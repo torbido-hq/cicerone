@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 
 import boto3
 import pytest
@@ -1226,11 +1227,10 @@ def test_s3_sqs_load_client_error_leaves_message(monkeypatch):
     assert held == 1
 
 
-def _settle_with_sqs_error(source: S3EventSource, settle: str, events: list) -> None:
+def _settle_with_sqs_error(source: S3EventSource, settle: str, events: list) -> Sequence[object]:
     if settle == "ack":
-        source.ack([events[0].event_id])
-    else:
-        source.nack(events)
+        return source.ack([events[0].event_id])
+    return source.nack(events)
 
 
 @mock_aws
@@ -1277,6 +1277,9 @@ def test_s3_sqs_settle_error_keeps_message(monkeypatch, caplog, settle, sqs_meth
             _settle_with_sqs_error(source, settle, events)
     else:
         with caplog.at_level(logging.ERROR, logger="cicerone.events.s3"):
-            _settle_with_sqs_error(source, settle, events)
+            settled = _settle_with_sqs_error(source, settle, events)
         assert any(record.getMessage() == logged and record.exc_info for record in caplog.records)
+        if settle == "ack":
+            # A failed delete is redelivered by SQS and acked as a replay; the ack still confirms it.
+            assert settled == (events[0].event_id,)
     assert _sqs_held(sqs, queue_url) == 1

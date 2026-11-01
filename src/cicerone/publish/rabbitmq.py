@@ -26,6 +26,7 @@ from cicerone.publish.payload import user_recommendation_messages
 logger = logging.getLogger(__name__)
 
 _PREFIX = "publish.options"
+_RETRY_ERRORS: tuple[type[BaseException], ...] = (ConfigError, *RABBITMQ_IO_ERRORS)
 
 
 @dataclass
@@ -103,7 +104,7 @@ class RabbitMQPublisher:
         try:
             self._recover()
             self._publish_from(messages, progress)
-        except (ConfigError, *RABBITMQ_IO_ERRORS) as exc:
+        except _RETRY_ERRORS as exc:
             # Callers republish every user; consumers dedupe on the stable message_id.
             raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 

@@ -62,6 +62,7 @@ logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
+_MANIFEST_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS)
 _APPEND_BUSY_ATTEMPTS = 3
 # Appends waiting for the writer thread; a request past this waits for a slot.
 _MAX_PENDING_APPENDS = 1000
@@ -144,7 +145,7 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
         return None
     try:
         latest = manifest_reader.read_latest()
-    except (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS):
+    except _MANIFEST_READ_ERRORS:
         logger.exception("Failed to read latest manifest for generated_at; omitting header")
         return None
     if not latest:

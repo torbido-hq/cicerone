@@ -23,6 +23,8 @@ from cicerone.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
 
+_MARKER_CHECK_ERRORS: tuple[type[BaseException], ...] = (ConfigError, OSError, *S3_READ_ERRORS)
+
 
 class _RunFn(Protocol):
     def __call__(self, triggered_by: str, *, fence_check: Callable[[], bool] | None = None) -> None: ...
@@ -112,7 +114,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
         key = object_key(options, EVENTS_FILENAME)
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
-    except (ConfigError, OSError, *S3_READ_ERRORS):
+    except _MARKER_CHECK_ERRORS:
         logger.exception("Failed to check input source for changes; treating as unchanged")
         return None
 
