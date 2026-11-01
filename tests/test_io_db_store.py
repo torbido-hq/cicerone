@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import Table, create_engine, text
 from sqlalchemy.dialects import mysql, postgresql
 from sqlalchemy.dialects.mysql import mariadb
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import NotSupportedError, OperationalError
 from sqlalchemy.schema import CreateTable
-from support.fakes import RecordingConnection
+from support.fakes import FakeInspector, RecordingConnection
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -465,15 +465,8 @@ def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) ->
 def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
     from cicerone.io import db_store
 
-    class _Inspector:
-        def has_table(self, _table):  # type: ignore[no-untyped-def]
-            return True
-
-        def get_columns(self, _table):  # type: ignore[no-untyped-def]
-            return [{"name": "generated_at"}]
-
     engine = RecordingConnection(mysql.dialect())
-    monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
+    monkeypatch.setattr(db_store, "inspect", lambda _engine: FakeInspector(columns=("generated_at",)))
     db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
@@ -486,26 +479,44 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
         (postgresql.dialect(), "TRUNCATE TABLE recommendations"),
     ],
 )
-def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement) -> None:  # type: ignore[no-untyped-def]
+def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from cicerone.io import db_store
 
     conn = RecordingConnection(dialect)
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
     db_store._clear_table_for_replace(conn, "recommendations")
     assert conn.sql == [statement]
 
 
-@pytest.mark.parametrize("dialect", [mysql.dialect(), postgresql.dialect()])
-def test_full_write_clear_raises_errors_other_than_a_missing_table(dialect, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_full_write_clear_falls_back_to_delete_and_raises_its_error(monkeypatch) -> None:
     from cicerone.io import db_store
 
-    conn = RecordingConnection(dialect)
+    conn = RecordingConnection(postgresql.dialect())
+    errors = {
+        "TRUNCATE TABLE recommendations": NotSupportedError(
+            "TRUNCATE", {}, Exception("cannot truncate a table referenced in a foreign key constraint")
+        ),
+        "DELETE FROM recommendations": OperationalError("DELETE", {}, Exception("lock wait timeout")),
+    }
 
-    def _lock_timeout(statement):  # type: ignore[no-untyped-def]
-        raise OperationalError(str(statement), {}, Exception("lock wait timeout exceeded"))
+    def _fail(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        raise errors[str(statement)]
 
-    monkeypatch.setattr(conn, "execute", _lock_timeout)
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
+    monkeypatch.setattr(conn, "execute", _fail)
     with pytest.raises(OperationalError, match="lock wait timeout"):
         db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == ["TRUNCATE TABLE recommendations", "DELETE FROM recommendations"]
+
+
+def test_full_write_clear_skips_a_missing_table(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(postgresql.dialect())
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector(has_table=False))
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == []
 
 
 def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:

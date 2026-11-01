@@ -38,6 +38,20 @@ class RecordingConnection:
         self.sql.append(str(statement))
 
 
+class FakeInspector:
+    """``sqlalchemy.inspect`` stand-in: every table exists or none does, with fixed column names."""
+
+    def __init__(self, *, has_table: bool = True, columns: tuple[str, ...] = ()) -> None:
+        self._has_table = has_table
+        self._columns = columns
+
+    def has_table(self, _table: str) -> bool:
+        return self._has_table
+
+    def get_columns(self, _table: str) -> list[dict[str, str]]:
+        return [{"name": name} for name in self._columns]
+
+
 class FakeS3Body:
     def __init__(self, payload: bytes, *, fail: bool = False) -> None:
         self._payload = payload

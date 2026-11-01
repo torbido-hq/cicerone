@@ -6,8 +6,8 @@ import logging
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import Connection, create_engine, text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
@@ -227,6 +227,31 @@ def test_sqlite_clear_table_for_replace_falls_back_to_delete(tmp_path):
     sink.write_recommendations(frame)  # second write must replace, not duplicate
     engine = create_engine(url)
     count = pd.read_sql(text('SELECT COUNT(*) AS n FROM "recommendations"'), engine).iloc[0]["n"]
+    assert int(count) == 1
+
+
+@pytest.mark.parametrize(
+    ("write", "table"),
+    [("write_recommendations", "recommendations"), ("write_items_snapshot", "recommendation_items")],
+)
+def test_sqlite_full_write_keeps_old_rows_and_keys_when_the_delete_fails(tmp_path, monkeypatch, write, table):
+    sink = DatabaseOutputSink({"database_url": _sqlite_url(tmp_path)})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1"}]))
+    real_execute = Connection.execute
+
+    def _execute(conn, statement, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(statement) == f"DELETE FROM {table}":
+            raise OperationalError(str(statement), {}, Exception("database is locked"))
+        return real_execute(conn, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "execute", _execute)
+    with pytest.raises(OperationalError, match="database is locked"):
+        getattr(sink, write)(rows)
+    monkeypatch.undo()
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    count = pd.read_sql(text(f'SELECT COUNT(*) AS n FROM "{table}"'), sink._engine).iloc[0]["n"]
     assert int(count) == 1
 
 

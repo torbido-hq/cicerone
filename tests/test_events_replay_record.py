@@ -380,13 +380,18 @@ def test_db_writes_without_keys_prune_a_key_table_created_after_their_check(tmp_
     sink = build_output_sink(_outputs_db_only(tmp_path))
     sink.replace_recommendations_for_users(rows, user_ids=["u1"])
     other = build_output_sink(_outputs_db_only(tmp_path))
+    start = datetime.now(UTC)
     other.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["old"])
-    later = datetime.now(UTC) + applied_events.APPLIED_EVENTS_RETENTION + timedelta(minutes=1)
+    monkeypatch.setattr(
+        "cicerone.io.db_store.datetime", _FrozenDatetime(start + applied_events.APPLIED_EVENTS_RETENTION / 2)
+    )
+    other.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["fresh"])
+    later = start + applied_events.APPLIED_EVENTS_RETENTION + timedelta(minutes=1)
     monkeypatch.setattr("cicerone.io.db_store.datetime", _FrozenDatetime(later))
     sink.replace_recommendations_for_users(rows, user_ids=["u1"])
     with sink._engine.connect() as conn:
         stored = {row[0] for row in conn.execute(select(sink._applied_events_table().c.event_key))}
-    assert stored == set()
+    assert stored == {"fresh"}
 
 
 def test_db_write_without_keys_survives_a_dropped_key_table(tmp_path) -> None:
