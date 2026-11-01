@@ -96,7 +96,7 @@ Optional retrain webhook **in addition to** cron. Runs inside
 | `enabled` | `false` | — |
 | `auth_token` | unset | **Required** when enabled |
 | `host` | `127.0.0.1` | Compose / `docker run -p` needs `0.0.0.0` |
-| `port` | `8080` (1–65535) | `POST /trigger/retrain` |
+| `port` | `8080` (1–65535; 0 deprecated) | `POST /trigger/retrain` |
 | `debounce_seconds` | `60` | In-flight or recent runs are skipped, not queued |
 | `poll_input_bucket` | `false` | Dataset input mtime / S3 `LastModified` |
 | `poll_interval_seconds` | `300` | — |
@@ -115,7 +115,7 @@ Required `auth_token` when `job.mode = "serve"`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Published Docker ports need `0.0.0.0` |
-| `port` | `8000` (1–65535) | — |
+| `port` | `8000` (1–65535; 0 deprecated) | — |
 | `default_k` | `10` (max 100) | Used when the client omits `limit` / `k` |
 | `refresh_interval_seconds` | `60` | Dataset output: reload parquet cache. DB output: reload the items snapshot only |
 | `category_column` | `"category"` | `?category=` filter |
@@ -204,7 +204,7 @@ variant), optional `models` / `weights` / `rrf_k` / `combiner` /
 | --- | --- | --- |
 | `enabled` | `false` | Required for `cicerone users` to read `users_path` from this file |
 | `host` | `127.0.0.1` | Compose needs `0.0.0.0` |
-| `port` | `8090` (1–65535) | — |
+| `port` | `8090` (1–65535; 0 deprecated) | — |
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |

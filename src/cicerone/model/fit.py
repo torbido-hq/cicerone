@@ -34,7 +34,11 @@ from cicerone.model.strategies import (
     as_recommender_model,
     build_strategy_model,
 )
-from cicerone.model_config import SEQUENTIAL_STRATEGY, default_model_configs, resolve_model_configs
+from cicerone.model_config import (
+    SEQUENTIAL_STRATEGY,
+    apply_legacy_item_based_k_neighbors,
+    resolve_model_configs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,20 +91,9 @@ def _resolve_model_configs_for_fit(
     item_based_k_neighbors: int | None,
 ) -> dict[str, dict[str, Any]]:
     """Apply optional k_neighbors override onto a copy of model configs."""
-    if model_configs is None and item_based_k_neighbors is None:
-        return default_model_configs()
     if model_configs is None:
-        return resolve_model_configs(
-            legacy_k_neighbors=item_based_k_neighbors,
-            legacy_k_neighbors_explicit=item_based_k_neighbors is not None,
-        )
-    configs = {name: deepcopy(cfg) for name, cfg in model_configs.items()}
-    if item_based_k_neighbors is not None:
-        item_cfg = configs.setdefault("item_based", deepcopy(default_model_configs()["item_based"]))
-        model_section = item_cfg.setdefault("model", {})
-        model_section["K"] = int(item_based_k_neighbors)
-        configs["item_based"] = item_cfg
-    return configs
+        return resolve_model_configs(legacy_k_neighbors=item_based_k_neighbors)
+    return apply_legacy_item_based_k_neighbors(model_configs, k_neighbors=item_based_k_neighbors)
 
 
 def _fit_strategy(

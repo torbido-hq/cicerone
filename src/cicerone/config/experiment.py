@@ -31,6 +31,7 @@ from cicerone.config.validation import (
     require_open_unit_interval,
     require_unit_interval,
     unique_policy_names,
+    validate_model_weights,
     validate_rrf_k,
     weights_field,
 )
@@ -143,6 +144,7 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         validate_variant_models(models, variant_name=name)
     weights_key = "weights" if "weights" in raw else "model_weights"
     weights = weights_field(raw, weights_key, context=f"experiment.variants[{name}].weights")
+    validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
     rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None
     validate_rrf_k(rrf_k, context=f"experiment.variants[{name}].rrf_k")
     combiner = str(raw["combiner"]).lower() if "combiner" in raw else None

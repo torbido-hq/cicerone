@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `dashboard.lookup_k` has no effect and is not validated; it logs a
   warning when set with the dashboard enabled, and will be removed in 0.9.0.
+- `serve.port`, `job.trigger.port` or `dashboard.port` = 0 (any free
+  port) logs a deprecation warning; it will be rejected in 0.9.0.
 
 ### Fixed
 
@@ -133,8 +135,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
-- `serve.port`, `job.trigger.port` and `dashboard.port` must be in
-  1–65535; 0, negative and larger values are rejected at config load.
+- A negative `serve.port`, `job.trigger.port` or `dashboard.port`, or one
+  above 65535, is rejected at config load instead of failing at bind.
+- A `job.model_weights` or `[[experiment.variants]]` `weights` /
+  `model_weights` that is not a table fails with a config error instead of
+  an `AttributeError`.
 
 ### Removed
 

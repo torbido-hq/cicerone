@@ -14,7 +14,6 @@ from cicerone.config.constants import (
     DEFAULT_EPOCH_METRICS_PLATEAU_EPS,
     DEFAULT_EPOCH_METRICS_PLATEAU_WINDOW,
     DEFAULT_EPOCH_METRICS_REGRESSION_DROP,
-    MAX_PORT,
     ConfigError,
 )
 from cicerone.config.settings import EpochMetricsSettings
@@ -117,12 +116,13 @@ def validate_model_weights(weights: dict[str, float] | None, *, context: str = "
 
 
 def weights_field(raw: Mapping[str, Any], key: str, *, context: str) -> dict[str, float] | None:
-    """``raw[key]`` as validated per-model weights, or ``None`` when unset."""
-    if key not in raw:
+    """``raw[key]`` as per-model weights, or ``None`` when unset; values are checked by the caller."""
+    value = raw.get(key)
+    if value is None:
         return None
-    weights = {str(name): float(weight) for name, weight in raw[key].items()}
-    validate_model_weights(weights, context=context)
-    return weights
+    if not isinstance(value, dict):
+        raise ConfigError(f"{context} must be a table of model name -> weight, got {value!r}")
+    return {str(name): float(weight) for name, weight in value.items()}
 
 
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
@@ -138,15 +138,12 @@ def require_positive_int(value: int, *, name: str) -> int:
     return value
 
 
-def require_positive_int_at_most(value: int, *, name: str, maximum: int) -> int:
-    require_positive_int(value, name=name)
+def require_int_in_range(value: int, *, name: str, minimum: int, maximum: int) -> int:
+    if value < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}, got {value}")
     if value > maximum:
         raise ConfigError(f"{name} must be <= {maximum}, got {value}")
     return value
-
-
-def require_port(value: int, *, name: str) -> int:
-    return require_positive_int_at_most(value, name=name, maximum=MAX_PORT)
 
 
 def require_non_negative_int(value: int, *, name: str) -> int:
