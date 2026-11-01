@@ -485,11 +485,11 @@ def test_recommendations_manifest_without_generated_at():
 def test_recommendations_survive_manifest_reader_errors():
     class BrokenManifest:
         def read_latest(self):
-            raise RuntimeError("manifest store down")
+            raise OSError("manifest store down")
 
         def read_recent(self, limit: int):
             del limit
-            raise RuntimeError("manifest store down")
+            raise OSError("manifest store down")
 
     app = create_app(
         _settings(),
