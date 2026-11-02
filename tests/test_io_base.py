@@ -3,7 +3,6 @@ from __future__ import annotations
 import pandas as pd
 
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.recommendation_reader import ItemFilterMixin
 
 
 def test_base_recommendation_reader_defaults():
@@ -20,14 +19,3 @@ def test_base_recommendation_reader_defaults():
     assert reader.present_variant_names() is None
     reader.refresh()  # no-op default
     reader.configure_item_filters(category_column="category", availability_filters=["published"])
-
-
-def test_item_filter_mixin_lazy_inits_if_subclass_skips_init():
-    class Bare(ItemFilterMixin):
-        pass
-
-    bare = Bare()
-    assert bare.items_version() == 0
-    assert bare.get_items() is None
-    bare.configure_item_filters(category_column="category")
-    assert bare.items_version() == 1

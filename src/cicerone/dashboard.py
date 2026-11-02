@@ -17,8 +17,9 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from cicerone.cli import configure_logging
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_CONFIG_PATH, DEFAULT_LOG_FORMAT
+from cicerone.config.constants import DEFAULT_CONFIG_PATH
 from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
@@ -47,7 +48,6 @@ from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 # ImportError: a missing optional DB driver.
@@ -389,4 +389,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_logging(None, None)
     main()
