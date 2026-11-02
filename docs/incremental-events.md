@@ -203,7 +203,7 @@ flush `ack`. When an `event_id` column exists, poll orders by
 every row must have a non-blank `event_id` or `idempotency_key` (`0`
 counts as blank, and ids are trimmed). A row
 with neither is rejected like an invalid row below and never holds the
-watermark.
+watermark. `event_id` and `idempotency_key` must be text or integer columns.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 `events_query`, when set, must be a single read-only `SELECT` from
