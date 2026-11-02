@@ -174,6 +174,7 @@ class DbEventSource(EventSource):
         if held:
             release_engine(self._database_url)
 
+    # Polls never overlap: the worker is the only caller, from tick() under _tick_guard.
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
