@@ -27,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
   still configure logging).
 
+### Deprecated
+
+- `dashboard.lookup_k` has no effect and is not validated; it logs a
+  warning when set with the dashboard enabled, and will be removed in 0.9.0.
+
 ### Fixed
 
 - Dashboard **Resume split** under Thompson allocation fails with
@@ -128,6 +133,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve writes exposures and impressions on one dedicated thread instead
   of the request threadpool, so busy-lock retries no longer hold request
   workers; pending writes finish on shutdown.
+- Dashboard Inspect user shows what `GET /recommendations/{user_id}`
+  returns with default parameters: `serve.default_k` rows, variant
+  fallback, unavailable items dropped (`features.toml`), ranks renumbered.
 
 ### Removed
 
