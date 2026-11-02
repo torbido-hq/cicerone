@@ -161,7 +161,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `rowid` or `ctid`; `id:`/`rowid:` ids with a sign or more than 20 digits
   order numerically in SQL as in the cursor; and Postgres compares ids by
   code point, whatever the column collation. Rows skipped this way before
-  are delivered after the upgrade.
+  are delivered after the upgrade. Once after upgrading, rows at the saved
+  watermark's exact timestamp may be skipped when ids are negative or
+  longer than 20 digits after `id:`/`rowid:`, use `ID:`-style prefixes or
+  forms like `id:+5`, or sit in a Postgres column with a non-C collation.
 
 ### Removed
 
