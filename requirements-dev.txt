@@ -6,6 +6,6 @@ pytest-mock==3.17.0
 moto[s3]==5.2.4
 httpx==0.28.1
 ruff==0.17.2
-mypy==2.4.0
+mypy==2.4.1
 types-croniter==6.2.4.20261006
 pip-audit==2.10.1
