@@ -119,16 +119,8 @@ def test_build_redis_lock_without_url_is_programming_error():
 
 
 def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
-    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2
-
-    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
-    assert advisory_keys_from_lock_key("other-job") != (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
+    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (613056429, 691498606)
+    assert advisory_keys_from_lock_key("other-job") != (613056429, 691498606)
 
 
 def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):

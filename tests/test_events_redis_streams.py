@@ -363,6 +363,25 @@ def test_connect_ping_failure(monkeypatch):
     source = RedisStreamsEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
+    assert client.closed is True
+
+
+def test_connect_group_failure_closes_new_client(monkeypatch):
+    import cicerone.redis_client as redis_client
+
+    first = FakeRedis()
+    second = FakeRedis()
+    _install_fake_redis(monkeypatch, first)
+    clients = iter((first, second))
+    monkeypatch.setattr(redis_client, "redis_from_url", lambda *_args, **_kwargs: next(clients))
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    assert first.closed is False
+    second.xgroup_create = lambda *_a, **_k: (_ for _ in ()).throw(_ResponseError("NOPERM"))  # type: ignore[method-assign]
+    with pytest.raises(_ResponseError, match="NOPERM"):
+        source.connect()
+    assert second.closed is True
+    assert first.closed is False
 
 
 def test_connect_ping_unexpected_error_propagates(monkeypatch):
@@ -372,6 +391,7 @@ def test_connect_ping_unexpected_error_propagates(monkeypatch):
     source = RedisStreamsEventSource(_options())
     with pytest.raises(RuntimeError, match="bug"):
         source.connect()
+    assert client.closed is True
 
 
 def test_health_tolerates_lag_probe_failures(monkeypatch):
