@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cicerone.config import IOSettings, make_settings
+from cicerone.events.base import EventSource
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.io.factory import build_output_sink
 
@@ -32,3 +33,12 @@ def dataset_updater(tmp_path, feature_config, **kwargs):  # type: ignore[no-unty
         sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
     )
     return settings, sink, updater
+
+
+def poll_one_by_one(source: EventSource) -> list[str]:
+    """Poll and ack one event at a time until the source is empty; return the ids in order."""
+    seen: list[str] = []
+    while batch := list(source.poll(1)):
+        seen.append(batch[0].event_id)
+        assert source.ack([batch[0].event_id]) == (batch[0].event_id,)
+    return seen

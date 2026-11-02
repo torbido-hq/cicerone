@@ -205,7 +205,8 @@ counts as blank, and ids are trimmed). A row
 with neither is rejected like an invalid row below and never holds the
 watermark.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
-`ctid` so identical payloads at the same timestamp stay distinct.
+`ctid` so identical payloads at the same timestamp stay distinct, and poll
+pages through same-timestamp rows by that id.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins

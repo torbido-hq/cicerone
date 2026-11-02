@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import create_engine, text
+from support.events import poll_one_by_one
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.events.db import DbEventSource
@@ -206,3 +207,37 @@ def test_postgres_naive_occurred_at_is_utc_whatever_the_session_time_zone():
         assert [event.event_id for event in source.poll(10)] == ["after"]
     finally:
         source.close()
+
+
+def _seed_same_time_rows(extra_columns: str, extras: list[str]) -> None:
+    columns = "user_id TEXT, item_id TEXT, event_type TEXT, quantity INTEGER, occurred_at TIMESTAMPTZ"
+    rows = ", ".join(
+        f"('u1', 'i{n}', 'purchase', 1, '2026-08-13T12:00:00Z'{extra})" for n, extra in enumerate(extras)
+    )
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE TABLE "{_TABLE}" ({columns}{extra_columns})'))
+        conn.execute(text(f'INSERT INTO "{_TABLE}" VALUES {rows}'))
+
+
+def test_postgres_same_timestamp_rows_without_event_id_page_past_the_first_page():
+    _seed_same_time_rows("", [""] * 12)
+    source = _source()
+    source.connect()
+    seen = poll_one_by_one(source)
+    assert len(seen) == len(set(seen)) == 12
+
+
+def test_postgres_signed_and_long_numeric_ids_order_like_the_cursor():
+    ids = ["id:-10", "id:-2", "id:5", "id:1" + "0" * 20, "id:2" + "0" * 20]
+    _seed_same_time_rows(", event_id TEXT", [f", '{event_id}'" for event_id in reversed(ids)])
+    source = _source()
+    source.connect()
+    assert poll_one_by_one(source) == ids
+
+
+def test_postgres_event_id_order_ignores_the_column_collation():
+    _seed_same_time_rows(', event_id TEXT COLLATE "und-x-icu"', [f", '{event_id}'" for event_id in "abB"])
+    source = _source()
+    source.connect()
+    assert poll_one_by_one(source) == ["B", "a", "b"]

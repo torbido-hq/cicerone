@@ -156,6 +156,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the same trimmed id as Python. With an `event_id` column, a row
   with neither `event_id` nor `idempotency_key` is now rejected (logged,
   acked, not applied) instead of keyed by `id` or its payload.
+- The db events source no longer strands or skips rows at the watermark's
+  timestamp: a table without `event_id` pages through them by `id`,
+  `rowid` or `ctid`; `id:`/`rowid:` ids with a sign or more than 20 digits
+  order numerically in SQL as in the cursor; and Postgres compares ids by
+  code point, whatever the column collation. Rows skipped this way before
+  are delivered after the upgrade.
 
 ### Removed
 

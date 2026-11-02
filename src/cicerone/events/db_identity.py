@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,50 +19,96 @@ from cicerone.option_parse import NUMBER_PARSE_ERRORS
 ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
 _CTID_TUPLE = re.compile(r"\((\d+),(\d+)\)")
 _IDENTITY_SORT_SEP = "\x1f"
-# SQLite/Postgres expression matching `_identity_bind_sort_key`; `event_id` stands for the quoted column.
+_SIGNED_INT = re.compile(r"-?[0-9]+")
+# Digits of a numeric suffix's length: '1' + length + digits orders non-negative numbers of any length,
+# '0' + (10**9 - 1 - length) + complemented digits orders negative ones below them, largest magnitude first.
+_LENGTH_WIDTH = 9
+_DIGIT_COMPLEMENT = str.maketrans("0123456789", "jihgfedcba")
+_EVENT_KEY = "cicerone_event_key"
+_SORT_KEY = "cicerone_sort_key"
+_SQL_SEP = {"sqlite": "char(31)", "postgresql": "chr(31)"}
+_SQL_COLLATE = {"sqlite": "BINARY", "postgresql": '"C"'}
+# Ctid branches of the identity sort; `event_id` stands for the key expression.
 _SQLITE_CTID_INNER = "replace(replace(replace(event_id, ' ', ''), 'ctid:(', ''), ')', '')"
-_SQLITE_IDENTITY_SORT = (
-    "CASE"
-    " WHEN event_id GLOB 'id:[0-9]*' AND substr(event_id, 4) NOT GLOB '*[^0-9]*'"
-    " THEN 'id:' || char(31) || printf('%020d', CAST(substr(event_id, 4) AS INTEGER))"
-    " WHEN event_id LIKE 'id:%'"
-    " THEN 'id:' || char(31) || substr(event_id, 4)"
-    " WHEN event_id GLOB 'rowid:[0-9]*' AND substr(event_id, 7) NOT GLOB '*[^0-9]*'"
-    " THEN 'rowid:' || char(31) || printf('%020d', CAST(substr(event_id, 7) AS INTEGER))"
-    " WHEN event_id LIKE 'rowid:%'"
-    " THEN 'rowid:' || char(31) || substr(event_id, 7)"
-    f" WHEN replace(event_id, ' ', '') LIKE 'ctid:(%,%)'"
-    f" THEN 'ctid:' || char(31)"
-    f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, 1, instr({_SQLITE_CTID_INNER}, ',') - 1)"
-    f" AS INTEGER))"
-    f" || char(31)"
-    f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, instr({_SQLITE_CTID_INNER}, ',') + 1)"
-    f" AS INTEGER))"
-    " WHEN event_id LIKE 'ctid:%'"
-    " THEN 'ctid:' || char(31) || char(31) || replace(substr(event_id, 6), ' ', '')"
-    " ELSE char(31) || event_id END"
-)
-_POSTGRES_IDENTITY_SORT = (
-    "CASE"
-    " WHEN event_id ~ '^id:[0-9]+$'"
-    " THEN 'id:' || chr(31) || lpad(substring(event_id from 4), 20, '0')"
-    " WHEN event_id LIKE 'id:%'"
-    " THEN 'id:' || chr(31) || substring(event_id from 4)"
-    " WHEN event_id ~ '^rowid:[0-9]+$'"
-    " THEN 'rowid:' || chr(31) || lpad(substring(event_id from 7), 20, '0')"
-    " WHEN event_id LIKE 'rowid:%'"
-    " THEN 'rowid:' || chr(31) || substring(event_id from 7)"
-    " WHEN replace(event_id, ' ', '') ~ '^ctid:\\([0-9]+,[0-9]+\\)$'"
-    " THEN 'ctid:' || chr(31)"
-    " || lpad((regexp_match(replace(event_id, ' ', ''),"
-    " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[1], 20, '0')"
-    " || chr(31)"
-    " || lpad((regexp_match(replace(event_id, ' ', ''),"
-    " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[2], 20, '0')"
-    " WHEN event_id LIKE 'ctid:%'"
-    " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
-    " ELSE chr(31) || event_id END"
-)
+_SQL_CTID_SORT = {
+    "sqlite": (
+        " WHEN replace(event_id, ' ', '') LIKE 'ctid:(%,%)'"
+        " THEN 'ctid:' || char(31)"
+        f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, 1, instr({_SQLITE_CTID_INNER}, ',') - 1)"
+        " AS INTEGER))"
+        " || char(31)"
+        f" || printf('%020d', CAST(substr({_SQLITE_CTID_INNER}, instr({_SQLITE_CTID_INNER}, ',') + 1)"
+        " AS INTEGER))"
+        " WHEN event_id LIKE 'ctid:%'"
+        " THEN 'ctid:' || char(31) || char(31) || replace(substr(event_id, 6), ' ', '')"
+    ),
+    "postgresql": (
+        " WHEN replace(event_id, ' ', '') ~ '^ctid:\\([0-9]+,[0-9]+\\)$'"
+        " THEN 'ctid:' || chr(31)"
+        " || lpad((regexp_match(replace(event_id, ' ', ''),"
+        " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[1], 20, '0')"
+        " || chr(31)"
+        " || lpad((regexp_match(replace(event_id, ' ', ''),"
+        " '^ctid:\\(([0-9]+),([0-9]+)\\)$'))[2], 20, '0')"
+        " WHEN event_id LIKE 'ctid:%'"
+        " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
+    ),
+}
+
+
+def _sql_is_signed_int(dialect: str, text: str) -> str:
+    if dialect == "postgresql":
+        return f"{text} ~ '^-?[0-9]+$'"
+    return (
+        f"(({text} GLOB '[0-9]*' AND {text} NOT GLOB '*[^0-9]*')"
+        f" OR ({text} GLOB '-[0-9]*' AND substr({text}, 2) NOT GLOB '*[^0-9]*'))"
+    )
+
+
+def _sql_padded(dialect: str, number: str) -> str:
+    if dialect == "postgresql":
+        return f"lpad(CAST({number} AS TEXT), {_LENGTH_WIDTH}, '0')"
+    return f"printf('%0{_LENGTH_WIDTH}d', {number})"
+
+
+def _sql_complement(dialect: str, digits: str) -> str:
+    if dialect == "postgresql":
+        return f"translate({digits}, '0123456789', 'jihgfedcba')"
+    for digit, letter in zip("0123456789", "jihgfedcba", strict=True):
+        digits = f"replace({digits}, '{digit}', '{letter}')"
+    return digits
+
+
+def _sql_signed_int_key(dialect: str, text: str) -> str:
+    """SQL twin of `_signed_int_key` for a ``text`` that matches ``-?[0-9]+``."""
+    magnitude = f"CASE WHEN substr({text}, 1, 1) = '-' THEN substr({text}, 2) ELSE {text} END"
+    digits = f"COALESCE(NULLIF(ltrim({magnitude}, '0'), ''), '0')"
+    negative = (
+        f"'0' || {_sql_padded(dialect, f'{10**_LENGTH_WIDTH - 1} - length({digits})')}"
+        f" || {_sql_complement(dialect, digits)}"
+    )
+    positive = f"'1' || {_sql_padded(dialect, f'length({digits})')} || {digits}"
+    return f"CASE WHEN substr({text}, 1, 1) = '-' AND {digits} <> '0' THEN {negative} ELSE {positive} END"
+
+
+def _identity_sort_sql(dialect: str) -> str:
+    """SQL matching `identity_bind_sort_key`; `event_id` stands for the key expression."""
+    sep = _SQL_SEP[dialect]
+    branches = []
+    for prefix in ("id:", "rowid:"):
+        starts = f"substr(event_id, 1, {len(prefix)}) = '{prefix}'"
+        rest = f"substr(event_id, {len(prefix) + 1})"
+        branches.append(
+            f" WHEN {starts} AND {_sql_is_signed_int(dialect, rest)}"
+            f" THEN '{prefix}' || {sep} || {_sql_signed_int_key(dialect, rest)}"
+        )
+        branches.append(f" WHEN {starts} THEN '{prefix}' || {sep} || {rest}")
+    return f"CASE{''.join(branches)}{_SQL_CTID_SORT[dialect]} ELSE {sep} || event_id END"
+
+
+_SQLITE_IDENTITY_SORT = _identity_sort_sql("sqlite")
+_POSTGRES_IDENTITY_SORT = _identity_sort_sql("postgresql")
+_IDENTITY_SORT_SQL = {"sqlite": _SQLITE_IDENTITY_SORT, "postgresql": _POSTGRES_IDENTITY_SORT}
 # Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
 ID_WHITESPACE = "".join(char for char in map(chr, range(0x3001)) if char.isspace())
 # `supplied_event_id` for one column: numeric 0 is missing, text is stripped, empty is missing.
@@ -100,15 +147,23 @@ def _row_identity(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _signed_int_key(text: str) -> str | None:
+    """Order-preserving string for a ``-?[0-9]+`` suffix of any length; None for other text."""
+    if not _SIGNED_INT.fullmatch(text):
+        return None
+    digits = text.lstrip("-").lstrip("0") or "0"
+    if text.startswith("-") and digits != "0":
+        complement = digits.translate(_DIGIT_COMPLEMENT)
+        return f"0{10**_LENGTH_WIDTH - 1 - len(digits):0{_LENGTH_WIDTH}d}{complement}"
+    return f"1{len(digits):0{_LENGTH_WIDTH}d}{digits}"
+
+
 def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
     """Numeric order for synthetic identities; suffixes stay strings."""
     for prefix in ("id:", "rowid:"):
         if event_id.startswith(prefix):
             rest = event_id[len(prefix) :]
-            try:
-                return (prefix, (f"{int(rest):020d}",))
-            except ValueError:
-                return (prefix, (rest,))
+            return (prefix, (_signed_int_key(rest) or rest,))
     if event_id.startswith("ctid:"):
         rest = event_id[5:].replace(" ", "")
         match = _CTID_TUPLE.fullmatch(rest)
@@ -122,11 +177,7 @@ def _is_numeric_identity(event_id: str) -> bool:
     """True when SQL text order would disagree with `_identity_sort_key`."""
     prefix, _parts = _identity_sort_key(event_id)
     if prefix in ("id:", "rowid:"):
-        try:
-            int(event_id[len(prefix) :])
-        except ValueError:
-            return False
-        return True
+        return _signed_int_key(event_id[len(prefix) :]) is not None
     if prefix == "ctid:":
         return _CTID_TUPLE.fullmatch(event_id[5:].replace(" ", "")) is not None
     return False
@@ -137,18 +188,38 @@ def identity_bind_sort_key(event_id: str) -> str:
     return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)
 
 
-def identity_sql_sort_expr(
-    dialect: str, event_id: str, idempotency_key: str | None, row_id: str | None
-) -> str | None:
-    """Sort key of the ``_stable_event_id`` of a row from an event_id-column source (quoted columns)."""
-    templates = {"sqlite": _SQLITE_IDENTITY_SORT, "postgresql": _POSTGRES_IDENTITY_SORT}
-    if dialect not in templates:
+def cursor_source_sql(dialect: str, source: str, columns: Mapping[str, str]) -> tuple[str, str] | None:
+    """``source`` plus each row's cursor sort key, and the collated key to filter and order by.
+
+    ``columns`` maps the selected lowercase names (with ``rowid`` / ``ctid`` when selected) to quoted
+    source columns. None when SQL can't rebuild `_stable_event_id` (other dialects, payload hashes).
+    """
+    if dialect not in _IDENTITY_SORT_SQL:
         return None
-    supplied = (column for column in (event_id, idempotency_key) if column is not None)
-    terms = [_SUPPLIED_ID_SQL[dialect].format(col=column) for column in supplied]
-    if row_id is not None:
-        terms.append(f"'id:' || NULLIF(CAST({row_id} AS TEXT), '')")
-    return templates[dialect].replace("event_id", f"COALESCE({', '.join(terms)}, '')")
+    terms = [
+        _SUPPLIED_ID_SQL[dialect].format(col=columns[name])
+        for name in ("event_id", "idempotency_key")
+        if name in columns
+    ]
+    if "id" in columns:
+        terms.append(f"'id:' || NULLIF(CAST({columns['id']} AS TEXT), '')")
+    if "rowid" in columns:
+        terms.append(f"'rowid:' || printf('%020d', {columns['rowid']})")
+    if "ctid" in columns:
+        terms.append(f"'ctid:' || CAST({columns['ctid']} AS TEXT)")
+    if "event_id" in columns:
+        terms.append("''")
+    elif not {"rowid", "ctid"} & columns.keys():
+        return None
+    exposed = "".join(f", {columns[name]}" for name in ("rowid", "ctid") if name in columns)
+    keyed = (
+        f"(SELECT *{exposed}, COALESCE({', '.join(terms)}) AS {_EVENT_KEY} FROM {source}) AS cicerone_keyed"
+    )
+    sort = _IDENTITY_SORT_SQL[dialect].replace("event_id", _EVENT_KEY)
+    return (
+        f"(SELECT *, {sort} AS {_SORT_KEY} FROM {keyed}) AS cicerone_sorted",
+        f"{_SORT_KEY} COLLATE {_SQL_COLLATE[dialect]}",
+    )
 
 
 def occurred_at_predicates(dialect: str, occurred_at: str) -> tuple[str, str, str]:

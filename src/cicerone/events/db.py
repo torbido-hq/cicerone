@@ -23,10 +23,10 @@ from cicerone.events.db_identity import (
     ROW_IDENTITY_KEYS,
     cursor_key,
     cursor_key_from_payload,
+    cursor_source_sql,
     cursor_tuple,
     db_occurred_at,
     identity_bind_sort_key,
-    identity_sql_sort_expr,
     occurred_at_predicates,
     payload_cursor,
     row_to_event,
@@ -142,6 +142,7 @@ class DbEventSource(EventSource):
         self._source_columns: frozenset[str] | None = None
         self._select_clause: str | None = None
         self._has_event_id_column: bool | None = None
+        self._cursor_source: tuple[str, str] | None = None
 
     def connect(self) -> None:
         created = False
@@ -169,6 +170,7 @@ class DbEventSource(EventSource):
             self._source_columns = None
             self._select_clause = None
             self._has_event_id_column = None
+            self._cursor_source = None
         if held:
             release_engine(self._database_url)
 
@@ -287,10 +289,11 @@ class DbEventSource(EventSource):
     def _from_clause(self, engine: Engine) -> str:
         return sql_source(engine, self._events_query, self._events_table, _EVENTS_QUERY_ALIAS)
 
-    def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool]:
+    def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool, tuple[str, str] | None]:
+        """Select clause, whether the source has event_id, and its `cursor_source_sql` (if any)."""
         with self._lock:
             if self._select_clause is not None and self._has_event_id_column is not None:
-                return self._select_clause, self._has_event_id_column
+                return self._select_clause, self._has_event_id_column, self._cursor_source
         with engine.connect() as conn:
             result = conn.execute(text(f"SELECT * FROM {self._from_clause(engine)} LIMIT 0"))
             columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
@@ -318,14 +321,18 @@ class DbEventSource(EventSource):
             else f"{quote_identifier(engine, by_lower[name])} AS {quote_identifier(engine, name)}"
             for name in selected
         )
+        cursor_source = cursor_source_sql(
+            engine.dialect.name,
+            self._from_clause(engine),
+            {name: quote_identifier(engine, by_lower.get(name, name)) for name in selected},
+        )
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns
                 self._select_clause = select_clause
                 self._has_event_id_column = has_event_id
-            cached_select = self._select_clause
-            cached_has_event_id = self._has_event_id_column
-        return cached_select, cached_has_event_id
+                self._cursor_source = cursor_source
+            return self._select_clause, self._has_event_id_column, self._cursor_source
 
     def _source_column(self, engine: Engine, name: str) -> str:
         """``name`` as the source spells it, quoted (Postgres keeps mixed case only when quoted)."""
@@ -334,29 +341,36 @@ class DbEventSource(EventSource):
 
     def _after_watermark(
         self, engine: Engine, watermark_at: datetime, watermark_event_id: str
-    ) -> tuple[str, str, dict[str, Any]]:
-        """WHERE and ORDER BY for rows after the (occurred_at, event_id) cursor, and their params."""
+    ) -> tuple[str, str, str, dict[str, Any]]:
+        """FROM, WHERE and ORDER BY for rows after the (occurred_at, event_id) cursor, and their params."""
+        _select_clause, has_event_id, cursor_source = self._ensure_source_schema(engine)
         occurred_at = self._source_column(engine, "occurred_at")
-        event_id = self._source_column(engine, "event_id")
-        present = {column.lower() for column in self._source_columns or ()}
-        idempotency_key, row_id = (
-            self._source_column(engine, name) if name in present else None
-            for name in ("idempotency_key", "id")
-        )
-        identity_sort = identity_sql_sort_expr(engine.dialect.name, event_id, idempotency_key, row_id)
-        if identity_sort is not None:
+        if cursor_source is not None:
+            source, sort_key = cursor_source
             later, same, occurred_order = occurred_at_predicates(engine.dialect.name, occurred_at)
             return (
-                f"{later} OR ({same} AND ({identity_sort}) > :watermark_sort)",
-                f"{occurred_order}, ({identity_sort}) ASC",
+                source,
+                f"{later} OR ({same} AND {sort_key} > :watermark_sort)",
+                f"{occurred_order}, {sort_key} ASC",
                 {
                     "watermark_at": watermark_at,
                     "watermark_sort": identity_bind_sort_key(watermark_event_id),
                     "id_whitespace": ID_WHITESPACE,
                 },
             )
+        source = self._from_clause(engine)
+        if not has_event_id:
+            # No SQL twin of the row's stable id: refetch the watermark timestamp and filter in Python.
+            return (
+                source,
+                f"{occurred_at} >= :watermark_at",
+                f"{occurred_at} ASC",
+                {"watermark_at": watermark_at},
+            )
+        event_id = self._source_column(engine, "event_id")
         # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
         return (
+            source,
             f"{occurred_at} > :watermark_at OR "
             f"({occurred_at} = :watermark_at AND {event_id} > :watermark_event_id)",
             f"{occurred_at} ASC, {event_id} ASC",
@@ -371,23 +385,15 @@ class DbEventSource(EventSource):
         *,
         limit: int,
     ) -> list[dict[str, Any]]:
-        select_clause, has_event_id = self._ensure_source_schema(engine)
-        if has_event_id:
-            where, order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
-        else:
-            occurred_at = self._source_column(engine, "occurred_at")
-            where, order = f"{occurred_at} >= :watermark", f"{occurred_at} ASC"
-            params = {"watermark": watermark_at}
-        sql = text(
-            f"SELECT {select_clause} FROM {self._from_clause(engine)} "
-            f"WHERE {where} ORDER BY {order} LIMIT :limit"
-        )
+        select_clause, _has_event_id, _cursor_source = self._ensure_source_schema(engine)
+        source, where, order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
+        sql = text(f"SELECT {select_clause} FROM {source} WHERE {where} ORDER BY {order} LIMIT :limit")
         with _utc_connection(engine) as conn:
             result = conn.execute(sql, {**params, "limit": max(limit, 1)})
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int | None:
-        _select_clause, has_event_id = self._ensure_source_schema(engine)
+        _select_clause, has_event_id, _cursor_source = self._ensure_source_schema(engine)
         # Prefer SQL COUNT when event_id exists. SQLite text/datetime binding makes
         # equality unreliable, so scan rows there (still on the narrow projection).
         if has_event_id and engine.dialect.name != "sqlite":
@@ -399,8 +405,8 @@ class DbEventSource(EventSource):
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
-        where, _order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
-        sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause(engine)} WHERE {where}")
+        source, where, _order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
+        sql = text(f"SELECT COUNT(*) AS n FROM {source} WHERE {where}")
         with _utc_connection(engine) as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 

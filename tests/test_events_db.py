@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from support.events import event_payload
+from support.events import event_payload, poll_one_by_one
 
 from cicerone.events.db import (
     DbEventSource,
@@ -1052,14 +1052,6 @@ def test_db_health_reports_acked_events_stuck_behind_the_head(tmp_path, monkeypa
     assert "acked_behind_head" not in (source.health().detail or "")
 
 
-def _polled_one_by_one(source: DbEventSource) -> list[str]:
-    seen: list[str] = []
-    while batch := list(source.poll(1)):
-        seen.append(batch[0].event_id)
-        assert source.ack([batch[0].event_id]) == (batch[0].event_id,)
-    return seen
-
-
 def test_db_idempotency_key_rows_at_the_watermark_timestamp_are_not_skipped(tmp_path):
     rows = [
         _event_row("e1", 0, idempotency_key=None),
@@ -1070,7 +1062,7 @@ def test_db_idempotency_key_rows_at_the_watermark_timestamp_are_not_skipped(tmp_
         _event_row("k5", 0, event_id="  ", idempotency_key=" k5 "),
     ]
     source, _options = _watermarked_source(tmp_path, rows)
-    assert _polled_one_by_one(source) == ["e1", "e2", "e4", "k2", "k3", "k5"]
+    assert poll_one_by_one(source) == ["e1", "e2", "e4", "k2", "k3", "k5"]
 
 
 def test_db_zero_event_id_falls_back_to_idempotency_key_in_sql_too(tmp_path):
@@ -1079,7 +1071,7 @@ def test_db_zero_event_id_falls_back_to_idempotency_key_in_sql_too(tmp_path):
         _event_row("k5", 0, event_id=5, idempotency_key="k5"),
     ]
     source, _options = _watermarked_source(tmp_path, rows)
-    assert _polled_one_by_one(source) == ["5", "k0"]
+    assert poll_one_by_one(source) == ["5", "k0"]
 
 
 def test_db_row_without_event_id_or_idempotency_key_is_rejected_without_blocking(tmp_path):
@@ -1089,6 +1081,23 @@ def test_db_row_without_event_id_or_idempotency_key_is_rejected_without_blocking
     assert [event.event_id for event in first] == [""]
     assert "event_id or idempotency_key is required" in (first[0].rejected or "")
     assert source.ack([""]) == ("",)
-    assert _polled_one_by_one(source) == ["e1", "e3"]
+    assert poll_one_by_one(source) == ["e1", "e3"]
     assert _saved_event_id(tmp_path) == "e3"
     assert _restarted_ids(options) == []
+
+
+def test_db_same_timestamp_rows_without_event_id_page_past_the_first_page(tmp_path):
+    row = {"user_id": "u1", "event_type": "purchase", "quantity": 1, "occurred_at": "2026-08-13T12:00:00Z"}
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [{**row, "item_id": f"i{n}"} for n in range(12)])
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    seen = poll_one_by_one(source)
+    assert len(seen) == len(set(seen)) == 12
+
+
+def test_db_signed_and_long_numeric_ids_order_like_the_cursor(tmp_path):
+    big, bigger = "id:1" + "0" * 20, "id:2" + "0" * 20
+    ids = ["id:-10", "id:-2", "id:5", big, bigger]
+    source, _options = _watermarked_source(tmp_path, [_event_row(event_id, 0) for event_id in reversed(ids)])
+    assert poll_one_by_one(source) == ids
