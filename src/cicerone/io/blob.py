@@ -19,7 +19,6 @@ from cicerone.io.options import (
     read_capped,
     read_parquet,
     read_s3_body,
-    require_max_bytes,
     require_option,
     storage_backend,
     validate_storage_options,
@@ -45,16 +44,13 @@ def read_parquet_if_exists(options: dict[str, Any], filename: str, **kwargs: Any
 def read_storage_bytes(
     options: dict[str, Any],
     filename: str,
-    *,
-    max_bytes: int = DEFAULT_MAX_STORAGE_READ_BYTES,
 ) -> bytes | None:
-    require_max_bytes(max_bytes)
     backend = validate_storage_options(options)
     if backend == "local":
         path = Path(require_option(options, "path", "local")) / filename
         try:
             with path.open("rb") as handle:
-                return read_capped(handle.read, max_bytes)
+                return read_capped(handle.read, DEFAULT_MAX_STORAGE_READ_BYTES)
         except FileNotFoundError:
             return None
     bucket = require_option(options, "bucket", "s3")
@@ -66,7 +62,7 @@ def read_storage_bytes(
         if is_s3_not_found(exc):
             return None
         raise
-    return read_s3_body(response, max_bytes=max_bytes)
+    return read_s3_body(response, max_bytes=DEFAULT_MAX_STORAGE_READ_BYTES)
 
 
 def write_storage_bytes(options: dict[str, Any], filename: str, payload: bytes, content_type: str) -> None:
