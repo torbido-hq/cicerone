@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 from sqlalchemy import Table, create_engine, text
-from sqlalchemy.dialects import mysql, postgresql
+from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.dialects.mysql import mariadb
 from sqlalchemy.exc import NotSupportedError, OperationalError
 from sqlalchemy.schema import CreateTable
@@ -519,17 +520,29 @@ def test_full_write_clear_skips_a_missing_table(monkeypatch) -> None:
     assert conn.sql == []
 
 
-def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("dialect", [sqlite.dialect(), postgresql.dialect()])
+def test_applied_event_scope_ignores_the_table_name_case(tmp_path, dialect) -> None:  # type: ignore[no-untyped-def]
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    assert sink._applied_scope("Recs") == sink._applied_scope("recs")
-    monkeypatch.setattr(sink._engine.dialect, "name", "mysql")
-    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
+    conn = RecordingConnection(dialect)
+    assert sink._applied_scope(conn, "Recs") == sink._applied_scope(conn, "recs")
+    assert conn.sql == []
 
 
-def test_applied_event_scope_keeps_the_table_name_case_on_mariadb(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("dialect", [mysql.dialect(), mariadb.MariaDBDialect()])
+@pytest.mark.parametrize(("lower_case_table_names", "keeps_case"), [(0, True), (1, False), (2, False)])
+def test_applied_event_scope_follows_mysql_lower_case_table_names(  # type: ignore[no-untyped-def]
+    tmp_path, monkeypatch, dialect, lower_case_table_names, keeps_case
+) -> None:
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    monkeypatch.setattr(sink._engine.dialect, "name", "mariadb")
-    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
+    conn = RecordingConnection(dialect)
+
+    def _server_setting(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        return SimpleNamespace(scalar_one=lambda: lower_case_table_names)
+
+    monkeypatch.setattr(conn, "execute", _server_setting)
+    assert (sink._applied_scope(conn, "Recs") != sink._applied_scope(conn, "recs")) is keeps_case
+    assert conn.sql == ["SELECT @@lower_case_table_names"]
 
 
 def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:

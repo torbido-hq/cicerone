@@ -321,6 +321,7 @@ class DatabaseOutputSink:
         self._engine = engine_for(require_option(options, "database_url", "db"))
         self._fence = fence or WriteFence()
         self._applied_table_seen = False
+        self._lower_case_table_names: int | None = None
         self._check_applied_events_table_name()
 
     @contextmanager
@@ -399,24 +400,32 @@ class DatabaseOutputSink:
         )
         return table
 
-    def _applied_scope(self, recommendations_table: str) -> str:
-        # Unquoted names ignore case on SQLite and Postgres; MySQL table-name case depends on the server.
-        name = recommendations_table if _mysql_family(self._engine) else recommendations_table.lower()
+    def _applied_scope(self, conn: Connection, recommendations_table: str) -> str:
+        # Unquoted names ignore case on SQLite and Postgres; MySQL keeps it if lower_case_table_names=0.
+        keeps_case = _mysql_family(conn) and self._mysql_lower_case_table_names(conn) == 0
+        name = recommendations_table if keeps_case else recommendations_table.lower()
         # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
         return hashlib.sha256(name.encode()).hexdigest()
+
+    def _mysql_lower_case_table_names(self, conn: Connection) -> int:
+        if self._lower_case_table_names is None:
+            self._lower_case_table_names = int(
+                conn.execute(text("SELECT @@lower_case_table_names")).scalar_one()
+            )
+        return self._lower_case_table_names
 
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = sorted({str(key) for key in keys})
         table = self._applied_events_table()
         if not wanted:
             return set()
-        scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
         found: dict[str, str] = {}
         try:
             with self._engine.connect() as conn:
                 if not self._applied_events_table_exists(conn):
                     return set()
+                scope = self._applied_scope(conn, self._recommendations_table_name())
                 for part in chunked(wanted):
                     query = select(table.c.event_key, table.c.applied_at).where(
                         table.c.recommendations_table == scope,
@@ -469,7 +478,7 @@ class DatabaseOutputSink:
         wanted = sorted({str(key) for key in keys})
         now = datetime.now(UTC)
         table = self._applied_events_table()
-        scope = self._applied_scope(self._recommendations_table_name())
+        scope = self._applied_scope(conn, self._recommendations_table_name())
         self._prune_applied_keys(conn, now)
         for part in chunked(wanted):
             conn.execute(
@@ -486,7 +495,7 @@ class DatabaseOutputSink:
         # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
         table = self._applied_events_table()
         if inspect(conn).has_table(table.name):
-            scope = self._applied_scope(recommendations_table)
+            scope = self._applied_scope(conn, recommendations_table)
             conn.execute(delete(table).where(table.c.recommendations_table == scope))
 
     def _replace_recommendations_for_users_unlocked(
