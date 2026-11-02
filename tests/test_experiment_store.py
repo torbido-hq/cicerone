@@ -210,6 +210,22 @@ def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
     assert pair == ("control", "blend")
 
 
+def test_read_finishing_after_a_write_keeps_the_written_state_cached(tmp_path, monkeypatch) -> None:
+    store = ExperimentStore(local_output(tmp_path))
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    old = store.backend.read_state()
+
+    def _read_then_lose_race():
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+        return old
+
+    monkeypatch.setattr(store.backend, "read_state", _read_then_lose_race)
+    assert store.read_state() == old
+    cached = store.last_state("exp")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
 def test_assignment_overlay_reraises_unexpected_read_error(tmp_path, monkeypatch) -> None:
     output = local_output(tmp_path)
     store = ExperimentStore(output)

@@ -137,12 +137,15 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
+        self._promote_writes = 0
         self.fence = fence or WriteFence()
         self.backend = build_experiment_backend(output, self.fence)
 
     def read_state(self) -> dict[str, Any] | None:
+        with self._promote_lock:
+            writes = self._promote_writes
         state = self.backend.read_state()
-        self._remember_state(state)
+        self._remember_state(state, writes)
         return state
 
     def last_state(self, experiment_id: str) -> dict[str, Any] | None:
@@ -155,8 +158,11 @@ class ExperimentStore:
                 return None
             return dict(self._promote_state)
 
-    def _remember_state(self, state: dict[str, Any] | None) -> None:
+    def _remember_state(self, state: dict[str, Any] | None, writes: int) -> None:
         with self._promote_lock:
+            # A write since the read started is newer than what the read saw.
+            if self._promote_writes != writes:
+                return
             self._promote_loaded = True
             if state and state.get("experiment_id"):
                 self._promote_experiment_id = str(state.get("experiment_id") or "")
@@ -195,6 +201,7 @@ class ExperimentStore:
             write()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
+            self._promote_writes += 1
             self._promote_loaded = True
             self._promote_experiment_id = str(payload.get("experiment_id") or "")
             self._promote_value = str(promoted) if promoted else None
