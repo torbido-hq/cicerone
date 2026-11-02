@@ -60,13 +60,14 @@ def test_load_object_events_closes_body(mocker):
     body.close.assert_called_once()
 
 
-def test_load_object_events_rejects_oversize_and_closes(mocker):
+def test_load_object_events_rejects_oversize_and_closes(mocker, monkeypatch):
+    monkeypatch.setattr("cicerone.events.s3.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
     body = mocker.Mock()
     s3 = mocker.Mock()
     s3.get_object.return_value = {"Body": body, "ContentLength": 99, "ETag": '"abc"'}
     source = S3EventSource(_creds(mode="list"))
     with pytest.raises(ValueError, match="max is 8"):
-        source._load_object_events(s3, "events-bucket", "events/e.json", max_bytes=8)
+        source._load_object_events(s3, "events-bucket", "events/e.json")
     body.read.assert_not_called()
     body.close.assert_called_once()
 
@@ -246,6 +247,25 @@ def test_s3_sqs_receive_sets_apply_visibility(monkeypatch):
     assert calls
     assert calls[0] == SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS
     source.ack([events[0].event_id])
+
+
+@mock_aws
+def test_s3_sqs_receive_caps_max_messages_at_ten(monkeypatch):
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    queue_url = sqs.create_queue(QueueName="events-max-messages")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url, max_messages=50))
+    source.connect()
+    assert source._sqs is not None
+    requested: list[int] = []
+    real = source._sqs.receive_message
+
+    def recording(**kwargs):  # type: ignore[no-untyped-def]
+        requested.append(kwargs["MaxNumberOfMessages"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(source._sqs, "receive_message", recording)
+    assert list(source.poll(100)) == []
+    assert requested == [10]
 
 
 @mock_aws

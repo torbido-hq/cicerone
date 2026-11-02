@@ -9,7 +9,6 @@ from cicerone.job_output import (
     skip_stale_job_manifest,
     truncate_job_error,
     write_job_manifest,
-    write_manifest_accepts_skip,
 )
 from cicerone.locks import LockLostError, WriteFence
 
@@ -33,18 +32,6 @@ def test_ensure_publication_fence_raises_when_retrain_lost() -> None:
     ensure_publication_fence(object(), retrain_fence(None, lambda: True))
 
 
-def test_write_job_manifest_legacy_and_skip() -> None:
-    written: list[dict] = []
-
-    class _Legacy:
-        def write_manifest(self, manifest: dict) -> None:
-            written.append(manifest)
-
-    assert write_job_manifest(_Legacy(), {"status": "failed"}, skip_if_newer_than="x") is True
-    assert written == [{"status": "failed"}]
-    assert write_manifest_accepts_skip(object()) is False
-
-
 def test_job_manifest_dict_compat() -> None:
     manifest = JobManifest(triggered_by="cron", top_k=10)
     manifest["status"] = "success"
@@ -62,6 +49,18 @@ def test_job_manifest_dict_compat() -> None:
     assert write_job_manifest(_Sink(), manifest) is True
     assert written[0]["triggered_by"] == "cron"
     assert written[0]["generated_at"] == "t"
+
+
+def test_write_job_manifest_returns_false_when_sink_skips() -> None:
+    seen: list[str | None] = []
+
+    class _SkippingSink:
+        def write_manifest(self, payload: dict, *, skip_if_newer_than=None) -> bool:
+            seen.append(skip_if_newer_than)
+            return False
+
+    assert write_job_manifest(_SkippingSink(), JobManifest(), skip_if_newer_than="t0") is False
+    assert seen == ["t0"]
 
 
 def test_job_manifest_unknown_keys_raise_keyerror() -> None:
