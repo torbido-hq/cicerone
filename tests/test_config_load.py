@@ -1563,7 +1563,7 @@ def test_make_settings_port_zero_loads_with_deprecation_warning(caplog, section,
     with caplog.at_level("WARNING", logger="cicerone.config.load"):
         settings = make_settings(**{section: {"port": 0}})
     assert getattr(settings, section).port == 0
-    assert f"{name} = 0 (any free port) is deprecated and will be rejected in 0.9.0" in caplog.text
+    assert f"{name}.port = 0 (any free port) is deprecated and will be rejected in 0.9.0" in caplog.text
 
 
 def test_load_settings_rejects_out_of_range_serve_port(tmp_path):
