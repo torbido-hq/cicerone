@@ -120,7 +120,7 @@ Required `auth_token` when `job.mode = "serve"`.
 | `refresh_interval_seconds` | `60` | Dataset output: reload parquet cache. DB output: reload the items snapshot only |
 | `category_column` | `"category"` | `?category=` filter |
 | `metrics_enabled` | `false` | `GET /metrics`; needs `metrics_token` |
-| `log_impressions` | `false` | Requires `[track]`. Records **returned** GET items, not browser renders. The HTTP response can return before the row is written |
+| `log_impressions` | `false` | Requires `[track]`. Records **returned** GET items, not browser renders. The HTTP response can return before the row is written; with 1000 appends pending the rows are dropped and counted in `cicerone_serve_appends_dropped_total` |
 
 `GET /recommendations/{user_id}` is a lookup of materialized rows. It does
 not fit a model. **200** returns the object; **401** missing/invalid
