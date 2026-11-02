@@ -12,7 +12,6 @@ from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
     SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     SQS_MALFORMED_RECEIVE_LIMIT,
-    SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     Batch,
     MalformedS3Notification,
     s3_records_from_sqs_body,
@@ -127,7 +126,7 @@ class S3SqsPoll:
         while loaded < need:
             response = sqs.receive_message(
                 QueueUrl=queue_url,
-                MaxNumberOfMessages=min(self._max_messages, 10),
+                MaxNumberOfMessages=self._max_messages,
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
                 VisibilityTimeout=SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
                 MessageSystemAttributeNames=["ApproximateReceiveCount"],
@@ -224,7 +223,7 @@ class S3SqsPoll:
         *,
         sqs: Any,
         queue_url: str | None,
-        timeout_seconds: int = SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+        timeout_seconds: int,
     ) -> None:
         if not receipts or sqs is None or queue_url is None:
             return
