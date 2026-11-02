@@ -81,10 +81,8 @@ def _reject_unread_state(_settings: Settings, _store: ExperimentStore) -> NoRetu
 
 
 def _promote_base_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
-    # Thompson state must come from a fresh read: a fallback would overwrite it with stale or no arms.
-    if settings.experiment.allocation == ALLOCATION_THOMPSON:
-        return _matched_state(settings, store, _reject_unread_state)
-    return _matched_state(settings, store, _last_known_state)
+    # Writes need a fresh read: the cached state misses other replicas' and the job's newer writes.
+    return _matched_state(settings, store, _reject_unread_state)
 
 
 def _live_thompson_pair(

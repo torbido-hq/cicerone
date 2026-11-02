@@ -1580,6 +1580,31 @@ def test_thompson_unpromote_keeps_state_when_state_read_fails(tmp_path, monkeypa
     assert state["challenger"] == "treatment"
 
 
+def test_fixed_promote_and_unpromote_refuse_when_state_read_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = _settings(tmp_path, log_exposures=False)
+    store = ExperimentStore(settings.output)
+    store.write_state(experiment_state("exp-1", promoted_variant="control"))
+    assert store.last_state("exp-1") is not None
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings, _store: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="treatment",
+                promote_blocked_by=(),
+            )
+        },
+    )
+    monkeypatch.setattr(store.backend, "read_state", raising(OSError("store down")))
+    assert promote_winner(settings, store, "treatment") == "Experiment state could not be read"
+    assert clear_promotion(settings, store) == "Experiment state could not be read"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
