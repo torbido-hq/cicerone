@@ -63,14 +63,17 @@ def test_save_users_does_not_truncate_destination(tmp_path, monkeypatch):
     path = tmp_path / "dashboard_users.toml"
     path.write_text("stale-secret\n")
     original_open = os.open
+    opened: list[str | os.PathLike[str]] = []
 
     def guarded(name: str | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        opened.append(name)
         if Path(name).resolve() == path.resolve() and flags & os.O_TRUNC:
             raise AssertionError("truncated destination")
         return original_open(name, flags, *args, **kwargs)  # type: ignore[arg-type]
 
     patch_module_ref(monkeypatch, "cicerone.dashboard_users.os", open=guarded)
     save_users(path, {"alice": "hash-a"})
+    assert opened
     assert "stale-secret" not in path.read_text()
     assert load_users(path) == {"alice": "hash-a"}
 

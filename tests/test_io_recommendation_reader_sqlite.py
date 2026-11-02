@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from support.fakes import patch_module_ref
+from support.fakes import patch_module_ref, raising
 
 from cicerone.io.db_store import DatabaseOutputSink
 from cicerone.io.recommendation_reader import DbRecommendationReader
@@ -122,11 +122,10 @@ def test_sqlite_db_reader_keeps_items_on_pandas_database_error(tmp_path, monkeyp
     assert list(reader.get_items()["item_id"]) == ["i1"]
     version_before = reader.items_version()
 
-    def boom(*_args, **_kwargs):
-        raise DatabaseError("no such table: recommendation_items")
-
+    boom = raising(DatabaseError("no such table: recommendation_items"))
     patch_module_ref(monkeypatch, "cicerone.io.db_recommendation_reader.pd", read_sql=boom)
     reader.refresh()
+    assert boom.calls >= 1
     assert list(reader.get_items()["item_id"]) == ["i1"]
     assert reader.items_version() == version_before
 

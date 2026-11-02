@@ -552,12 +552,10 @@ def test_read_state_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> 
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    patch_module_ref(
-        monkeypatch,
-        "cicerone.experiment.store_db.pd",
-        read_sql=raising(DatabaseError("no such table: experiment_state")),
-    )
+    boom = raising(DatabaseError("no such table: experiment_state"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_state() is None
+    assert boom.calls >= 1
 
 
 def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, monkeypatch) -> None:
@@ -584,12 +582,10 @@ def test_read_exposures_db_pandas_database_error_is_empty(tmp_path, monkeypatch)
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    patch_module_ref(
-        monkeypatch,
-        "cicerone.experiment.store_db.pd",
-        read_sql=raising(DatabaseError("no such table: exposures")),
-    )
+    boom = raising(DatabaseError("no such table: exposures"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_exposures() == []
+    assert boom.calls >= 1
 
 
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:

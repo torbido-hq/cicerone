@@ -6,10 +6,11 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from support.events import BeatingSource, apply_after_second_beat, event_payload, wait_until
+from support.events import BeatingSource, apply_after_second_beat, event_payload
 from support.prometheus_metrics import registry_metric_value
 from support.settings import make_settings
 from support.toml_config import write_toml
+from support.waits import WAIT_SECONDS, wait_until
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings
 from cicerone.events.base import EventSourceError
@@ -249,7 +250,7 @@ def test_two_writers_serialized_keep_both_users(tmp_path, feature_config: Featur
             source = WebhookEventSource({})
             source.ingest(event_payload(event_id=f"e-{user_id}", user_id=user_id, item_id=item_id))
             worker = _worker(settings, source, feature_config, apply_lock=lock)
-            if not wait_until(lambda: worker.tick() == 1, timeout=5.0):
+            if not wait_until(lambda: worker.tick() == 1):
                 errors.append(AssertionError(f"{user_id} never applied"))
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
@@ -296,7 +297,7 @@ def test_redis_streams_unique_consumers_leader_only(tmp_path, feature_config, mo
         recs = pd.read_parquet(_out / "recommendations.parquet")
         return {"is1", "is2"}.issubset(set(recs["item_id"].astype(str)))
 
-    assert wait_until(_both_applied, timeout=5.0)
+    assert wait_until(_both_applied)
     assert leader._consumer == "serve-1"
     assert follower._consumer == "serve-2"
 
@@ -834,7 +835,7 @@ def test_inflight_heartbeat_preserves_apply_error():
 
     source = BeatingSource(RuntimeError("lost visibility"))
     with pytest.raises(ValueError, match="apply boom"), inflight_heartbeat(source, [], 0.02):
-        assert source.second_beat.wait(timeout=5)
+        assert source.second_beat.wait(WAIT_SECONDS)
         raise ValueError("apply boom")
 
 
@@ -856,7 +857,7 @@ def test_later_unexpected_heartbeat_propagates():
 
     source = BeatingSource(RuntimeError("beat bug"))
     with pytest.raises(RuntimeError, match="beat bug") as captured, inflight_heartbeat(source, [], 0.02):
-        assert source.second_beat.wait(timeout=5)
+        assert source.second_beat.wait(WAIT_SECONDS)
     assert not isinstance(captured.value, HeartbeatError)
 
 
@@ -865,7 +866,7 @@ def test_later_source_heartbeat_error_is_heartbeat_error():
 
     source = BeatingSource(EventSourceError("lost visibility"))
     with pytest.raises(HeartbeatError, match="heartbeat failed"), inflight_heartbeat(source, [], 0.02):
-        assert source.second_beat.wait(timeout=5)
+        assert source.second_beat.wait(WAIT_SECONDS)
 
 
 def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):
