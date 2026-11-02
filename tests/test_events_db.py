@@ -1096,8 +1096,8 @@ def test_db_same_timestamp_rows_without_event_id_page_past_the_first_page(tmp_pa
     assert len(seen) == len(set(seen)) == 12
 
 
-def test_db_signed_and_long_numeric_ids_order_like_the_cursor(tmp_path):
-    big, bigger = "id:1" + "0" * 20, "id:2" + "0" * 20
-    ids = ["id:-10", "id:-2", "id:5", big, bigger]
-    source, _options = _watermarked_source(tmp_path, [_event_row(event_id, 0) for event_id in reversed(ids)])
-    assert poll_one_by_one(source) == ids
+def test_db_odd_identity_shapes_are_each_delivered_once(tmp_path):
+    ids = ["id:-2", "id:-10", "id:1" + "0" * 20, "ID:5", "id:+5", "id:5", "id:10"]
+    source, _options = _watermarked_source(tmp_path, [_event_row(event_id, 0) for event_id in ids])
+    seen = poll_one_by_one(source)
+    assert sorted(seen) == sorted(ids)

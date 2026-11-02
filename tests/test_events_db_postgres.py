@@ -228,12 +228,12 @@ def test_postgres_same_timestamp_rows_without_event_id_page_past_the_first_page(
     assert len(seen) == len(set(seen)) == 12
 
 
-def test_postgres_signed_and_long_numeric_ids_order_like_the_cursor():
-    ids = ["id:-10", "id:-2", "id:5", "id:1" + "0" * 20, "id:2" + "0" * 20]
-    _seed_same_time_rows(", event_id TEXT", [f", '{event_id}'" for event_id in reversed(ids)])
+def test_postgres_odd_identity_shapes_are_each_delivered_once():
+    ids = ["id:-2", "id:-10", "id:1" + "0" * 20, "ID:5", "id:+5", "id:5", "id:10"]
+    _seed_same_time_rows(", event_id TEXT", [f", '{event_id}'" for event_id in ids])
     source = _source()
     source.connect()
-    assert poll_one_by_one(source) == ids
+    assert sorted(poll_one_by_one(source)) == sorted(ids)
 
 
 def test_postgres_event_id_order_ignores_the_column_collation():

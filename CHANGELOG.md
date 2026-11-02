@@ -158,13 +158,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   acked, not applied) instead of keyed by `id` or its payload.
 - The db events source no longer strands or skips rows at the watermark's
   timestamp: a table without `event_id` pages through them by `id`,
-  `rowid` or `ctid`; `id:`/`rowid:` ids with a sign or more than 20 digits
-  order numerically in SQL as in the cursor; and Postgres compares ids by
-  code point, whatever the column collation. Rows skipped this way before
-  are delivered after the upgrade. Once after upgrading, rows at the saved
-  watermark's exact timestamp may be skipped when ids are negative or
-  longer than 20 digits after `id:`/`rowid:`, use `ID:`-style prefixes or
-  forms like `id:+5`, or sit in a Postgres column with a non-C collation.
+  `rowid` or `ctid`; ids other than `id:`/`rowid:` plus up to 20 digits
+  (negative, longer, `id:+5`, `ID:5`) compare as plain text in SQL and in
+  the cursor alike; and Postgres compares ids by code point, whatever the
+  column collation. Rows skipped this way before are delivered after the
+  upgrade. Once after upgrading, rows with those id shapes, or in a
+  Postgres column with a non-C collation, may be skipped if they sit at
+  the saved watermark's exact timestamp.
 
 ### Removed
 
