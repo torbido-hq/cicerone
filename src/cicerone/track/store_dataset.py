@@ -105,7 +105,7 @@ class TrackDatasetBackend:
     ) -> list[dict[str, Any]]:
         # ``since`` is applied while reading the file.
         raw = read_storage_bytes(self._options, TRACK_FILENAME)
-        rows = self._read_rows_dataset([] if raw is None else raw.splitlines(), since=since)
+        rows = self._read_rows_dataset(BytesIO(raw or b""), since=since)
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=None)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
