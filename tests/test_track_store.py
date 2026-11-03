@@ -6,7 +6,7 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
-from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, patch_module_ref, raising
+from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
@@ -47,14 +47,12 @@ def test_store_constants() -> None:
         DEFAULT_EVAL_TABLE,
         DEFAULT_HISTORY_TABLE,
         DEFAULT_TRACK_TABLE,
-        TRACK_COLUMNS,
         TRACK_LOG_BACKEND_ERROR,
     )
 
     assert DEFAULT_TRACK_TABLE == "recommendation_track"
     assert DEFAULT_EVAL_TABLE == "recommendation_eval"
     assert DEFAULT_HISTORY_TABLE == "recommendation_history"
-    assert "kind" in TRACK_COLUMNS
     assert "output kind" in TRACK_LOG_BACKEND_ERROR
 
 
@@ -752,20 +750,6 @@ def test_track_history_non_s3_error_reraises(tmp_path, monkeypatch, s3_options) 
         TrackStore(output).read_history()
 
 
-def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
-    from cicerone.track.store_dataset import _s3_parquet_frame
-
-    body = FakeS3Body(b"parquet")
-    patch_module_ref(
-        monkeypatch,
-        "cicerone.track.store_dataset.pd",
-        read_parquet=lambda _buf: pd.DataFrame({"x": [1]}),
-    )
-    frame = _s3_parquet_frame(FakeS3Client(body), "recs", "history/part.parquet")
-    assert frame is not None
-    assert body.closed is True
-
-
 def test_track_read_bytes_s3_generic_error(monkeypatch, s3_options) -> None:
     class _Boom:
         def get_object(self, **_kwargs):
@@ -804,29 +788,27 @@ def test_track_history_s3_access_denied_reraises(monkeypatch, s3_options) -> Non
         TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history()
 
 
-def test_s3_parquet_frame_unexpected_error_ignores_not_found_helper(monkeypatch) -> None:
-    from cicerone.track.store_dataset import _s3_parquet_frame
-
+def test_track_history_s3_part_unexpected_error_ignores_not_found_helper(monkeypatch, s3_options) -> None:
     class _Boom:
         def get_object(self, **_kwargs):
             raise RuntimeError("get failed")
 
-    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.io.options.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.io.blob.is_storage_not_found", lambda _exc: True)
     with pytest.raises(RuntimeError, match="get failed"):
-        _s3_parquet_frame(_Boom(), "recs", "history/part.parquet")
+        TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history(generated_ats=["t"])
 
 
-def test_s3_parquet_frame_access_denied_reraises() -> None:
+def test_track_history_s3_part_access_denied_reraises(monkeypatch, s3_options) -> None:
     from botocore.exceptions import ClientError
-
-    from cicerone.track.store_dataset import _s3_parquet_frame
 
     class _Denied:
         def get_object(self, **_kwargs):
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
 
+    monkeypatch.setattr("cicerone.io.options.build_s3_client", lambda _options: _Denied())
     with pytest.raises(ClientError, match="AccessDenied"):
-        _s3_parquet_frame(_Denied(), "recs", "history/part.parquet")
+        TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history(generated_ats=["t"])
 
 
 def test_track_read_eval_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
