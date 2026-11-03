@@ -168,6 +168,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   serve exposure/impression writes, RabbitMQ handle close, publisher
   close on serve startup failure and the Redis lock refresh thread; only
   storage and broker errors are.
+- The db events source no longer loses earlier events on restart when a
+  later one was acked first: the watermark moves only over the leading run
+  of acked events. A nacked event holds it until redelivered and acked; an
+  in-flight event whose row is gone is dropped with a warning.
+- The db events source no longer skips rows whose `event_id` is NULL,
+  blank, `0` or padded at the watermark's timestamp: SQL orders them by
+  the same trimmed id as Python. With an `event_id` column, a row
+  with neither `event_id` nor `idempotency_key` is now rejected (logged,
+  acked, not applied) instead of keyed by `id` or its payload.
 
 ### Removed
 
