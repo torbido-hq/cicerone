@@ -26,8 +26,8 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
 | `io/recommendation_reader.py` | Re-exports the serve-mode recommendation readers and shared helpers |
 | `io/dataset_recommendation_reader.py` / `io/db_recommendation_reader.py` | Read-only lookup of precomputed recs (parquet cache indexed by `user_id` at refresh / SQL per request) |
-| `io/recommendation_reader_common.py` | Shared cold-start selection rule and item-filter mixin (pulls `rectools` for `Columns` via `blending.py` → `ranking.py`, but no lightfm/implicit/torch) |
-| `io/engines.py` | Shared SQLAlchemy engines keyed by database URL |
+| `io/recommendation_reader_common.py` | Shared cold-start selection rule and item-filter mixin (pulls `rectools` for `Columns` via `blending.py`, but no lightfm/implicit/torch) |
+| `io/engines.py` | Shared SQLAlchemy engines keyed by database URL; dialect-quoted SQL helpers (`quote_identifier`) |
 | `io/manifest_reader.py` | Read-only lookup of job-run manifests for the dashboard (no rectools/lightfm import) |
 | `io/options.py` | Shared `require_option` / `build_s3_client` helpers |
 | `io/replace_users.py` | Shared helpers for user-scoped recommendation replaces |
@@ -305,10 +305,9 @@ imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
 needs no lightfm/implicit/torch there. With `[events.online]`, the events
 worker lazy-imports the artifact stack (LightFM) for write-through only.
 It does import
-`rectools` at startup: `serve/app.py` → `serve/recommendations.py` →
-`io/recommendation_reader.py` → `recommendation_reader_common.py` →
-`blending.py` → `ranking.py` → `from rectools import Columns`, so `rectools`
-cannot be dropped from a serve-only image.
+`rectools` at startup: `serve/app.py` → `io/recommendation_reader.py` →
+`recommendation_reader_common.py` → `blending.py` → `from rectools import
+Columns`, so `rectools` cannot be dropped from a serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/recommendation_reader.py`) matching the
@@ -460,7 +459,7 @@ never imports `cicerone.model`/`dataset`/`automl`.
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
   runtime and no Node/npm dependency at runtime or for end users. Tailwind
   is compiled ahead of time in a dedicated `frontend` Docker build stage
-  (`node:26.12.0-slim`, pinned via `package.json`/`package-lock.json`) whose only
+  (`node:26.12.1-slim`, pinned via `package.json`/`package-lock.json`) whose only
   output (`static/tailwind.css`) is copied into the runtime image and the
   PyPI wheel (`package` Docker stage).
 
