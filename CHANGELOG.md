@@ -46,6 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `idempotency_key` is `0` or `false` get their stable fallback id,
   instead of all sharing the id `"0"` or `"False"` and being dropped as
   duplicates.
+- Reading track rows from a local `track.jsonl` (eval job, dashboard)
+  fails over the 512 MiB storage read limit, as on S3, instead of loading
+  any size into memory. `POST /track` keeps accepting rows past the limit.
 - The db events watermark file syncs its directory after the rename, as
   the S3 list marker already did, and both sync a newly created
   positions directory into its parent, so the saved position survives a
