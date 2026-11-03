@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
+  impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings
   (`max_workers`, `epoch_metrics`, `item_based_k_neighbors`,
   `model_configs`, `content_fallback_max_neighbors`). `fit_strategies` and
@@ -34,6 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Serve answers at once when its append queue (1000 pending) is full,
+  dropping the exposure or impression append, instead of stalling.
 - Kafka and Redis Streams event sources close the new consumer or client
   when `connect` fails after creating it (Kafka `subscribe`, Redis `PING`
   or `XGROUP CREATE`), and the S3 event source closes its S3 and SQS
