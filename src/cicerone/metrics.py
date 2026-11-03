@@ -104,6 +104,11 @@ TRACK_INGEST_TOTAL = Counter(
     "POST /track ingest outcomes",
     ["kind", "status"],
 )
+SERVE_APPENDS_DROPPED_TOTAL = Counter(
+    "cicerone_serve_appends_dropped_total",
+    "Serve exposure and impression appends dropped because the append queue was full",
+    ["kind"],
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
@@ -229,6 +234,10 @@ def record_events_apply_busy(*, reason: str) -> None:
 def update_events_source_health(*, connected: bool, lag: int | None) -> None:
     EVENTS_SOURCE_CONNECTED.set(1 if connected else 0)
     EVENTS_SOURCE_LAG.set(-1 if lag is None else max(0, int(lag)))
+
+
+def record_serve_append_dropped(kind: str) -> None:
+    SERVE_APPENDS_DROPPED_TOTAL.labels(kind=kind).inc()
 
 
 def record_track_ingest(*, kind: str, status: str, count: int = 1) -> None:
