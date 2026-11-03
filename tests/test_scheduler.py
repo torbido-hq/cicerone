@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from support.fakes import hold_threads, patch_module_ref
 
 from cicerone import scheduler
 
@@ -62,7 +63,7 @@ def test_cron_loop_does_not_rerun_a_tick_after_the_clock_steps_back(monkeypatch)
 
     runs: list[None] = []
     monkeypatch.setattr(scheduler, "datetime", _Clock)
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     with pytest.raises(SystemExit):
         scheduler._cron_loop("0 3 * * *", lambda: runs.append(None))
     assert runs == [None]
@@ -91,7 +92,7 @@ def test_main_runs_job_each_iteration_and_survives_failures(tmp_path, monkeypatc
         assert triggered_by == "cron"
         raise ValueError("boom")  # main() must log and keep looping, not crash
 
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     monkeypatch.setattr(scheduler.job, "run", fake_run)
 
     with pytest.raises(SystemExit):
@@ -137,7 +138,7 @@ def test_main_with_distributed_lock_uses_locked_cron_path(tmp_path, monkeypatch)
     def fake_locked():
         calls["locked"] += 1
 
-    monkeypatch.setattr(scheduler.time, "sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
     monkeypatch.setattr(scheduler, "build_lock_backend", lambda _settings: object())
     monkeypatch.setattr(scheduler, "_cron_run_with_lock", lambda _backend: fake_locked())
 
@@ -194,15 +195,7 @@ def test_main_with_trigger_and_distributed_lock_wires_runguard(tmp_path, monkeyp
 
     monkeypatch.setattr(trigger_mod, "RunGuard", FakeRunGuard)
 
-    started: list = []
-    real_thread_init = scheduler.threading.Thread.__init__
-
-    def fake_thread_init(self, *args, **kwargs):
-        started.append({"target": kwargs.get("target"), "args": kwargs.get("args", ())})
-        real_thread_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(scheduler.threading.Thread, "__init__", fake_thread_init)
-    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    started = hold_threads(monkeypatch, "cicerone.scheduler.threading")
     monkeypatch.setattr(
         scheduler,
         "uvicorn",
@@ -249,7 +242,7 @@ def test_main_with_trigger_in_process_skips_build_lock_backend(tmp_path, monkeyp
         raise AssertionError("build_lock_backend must not run for in_process")
 
     monkeypatch.setattr(scheduler, "build_lock_backend", boom)
-    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    hold_threads(monkeypatch, "cicerone.scheduler.threading")
     monkeypatch.setattr(
         scheduler,
         "uvicorn",
@@ -286,13 +279,6 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
     )
     monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config_path))
 
-    started_threads = []
-    real_thread_init = scheduler.threading.Thread.__init__
-
-    def fake_thread_init(self, *args, **kwargs):
-        started_threads.append(kwargs.get("target"))
-        real_thread_init(self, *args, **kwargs)
-
     uvicorn_calls = {}
 
     def fake_uvicorn_run(app, host, port):
@@ -300,15 +286,15 @@ def test_main_with_trigger_enabled_starts_cron_thread_and_serves_http(tmp_path, 
         uvicorn_calls["host"] = host
         uvicorn_calls["port"] = port
 
-    monkeypatch.setattr(scheduler.threading.Thread, "__init__", fake_thread_init)
-    monkeypatch.setattr(scheduler.threading.Thread, "start", lambda self: None)
+    started = hold_threads(monkeypatch, "cicerone.scheduler.threading")
     monkeypatch.setattr(scheduler, "uvicorn", type("_U", (), {"run": staticmethod(fake_uvicorn_run)}))
 
     from cicerone.trigger import poll_input_forever
 
     scheduler.main()
 
-    assert scheduler._cron_loop in started_threads
-    assert poll_input_forever in started_threads
+    started_targets = [thread["target"] for thread in started]
+    assert scheduler._cron_loop in started_targets
+    assert poll_input_forever in started_targets
     assert uvicorn_calls["host"] == "127.0.0.1"
     assert uvicorn_calls["port"] == 8080

@@ -68,3 +68,16 @@ def test_requirements_txt_does_not_pin_s3fs():
     text = (_REPO / "requirements.txt").read_text()
     assert "s3fs" not in text
     assert "aiobotocore" not in text
+
+
+def test_importing_entry_modules_leaves_root_logger_unconfigured():
+    _run(
+        """
+import logging
+import cicerone.dashboard
+import cicerone.job
+import cicerone.scheduler
+import cicerone.serve.app
+assert logging.getLogger().handlers == []
+"""
+    )

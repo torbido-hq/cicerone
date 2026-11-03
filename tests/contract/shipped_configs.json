@@ -4,7 +4,6 @@
     "dashboard.history_limit": 20,
     "dashboard.host": "0.0.0.0",
     "dashboard.lookup_events": 20,
-    "dashboard.lookup_k": 20,
     "dashboard.port": 8090,
     "dashboard.refresh_interval_seconds": 30,
     "dashboard.users_path": "/app/config/dashboard_users.toml",
