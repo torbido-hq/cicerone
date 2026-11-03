@@ -16,15 +16,20 @@ def test_validate_model_weights_rejects_negative_and_allows_non_negative():
 
 def test_resolve_epoch_metrics_rejects_non_positive_when_enabled():
     with pytest.raises(ConfigError, match="epoch_metrics_every"):
-        resolve_epoch_metrics(log_epoch_metrics=True, every=0)
+        resolve_epoch_metrics({"log_epoch_metrics": True, "epoch_metrics_every": 0})
 
 
 def test_resolve_epoch_metrics_rejects_fraction_outside_unit_interval():
     with pytest.raises(ConfigError, match="epoch_metrics_regression_drop"):
-        resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.5)
+        resolve_epoch_metrics({"log_epoch_metrics": True, "epoch_metrics_regression_drop": 1.5})
     with pytest.raises(ConfigError, match="epoch_metrics_plateau_eps"):
-        resolve_epoch_metrics(log_epoch_metrics=True, plateau_eps=0)
-    assert resolve_epoch_metrics(log_epoch_metrics=True, regression_drop=1.0).regression_drop == 1.0
+        resolve_epoch_metrics({"log_epoch_metrics": True, "epoch_metrics_plateau_eps": 0})
+    assert (
+        resolve_epoch_metrics(
+            {"log_epoch_metrics": True, "epoch_metrics_regression_drop": 1.0}
+        ).regression_drop
+        == 1.0
+    )
 
 
 def test_validate_model_weights_no_op_when_none():

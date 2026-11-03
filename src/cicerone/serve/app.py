@@ -5,24 +5,28 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT, DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
-from cicerone.experiment.store import ExperimentStore
-from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.experiment.store import build_experiment_store
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
@@ -31,31 +35,33 @@ from cicerone.locks import (
     WriteFence,
     WriterLockBusyError,
     build_dataset_writer_lock,
-    build_output_writer_lock,
 )
 from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
     record_experiment_served,
     record_recommendations_served,
     record_request,
+    record_serve_append_dropped,
     update_cache_age_gauge,
     update_events_source_health,
 )
 from cicerone.reasons import parse_reasons
+from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.code_samples import HEALTH_PATH, RECOMMENDATIONS_PATH, attach_code_samples
-from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
-from cicerone.serve.recommendations import RecommendationService
+from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, mount_events_routes
+from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
+from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
-from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
+from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
 _APPEND_BUSY_ATTEMPTS = 3
+# Appends waiting for the writer thread; a request past this drops its append.
+_MAX_PENDING_APPENDS = 1000
 
 
 def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
@@ -80,22 +86,6 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
 
 
-def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_exposures(rows),
-        label="append experiment exposure",
-        user_id=user_id,
-    )
-
-
-def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_rows(rows),
-        label="append serve impressions",
-        user_id=user_id,
-    )
-
-
 SERVE_API_TITLE = "Cicerone Serve API"
 SERVE_API_VERSION = __version__
 SERVE_API_DESCRIPTION = f"""
@@ -118,7 +108,7 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
-def _refresh_step(step: RecommendationReader | _GeneratedAtCache | _AssignmentOverlayCache) -> bool:
+def _refresh_step(step: RecommendationReader | RefreshedValue[Any]) -> bool:
     # Readers are pluggable; one failed step must not end the loop.
     try:
         return step.refresh() is not False
@@ -131,8 +121,8 @@ def _start_refresh_loop(
     reader: RecommendationReader,
     interval_seconds: float,
     *,
-    generated_at_cache: _GeneratedAtCache | None = None,
-    overlay_cache: _AssignmentOverlayCache | None = None,
+    generated_at_cache: RefreshedValue[str | None] | None = None,
+    overlay_cache: RefreshedValue[AssignmentOverlay] | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
@@ -161,61 +151,6 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     return str(value) if value is not None else None
 
 
-class _GeneratedAtCache:
-    """Cache manifest ``generated_at``; refresh with the recommendations loop."""
-
-    def __init__(self, manifest_reader: ManifestReader | None) -> None:
-        self._manifest_reader = manifest_reader
-        self._lock = threading.Lock()
-        self._value: str | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        value = _read_generated_at(self._manifest_reader)
-        with self._lock:
-            self._value = value
-
-    def get(self) -> str | None:
-        with self._lock:
-            return self._value
-
-
-class _AssignmentOverlayCache:
-    """Last successful promote/pair overlay; refresh with the recommendations loop."""
-
-    def __init__(self, settings: Settings, store: ExperimentStore | None) -> None:
-        self._settings = settings
-        self._store = store
-        self._lock = threading.Lock()
-        self._promoted: str | None = None
-        self._pair: tuple[str, str] | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        if self._store is None or not self._settings.experiment.enabled:
-            return
-        try:
-            promoted, pair = _assignment_overlay(self._settings, self._store)
-        except Exception:
-            logger.exception("Failed to refresh assignment overlay; keeping previous")
-            return
-        with self._lock:
-            self._promoted = promoted
-            self._pair = pair
-
-    def get(self) -> tuple[str | None, tuple[str, str] | None]:
-        with self._lock:
-            return self._promoted, self._pair
-
-
-def _assignment_overlay(
-    settings: Settings, store: ExperimentStore | None
-) -> tuple[str | None, tuple[str, str] | None]:
-    if store is None or not settings.experiment.enabled:
-        return None, None
-    return store.assignment_overlay(settings.experiment.id)
-
-
 def create_app(
     settings: Settings,
     reader: RecommendationReader,
@@ -225,40 +160,50 @@ def create_app(
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
 ) -> FastAPI:
+    # One writer thread keeps appends ordered and off the request threadpool.
+    append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
+    append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
+
+    def submit_append(write: Any, *, kind: str, label: str, user_id: str) -> None:
+        if not append_slots.acquire(blocking=False):
+            record_serve_append_dropped(kind)
+            logger.warning("Dropped %s append for user_id=%r: append queue is full", kind, user_id)
+            return
+        append_pool.submit(_append_with_busy_retry, write, label=label, user_id=user_id).add_done_callback(
+            lambda _done: append_slots.release()
+        )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            append_pool.shutdown(wait=True)
+
     app = FastAPI(
         title=SERVE_API_TITLE,
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
+        lifespan=lifespan,
     )
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    items_cache = ItemsFilterCache(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-    generated_at_cache = _GeneratedAtCache(manifest_reader)
+    generated_at_cache = RefreshedValue(lambda: _read_generated_at(manifest_reader))
+    generated_at_cache.refresh()
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
-    experiment_store = (
-        ExperimentStore(settings.output, fence=WriteFence(build_output_writer_lock(settings)))
-        if settings.experiment.enabled
-        else None
+    experiment_store = build_experiment_store(settings)
+    overlay_cache: RefreshedValue[AssignmentOverlay] = RefreshedValue(
+        lambda: read_assignment_overlay(settings, experiment_store), initial=(None, None)
     )
-    overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
+    _refresh_step(overlay_cache)
     app.state.assignment_overlay_cache = overlay_cache
     track_store = (
         TrackStore(settings.output, fence=WriteFence(build_dataset_writer_lock(settings)))
         if settings.track.enabled
         else None
     )
-    recommendation_service = RecommendationService(
-        settings,
-        reader,
-        items_cache=items_cache,
-        assignment_overlay=overlay_cache.get,
-    )
+    recommendation_service = build_recommendation_service(settings, reader, feature_config, overlay_cache.get)
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):
@@ -314,7 +259,6 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
-        background_tasks: BackgroundTasks,
         limit: int | None = Query(
             default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
         ),
@@ -355,18 +299,17 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                background_tasks.add_task(
-                    _append_exposures_safe,
-                    experiment_store,
-                    [
-                        exposure_row(
-                            user_id=user_id,
-                            experiment_id=experiment_id,
-                            variant=variant,
-                            generated_at=generated_at,
-                        )
-                    ],
-                    user_id,
+                exposure = exposure_row(
+                    user_id=user_id,
+                    experiment_id=experiment_id,
+                    variant=variant,
+                    generated_at=generated_at,
+                )
+                submit_append(
+                    partial(experiment_store.append_exposures, [exposure]),
+                    kind="exposure",
+                    label="append experiment exposure",
+                    user_id=user_id,
                 )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
             occurred = datetime.now(UTC).isoformat()
@@ -384,7 +327,12 @@ def create_app(
                 }
                 for row in filtered.itertuples(index=False)
             ]
-            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
+            submit_append(
+                partial(track_store.append_rows, rows),
+                kind="impression",
+                label="append serve impressions",
+                user_id=user_id,
+            )
 
         body = RecommendationsResponse(
             generated_at=generated_at,
@@ -432,8 +380,8 @@ def create_app(
                 "$ref": "#/components/headers/X-Generated-At",
             }
         attach_code_samples(schema)
-        attach_events_ingest_openapi(schema)
-        attach_track_ingest_openapi(schema)
+        attach_ingest_openapi(schema, EVENTS_INGEST)
+        attach_ingest_openapi(schema, TRACK_INGEST)
         app.openapi_schema = schema
         return app.openapi_schema
 
@@ -450,23 +398,8 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    if feature_path.is_file():
-        feature_config = load_feature_config(feature_path)
-    else:
-        logger.warning(
-            "feature config missing at %s; serve continuing without features.toml",
-            feature_path,
-        )
-        feature_config = None
-
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-
+    feature_config = load_optional_feature_config(settings)
+    configure_reader_item_filters(settings, reader, feature_config)
     events_runtime = start_events_runtime(settings, feature_config=feature_config, reader=reader)
     app = create_app(
         settings,

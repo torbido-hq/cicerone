@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import os
 from collections.abc import Callable
@@ -55,7 +56,7 @@ def _resolve_log_level(name: str) -> int:
         raise SystemExit(f"invalid log level {name!r}") from None
 
 
-def _configure_logging(level_name: str | None, log_format: str | None) -> None:
+def configure_logging(level_name: str | None, log_format: str | None) -> None:
     name = level_name or os.environ.get("CICERONE_LOG_LEVEL") or "INFO"
     fmt = log_format or os.environ.get("CICERONE_LOG_FORMAT") or DEFAULT_LOG_FORMAT
     logging.basicConfig(level=_resolve_log_level(name), format=fmt)
@@ -74,14 +75,9 @@ def _parser() -> argparse.ArgumentParser:
         lambda _rest: _cmd_start(),
     )
     _add_command(sub.add_parser("job", help="Run one training job"), lambda _rest: _run_job())
-    _add_command(
-        sub.add_parser("serve", help="Read API (requires job.mode = serve)"), lambda _rest: _cmd_serve()
-    )
-    _add_command(sub.add_parser("dashboard", help="Basic-Auth status page"), lambda _rest: _cmd_dashboard())
-    _add_command(
-        sub.add_parser("scheduler", help="Cron loop (and optional retrain trigger)"),
-        lambda _rest: _cmd_scheduler(),
-    )
+    _add_command(sub.add_parser("serve", help="Read API (requires job.mode = serve)"), _cmd_serve)
+    _add_command(sub.add_parser("dashboard", help="Basic-Auth status page"), _cmd_dashboard)
+    _add_command(sub.add_parser("scheduler", help="Cron loop (and optional retrain trigger)"), _cmd_scheduler)
     _add_command(
         sub.add_parser("users", add_help=False, help="Manage dashboard Basic Auth users"), _cmd_users
     )
@@ -108,44 +104,32 @@ def _run_job() -> int:
     return 0
 
 
+def _entry(module: str) -> Callable[[list[str]], int]:
+    def run(_rest: list[str]) -> int:
+        importlib.import_module(module).main()
+        return 0
+
+    return run
+
+
+_cmd_serve = _entry("cicerone.serve.app")
+_cmd_dashboard = _entry("cicerone.dashboard")
+_cmd_scheduler = _entry("cicerone.scheduler")
+
+
 def _cmd_start() -> int:
     from cicerone.config import load_settings
-    from cicerone.scheduler import main as scheduler_main
-    from cicerone.serve.app import main as serve_main
 
     settings = load_settings()
     if settings.mode == "serve":
         logger.info("mode=serve, starting read API")
-        serve_main()
-        return 0
+        return _cmd_serve([])
     logger.info("mode=batch, running initial job")
     status = _run_job()
     if status != 0:
         return status
     logger.info("entering schedule loop (cron_schedule=%s)", settings.cron_schedule)
-    scheduler_main()
-    return 0
-
-
-def _cmd_serve() -> int:
-    from cicerone.serve.app import main as serve_main
-
-    serve_main()
-    return 0
-
-
-def _cmd_dashboard() -> int:
-    from cicerone.dashboard import main as dashboard_main
-
-    dashboard_main()
-    return 0
-
-
-def _cmd_scheduler() -> int:
-    from cicerone.scheduler import main as scheduler_main
-
-    scheduler_main()
-    return 0
+    return _cmd_scheduler([])
 
 
 def _users_config_error(
@@ -179,7 +163,8 @@ def dashboard_users_path(settings: object, *, config_path: str | None = None) ->
 def _cmd_users(argv: list[str]) -> int:
     from cicerone.manage_dashboard_users import main as users_main
 
-    if os.environ.get("CICERONE_CONFIG_PATH") and not _has_flag(argv, "--users-path"):
+    skip_config = ("-h", "--help", "--users-path")
+    if os.environ.get("CICERONE_CONFIG_PATH") and not any(_has_flag(argv, flag) for flag in skip_config):
         from cicerone.config import load_settings
 
         config_path = os.environ.get("CICERONE_CONFIG_PATH")
@@ -200,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command not in _FORWARDING_COMMANDS and rest:
         parser.error(f"unrecognized arguments: {' '.join(rest)}")
     _apply_config(args.config)
-    _configure_logging(args.log_level, args.log_format)
+    configure_logging(args.log_level, args.log_format)
 
     handler: Callable[[list[str]], int] = args.handler
     return handler(rest)

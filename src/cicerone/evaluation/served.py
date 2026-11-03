@@ -24,6 +24,7 @@ from rectools.metrics import (
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config.constants import TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio
+from cicerone.evaluation.tracking import filter_events_by_types
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -32,6 +33,7 @@ from cicerone.io.recommendation_schema import (
     USER_COLUMN,
     VARIANT_COLUMN,
 )
+from cicerone.ranking import drop_seen_pairs
 
 logger = logging.getLogger(__name__)
 _RECTOOLS_ERRORS = (ValueError, LookupError)
@@ -247,12 +249,7 @@ def recs_from_impressions(
 def _unseen_relevant(window: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
     if window.empty or USER_COLUMN not in window.columns or ITEM_COLUMN not in window.columns:
         return window.iloc[0:0]
-    relevant = window.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    if relevant.empty or prev.empty:
-        return relevant
-    seen = prev.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    merged = relevant.merge(seen, on=[USER_COLUMN, ITEM_COLUMN], how="left", indicator=True)
-    return merged.loc[merged["_merge"] == "left_only", [USER_COLUMN, ITEM_COLUMN]].reset_index(drop=True)
+    return drop_seen_pairs(window.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates(), prev)
 
 
 def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
@@ -330,8 +327,7 @@ def evaluate_served(
         start = pd.to_datetime(generated_at, utc=True, errors="coerce")
         if pd.notna(start):
             window_events = window_events[window_events[OCCURRED_AT] > start]
-    if event_types and "event_type" in window_events.columns:
-        window_events = window_events[window_events["event_type"].astype(str).isin(set(event_types))]
+    window_events = filter_events_by_types(window_events, event_types)
     if (
         not used_impressions
         and history is not None

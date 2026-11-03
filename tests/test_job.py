@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from support.fakes import FakeLock
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
@@ -1050,106 +1051,6 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
     assert users is None
     assert items is None
     assert manifest is None
-
-
-def test_try_load_logs_exception_type_and_message(caplog):
-    from cicerone.job_eval import try_load
-
-    def _boom() -> None:
-        raise OSError("recs")
-
-    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
-        assert try_load("load previous recommendations for eval", _boom, None) is None
-    assert any(
-        "Failed to load previous recommendations for eval (OSError: recs)" in record.getMessage()
-        for record in caplog.records
-    )
-
-
-def test_try_load_logs_on_job_eval_logger(caplog):
-    from cicerone.job_eval import try_load
-
-    with caplog.at_level("ERROR"):
-        try_load("read manifest", lambda: (_ for _ in ()).throw(OSError("gone")), None)
-    assert [record.name for record in caplog.records] == ["cicerone.job_eval"]
-
-
-def test_log_caught_defaults_to_errors_logger(caplog):
-    from cicerone.errors import log_caught
-
-    with caplog.at_level("ERROR"):
-        log_caught("Failed to read", ValueError("bad"))
-    assert [(record.name, record.getMessage()) for record in caplog.records] == [
-        ("cicerone.errors", "Failed to read (ValueError: bad)")
-    ]
-
-
-def test_job_eval_log_caught_keeps_its_default_logger(caplog):
-    from cicerone.job_eval import log_caught
-
-    with caplog.at_level("ERROR"):
-        log_caught("Failed to read", ValueError("bad"))
-    assert [(record.name, record.getMessage()) for record in caplog.records] == [
-        ("cicerone.job_eval", "Failed to read (ValueError: bad)")
-    ]
-
-
-def test_try_load_does_not_swallow_unexpected_errors():
-    from cicerone.job_eval import try_load
-
-    with pytest.raises(RuntimeError, match="bug"):
-        try_load(
-            "load previous recommendations for eval",
-            lambda: (_ for _ in ()).throw(RuntimeError("bug")),
-            None,
-        )
-
-
-@pytest.mark.parametrize("errors", ["io", "eval"])
-def test_try_load_does_not_swallow_type_errors(errors):
-    from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS
-    from cicerone.job_eval import try_load
-
-    with pytest.raises(TypeError, match="bug"):
-        try_load(
-            "compute track eval",
-            lambda: (_ for _ in ()).throw(TypeError("bug")),
-            None,
-            errors=OPTIONAL_IO_ERRORS if errors == "io" else OPTIONAL_EVAL_ERRORS,
-        )
-
-
-def test_try_load_treats_arrow_type_errors_as_optional():
-    from pyarrow.lib import ArrowTypeError
-
-    from cicerone.job_eval import try_load
-
-    assert (
-        try_load(
-            "load previous recommendations for eval",
-            lambda: (_ for _ in ()).throw(ArrowTypeError("schema mismatch")),
-            None,
-        )
-        is None
-    )
-
-
-def test_try_load_reraises_lock_errors():
-    from cicerone.job_eval import try_load
-    from cicerone.locks import LockLostError, WriterLockBusyError
-
-    with pytest.raises(LockLostError, match="retrain lock lost"):
-        try_load(
-            "write track eval",
-            lambda: (_ for _ in ()).throw(LockLostError("retrain lock lost", kind="retrain")),
-            None,
-        )
-    with pytest.raises(WriterLockBusyError, match="busy"):
-        try_load(
-            "write track eval",
-            lambda: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
-            None,
-        )
 
 
 def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
@@ -2285,21 +2186,7 @@ def test_job_run_records_configured_lock_backend(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.job.build_dataset_writer_lock", lambda _settings: None)
     monkeypatch.setattr("cicerone.job.build_output_writer_lock", lambda _settings: None)
 
-    class _Held:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Held())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: FakeLock())
 
     job.run(triggered_by="cron")
 
@@ -2533,7 +2420,7 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
             "triggered_by": "other",
             "generated_at": (ours - pd.Timedelta("1us")).isoformat(),
         }
-        real_write(sink, foreign)
+        real_write(sink, job.JobManifest(**foreign))
         return False
 
     class _Pub:
@@ -2585,6 +2472,51 @@ def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatc
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
     assert (output_dir / "recommendations.parquet").exists()
+
+
+def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_path, monkeypatch, caplog):
+    from contextlib import contextmanager
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+
+    real_guard = job.recommendations_write_guard
+    exits: list[object] = []
+
+    @contextmanager
+    def interrupt_on_first_exit(sink):
+        with real_guard(sink):
+            yield
+        exits.append(sink)
+        if len(exits) == 1:
+            raise KeyboardInterrupt
+
+    real_write = job.write_job_manifest
+    writes: list[str] = []
+
+    def record_write(sink, manifest, **kwargs):
+        writes.append(str(manifest.get("status")))
+        return real_write(sink, manifest, **kwargs)
+
+    monkeypatch.setattr(job, "recommendations_write_guard", interrupt_on_first_exit)
+    monkeypatch.setattr(job, "write_job_manifest", record_write)
+    with caplog.at_level("INFO", logger="cicerone.job"), pytest.raises(KeyboardInterrupt):
+        job.run()
+
+    assert writes == ["success"]
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == "success"
+    finished = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Job finished: ")]
+    assert len(finished) == 1
+    logged = json.loads(finished[0].removeprefix("Job finished: "))
+    assert logged["generated_at"] == manifest["generated_at"]
 
 
 def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
@@ -2642,64 +2574,26 @@ def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkey
     assert writes == ["failed"]
 
 
-def test_write_job_manifest_accepts_legacy_signature():
-    written: dict[str, object] = {}
-
-    class _LegacySink:
-        def write_manifest(self, manifest):
-            written["manifest"] = manifest
-
-    assert job.write_job_manifest(_LegacySink(), {"status": "failed"}, skip_if_newer_than="x") is True
-    assert written["manifest"] == {"status": "failed"}
-
-
-def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch):
+def test_direct_job_acquires_retrain_lock_when_distributed(monkeypatch, no_lock_wait):
     from cicerone.locks import WriterLockBusyError
 
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
     monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Busy())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: False)
+    monkeypatch.setattr(
+        "cicerone.job.build_lock_backend", lambda _settings: FakeLock(acquires=False, owned=False)
+    )
     monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
     with pytest.raises(WriterLockBusyError, match="retrain lock busy"):
         job.run()
 
 
 def test_direct_job_releases_retrain_lock_after_run(monkeypatch):
-    released = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            released["n"] += 1
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
+    lock = FakeLock()
     monkeypatch.setattr("cicerone.job.has_distributed_lock", lambda _settings: True)
-    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: _Lock())
-    monkeypatch.setattr("cicerone.job.acquire_blocking", lambda _lock, **_kwargs: True)
+    monkeypatch.setattr("cicerone.job.build_lock_backend", lambda _settings: lock)
     monkeypatch.setattr("cicerone.job.load_settings", lambda: object())
     monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
     job.run()
-    assert released["n"] == 1
+    assert lock.events.count("release") == 1
 
 
 def test_scheduler_job_skips_direct_retrain_lock(monkeypatch):
@@ -2715,15 +2609,6 @@ def test_scheduler_job_skips_direct_retrain_lock(monkeypatch):
     monkeypatch.setattr("cicerone.job._run_job", lambda *_args, **_kwargs: None)
     job.run(fence_check=lambda: True)
     assert built["n"] == 0
-
-
-def test_write_job_manifest_reraises_implementation_type_error():
-    class _Sink:
-        def write_manifest(self, manifest, *, skip_if_newer_than=None):
-            raise TypeError("bad payload")
-
-    with pytest.raises(TypeError, match="bad payload"):
-        job.write_job_manifest(_Sink(), {"status": "failed"}, skip_if_newer_than="x")
 
 
 def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):

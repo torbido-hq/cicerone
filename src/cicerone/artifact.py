@@ -265,17 +265,14 @@ def loads_artifact(
     payload: bytes,
     *,
     hmac_key: str | None = None,
-    max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> ModelArtifact:
     """Deserialize a trusted v3 ModelArtifact zip. Legacy bare pickle is refused."""
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
-    if len(payload) > max_bytes:
-        raise ValueError(f"Artifact payload exceeds {max_bytes} bytes")
+    if len(payload) > DEFAULT_MAX_ARTIFACT_BYTES:
+        raise ValueError(f"Artifact payload exceeds {DEFAULT_MAX_ARTIFACT_BYTES} bytes")
     try:
         buffer = io.BytesIO(payload)
         with zipfile.ZipFile(buffer, mode="r") as zf:
-            _assert_artifact_size(zf, max_bytes)
+            _assert_artifact_size(zf, DEFAULT_MAX_ARTIFACT_BYTES)
             names = _assert_safe_artifact_zip(zf)
             key = _hmac_key_bytes(hmac_key)
             if key is not None:
@@ -327,15 +324,12 @@ def load_artifact(
     path: Path | str,
     *,
     hmac_key: str | None = None,
-    max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> ModelArtifact:
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
     with path.open("rb") as handle:
-        payload = handle.read(max_bytes + 1)
-    return loads_artifact(payload, hmac_key=hmac_key, max_bytes=max_bytes)
+        payload = handle.read(DEFAULT_MAX_ARTIFACT_BYTES + 1)
+    return loads_artifact(payload, hmac_key=hmac_key)
 
 
 def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:

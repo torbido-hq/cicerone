@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import pytest
 from botocore.exceptions import ClientError
+from support.settings import local_output
 
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
+from cicerone.config import ConfigError, IOSettings
+from cicerone.io.blob import (
+    append_storage_bytes,
+    read_storage_bytes,
+    require_db_or_local_dataset,
+    write_storage_bytes,
+)
 
 
 def test_local_read_write_append_round_trip(tmp_path) -> None:
@@ -31,20 +38,16 @@ def test_s3_read_closes_body(mocker) -> None:
     body.close.assert_called_once()
 
 
-def test_read_rejects_nonpositive_max_bytes(tmp_path) -> None:
-    options = {"storage_backend": "local", "path": str(tmp_path)}
-    with pytest.raises(ValueError, match="max_bytes"):
-        read_storage_bytes(options, "note.txt", max_bytes=0)
-
-
-def test_local_read_rejects_oversize(tmp_path) -> None:
+def test_local_read_rejects_oversize(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 4)
     options = {"storage_backend": "local", "path": str(tmp_path)}
     write_storage_bytes(options, "big.bin", b"123456", "application/octet-stream")
     with pytest.raises(ValueError, match="max is 4"):
-        read_storage_bytes(options, "big.bin", max_bytes=4)
+        read_storage_bytes(options, "big.bin")
 
 
-def test_s3_read_rejects_content_length(mocker) -> None:
+def test_s3_read_rejects_content_length(mocker, monkeypatch) -> None:
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
     body = mocker.Mock()
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body, "ContentLength": 99}
@@ -56,7 +59,7 @@ def test_s3_read_rejects_content_length(mocker) -> None:
         "bucket": "bucket",
     }
     with pytest.raises(ValueError, match="max is 8"):
-        read_storage_bytes(options, "file.bin", max_bytes=8)
+        read_storage_bytes(options, "file.bin")
     body.read.assert_not_called()
     body.close.assert_called_once()
 
@@ -75,3 +78,10 @@ def test_s3_read_missing_returns_none(mocker) -> None:
         "bucket": "bucket",
     }
     assert read_storage_bytes(options, "file.bin") is None
+
+
+def test_require_db_or_local_dataset(tmp_path, s3_options) -> None:
+    require_db_or_local_dataset(IOSettings(kind="db", options={"database_url": "sqlite://"}), "nope")
+    require_db_or_local_dataset(local_output(tmp_path), "nope")
+    with pytest.raises(ConfigError, match="nope"):
+        require_db_or_local_dataset(IOSettings(kind="dataset", options=s3_options), "nope")

@@ -33,9 +33,19 @@ def test_mixing_radius_requires_two_observations() -> None:
 def test_compare_variants_decides_large_gap() -> None:
     control = variant_metric("control", [0.0] * 40)
     treatment = variant_metric("treatment", [1.0] * 40)
-    result = compare_variants(control, treatment, alpha=0.05)
+    result = compare_variants(control, treatment, alpha=0.05, min_users=40)
     assert result.decided is True
     assert result.winner == "treatment"
+    assert result.ci_low > 0
+
+
+def test_compare_variants_waits_for_min_users_per_arm() -> None:
+    control = variant_metric("control", [0.0] * 40)
+    treatment = variant_metric("treatment", [1.0] * 2)
+    assert compare_variants(control, treatment, alpha=0.05, min_users=0).decided is True
+    result = compare_variants(control, treatment, alpha=0.05, min_users=3)
+    assert result.decided is False
+    assert result.winner is None
     assert result.ci_low > 0
 
 
@@ -767,6 +777,7 @@ def test_evaluate_experiment_ctr_volume_floor() -> None:
     )
     assert "volume" not in enough.promote_blocked_by
     assert enough.primary_metric == "ctr"
+    assert "undecided" in enough.promote_blocked_by
 
 
 def test_evaluate_experiment_recommended_attribution() -> None:
@@ -950,7 +961,7 @@ def test_evaluate_experiment_split_winners() -> None:
         recommendations=recs,
         track_outcomes=outcomes,
         n_impressions=200,
-        min_impressions=100,
+        min_impressions=25,
     )
     assert "split_winners" in report.promote_blocked_by
 

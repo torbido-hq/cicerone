@@ -6,13 +6,18 @@ from conftest import make_settings
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
 from cicerone.experiment.assignment import (
+    assign_user,
     assign_variant,
     assignment_bucket,
-    assignment_needs_snapshot,
     experiment_variant_names,
-    resolve_assignment,
     snapshot_variant_names,
 )
+
+_NO_OVERLAY = (None, None)
+
+
+def _no_snapshot() -> None:
+    return None
 
 
 def test_assignment_bucket_is_sticky() -> None:
@@ -44,12 +49,12 @@ def test_assign_variant_requires_variants() -> None:
         assign_variant("exp", "u1", ())
 
 
-def test_resolve_assignment_disabled() -> None:
+def test_assign_user_disabled() -> None:
     settings = make_settings(experiment=ExperimentSettings())
-    assert resolve_assignment(settings, "u1") == (None, None)
+    assert assign_user(settings, "u1", _NO_OVERLAY, _no_snapshot) == (None, None)
 
 
-def test_resolve_assignment_promoted_wins() -> None:
+def test_assign_user_promoted_wins() -> None:
     settings = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -60,21 +65,21 @@ def test_resolve_assignment_promoted_wins() -> None:
             ),
         )
     )
-    assert resolve_assignment(settings, "u1", promoted_variant="treatment") == (
+    assert assign_user(settings, "u1", ("treatment", None), _no_snapshot) == (
         "exp",
         "treatment",
     )
-    assigned = resolve_assignment(settings, "u1", promoted_variant="unknown")
+    assigned = assign_user(settings, "u1", ("unknown", None), _no_snapshot)
     assert assigned[0] == "exp"
     assert assigned[1] in {"control", "treatment"}
 
 
-def test_resolve_assignment_automl_challenger_without_variants() -> None:
+def test_assign_user_automl_challenger_without_variants() -> None:
     settings = make_settings(experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True))
-    experiment_id, variant = resolve_assignment(settings, "u1")
+    experiment_id, variant = assign_user(settings, "u1", _NO_OVERLAY, _no_snapshot)
     assert experiment_id == "auto"
     assert variant in {"control", "treatment"}
-    assert resolve_assignment(settings, "u1", promoted_variant="treatment") == ("auto", "treatment")
+    assert assign_user(settings, "u1", ("treatment", None), _no_snapshot) == ("auto", "treatment")
 
 
 def test_experiment_variant_names_challenger_defaults() -> None:
@@ -105,7 +110,7 @@ def test_experiment_variant_names_challenger_defaults() -> None:
         )
     )
     assert experiment_variant_names(custom) == ("champion", "challenger")
-    experiment_id, variant = resolve_assignment(custom, "u1")
+    experiment_id, variant = assign_user(custom, "u1", _NO_OVERLAY, _no_snapshot)
     assert experiment_id == "auto"
     assert variant in {"champion", "challenger"}
     mixed = make_settings(
@@ -124,12 +129,12 @@ def test_experiment_variant_names_challenger_defaults() -> None:
     assert experiment_variant_names(enabled_empty) == ()
 
 
-def test_resolve_assignment_enabled_without_variants_is_off() -> None:
+def test_assign_user_enabled_without_variants_is_off() -> None:
     settings = make_settings(experiment=ExperimentSettings(enabled=True, id="exp"))
-    assert resolve_assignment(settings, "u1") == (None, None)
+    assert assign_user(settings, "u1", _NO_OVERLAY, _no_snapshot) == (None, None)
 
 
-def test_resolve_assignment_normalizes_numeric_user_id() -> None:
+def test_assign_user_normalizes_numeric_user_id() -> None:
     settings = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -140,10 +145,12 @@ def test_resolve_assignment_normalizes_numeric_user_id() -> None:
             ),
         )
     )
-    assert resolve_assignment(settings, 123) == resolve_assignment(settings, "123")
+    assert assign_user(settings, 123, _NO_OVERLAY, _no_snapshot) == assign_user(
+        settings, "123", _NO_OVERLAY, _no_snapshot
+    )
 
 
-def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
+def test_assign_user_hashes_active_pair_not_toml_traffic() -> None:
     settings = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -158,24 +165,22 @@ def test_resolve_assignment_hashes_active_pair_not_toml_traffic() -> None:
         ),
         track=TrackSettings(enabled=True),
     )
-    seen = {resolve_assignment(settings, f"u{i}", active_pair=("control", "blend"))[1] for i in range(40)}
+    seen = {assign_user(settings, f"u{i}", (None, ("control", "blend")), _no_snapshot)[1] for i in range(40)}
     assert seen == {"blend"}
-    promoted = resolve_assignment(
-        settings, "u1", promoted_variant="treatment", active_pair=("control", "blend")
-    )
+    promoted = assign_user(settings, "u1", ("treatment", ("control", "blend")), _no_snapshot)
     assert promoted == ("exp", "treatment")
-    same = resolve_assignment(settings, "u1", active_pair=("control", "control"))
+    same = assign_user(settings, "u1", (None, ("control", "control")), _no_snapshot)
     assert same[1] == "control"
-    ignored = resolve_assignment(settings, "u1", active_pair=("missing", "gone"))
+    ignored = assign_user(settings, "u1", (None, ("missing", "gone")), _no_snapshot)
     assert ignored == (None, None)
-    half = resolve_assignment(settings, "u1", active_pair=("control", "missing-arm"))
+    half = assign_user(settings, "u1", (None, ("control", "missing-arm")), _no_snapshot)
     assert half == (None, None)
     snapshot = {
-        resolve_assignment(settings, f"u{i}", snapshot_names=("control", "blend"))[1] for i in range(40)
+        assign_user(settings, f"u{i}", _NO_OVERLAY, lambda: ("control", "blend"))[1] for i in range(40)
     }
     assert snapshot <= {"control", "blend"}
-    assert resolve_assignment(settings, "u1", snapshot_names=("gone",)) == (None, None)
-    assert resolve_assignment(settings, "u1") == (None, None)
+    assert assign_user(settings, "u1", _NO_OVERLAY, lambda: ("gone",)) == (None, None)
+    assert assign_user(settings, "u1", _NO_OVERLAY, _no_snapshot) == (None, None)
 
 
 def test_snapshot_variant_names_from_reader() -> None:
@@ -195,9 +200,20 @@ def test_snapshot_variant_names_from_reader() -> None:
     assert snapshot_variant_names(_Present()) == ("control", "blend")
 
 
-def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
+def test_assign_user_reads_snapshot_only_for_thompson_without_pair() -> None:
+    calls: list[int] = []
+
+    def names() -> tuple[str, ...]:
+        calls.append(1)
+        return ("control", "treatment")
+
+    def reads_snapshot(settings, overlay=_NO_OVERLAY) -> bool:
+        calls.clear()
+        assign_user(settings, "u1", overlay, names)
+        return bool(calls)
+
     off = make_settings()
-    assert assignment_needs_snapshot(off) is False
+    assert reads_snapshot(off) is False
     fixed = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -208,7 +224,7 @@ def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
             ),
         )
     )
-    assert assignment_needs_snapshot(fixed) is False
+    assert reads_snapshot(fixed) is False
     thompson = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -221,10 +237,10 @@ def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
         ),
         track=TrackSettings(enabled=True),
     )
-    assert assignment_needs_snapshot(thompson) is True
-    assert assignment_needs_snapshot(thompson, promoted_variant="control") is False
-    assert assignment_needs_snapshot(thompson, active_pair=("control", "treatment")) is False
-    assert assignment_needs_snapshot(thompson, active_pair=("control", "missing")) is True
+    assert reads_snapshot(thompson) is True
+    assert reads_snapshot(thompson, ("control", None)) is False
+    assert reads_snapshot(thompson, (None, ("control", "treatment"))) is False
+    assert reads_snapshot(thompson, (None, ("control", "missing"))) is True
     automl = make_settings(
         experiment=ExperimentSettings(
             enabled=True,
@@ -234,5 +250,5 @@ def test_assignment_needs_snapshot_only_for_thompson_without_pair() -> None:
         ),
         track=TrackSettings(enabled=True),
     )
-    assert assignment_needs_snapshot(automl) is True
-    assert assignment_needs_snapshot(automl, active_pair=("control", "treatment")) is False
+    assert reads_snapshot(automl) is True
+    assert reads_snapshot(automl, (None, ("control", "treatment"))) is False

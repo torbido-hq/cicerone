@@ -11,7 +11,7 @@ from rectools import Columns
 from cicerone.config.settings import ExplainSettings
 from cicerone.content_fallback import item_feature_tokens
 from cicerone.feature_config import FeatureColumn
-from cicerone.ids import interactions_item_column, interactions_user_column, items_id_column
+from cicerone.ids import interactions_user_column, items_id_column, user_item_history
 from cicerone.io.recommendation_schema import REASONS_COLUMN, SOURCE_COLUMN
 from cicerone.reasons import (
     BOOST_HITS_COLUMN,
@@ -70,36 +70,11 @@ def _item_token_index(
     return index
 
 
-def _user_history(
-    interactions: pd.DataFrame | None,
-    *,
-    cap: int = _MAX_HISTORY_ITEMS,
-) -> dict[str, list[str]]:
-    if interactions is None or interactions.empty:
-        return {}
-    user_col = interactions_user_column(interactions)
-    item_col = interactions_item_column(interactions)
-    ordered = interactions
-    if Columns.Datetime in interactions.columns:
-        ordered = interactions.sort_values(Columns.Datetime, kind="mergesort")
-    history: dict[str, list[str]] = {}
-    for user_id, item_id in zip(
-        ordered[user_col].astype(str).tolist(),
-        ordered[item_col].astype(str).tolist(),
-        strict=True,
-    ):
-        items = history.setdefault(user_id, [])
-        items.append(item_id)
+def _user_history(interactions: pd.DataFrame | None) -> dict[str, list[str]]:
+    history = user_item_history(interactions)
     for user_id, items in history.items():
-        unique: list[str] = []
-        seen: set[str] = set()
-        for item_id in reversed(items):
-            if item_id in seen:
-                continue
-            seen.add(item_id)
-            unique.append(item_id)
-        unique.reverse()
-        history[user_id] = unique[-cap:] if len(unique) > cap else unique
+        # Keep each item's last occurrence, in order.
+        history[user_id] = list(dict.fromkeys(reversed(items)))[::-1][-_MAX_HISTORY_ITEMS:]
     return history
 
 

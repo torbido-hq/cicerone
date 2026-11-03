@@ -3,10 +3,19 @@ from __future__ import annotations
 import logging
 
 import pytest
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
-from cicerone.config import ConfigError, EventsSettings, load_settings, make_settings
-from cicerone.config.events import coerce_events_settings, load_events_settings
+from cicerone.config import (
+    ConfigError,
+    EventsIncrementalSettings,
+    EventsOnlineSettings,
+    EventsSettings,
+    IOSettings,
+    TriggerSettings,
+    load_settings,
+    make_settings,
+)
+from cicerone.config.events import load_events_settings
 
 
 def test_make_settings_events_defaults():
@@ -23,23 +32,37 @@ def test_make_settings_events_defaults():
     assert settings.events.kind == "webhook"
 
 
-def test_coerce_events_settings_errors():
-    with pytest.raises(TypeError):
-        coerce_events_settings("bad")
-    with pytest.raises(TypeError):
-        coerce_events_settings({"incremental": "bad"})
-    with pytest.raises(ValueError):
-        coerce_events_settings({"incremental": {"batch_size": 0}})
-    with pytest.raises(TypeError):
-        coerce_events_settings({"online": "bad"})
-    with pytest.raises(ValueError):
-        coerce_events_settings({"online": {"fit_partial_epochs": -1}})
-    with pytest.raises(ValueError):
-        coerce_events_settings({"online": {"fit_min_events": 0}})
-    with pytest.raises(ValueError):
-        coerce_events_settings({"online": {"max_extra_interactions": 0}})
-    with pytest.raises(ConfigError, match="events.online.enabled requires events.enabled"):
-        coerce_events_settings({"enabled": False, "online": {"enabled": True}})
+@pytest.mark.parametrize(
+    ("events", "error"),
+    [
+        ("bad", TypeError),
+        ({"incremental": {"batch_size": 0}}, ValueError),
+        ({"online": {"fit_partial_epochs": -1}}, ValueError),
+        ({"online": {"fit_min_events": 0}}, ValueError),
+        ({"online": {"max_extra_interactions": 0}}, ValueError),
+        (EventsSettings(incremental=EventsIncrementalSettings(batch_size=0)), ValueError),
+    ],
+)
+def test_make_settings_events_errors(events, error):
+    with pytest.raises(error):
+        make_settings(events=events)
+
+
+@pytest.mark.parametrize(
+    ("events", "match"),
+    [
+        (EventsSettings(enabled=True, kind="carrier-pigeon"), "events.kind"),
+        (EventsSettings(enabled=True, kind="db"), "database_url"),
+        (
+            EventsSettings(online=EventsOnlineSettings(enabled=True)),
+            "events.online.enabled requires events.enabled",
+        ),
+        (EventsSettings(enabled=True, online=EventsOnlineSettings(enabled=True)), "output.artifact_hmac_key"),
+    ],
+)
+def test_make_settings_validates_events_like_load_settings(events, match):
+    with pytest.raises(ConfigError, match=match):
+        make_settings(events=events)
 
 
 def test_load_events_section(tmp_path):
@@ -133,12 +156,15 @@ def test_load_online_and_experiment_warns(tmp_path, caplog):
 
 
 def test_make_settings_online_sequential_without_torch_warns(monkeypatch, caplog):
-    from cicerone.config import EventsOnlineSettings
-
     monkeypatch.setattr("cicerone.model_config.sequential_extra_available", lambda: False)
     with caplog.at_level(logging.WARNING, logger="cicerone.config.load"):
         make_settings(
             models=["collaborative", "sequential"],
+            output=IOSettings(
+                kind="dataset",
+                options={"storage_backend": "local", "path": "/tmp/out"},
+                artifact_hmac_key="0123456789abcdef",
+            ),
             events=EventsSettings(
                 enabled=True,
                 kind="webhook",
@@ -188,199 +214,72 @@ def test_load_events_unknown_kind(tmp_path):
         [events]
         enabled = true
         kind = "carrier-pigeon"
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="events.kind"):
         load_settings(path)
 
 
-def test_load_events_db_requires_database_url():
-    with pytest.raises(ConfigError, match="database_url"):
-        load_events_settings(
-            {"enabled": True, "kind": "db", "options": {}},
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
+_S3_KEYS = {"access_key_id": "a", "secret_access_key": "b"}
+_R2_ENDPOINT = "https://abc.r2.cloudflarestorage.com"
 
 
-def test_load_events_db_ok():
-    settings = load_events_settings(
-        {"enabled": True, "kind": "db", "options": {"database_url": "sqlite+pysqlite:///:memory:"}},
-        mode="serve",
-        serve_auth_token="tok",
-        resolve_env=lambda value, _path: value,
-    )
-    assert settings.kind == "db"
-    assert settings.options["database_url"].startswith("sqlite")
-
-
-def test_load_events_s3_requires_bucket():
-    with pytest.raises(ConfigError, match="bucket"):
-        load_events_settings(
+@pytest.mark.parametrize(
+    ("kind", "options", "match"),
+    [
+        ("db", {}, "database_url"),
+        ("s3", _S3_KEYS, "bucket"),
+        ("s3", {**_S3_KEYS, "bucket": "events", "mode": "sqs"}, "queue_url"),
+        (
+            "s3",
             {
-                "enabled": True,
-                "kind": "s3",
-                "options": {"access_key_id": "a", "secret_access_key": "b"},
-            },
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
-
-
-def test_load_events_s3_sqs_requires_queue_url():
-    with pytest.raises(ConfigError, match="queue_url"):
-        load_events_settings(
-            {
-                "enabled": True,
-                "kind": "s3",
-                "options": {
-                    "access_key_id": "a",
-                    "secret_access_key": "b",
-                    "bucket": "events",
-                    "mode": "sqs",
-                },
-            },
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
-
-
-def test_load_events_s3_list_ok():
-    settings = load_events_settings(
-        {
-            "enabled": True,
-            "kind": "s3",
-            "options": {
-                "access_key_id": "a",
-                "secret_access_key": "b",
+                **_S3_KEYS,
                 "bucket": "events",
-                "mode": "list",
-                "endpoint_url": "https://abc.r2.cloudflarestorage.com",
+                "mode": "sqs",
+                "queue_url": "https://sqs.example/q",
+                "endpoint_url": _R2_ENDPOINT,
             },
-        },
-        mode="serve",
-        serve_auth_token="tok",
-        resolve_env=lambda value, _path: value,
-    )
-    assert settings.kind == "s3"
-
-
-def test_load_events_s3_sqs_rejects_endpoint_url():
-    with pytest.raises(ConfigError, match="AWS-only"):
+            "AWS-only",
+        ),
+        ("redis_streams", {"redis_url": "redis://localhost:6379/0", "consumer_group": "cicerone"}, "stream"),
+        ("kafka", {"topic": "t", "group_id": "g"}, "bootstrap_servers"),
+        ("rabbitmq", {"amqp_url": "amqp://localhost/"}, "queue"),
+    ],
+)
+def test_load_events_rejects_incomplete_options(kind, options, match):
+    with pytest.raises(ConfigError, match=match):
         load_events_settings(
-            {
-                "enabled": True,
-                "kind": "s3",
-                "options": {
-                    "access_key_id": "a",
-                    "secret_access_key": "b",
-                    "bucket": "events",
-                    "mode": "sqs",
-                    "queue_url": "https://sqs.example/q",
-                    "endpoint_url": "https://abc.r2.cloudflarestorage.com",
-                },
-            },
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
+            {"enabled": True, "kind": kind, "options": options}, mode="serve", serve_auth_token="tok"
         )
 
 
-def test_load_events_redis_streams_requires_stream():
-    with pytest.raises(ConfigError, match="stream"):
-        load_events_settings(
+@pytest.mark.parametrize(
+    ("kind", "options"),
+    [
+        ("db", {"database_url": "sqlite+pysqlite:///:memory:"}),
+        ("s3", {**_S3_KEYS, "bucket": "events", "mode": "list", "endpoint_url": _R2_ENDPOINT}),
+        (
+            "redis_streams",
             {
-                "enabled": True,
-                "kind": "redis_streams",
-                "options": {"redis_url": "redis://localhost:6379/0", "consumer_group": "cicerone"},
-            },
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
-
-
-def test_load_events_redis_streams_ok():
-    settings = load_events_settings(
-        {
-            "enabled": True,
-            "kind": "redis_streams",
-            "options": {
                 "redis_url": "redis://localhost:6379/0",
                 "stream": "cicerone:events",
                 "consumer_group": "cicerone",
             },
-        },
-        mode="serve",
-        serve_auth_token="tok",
-        resolve_env=lambda value, _path: value,
-    )
-    assert settings.kind == "redis_streams"
-
-
-def test_load_events_kafka_requires_bootstrap_servers():
-    with pytest.raises(ConfigError, match="bootstrap_servers"):
-        load_events_settings(
-            {"enabled": True, "kind": "kafka", "options": {"topic": "t", "group_id": "g"}},
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
-
-
-def test_load_events_kafka_ok():
+        ),
+        (
+            "kafka",
+            {"bootstrap_servers": "localhost:9092", "topic": "cicerone.events", "group_id": "cicerone"},
+        ),
+        ("rabbitmq", {"amqp_url": "amqp://localhost/", "queue": "cicerone.events"}),
+    ],
+)
+def test_load_events_accepts_complete_options(kind, options):
     settings = load_events_settings(
-        {
-            "enabled": True,
-            "kind": "kafka",
-            "options": {
-                "bootstrap_servers": "localhost:9092",
-                "topic": "cicerone.events",
-                "group_id": "cicerone",
-            },
-        },
-        mode="serve",
-        serve_auth_token="tok",
-        resolve_env=lambda value, _path: value,
+        {"enabled": True, "kind": kind, "options": options}, mode="serve", serve_auth_token="tok"
     )
-    assert settings.kind == "kafka"
-
-
-def test_load_events_rabbitmq_requires_queue():
-    with pytest.raises(ConfigError, match="queue"):
-        load_events_settings(
-            {"enabled": True, "kind": "rabbitmq", "options": {"amqp_url": "amqp://localhost/"}},
-            mode="serve",
-            serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
-        )
-
-
-def test_load_events_rabbitmq_ok():
-    settings = load_events_settings(
-        {
-            "enabled": True,
-            "kind": "rabbitmq",
-            "options": {"amqp_url": "amqp://localhost/", "queue": "cicerone.events"},
-        },
-        mode="serve",
-        serve_auth_token="tok",
-        resolve_env=lambda value, _path: value,
-    )
-    assert settings.kind == "rabbitmq"
+    assert settings.kind == kind
+    assert settings.options == options
 
 
 def test_load_events_online_must_be_table():
@@ -389,7 +288,6 @@ def test_load_events_online_must_be_table():
             {"enabled": True, "kind": "webhook", "online": "nope"},
             mode="batch",
             serve_auth_token="tok",
-            resolve_env=lambda value, _path: value,
         )
 
 
@@ -399,7 +297,6 @@ def test_load_events_online_requires_events_enabled():
             {"enabled": False, "online": {"enabled": True}},
             mode="batch",
             serve_auth_token=None,
-            resolve_env=lambda value, _path: value,
         )
 
 
@@ -409,7 +306,6 @@ def test_load_events_incremental_must_be_table():
             {"enabled": False, "incremental": "nope"},
             mode="batch",
             serve_auth_token=None,
-            resolve_env=lambda value, _path: value,
         )
 
 
@@ -418,21 +314,19 @@ def test_load_events_disabled_allows_unknown_kind():
         {"enabled": False, "kind": "kafka"},
         mode="batch",
         serve_auth_token=None,
-        resolve_env=lambda value, _path: value,
     )
     assert settings.enabled is False
     assert settings.kind == "kafka"
 
 
-def test_coerce_pass_through_events_settings():
-    original = EventsSettings(enabled=True, kind="webhook")
-    coerced = coerce_events_settings(original)
-    assert coerced.enabled is True
-    assert coerced.incremental.batch_size == 100
-    assert coerced.ha is False
-    assert coerced.online.enabled is False
-    ha = coerce_events_settings(EventsSettings(enabled=True, kind="webhook", ha=True))
-    assert ha.ha is True
+def test_make_settings_events_dataclass_round_trips():
+    events = EventsSettings(enabled=True, kind="webhook", ha=True, options={"auth_token": "t"})
+    assert (
+        make_settings(
+            events=events, trigger=TriggerSettings(lock_backend="redis", redis_url="redis://r")
+        ).events
+        == events
+    )
 
 
 def test_load_online_requires_artifact_hmac_key(tmp_path):
@@ -448,17 +342,8 @@ def test_load_online_requires_artifact_hmac_key(tmp_path):
         kind = "webhook"
         [events.online]
         enabled = true
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="output.artifact_hmac_key"):
         load_settings(path)
@@ -550,3 +435,16 @@ def test_input_rejects_artifact_hmac_key(tmp_path):
     )
     with pytest.raises(ConfigError, match="only valid on \\[output\\]"):
         load_settings(path)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"), [("${EVENTS_TOKEN}", "secret"), ("$${EVENTS_TOKEN}", "${EVENTS_TOKEN}")]
+)
+def test_load_events_resolves_auth_token_placeholders_once(monkeypatch, token, expected):
+    monkeypatch.setenv("EVENTS_TOKEN", "secret")
+    settings = load_events_settings(
+        {"enabled": True, "kind": "webhook", "options": {"auth_token": token}},
+        mode="serve",
+        serve_auth_token=None,
+    )
+    assert settings.options["auth_token"] == expected

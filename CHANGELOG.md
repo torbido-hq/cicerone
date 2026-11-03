@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
+  impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings
   (`max_workers`, `epoch_metrics`, `item_based_k_neighbors`,
   `model_configs`, `content_fallback_max_neighbors`). `fit_strategies` and
@@ -20,9 +22,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `build_experiment_backend`, instead of branching on the output kind.
 - Dashboard startup turns recommendation lookup or the history pane off only
   for store-open errors; any other error now aborts startup.
+- Redis Streams treats an empty `consumer_name` or `group_start_id` as
+  unset (host name / `0-0`), like Kafka, instead of rejecting it.
+- A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
+  with `events.options.<key> is required`, like Kafka, without the
+  `when events.kind = "redis_streams"` suffix.
+- Importing `cicerone.serve.app`, `cicerone.dashboard` or `cicerone.scheduler`
+  no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
+  still configure logging).
+
+### Deprecated
+
+- `dashboard.lookup_k` has no effect and is not validated; it logs a
+  warning when set with the dashboard enabled, and will be removed in 0.9.0.
 
 ### Fixed
 
+- A Kafka message whose `event_id` is `0` gets the stable
+  partition-offset id like a missing one, instead of a random id that
+  broke duplicate detection on redelivery.
+- Event sources trim whitespace around a supplied `event_id` or
+  `idempotency_key`, as `/track` already did: `" abc "` is the id
+  `"abc"`, and a blank id counts as missing.
+- S3 and db events whose `event_id` is empty and whose
+  `idempotency_key` is `0` or `false` get their stable fallback id,
+  instead of all sharing the id `"0"` or `"False"` and being dropped as
+  duplicates.
+- Reading track rows from a local `track.jsonl` (eval job, dashboard)
+  fails over the 512 MiB storage read limit, as on S3, instead of loading
+  any size into memory. `POST /track` keeps accepting rows past the limit.
+- The db events watermark file syncs its directory after the rename, as
+  the S3 list marker already did, and both sync a newly created
+  positions directory into its parent, so the saved position survives a
+  crash.
+- Serve answers at once when its append queue (1000 pending) is full,
+  dropping the exposure or impression append, instead of stalling.
+- Kafka and Redis Streams event sources close the new consumer or client
+  when `connect` fails after creating it (Kafka `subscribe`, Redis `PING`
+  or `XGROUP CREATE`), and the S3 event source closes its S3 and SQS
+  clients on `close`, instead of leaking the connections.
+- Dashboard **Resume split** under Thompson allocation fails with
+  "Experiment state could not be read" when the state read fails, instead
+  of overwriting the stored champion, challenger and arms.
 - An incremental flush that fails after its recommendations are written
   (a manifest error, a lost apply fence or unexpected sidecar error, a
   failed heartbeat)
@@ -45,9 +86,98 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   strategy's block instead of across them, so a model with large raw scores
   (popularity counts) no longer jumps ahead of an earlier strategy. Weighted
   RRF and blending are unchanged.
+- Full recommendations and item-snapshot writes on MySQL or MariaDB empty
+  the table with `DELETE` instead of `TRUNCATE` (which commits implicitly
+  there), so a failed write no longer leaves the table empty.
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
+- Concurrent first use of the db experiment store checks out one shared
+  engine instead of two.
+- The Kafka event source no longer starts an idle heartbeat thread on every
+  apply.
+- The dashboard config page drops a hint for `serve.enabled`, which is not
+  a setting.
+- `cicerone users --help` and `cicerone export-openapi --help` show the
+  `cicerone` subcommand in their usage line, and `cicerone users --help`
+  no longer needs a config with dashboard users.
+- `POST /track` counts a body that is not an event, list or `{"events": [...]}`
+  as an `error` in `cicerone_track_ingest_total`.
+- The missing feature column warning names `user_features` or
+  `item_features`.
+- The Postgres advisory lock holds its session in autocommit, so it no
+  longer idles in a transaction for the whole run, and a failed unlock
+  discards the session instead of returning it, still locked, to the pool.
+- The cron loop no longer runs a tick twice when the wall clock steps back
+  just after it fired.
+- AutoML runs its parallel folds in spawned worker processes instead of
+  forking the threaded scheduler, which could deadlock the workers.
+- An escaped `$${NAME}` in `events.options.auth_token` stays the literal
+  `${NAME}` instead of being expanded by a second placeholder pass.
+- `cicerone users add` rejects a password over 72 bytes (UTF-8, the bcrypt
+  limit) with a clear error instead of crashing.
+- The dashboard user lookup on dataset storage (history pane, `get_user`)
+  works when `user_id` is stored as an integer column instead of failing
+  the filtered read.
+- Loading dataset recommendations for a set of users (event updates,
+  dashboard quality) finds integer `user_id` rows by their string id
+  instead of failing when a requested id is not numeric.
+- `replace_model_artifact_if` on SQLite db output matches the artifact
+  fingerprint it hands out instead of never swapping.
+- Tracking conversion counts and CVR count each converted impression once,
+  as CTR does, so repeat conversions or several converting clicks on one
+  recommendation no longer inflate them (overall, per rank/source/variant,
+  experiment outcomes and Thompson arms).
+- Tracking metrics, experiment outcomes and Thompson arms leave out
+  impressions, clicks and conversions with a future `occurred_at` until
+  that time has passed, so Thompson no longer counts them twice.
+- Redis Streams no longer sends `BLOCK 0` (wait forever) when `block_ms`
+  is unset, so a quiet stream no longer parks the event worker. An
+  explicit `block_ms = 0` keeps that behaviour and logs a warning.
+- An event with an infinite `quantity` (JSON `Infinity`, `1e400`) is
+  rejected as invalid instead of stopping the event worker.
+- An invalid db event row no longer stops the worker: it is delivered in
+  order as a rejected event, logged once by its identity columns only, and
+  acked with its batch without being applied.
+- db source health no longer fails on a row with an unparseable
+  `occurred_at`.
+- SQL statements quote table and column names the way the database dialect
+  does. On Postgres a mixed-case `recommendations_table` no longer keeps a
+  user's old rows on incremental replace, and the events worker's reads of
+  it (recommendations, user count, catalog size, guardrail rows) no longer
+  come back empty. Identifiers use backticks on MySQL instead of double
+  quotes. A configured table name now has to match the table's case: an
+  `events_table = "Events"` no longer finds a lowercase `events` table.
+- The db events source polls tables with mixed-case columns on Postgres.
+- Docs: the db events source and the track, eval and experiment-state
+  tables support Postgres and SQLite, not MySQL.
+- Concurrent dashboard lookups refresh the recommendation reader once per
+  5-second window instead of each racing their own refresh; a failed
+  refresh is retried on the next lookup.
+- A dashboard promote or unpromote that hits a busy or lost writer lock
+  shows "Writer lock is busy" / "Writer lock was lost" instead of
+  "Experiment report is not available".
+- Serve writes exposures and impressions on one dedicated thread instead
+  of the request threadpool, so busy-lock retries no longer hold request
+  workers; pending writes finish on shutdown.
+- Dashboard Inspect user shows what `GET /recommendations/{user_id}`
+  returns with default parameters: `serve.default_k` rows, variant
+  fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- When the experiment state read fails, the dashboard experiments page
+  shows that dashboard's own last read or written state, instead of an
+  unlocked process-wide copy.
+- Dashboard promote and **Resume split** refuse with "Experiment state
+  could not be read" for every allocation when the state read fails,
+  instead of writing from a possibly stale cached state.
+- The db events source no longer loses earlier events on restart when a
+  later one was acked first: the watermark moves only over the leading run
+  of acked events. A nacked event holds it until redelivered and acked; an
+  in-flight event whose row is gone is dropped with a warning.
+- The db events source no longer skips rows whose `event_id` is NULL,
+  blank, `0` or padded at the watermark's timestamp: SQL orders them by
+  the same trimmed id as Python. With an `event_id` column, a row
+  with neither `event_id` nor `idempotency_key` is now rejected (logged,
+  acked, not applied) instead of keyed by `id` or its payload.
 - Docs match the code for `/metrics` auth, `limit` / `k` bounds, trigger
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
@@ -55,6 +185,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- Flat `make_settings` overrides (`make_settings(serve_port=…)`), deprecated
+  in 0.8.5 ahead of 0.9.0, now raise `TypeError`. Use
+  `make_settings(serve=ServeSettings(…))`.
+- The experiment sequential test does not decide until each arm has at
+  least `track.min_impressions` users (with `[track]` on), instead of
+  deciding on two users per arm.
+- `POST /track` returns **503** "Track store unavailable" instead of
+  **500** when the track store is unavailable or failing (any storage or
+  database error).
+- The Kafka event source drops the deliveries of partitions revoked or lost
+  in a group rebalance, so their acks no longer commit offsets for another
+  member or fail every worker tick, and the redelivered messages are not
+  skipped when the partition comes back.
+- The event worker no longer retries forever an ack the source does not
+  confirm (Kafka commits it with a later offset, RabbitMQ requeues it when
+  the channel closes). A failed ack is still retried until it succeeds.
+- The db events source compares a naive `occurred_at` on Postgres in UTC,
+  as it reads it, instead of the session time zone, which skipped or
+  re-read rows when the server zone was not UTC.
+- The Kafka publisher serves delivery callbacks after each message, so a
+  large publish no longer fills the producer queue.
+- A RabbitMQ publish that fails after some messages were confirmed raises
+  `PublishError`, like Kafka, instead of logging and reporting success.
+  The incremental sidecar retry then republishes every affected user with
+  the same `message_id`, which consumers dedupe on.
 - The deprecated `_`-prefixed aliases in `cicerone.evaluation`,
   `cicerone.io.recommendation_reader`, `cicerone.track.store` and
   `cicerone.locks`, and the `cicerone.deprecation` module, in 0.8.6 rather

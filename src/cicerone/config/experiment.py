@@ -25,6 +25,8 @@ from cicerone.config.constants import (
 )
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.config.validation import (
+    float_field,
+    parse_policy_rules,
     require_finite,
     require_open_unit_interval,
     require_unit_interval,
@@ -131,7 +133,7 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
     name = str(raw.get("name") or "").strip()
     if not name:
         raise ConfigError(f"experiment.variants[{index}].name is required")
-    traffic = require_finite(float(raw.get("traffic", 0.0)), name=f"experiment.variants[{name}].traffic")
+    traffic = float_field(raw, f"experiment.variants[{name}].traffic", 0.0, require_finite)
     if traffic < 0:
         raise ConfigError(f"experiment.variants[{name}].traffic must be >= 0, got {traffic}")
     models = list(raw["models"]) if "models" in raw else None
@@ -200,12 +202,7 @@ def _load_policy_spec(
         return unique_policy_names(value, label=label)
     if not all(isinstance(item, dict) for item in value):
         raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
-    try:
-        rules = tuple(parse_table([dict(item) for item in value]))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ConfigError(f"{label}: {exc}") from exc
-    unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
-    return rules
+    return parse_policy_rules(value, parse_table, label=label)
 
 
 def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:

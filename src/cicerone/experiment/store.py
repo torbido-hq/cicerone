@@ -10,13 +10,12 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError
 
-from cicerone.config.settings import IOSettings
+from cicerone.config.settings import IOSettings, Settings
 from cicerone.experiment.store_dataset import (
     EXPOSURE_LOG_BACKEND_ERROR,
     EXPOSURES_FILENAME,
     STATE_FILENAME,
     ExperimentDatasetBackend,
-    require_appendable_exposure_log,
 )
 from cicerone.experiment.store_db import (
     DEFAULT_EXPOSURES_TABLE,
@@ -26,7 +25,7 @@ from cicerone.experiment.store_db import (
     ExperimentDbBackend,
 )
 from cicerone.io.db_errors import SQL_READ_ERRORS
-from cicerone.locks import WriteFence
+from cicerone.locks import WriteFence, build_output_writer_lock
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +46,9 @@ __all__ = [
     "ExperimentStore",
     "active_pair_from_state",
     "build_experiment_backend",
+    "build_experiment_store",
     "experiment_state",
     "merge_experiment_state",
-    "require_appendable_exposure_log",
 ]
 
 
@@ -138,12 +137,15 @@ class ExperimentStore:
         self._promote_experiment_id: str | None = None
         self._promote_value: str | None = None
         self._promote_state: dict[str, Any] | None = None
-        self._fence = fence or WriteFence()
-        self.backend = build_experiment_backend(output, self._fence)
+        self._promote_writes = 0
+        self.fence = fence or WriteFence()
+        self.backend = build_experiment_backend(output, self.fence)
 
     def read_state(self) -> dict[str, Any] | None:
+        with self._promote_lock:
+            writes = self._promote_writes
         state = self.backend.read_state()
-        self._remember_state(state)
+        self._remember_state(state, writes)
         return state
 
     def last_state(self, experiment_id: str) -> dict[str, Any] | None:
@@ -156,8 +158,11 @@ class ExperimentStore:
                 return None
             return dict(self._promote_state)
 
-    def _remember_state(self, state: dict[str, Any] | None) -> None:
+    def _remember_state(self, state: dict[str, Any] | None, writes: int) -> None:
         with self._promote_lock:
+            # A write since the read started is newer than what the read saw.
+            if self._promote_writes != writes:
+                return
             self._promote_loaded = True
             if state and state.get("experiment_id"):
                 self._promote_experiment_id = str(state.get("experiment_id") or "")
@@ -192,18 +197,11 @@ class ExperimentStore:
     def write_state(self, state: Mapping[str, Any]) -> None:
         payload = dict(state)
         write = self.backend.state_writer(payload)
-
-        def _persist() -> None:
-            self._fence.ensure()
+        with self.fence.lease():
             write()
-
-        if self._fence.held_here():
-            _persist()
-        else:
-            with self._fence.hold():
-                _persist()
         promoted = payload.get("promoted_variant")
         with self._promote_lock:
+            self._promote_writes += 1
             self._promote_loaded = True
             self._promote_experiment_id = str(payload.get("experiment_id") or "")
             self._promote_value = str(promoted) if promoted else None
@@ -213,16 +211,8 @@ class ExperimentStore:
         if not rows:
             return
         write = self.backend.exposure_writer(rows)
-
-        def _persist() -> None:
-            self._fence.ensure()
+        with self.fence.lease():
             write()
-
-        if self._fence.held_here():
-            _persist()
-            return
-        with self._fence.hold():
-            _persist()
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
         rows = self.backend.read_exposures(experiment_id=experiment_id)
@@ -230,3 +220,9 @@ class ExperimentStore:
             return rows
         # Backends filter too; this keeps the string match the db filter may not (a legacy numeric column).
         return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]
+
+
+def build_experiment_store(settings: Settings) -> ExperimentStore | None:
+    if not settings.experiment.enabled:
+        return None
+    return ExperimentStore(settings.output, fence=WriteFence(build_output_writer_lock(settings)))

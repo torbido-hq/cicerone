@@ -10,6 +10,10 @@ from cicerone.config.constants import ConfigError
 MAX_BROKER_TIMEOUT_SECONDS = (2**31 - 1) / 1000.0  # signed 32-bit milliseconds
 
 
+# What int()/float() raise on a value that isn't a usable number.
+NUMBER_PARSE_ERRORS = (TypeError, ValueError, OverflowError)
+
+
 def require_nonempty_str(options: dict[str, Any], key: str, *, prefix: str) -> str:
     value = options.get(key)
     if value in (None, "") or (isinstance(value, str) and not str(value).strip()):
@@ -30,7 +34,7 @@ def as_int(options: dict[str, Any], key: str, default: int, *, prefix: str) -> i
     raw = options.get(key, default)
     try:
         return int(raw)
-    except (TypeError, ValueError, OverflowError) as exc:
+    except NUMBER_PARSE_ERRORS as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
 
 
@@ -54,7 +58,7 @@ def optional_float(
     raw = options.get(key, default)
     try:
         value = float(raw)
-    except (TypeError, ValueError, OverflowError) as exc:
+    except NUMBER_PARSE_ERRORS as exc:
         raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
     if not math.isfinite(value):
         raise ConfigError(f"{prefix}.{key} must be finite{_option_detail(raw)}")

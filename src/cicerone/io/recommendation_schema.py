@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from cicerone.io.options import sql_identifier
+from cicerone.io.options import sql_identifier, table_option
 from cicerone.values import is_missing
 
 USER_COLUMN = "user_id"
@@ -34,10 +34,7 @@ def recommendations_sql_names(
     default_table: str,
 ) -> tuple[str, str, str]:
     """Return ``(table, select_columns, user_column)`` as validated SQL identifiers."""
-    table = sql_identifier(
-        options.get("recommendations_table", default_table),
-        option="recommendations_table",
-    )
+    table = table_option(options, "recommendations_table", default_table)
     columns = ", ".join(
         sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
     )

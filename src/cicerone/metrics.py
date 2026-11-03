@@ -104,6 +104,11 @@ TRACK_INGEST_TOTAL = Counter(
     "POST /track ingest outcomes",
     ["kind", "status"],
 )
+SERVE_APPENDS_DROPPED_TOTAL = Counter(
+    "cicerone_serve_appends_dropped_total",
+    "Serve exposure and impression appends dropped because the append queue was full",
+    ["kind"],
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
@@ -189,12 +194,15 @@ def record_experiment_served(experiment_id: str, variant: str) -> None:
     RECOMMENDATIONS_EXPERIMENT_TOTAL.labels(experiment_id=experiment_id, variant=variant).inc()
 
 
+def _bounded_label(what: str, value: str, allowed: frozenset[str], fallback: str) -> str:
+    if value in allowed:
+        return value
+    logger.warning("Unknown %s %r; recording as %s", what, value, fallback)
+    return fallback
+
+
 def record_events_flush(*, status: str, events: int = 0) -> None:
-    if status in _EVENTS_FLUSH_STATUSES:
-        label = status
-    else:
-        logger.warning("Unknown events flush status %r; recording as error", status)
-        label = "error"
+    label = _bounded_label("events flush status", status, _EVENTS_FLUSH_STATUSES, "error")
     EVENTS_FLUSH_TOTAL.labels(status=label).inc()
     if label == "success" and events > 0:
         EVENTS_FLUSH_EVENTS_TOTAL.inc(events)
@@ -210,10 +218,8 @@ def record_events_replayed(count: int) -> None:
 
 
 def record_events_lock(*, status: str) -> None:
-    if status not in _EVENTS_LOCK_STATUSES:
-        logger.warning("Unknown events lock status %r; recording as skip", status)
-        status = "skip"
-    EVENTS_LOCK_TOTAL.labels(status=status).inc()
+    label = _bounded_label("events lock status", status, _EVENTS_LOCK_STATUSES, "skip")
+    EVENTS_LOCK_TOTAL.labels(status=label).inc()
 
 
 def update_events_leader(is_leader: bool) -> None:
@@ -221,15 +227,17 @@ def update_events_leader(is_leader: bool) -> None:
 
 
 def record_events_apply_busy(*, reason: str) -> None:
-    if reason not in _EVENTS_APPLY_BUSY_REASONS:
-        logger.warning("Unknown events apply busy reason %r; recording as lock", reason)
-        reason = "lock"
-    EVENTS_APPLY_BUSY_TOTAL.labels(reason=reason).inc()
+    label = _bounded_label("events apply busy reason", reason, _EVENTS_APPLY_BUSY_REASONS, "lock")
+    EVENTS_APPLY_BUSY_TOTAL.labels(reason=label).inc()
 
 
 def update_events_source_health(*, connected: bool, lag: int | None) -> None:
     EVENTS_SOURCE_CONNECTED.set(1 if connected else 0)
     EVENTS_SOURCE_LAG.set(-1 if lag is None else max(0, int(lag)))
+
+
+def record_serve_append_dropped(kind: str) -> None:
+    SERVE_APPENDS_DROPPED_TOTAL.labels(kind=kind).inc()
 
 
 def record_track_ingest(*, kind: str, status: str, count: int = 1) -> None:

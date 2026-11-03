@@ -278,8 +278,8 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   beside their current precomputed top-K (cold-start fallback when they
   have no personal rows). Shared item ids are highlighted; a source-mix
   badge and optional user attributes (`dashboard.lookup_user_attrs`) sit above the two panes. Recs show
-  `min(job.top_k, dashboard.lookup_k)` rows (`lookup_k` defaults to 20, so
-  10 with the default `top_k`); events show `dashboard.lookup_events`
+  `serve.default_k` rows (default 10), like `GET /recommendations/{user_id}`
+  without `limit`; events show `dashboard.lookup_events`
   (default 20). When `[experiment]` is enabled, lookup shows the assigned
   variant (what serve would return). `GET /dashboard/experiments` compares
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
@@ -312,7 +312,8 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
 
   (`--users-path` is optional when `--config` points at a dashboard TOML).
   Passwords are hashed with bcrypt; the file is plain TOML
-  (`username = "<bcrypt hash>"` under `[users]`).
+  (`username = "<bcrypt hash>"` under `[users]`). `add` rejects a password
+  over 72 bytes (UTF-8): "Password must be at most 72 bytes (UTF-8)."
 - Enable it via `[dashboard].enabled = true` in `config/cicerone.toml` (or
   use the standalone `config/cicerone.dashboard.toml` example config). See
   the `dashboard` service in `docker-compose.yml` for how it's wired up

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from typing import Any
 
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
+from support.fakes import hide_module
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
+from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import RedisError
 from cicerone.events.redis_streams import RedisStreamsEventSource, validate_redis_stream_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
+from cicerone.events.worker import EventWorker
+from cicerone.feature_config import FeatureConfig
 
 
 class _ResponseError(Exception):
@@ -149,8 +154,6 @@ class FakeRedis:
                 continue
             if meta["idle_ms"] < min_idle_time:
                 continue
-            if meta["consumer"] == consumername:
-                continue
             meta["consumer"] = consumername
             meta["idle_ms"] = 0
             claimed.append((entry_id, dict(meta["fields"])))
@@ -266,12 +269,15 @@ def test_nack_allows_repoll(monkeypatch):
     assert list(source.poll(10)) == []
 
 
-def test_missing_event_id_uses_stream_entry_id(monkeypatch):
+@pytest.mark.parametrize("event_id", [None, ""], ids=["absent", "empty"])
+def test_missing_event_id_uses_stream_entry_id(monkeypatch, event_id):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())
     source.connect()
     payload = event_payload()
     payload.pop("event_id")
+    if event_id is not None:
+        payload["event_id"] = event_id
     entry_id = client.xadd("cicerone:events", payload)
     events = list(source.poll(10))
     assert len(events) == 1
@@ -303,6 +309,19 @@ def test_autoclaim_idle_from_other_consumer(monkeypatch):
     source.ack([events[0].event_id])
 
 
+def test_restarted_consumer_reclaims_its_own_unacked_entry(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    first = RedisStreamsEventSource(_options(claim_idle_ms=50))
+    first.connect()
+    entry_id = client.xadd("cicerone:events", event_payload(event_id="unacked"))
+    assert [event.event_id for event in first.poll(10)] == ["unacked"]
+    first.close()
+    restarted = RedisStreamsEventSource(_options(claim_idle_ms=50))
+    restarted.connect()
+    client.age_pending("cicerone:events", "cicerone", entry_id, idle_ms=100)
+    assert [event.event_id for event in restarted.poll(10)] == ["unacked"]
+
+
 def test_busygroup_is_ok(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options())
@@ -316,16 +335,7 @@ def test_busygroup_is_ok(monkeypatch):
 
 
 def test_missing_redis_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "redis":
-            raise ImportError("no redis")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "redis")
     source = RedisStreamsEventSource(_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[redis\]"):
         source.connect()
@@ -356,6 +366,25 @@ def test_connect_ping_failure(monkeypatch):
     source = RedisStreamsEventSource(_options())
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
+    assert client.closed is True
+
+
+def test_connect_group_failure_closes_new_client(monkeypatch):
+    import cicerone.redis_client as redis_client
+
+    first = FakeRedis()
+    second = FakeRedis()
+    _install_fake_redis(monkeypatch, first)
+    clients = iter((first, second))
+    monkeypatch.setattr(redis_client, "redis_from_url", lambda *_args, **_kwargs: next(clients))
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    assert first.closed is False
+    second.xgroup_create = lambda *_a, **_k: (_ for _ in ()).throw(_ResponseError("NOPERM"))  # type: ignore[method-assign]
+    with pytest.raises(_ResponseError, match="NOPERM"):
+        source.connect()
+    assert second.closed is True
+    assert first.closed is False
 
 
 def test_connect_ping_unexpected_error_propagates(monkeypatch):
@@ -365,6 +394,7 @@ def test_connect_ping_unexpected_error_propagates(monkeypatch):
     source = RedisStreamsEventSource(_options())
     with pytest.raises(RuntimeError, match="bug"):
         source.connect()
+    assert client.closed is True
 
 
 def test_health_tolerates_lag_probe_failures(monkeypatch):
@@ -557,3 +587,50 @@ def test_repeated_nack_does_not_duplicate(monkeypatch):
 def test_whitespace_required_options_rejected():
     with pytest.raises(ConfigError, match="redis_url"):
         validate_redis_stream_options({"redis_url": "  ", "stream": "s", "consumer_group": "g"})
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [({}, None), ({"block_ms": None}, None), ({"block_ms": 0}, 0), ({"block_ms": 250}, 250)],
+)
+def test_read_sends_block_only_when_configured(monkeypatch, options, expected):
+    # Redis treats BLOCK 0 as "wait forever"; unset must not send it.
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    seen: list[int | None] = []
+    real_read = client.xreadgroup
+
+    def _recording_read(*args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(inspect.signature(real_read).bind(*args, **kwargs).arguments.get("block"))
+        return real_read(*args, **kwargs)
+
+    client.xreadgroup = _recording_read  # type: ignore[method-assign]
+    source = RedisStreamsEventSource(_options(**options))
+    source.connect()
+    assert list(source.poll(1)) == []
+    assert seen == [expected]
+
+
+def test_explicit_block_zero_warns(caplog):
+    with caplog.at_level("WARNING", logger="cicerone.events.redis_streams"):
+        RedisStreamsEventSource(_options(block_ms=0))
+    assert "block_ms = 0" in caplog.text
+
+
+def test_worker_retries_failed_xack_until_acked(monkeypatch, tmp_path, feature_config: FeatureConfig):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    source = RedisStreamsEventSource(_options())
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    source.connect()
+    client.xadd("cicerone:events", event_payload(event_id="e1"))
+    real_xack = client.xack
+
+    def _fail_xack(*_args: Any) -> int:
+        raise RedisError("xack down")
+
+    client.xack = _fail_xack  # type: ignore[method-assign]
+    with pytest.raises(RedisError, match="xack down"):
+        worker.tick()
+    client.xack = real_xack  # type: ignore[method-assign]
+    assert worker.tick() == 0
+    assert client.groups[("cicerone:events", "cicerone")]["pending"] == {}

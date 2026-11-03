@@ -17,11 +17,12 @@ from cicerone.blending import (
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
-from cicerone.model.constants import RRF_K, SOURCE_COLUMN, WEIGHT_COLUMN
+from cicerone.model.constants import RRF_K, SOURCE_COLUMN
 from cicerone.model.recommend_cohort import CohortPlan
 from cicerone.model.recommend_strategy import StrategyFrames
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
 from cicerone.policy import allowed_items_for_cohort, is_user_scoped
+from cicerone.ranking import WEIGHT_COLUMN
 
 
 def combine_strategy_frames(

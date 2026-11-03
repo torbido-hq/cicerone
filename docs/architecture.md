@@ -116,7 +116,7 @@ Test modules mirror the packages (same pattern as `tests/test_io_*.py`):
 | Path | Covers |
 | --- | --- |
 | `tests/test_config_load.py` | TOML load / Settings / env placeholders |
-| `tests/test_config_validation.py` | Weights, epoch metrics, max_workers helpers |
+| `tests/test_config_validation.py` | Weights, epoch metrics, number checks |
 | `tests/test_model_strategies.py` | `STRATEGIES` registry / `RecommenderModel` checks |
 | `tests/test_model_fit.py` | Fit cache, parallel fit, `plan_model_run` |
 | `tests/test_model_recommend.py` | `train_and_recommend` / boosts / `content_fallback` |
@@ -410,13 +410,15 @@ never imports `cicerone.model`/`dataset`/`automl`.
   `RecommendationReader` for the user-id inspector (`dashboard_lookup.py`).
   `io.factory.build_input_source(settings.input)` builds a
   `UserHistoryReader` (`get_events_for_user` / `get_user` on the input
-  source) for the events pane. Lookup reads those stores directly (no serve
-  hop). Recs `k` is `min(job.top_k, dashboard.lookup_k)` (`lookup_k`
-  defaults to 20, so 10 with the default `top_k`); events use
+  source) for the events pane. Recs go through serve's
+  `RecommendationService` in-process (no HTTP hop), so Inspect shows what
+  `GET /recommendations/{user_id}` returns with default parameters:
+  `serve.default_k` rows, variant fallback, cold-start fallback (with a badge),
+  unavailable items dropped (`features.toml` availability filters) and ranks
+  renumbered. `dashboard.lookup_k` is deprecated and has no effect. Events use
   `dashboard.lookup_events` (default 20). User attributes use
-  `dashboard.lookup_user_attrs` (default none). Missing users fall back to
-  `__cold_start__` / popular-latest rows with a badge; `category` is joined
-  from the items snapshot when that column exists. When `reasons` is
+  `dashboard.lookup_user_attrs` (default none). `category` is joined from the
+  items snapshot when that column exists. When `reasons` is
   present, the recs table shows a short Why summary (source labels, top
   similar item). History load failures keep the recs pane.
 - `job.run()` writes exactly one manifest per run via a `try`/`finally`,

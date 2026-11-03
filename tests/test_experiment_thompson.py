@@ -69,9 +69,14 @@ def test_track_rows_since_filters_occurred_at() -> None:
     rows = [
         {"occurred_at": "2026-09-01T00:00:00Z", "kind": "impression"},
         {"occurred_at": "2026-09-03T00:00:00Z", "kind": "impression"},
+        {"occurred_at": "2026-09-04T00:00:00Z", "kind": "impression"},
     ]
-    kept = track_rows_since(rows, "2026-09-02T00:00:00Z")
+    until = datetime(2026, 9, 4, tzinfo=UTC)
+    kept = track_rows_since(rows, "2026-09-02T00:00:00Z", until=until)
     assert [row["occurred_at"] for row in kept] == ["2026-09-03T00:00:00Z"]
+    # The row at ``until`` belongs to the next window, which starts there.
+    following = track_rows_since(rows, until.isoformat(), until=until.replace(day=5))
+    assert [row["occurred_at"] for row in following] == ["2026-09-04T00:00:00Z"]
 
 
 def test_parse_arm_counts_ignores_junk() -> None:
@@ -213,11 +218,13 @@ def test_pick_champion_and_helpers() -> None:
     solo = select_active_recipes(recipes, champion="control", challenger="control", explore_traffic=0.5)
     assert [item.name for item in solo] == ["control"]
     assert solo[0].traffic == pytest.approx(1.0)
-    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time")
+    until = datetime(2026, 9, 4, tzinfo=UTC)
+    kept = track_rows_since([{"occurred_at": "2026-09-01T00:00:00Z"}], "not-a-time", until=until)
     assert kept == []
     undated = track_rows_since(
         [{"occurred_at": None, "kind": "impression"}, {"occurred_at": "2026-09-03T00:00:00Z"}],
         "2026-09-02T00:00:00Z",
+        until=until,
     )
     assert [row["occurred_at"] for row in undated] == ["2026-09-03T00:00:00Z"]
     with pytest.raises(ValueError, match="at least two"):

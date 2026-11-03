@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from cicerone.config import Settings, make_settings
@@ -22,20 +20,8 @@ def test_flat_property_still_returns_nested_value_with_warning(name):
     assert value == getattr(getattr(settings, section), field)
 
 
-def test_flat_make_settings_kwarg_still_applies_with_warning():
-    with pytest.warns(
-        FutureWarning,
-        match=re.escape("make_settings(serve_port=...) is deprecated")
-        + ".*serve=ServeSettings\\(port=...\\)",
-    ):
-        settings = make_settings(serve_port=9000)
-    assert settings.serve.port == 9000
-
-
 def test_deprecation_warnings_point_at_the_caller():
     settings = make_settings()
     with pytest.warns(FutureWarning) as property_warning:
         _ = settings.serve_host
-    with pytest.warns(FutureWarning) as kwarg_warning:
-        make_settings(serve_port=9000)
-    assert [w.filename for w in (*property_warning, *kwarg_warning)] == [__file__, __file__]
+    assert [w.filename for w in property_warning] == [__file__]

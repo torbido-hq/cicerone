@@ -168,14 +168,8 @@ def index_users_by_id(users: pd.DataFrame | None) -> dict[str, pd.Series]:
     return {key: users.loc[idx] for idx, key in zip(users.index[keep], keys[keep], strict=True)}
 
 
-def _user_row_for(
-    users: pd.DataFrame | None,
-    user_id: str,
-    *,
-    users_by_id: dict[str, pd.Series] | None = None,
-) -> pd.Series | None:
-    lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
-    return lookup.get(str(user_id))
+def _user_row_for(user_id: str, users_by_id: dict[str, pd.Series]) -> pd.Series | None:
+    return users_by_id.get(str(user_id))
 
 
 def allowed_items_for_cohort(
@@ -209,7 +203,7 @@ def allowed_items_for_cohort(
         return catalog
 
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
-    representative = _user_row_for(users, users_slice[0], users_by_id=lookup) if users_slice else None
+    representative = _user_row_for(users_slice[0], lookup) if users_slice else None
     mask = eligible_item_mask(representative, items, rules)
     id_col = items_id_column(items)
     allowed = set(items.loc[mask, id_col].astype(str))
@@ -235,7 +229,7 @@ def group_users_by_cohort(
     order: list[Hashable] = []
     lookup = users_by_id if users_by_id is not None else index_users_by_id(users)
     for user_id in dict.fromkeys(target_users):
-        key = cohort_key(_user_row_for(users, user_id, users_by_id=lookup), rules)
+        key = cohort_key(_user_row_for(user_id, lookup), rules)
         if key not in cohorts:
             cohorts[key] = []
             order.append(key)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
+from cicerone.job_eval import retrain_fence
 from cicerone.job_output import (
     JobManifest,
-    ensure_fence,
+    ensure_publication_fence,
     skip_stale_job_manifest,
     truncate_job_error,
     write_job_manifest,
-    write_manifest_accepts_skip,
 )
 from cicerone.locks import LockLostError, WriteFence
 
@@ -22,27 +24,12 @@ def test_skip_stale_job_manifest_on_lock_loss() -> None:
     assert skip_stale_job_manifest(WriteFence()) is False
 
 
-def test_ensure_fence_raises_when_lost() -> None:
-    try:
-        ensure_fence(lambda: False)
-    except LockLostError as exc:
-        assert exc.kind == "retrain"
-    else:
-        raise AssertionError("expected LockLostError")
-    ensure_fence(None)
-    ensure_fence(lambda: True)
-
-
-def test_write_job_manifest_legacy_and_skip() -> None:
-    written: list[dict] = []
-
-    class _Legacy:
-        def write_manifest(self, manifest: dict) -> None:
-            written.append(manifest)
-
-    assert write_job_manifest(_Legacy(), {"status": "failed"}, skip_if_newer_than="x") is True
-    assert written == [{"status": "failed"}]
-    assert write_manifest_accepts_skip(object()) is False
+def test_ensure_publication_fence_raises_when_retrain_lost() -> None:
+    with pytest.raises(LockLostError) as exc_info:
+        ensure_publication_fence(object(), retrain_fence(None, lambda: False))
+    assert exc_info.value.kind == "retrain"
+    ensure_publication_fence(object(), retrain_fence(None, None))
+    ensure_publication_fence(object(), retrain_fence(None, lambda: True))
 
 
 def test_job_manifest_dict_compat() -> None:
@@ -62,6 +49,18 @@ def test_job_manifest_dict_compat() -> None:
     assert write_job_manifest(_Sink(), manifest) is True
     assert written[0]["triggered_by"] == "cron"
     assert written[0]["generated_at"] == "t"
+
+
+def test_write_job_manifest_returns_false_when_sink_skips() -> None:
+    seen: list[str | None] = []
+
+    class _SkippingSink:
+        def write_manifest(self, payload: dict, *, skip_if_newer_than=None) -> bool:
+            seen.append(skip_if_newer_than)
+            return False
+
+    assert write_job_manifest(_SkippingSink(), JobManifest(), skip_if_newer_than="t0") is False
+    assert seen == ["t0"]
 
 
 def test_job_manifest_unknown_keys_raise_keyerror() -> None:

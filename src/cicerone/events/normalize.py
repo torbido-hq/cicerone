@@ -11,6 +11,7 @@ from uuid import uuid4
 import pandas as pd
 
 from cicerone.events.base import NormalizedEvent
+from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 _REQUIRED = ("user_id", "item_id", "event_type", "occurred_at")
 
@@ -62,7 +63,8 @@ def _parse_quantity(value: Any) -> int:
         return 1
     try:
         quantity = int(value)
-    except (TypeError, ValueError) as exc:
+    except NUMBER_PARSE_ERRORS as exc:
+        # OverflowError: JSON ``Infinity`` / ``1e400`` parse to float inf.
         raise EventNormalizeError("quantity must be an integer") from exc
     if quantity < 1:
         raise EventNormalizeError("quantity must be >= 1")
@@ -85,6 +87,15 @@ def event_fingerprint(event: NormalizedEvent) -> str:
     return sha256(payload).hexdigest()
 
 
+def supplied_event_id(payload: Mapping[str, Any]) -> str | None:
+    for key in ("event_id", "idempotency_key"):
+        value = payload.get(key)
+        text = str(value).strip() if value else ""
+        if text:
+            return text
+    return None
+
+
 def normalize_event(payload: Any) -> NormalizedEvent:
     raw = _as_mapping(payload)
     missing = [key for key in _REQUIRED if raw.get(key) in (None, "")]
@@ -97,9 +108,9 @@ def normalize_event(payload: Any) -> NormalizedEvent:
     if not user_id or not item_id or not event_type:
         raise EventNormalizeError("user_id, item_id, and event_type must be non-empty")
 
-    supplied = raw.get("event_id") or raw.get("idempotency_key")
-    generated = not supplied
-    event_id = str(supplied) if supplied else str(uuid4())
+    supplied = supplied_event_id(raw)
+    generated = supplied is None
+    event_id = supplied or str(uuid4())
     return NormalizedEvent(
         user_id=user_id,
         item_id=item_id,

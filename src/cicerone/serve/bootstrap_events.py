@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -24,7 +23,7 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.updater_policy import incremental_needs_users_frame
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
+from cicerone.experiment.assignment import assign_user, experiment_variant_names
 from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
 from cicerone.feature_config import FeatureConfig
@@ -39,6 +38,7 @@ from cicerone.locks import (
     has_distributed_lock,
 )
 from cicerone.publish import RecommendationPublisher, build_publisher
+from cicerone.refreshed_value import RefreshedValue
 
 logger = logging.getLogger(__name__)
 
@@ -67,70 +67,19 @@ class EventsRuntime:
                 self.publisher = None
 
 
-def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
-    active = [check for check in checks if check is not None]
-    if not active:
-        return None
-    if len(active) == 1:
-        return active[0]
-    return lambda: any(check() for check in active)
-
-
-def _throttled_busy_check(
-    check: Callable[[], bool] | None,
-    *,
-    ttl_seconds: float,
-) -> Callable[[], bool] | None:
-    if check is None:
-        return None
-    if ttl_seconds <= 0:
-        return check
-    cached_until = 0.0
-    cached_value = False
-
-    def _wrapped() -> bool:
-        nonlocal cached_until, cached_value
-        now = time.monotonic()
-        if now < cached_until:
-            return cached_value
-        cached_value = check()
-        cached_until = now + ttl_seconds
-        return cached_value
-
-    return _wrapped
-
-
-def _assign_incremental_variant(
-    settings: Settings,
-    *,
-    ttl_seconds: float = DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
-    clock: Callable[[], float] = time.monotonic,
-) -> Callable[[str], str | None] | None:
+def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
     if not settings.experiment.enabled:
         return None
     store = ExperimentStore(settings.output)
     experiment_id = settings.experiment.id
-    cached_until = 0.0
-    cached: tuple[str | None, tuple[str, str] | None] = (None, None)
-
-    def overlay() -> tuple[str | None, tuple[str, str] | None]:
-        nonlocal cached_until, cached
-        now = clock()
-        if ttl_seconds > 0 and now < cached_until:
-            return cached
-        cached = store.assignment_overlay(experiment_id)
-        cached_until = now + ttl_seconds
-        return cached
+    overlay = RefreshedValue(
+        lambda: store.assignment_overlay(experiment_id),
+        ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+    )
 
     def assigned(user_id: str) -> str | None:
-        promoted, pair = overlay()
-        names = experiment_variant_names(settings)
-        return resolve_assignment(
-            settings,
-            str(user_id),
-            promoted_variant=promoted,
-            active_pair=pair,
-            snapshot_names=names or None,
+        return assign_user(
+            settings, str(user_id), overlay.get(), lambda: experiment_variant_names(settings) or None
         )[1]
 
     return assigned
@@ -181,7 +130,6 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
-    busy_check: Callable[[], bool] | None = None,
     start_worker: bool = True,
 ) -> EventsRuntime:
     if not settings.events.enabled:
@@ -213,10 +161,7 @@ def start_events_runtime(
             settings.events.ha,
         )
 
-    combined_busy = _combine_busy_checks(
-        busy_check,
-        (retrain_probe.is_locked if retrain_probe is not None else None),
-    )
+    retrain_busy = retrain_probe.is_locked if retrain_probe is not None else None
 
     sink = build_output_sink(
         settings.output,
@@ -266,11 +211,12 @@ def start_events_runtime(
             output_settings=settings.output,
             feature_config=feature_config,
             top_k=settings.top_k,
-            busy_check=_throttled_busy_check(
-                combined_busy,
-                ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+            busy_check=(
+                RefreshedValue(retrain_busy, ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS).get
+                if retrain_busy is not None
+                else None
             ),
-            write_busy_check=combined_busy,
+            write_busy_check=retrain_busy,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
             on_success=reader.refresh,
             online=online,

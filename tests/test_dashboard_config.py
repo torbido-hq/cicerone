@@ -124,6 +124,16 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert display["hints"]["job.top_k"]["docs"].startswith("https://cicerone.dev/")
 
 
+def test_config_hints_name_displayed_fields():
+    display = config_display(_secret_settings())
+    sections = {section["id"]: section["fields"] for section in display["sections"]}
+    for key in display["hints"]:
+        section_id, _, field = key.partition(".")
+        assert section_id in sections, key
+        if field:
+            assert isinstance(sections[section_id], dict) and field in sections[section_id], key
+
+
 def test_config_display_missing_feature_file(tmp_path):
     settings = make_settings(feature_config_path=str(tmp_path / "missing.toml"))
     features = _section(config_display(settings), "features")

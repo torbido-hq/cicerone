@@ -12,20 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import math
-from pathlib import Path
 from typing import Any
 
-from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.blob import read_storage_bytes
 from cicerone.io.filenames import MANIFEST_FILENAME
-from cicerone.io.options import (
-    build_s3_client,
-    is_s3_not_found,
-    object_key,
-    read_s3_body,
-    require_option,
-    sql_identifier,
-    validate_storage_options,
-)
+from cicerone.io.options import require_option, table_option, validate_storage_options
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +24,11 @@ logger = logging.getLogger(__name__)
 class DatasetManifestReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = validate_storage_options(options)
+        validate_storage_options(options)
 
     def _read(self) -> dict[str, Any] | None:
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / MANIFEST_FILENAME
-            if not path.exists():
-                return None
-            return json.loads(path.read_text())
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, MANIFEST_FILENAME)
-        client = build_s3_client(self._options)
-        try:
-            obj = client.get_object(Bucket=bucket, Key=key)
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                return None
-            raise
-        return json.loads(read_s3_body(obj))
+        payload = read_storage_bytes(self._options, MANIFEST_FILENAME)
+        return None if payload is None else json.loads(payload)
 
     def read_latest(self) -> dict[str, Any] | None:
         return self._read()
@@ -68,10 +45,7 @@ class DbManifestReader:
         from cicerone.io.engines import engine_for
 
         self._options = options
-        self._table = sql_identifier(
-            options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
-            option="manifest_table",
-        )
+        self._table = table_option(options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         self._engine = engine_for(require_option(options, "database_url", "db"))
 
     def read_latest(self) -> dict[str, Any] | None:

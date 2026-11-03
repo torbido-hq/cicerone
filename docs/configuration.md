@@ -27,7 +27,7 @@ table below is optional unless a later rule says otherwise.
 | `cicerone scheduler` | Cron loop (and `[job.trigger]` if enabled). Does **not** run a job first; it sleeps until the next `cron_schedule` tick. |
 | `cicerone serve` | Read API. Requires `job.mode = "serve"`. |
 | `cicerone dashboard` | Basic-Auth status UI. Independent of `job.mode`. |
-| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. |
+| `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. Passwords are at most 72 bytes (UTF-8). |
 | `cicerone export-openapi` | Write the serve OpenAPI document (`-o PATH`). |
 
 Global flags: `-c` / `--config`, `--log-level` (default `INFO`, or
@@ -61,6 +61,12 @@ write tables, each renamed by the `[output.options]` key in brackets:
 (`exposures_table`), `experiment_state` (`experiment_state_table`),
 `recommendation_track` (`track_table`), `recommendation_eval`
 (`eval_table`) and `recommendation_history` (`history_table`).
+
+The db events source and the track, eval and experiment-state tables
+support Postgres and SQLite, not MySQL.
+On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
+must use a transactional engine (InnoDB): a full write empties them with
+`DELETE` and rolls back on failure.
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
@@ -136,13 +142,15 @@ Required `auth_token` when `job.mode = "serve"`.
 | `category_column` | `"category"` | `?category=` filter |
 | `metrics_enabled` | `false` | `GET /metrics`; needs `metrics_token` |
 | `metrics_token` | unset | **Required** when `metrics_enabled`; scrapes send it as `X-Metrics-Token` |
-| `log_impressions` | `false` | Requires `[track]`. Records **returned** GET items, not browser renders. The HTTP response can return before the row is written |
+| `log_impressions` | `false` | Requires `[track]`. Records **returned** GET items, not browser renders. The HTTP response can return before the row is written; with 1000 appends pending the rows are dropped and counted in `cicerone_serve_appends_dropped_total` |
 
 `GET /recommendations/{user_id}` is a lookup of materialized rows. It does
 not fit a model. **200** returns the object; **400** `limit` and `k`
 disagree; **401** missing/invalid bearer; **404** no rows and no fallback;
-**422** `limit` / `k` outside 1–100. `exclude_unavailable` (default `true`)
-re-applies `item_availability_filters`. Dataset vs DB visibility:
+**422** `limit` / `k` outside 1–100. User ids containing `/` are
+not supported (an encoded `%2F` is decoded before routing and still
+404s). `exclude_unavailable` (default `true`) re-applies
+`item_availability_filters`. Dataset vs DB visibility:
 [how-it-works.md](how-it-works.md#what-get-recommendations-does).
 
 ## `[events]`
@@ -188,7 +196,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused) |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
 | `conversion_event_types` | empty → `"purchase"`, or the experiment's event-type `primary_metric` | `[input]` event types treated as conversions |
-| `min_impressions` | `100` | Gates Promote / Thompson volume. Does **not** change the CTR formula |
+| `min_impressions` | `100` | Gates Promote / Thompson volume; the sequential test needs this many users per arm. Does **not** change the CTR formula |
 
 `kind` is `impression` or `click` only. Details:
 [evaluation.md](evaluation.md).
@@ -226,9 +234,13 @@ tables) / `eligibility`. Changing `traffic` remaps users.
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
-| `lookup_k` | `20` | Inspector recs, capped by `job.top_k` |
+| `lookup_k` | `20` | Deprecated and ignored (removed in 0.9.0); warns when the dashboard is enabled; Inspect shows `serve.default_k` rows |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
+
+The dashboard loads `[job].feature_config_path` at startup to drop unavailable items from Inspect user, as serve does.
+Inspect takes `[serve]`, `[job].feature_config_path` and `[experiment]` from the dashboard's own config file, so they must match serve's.
+After a promote, Inspect can show the new variant up to one serve `refresh_interval_seconds` before serve does.
 
 ## `[publish]`
 

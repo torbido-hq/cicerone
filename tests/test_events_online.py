@@ -629,7 +629,11 @@ def test_start_events_runtime_online_requires_artifact(tmp_path, feature_config:
     with pytest.raises(OnlineArtifactError, match="save_model_artifact"):
         start_events_runtime(
             make_settings(
-                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                output=IOSettings(
+                    kind="dataset",
+                    options={"storage_backend": "local", "path": str(out)},
+                    artifact_hmac_key="0123456789abcdef",
+                ),
                 events=EventsSettings(
                     enabled=True,
                     kind="webhook",
@@ -662,7 +666,11 @@ def test_start_events_runtime_online_skipped_during_experiment(
     with caplog.at_level("WARNING"):
         runtime = start_events_runtime(
             make_settings(
-                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                output=IOSettings(
+                    kind="dataset",
+                    options={"storage_backend": "local", "path": str(out)},
+                    artifact_hmac_key="0123456789abcdef",
+                ),
                 events=EventsSettings(
                     enabled=True,
                     kind="webhook",

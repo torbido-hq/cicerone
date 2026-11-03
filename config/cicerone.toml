@@ -345,7 +345,7 @@ prefix = "recommendations/latest"
 # consumer_group = "cicerone"
 # # consumer_name = "serve-1"       # default: hostname
 # # group_start_id = "0-0"
-# # block_ms = 0
+# # block_ms = 1000              # unset = non-blocking; 0 = wait forever
 # # claim_idle_ms = 300000
 
 # Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'
@@ -401,7 +401,7 @@ prefix = "recommendations/latest"
 # users_path = "/app/config/dashboard_users.toml"
 # refresh_interval_seconds = 30 # how often the page polls /partials/status
 # history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
-# lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
+# lookup_k: deprecated, no effect (removed in 0.9.0); Inspect user shows [serve].default_k rows
 # lookup_events = 20 # inspector event rows (from [input], newest first)
 # lookup_user_attrs = ["region_slug"] # allowlisted user columns; default none
 

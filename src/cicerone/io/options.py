@@ -9,7 +9,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
@@ -25,7 +25,7 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 import pandas as pd
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowException, ArrowNotImplementedError, ArrowTypeError
 
 from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
 from cicerone.locks import WriterLockBusyError
@@ -142,6 +142,10 @@ def sql_identifier(name: str, *, option: str) -> str:
     return name
 
 
+def table_option(options: Mapping[str, Any], key: str, default: str) -> str:
+    return sql_identifier(options.get(key, default), option=key)
+
+
 def readonly_select(query: str, *, option: str) -> str:
     """Deploy-time SQL: a single SELECT with a keyword denylist (not a parser)."""
     if not isinstance(query, str):
@@ -164,20 +168,32 @@ def close_s3_body(body: Any) -> None:
         close()
 
 
+def require_max_bytes(max_bytes: int) -> None:
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be >= 1")
+
+
+def reject_oversize(size: int, max_bytes: int) -> None:
+    if size > max_bytes:
+        raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+
+
+def read_capped(read: Callable[[int], bytes], max_bytes: int) -> bytes:
+    payload = read(max_bytes + 1)
+    reject_oversize(len(payload), max_bytes)
+    return payload
+
+
 def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
     body = response["Body"]
     try:
         if max_bytes is None:
             return body.read()
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be >= 1")
+        require_max_bytes(max_bytes)
         known = response.get("ContentLength")
-        if isinstance(known, int) and known > max_bytes:
-            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
-        payload = body.read(max_bytes + 1)
-        if len(payload) > max_bytes:
-            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
-        return payload
+        if isinstance(known, int):
+            reject_oversize(known, max_bytes)
+        return read_capped(body.read, max_bytes)
     finally:
         close_s3_body(body)
 
@@ -260,6 +276,41 @@ def read_parquet(
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
     obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
+
+
+PARQUET_PUSHDOWN_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    ArrowTypeError,
+    ArrowNotImplementedError,
+)
+_PUSHDOWN_ERROR_TOKENS = ("fieldref", "filter", "column", "projection")
+
+
+def _rejects_pushdown(exc: BaseException, names: Sequence[str]) -> bool:
+    if isinstance(exc, (ArrowTypeError, ArrowNotImplementedError)):
+        return True
+    message = str(exc).lower()
+    return any(token in message for token in (*(name.lower() for name in names), *_PUSHDOWN_ERROR_TOKENS))
+
+
+def read_parquet_pushdown(
+    options: dict[str, Any],
+    filename: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filters: Sequence[tuple[str, str, Any]] | None = None,
+) -> pd.DataFrame:
+    """``read_parquet`` that falls back to a full read when the engine rejects the pushdown.
+
+    The fallback returns every row and column: callers filter and project it themselves.
+    """
+    try:
+        return read_parquet(options, filename, columns=columns, filters=filters)
+    except PARQUET_PUSHDOWN_ERRORS as exc:
+        if not _rejects_pushdown(exc, [*(columns or ()), *(name for name, _op, _value in filters or ())]):
+            raise
+        logger.warning("Pushdown read of %s failed; falling back to full-file load: %s", filename, exc)
+        return read_parquet(options, filename)
 
 
 def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]:

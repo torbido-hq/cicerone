@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pandas as pd
 
@@ -22,7 +22,7 @@ from cicerone.config.constants import (
     TRACK_KIND_IMPRESSION,
     ConfigError,
 )
-from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught, try_load
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -41,19 +41,12 @@ from cicerone.experiment.store import ExperimentStore, active_pair_from_state, m
 from cicerone.experiment.thompson import ArmCounts, parse_arm_counts, select_active_recipes
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
-from cicerone.job_eval import try_load
-from cicerone.locks import (
-    LockLostError,
-    WriteFence,
-    WriterLockBusyError,
-    build_output_writer_lock,
-)
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
 
-_PROMOTE_STATE: dict[str, dict[str, Any]] = {}
 _THOMPSON_SHIP_IGNORE = frozenset({"undecided", "split_winners"})
 
 
@@ -63,33 +56,33 @@ class _PromoteRejected(Exception):
         self.message = message
 
 
-def _matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+def _matched_state(
+    settings: Settings,
+    store: ExperimentStore,
+    on_error: Callable[[Settings, ExperimentStore], Mapping[str, Any] | None],
+) -> dict[str, Any] | None:
+    state: Mapping[str, Any] | None
     try:
         state = store.read_state()
-        if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
-            _PROMOTE_STATE[settings.experiment.id] = dict(state)
-        else:
-            _PROMOTE_STATE.pop(settings.experiment.id, None)
-            state = None
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read experiment state", exc, log=logger)
-        state = store.last_state(settings.experiment.id) or _PROMOTE_STATE.get(settings.experiment.id)
+        state = on_error(settings, store)
     if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
         return dict(state)
     return None
 
 
-def _fresh_matched_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
-    try:
-        state = store.read_state()
-    except OPTIONAL_IO_ERRORS as exc:
-        log_caught("Failed to read experiment state", exc, log=logger)
-        raise _PromoteRejected("Experiment state could not be read") from exc
-    if state and str(state.get("experiment_id") or "") == str(settings.experiment.id):
-        _PROMOTE_STATE[settings.experiment.id] = dict(state)
-        return dict(state)
-    _PROMOTE_STATE.pop(settings.experiment.id, None)
-    return None
+def _last_known_state(settings: Settings, store: ExperimentStore) -> Mapping[str, Any] | None:
+    return store.last_state(settings.experiment.id)
+
+
+def _reject_unread_state(_settings: Settings, _store: ExperimentStore) -> NoReturn:
+    raise _PromoteRejected("Experiment state could not be read")
+
+
+def _promote_base_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
+    # Writes need a fresh read: the cached state misses other replicas' and the job's newer writes.
+    return _matched_state(settings, store, _reject_unread_state)
 
 
 def _live_thompson_pair(
@@ -206,9 +199,9 @@ def _track_variant_by_user(rows: Sequence[dict[str, Any]], names: set[str]) -> d
     return {user_id: variant for user_id, (_key, variant) in chosen.items()}
 
 
-def experiment_context(settings: Settings) -> dict[str, Any]:
+def experiment_context(settings: Settings, store: ExperimentStore | None) -> dict[str, Any]:
     experiment = settings.experiment
-    if not experiment.enabled:
+    if store is None:
         return {
             "enabled": False,
             "experiment": experiment,
@@ -216,8 +209,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "error": None,
             "promoted_variant": None,
         }
-    store = ExperimentStore(settings.output)
-    state = _matched_state(settings, store)
+    state = _matched_state(settings, store, _last_known_state)
     promoted = None
     promoted_at = None
     if state:
@@ -268,24 +260,28 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
             "read events for experiment metrics",
             lambda: _load_metric_events(settings, event_types=event_types, since=since),
             pd.DataFrame(),
+            log=logger,
         )
         recs_f = pool.submit(
             try_load,
             "load recommendations for experiment guardrails",
             lambda: load_recommendation_guardrail_rows(settings.output),
             None,
+            log=logger,
         )
         exposures_f: Future[list[dict[str, Any]] | None] = pool.submit(
             try_load,
             "read experiment exposures",
             lambda: store.read_exposures(experiment_id=experiment.id) if experiment.log_exposures else None,
             [] if experiment.log_exposures else None,
+            log=logger,
         )
         catalog_f = pool.submit(
             try_load,
             "read items snapshot for experiment catalog size",
             lambda: load_items_catalog_size(settings.output),
             None,
+            log=logger,
         )
         track_f = None
         if settings.track.enabled:
@@ -294,6 +290,7 @@ def experiment_context(settings: Settings) -> dict[str, Any]:
                 "read track rows for experiment metrics",
                 lambda: TrackStore(settings.output).read_rows(experiment_id=experiment.id, since=since),
                 None,
+                log=logger,
             )
         events = events_f.result()
         recs = recs_f.result()
@@ -396,27 +393,22 @@ def _thompson_promote_error(
 
 
 def _publish_experiment_state(
-    settings: Settings, payload_for: Callable[[ExperimentStore], dict[str, Any]]
+    store: ExperimentStore, payload_for: Callable[[ExperimentStore], dict[str, Any]]
 ) -> str | None:
-    writer_lock = build_output_writer_lock(settings)
-    fence = WriteFence(writer_lock)
-    store = ExperimentStore(settings.output, fence=fence)
     try:
-        with fence.hold():
-            payload = payload_for(store)
-            store.write_state(payload)
+        with store.fence.hold():
+            store.write_state(payload_for(store))
     except _PromoteRejected as exc:
         return exc.message
     except WriterLockBusyError:
         return "Writer lock is busy"
     except LockLostError:
         return "Writer lock was lost"
-    _PROMOTE_STATE[settings.experiment.id] = dict(payload)
     return None
 
 
-def promote_winner(settings: Settings, variant: str) -> str | None:
-    context = experiment_context(settings)
+def promote_winner(settings: Settings, store: ExperimentStore | None, variant: str) -> str | None:
+    context = experiment_context(settings, store)
     report = context.get("report")
     names = {item.name for item in settings.experiment.variants}
     if report is not None:
@@ -424,7 +416,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         names.update(item.control.name for item in report.comparisons)
     if variant not in names:
         return f"Unknown variant {variant!r}"
-    if report is None:
+    if store is None or report is None:
         return "Experiment report is not available"
     blocked = _ship_blocked(report, settings.experiment)
     if blocked:
@@ -438,11 +430,7 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
         return f"Winner is {report.winner!r}, not {variant!r}"
 
     def _payload(store: ExperimentStore) -> dict[str, Any]:
-        state = (
-            _fresh_matched_state(settings, store)
-            if settings.experiment.allocation == ALLOCATION_THOMPSON
-            else _matched_state(settings, store)
-        )
+        state = _promote_base_state(settings, store)
         if settings.experiment.allocation == ALLOCATION_THOMPSON:
             error = _thompson_promote_error(variant, state, pair_names)
             if error:
@@ -453,16 +441,16 @@ def promote_winner(settings: Settings, variant: str) -> str | None:
             promoted_variant=variant,
         )
 
-    return _publish_experiment_state(settings, _payload)
+    return _publish_experiment_state(store, _payload)
 
 
-def clear_promotion(settings: Settings) -> str | None:
-    if not settings.experiment.enabled:
+def clear_promotion(settings: Settings, store: ExperimentStore | None) -> str | None:
+    if store is None:
         return "No experiment is enabled"
     return _publish_experiment_state(
-        settings,
+        store,
         lambda store: merge_experiment_state(
-            _matched_state(settings, store),
+            _promote_base_state(settings, store),
             experiment_id=settings.experiment.id,
             promoted_variant=None,
         ),

@@ -254,6 +254,7 @@ def test_dataset_key_lookup_reads_no_recommendation_rows(tmp_path, monkeypatch) 
         raise AssertionError("the lookup must read only the parquet footer")
 
     monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _no_row_reads)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _no_row_reads)
     assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
 
 

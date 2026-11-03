@@ -179,7 +179,7 @@ The knobs and failure modes if you are wiring this up. The product page is [expe
 
 **Inheritance.** Combiner fallback: blend if blending is on, else RRF if `model_weights` is set, else priority. Boosts and eligibility default to inherit (`boosts` / `eligibility = true`). `false` drops them. A name list keeps a subset.
 
-**Experiment off.** `resolve_assignment` is `(None, None)`. Promote is ignored. Leftover rows are **filtered** to `control` if that name exists, else `sorted(variant names)[0]`. Not a `DELETE`. Incremental follows the same rule when `variant_names == ()`.
+**Experiment off.** `assign_user` is `(None, None)`. Promote is ignored. Leftover rows are **filtered** to `control` if that name exists, else `sorted(variant names)[0]`. Not a `DELETE`. Incremental follows the same rule when `variant_names == ()`.
 
 **Guardrails (defaults).** Fallback-rate cap `0.5` (`popular_fallback` / `latest` / `incremental` and `+` mixes). Top-item share cap `0.4`. Distinct-item floor: `5`, or `min(5, max(1, catalog_size // 20))` if the catalog is known — that formula can only lower the default 5 for a small catalog; it never raises the floor for a large one. Empty list fails. Missing `variant` column blocks Promote.
 

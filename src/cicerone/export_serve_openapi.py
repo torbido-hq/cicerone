@@ -42,7 +42,9 @@ def build_openapi() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Export the Cicerone serve OpenAPI schema")
+    parser = argparse.ArgumentParser(
+        prog="cicerone export-openapi", description="Export the Cicerone serve OpenAPI schema"
+    )
     parser.add_argument(
         "-o",
         "--output",

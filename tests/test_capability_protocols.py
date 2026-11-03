@@ -48,7 +48,8 @@ def test_builtin_readers_report_snapshot_variants(reader):
     assert issubclass(reader, VariantSnapshotReader)
 
 
-@pytest.mark.parametrize("source", _POLLING_SOURCES)
+# Kafka redelivers by offset commit, so it has nothing to extend while a batch applies.
+@pytest.mark.parametrize("source", [S3EventSource, RedisStreamsEventSource, RabbitMQEventSource])
 def test_polling_sources_heartbeat(source):
     assert issubclass(source, HeartbeatSource)
 

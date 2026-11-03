@@ -3,14 +3,14 @@ from __future__ import annotations
 import re
 
 import pytest
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import (
     ConfigError,
     EpochMetricsSettings,
     load_settings,
+    make_settings,
     resolve_epoch_metrics,
-    resolve_max_workers,
 )
 
 
@@ -552,17 +552,8 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """
         [job]
         max_workers = 4
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     assert load_settings(good).max_workers == 4
 
@@ -572,22 +563,10 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         omitted_dir,
         """
         [job]
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     assert load_settings(omitted).max_workers == 1
-    assert resolve_max_workers() == 1
-    assert resolve_max_workers(None) == 1
-    assert resolve_max_workers(3) == 3
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -596,17 +575,8 @@ def test_load_settings_max_workers_and_rejects_non_positive(tmp_path):
         """
         [job]
         max_workers = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="max_workers"):
         load_settings(bad)
@@ -646,9 +616,9 @@ def test_load_settings_log_epoch_metrics(tmp_path):
         plateau_eps=0.02,
         plateau_window=4,
     )
-    assert resolve_epoch_metrics(log_epoch_metrics=True, every=3).every == 3
-    assert resolve_epoch_metrics(log_epoch_metrics=False, every=3) is None
-    assert resolve_epoch_metrics(log_epoch_metrics=True, every=None).every == 5
+    assert resolve_epoch_metrics({"log_epoch_metrics": True, "epoch_metrics_every": 3}).every == 3
+    assert resolve_epoch_metrics({"log_epoch_metrics": False, "epoch_metrics_every": 3}) is None
+    assert resolve_epoch_metrics({"log_epoch_metrics": True}).every == 5
 
 
 def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_path):
@@ -659,17 +629,8 @@ def test_load_settings_ignores_epoch_metrics_every_when_logging_disabled(tmp_pat
         [job]
         log_epoch_metrics = false
         epoch_metrics_every = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     settings = load_settings(config_path)
     assert settings.epoch_metrics is None
@@ -682,17 +643,8 @@ def test_load_settings_rejects_non_positive_epoch_metrics_every_when_enabled(tmp
         [job]
         log_epoch_metrics = true
         epoch_metrics_every = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="epoch_metrics_every"):
         load_settings(config_path)
@@ -704,17 +656,8 @@ def test_load_settings_rejects_non_positive_half_life_days(tmp_path):
         """
         [job]
         half_life_days = 0
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """,
+        """
+        + MINIMAL_IO_TOML,
     )
     with pytest.raises(ConfigError, match="half_life_days"):
         load_settings(config_path)
@@ -1060,7 +1003,7 @@ def _base_io_toml() -> str:
         """
 
 
-def test_load_settings_dashboard_lookup_k(tmp_path):
+def test_load_settings_dashboard_lookup_k(tmp_path, caplog):
     config_path = write_toml(
         tmp_path,
         f"""
@@ -1071,31 +1014,41 @@ def test_load_settings_dashboard_lookup_k(tmp_path):
         """,
     )
 
-    settings = load_settings(config_path)
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(config_path)
 
     assert settings.dashboard.lookup_k == 8
-    assert settings.dashboard.lookup_k == 8
+    assert "dashboard.lookup_k is deprecated" in caplog.text
 
 
-def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path):
-    settings = load_settings(write_toml(tmp_path, _base_io_toml()))
+def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path, caplog):
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(write_toml(tmp_path, _base_io_toml()))
 
     assert settings.dashboard.lookup_k == 20
+    assert "dashboard.lookup_k" not in caplog.text
     assert settings.dashboard.host == "127.0.0.1"
 
 
-def test_load_settings_rejects_non_positive_dashboard_lookup_k(tmp_path):
+@pytest.mark.parametrize(("enabled", "warned"), [("true", True), ("false", False)])
+def test_load_settings_accepts_any_dashboard_lookup_k_and_warns_only_when_enabled(
+    tmp_path, caplog, enabled, warned
+):
     config_path = write_toml(
         tmp_path,
         f"""
         [dashboard]
+        enabled = {enabled}
         lookup_k = 0
         {_base_io_toml()}
         """,
     )
 
-    with pytest.raises(ConfigError, match="dashboard.lookup_k must be >= 1"):
-        load_settings(config_path)
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = load_settings(config_path)
+
+    assert settings.dashboard.lookup_k == 0
+    assert ("dashboard.lookup_k is deprecated" in caplog.text) is warned
 
 
 def test_load_settings_dashboard_lookup_events(tmp_path):
@@ -1575,3 +1528,8 @@ def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
     config_path = write_toml(tmp_path, f"{_base_io_toml()}\n{toml}\n")
     with pytest.raises(ConfigError, match=message):
         load_settings(config_path)
+
+
+def test_make_settings_rejects_unknown_mode():
+    with pytest.raises(ConfigError, match="job.mode must be one of"):
+        make_settings(mode="not_a_mode")

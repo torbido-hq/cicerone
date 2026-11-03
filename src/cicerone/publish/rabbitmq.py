@@ -17,7 +17,7 @@ from cicerone.amqp_options import (
     require_amqp_url,
     require_queue,
 )
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import ConfigError, import_extra
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -56,13 +56,6 @@ def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
         optional_routing_key(options, prefix=_PREFIX)
 
 
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'publish.kind = "rabbitmq" requires the pika package; '
-        "install with: pip install 'cicerone-recommender[rabbitmq]'"
-    )
-
-
 class RabbitMQPublisher:
     def __init__(self, options: dict[str, Any]):
         validate_rabbitmq_publish_options(options)
@@ -79,10 +72,7 @@ class RabbitMQPublisher:
     def connect(self) -> None:
         if self._channel is not None:
             return
-        try:
-            import pika
-        except ImportError as exc:
-            raise _missing_extra() from exc
+        pika = import_extra("pika", "rabbitmq", 'publish.kind = "rabbitmq"')
         connection = None
         connected = False
         try:
@@ -127,28 +117,12 @@ class RabbitMQPublisher:
     def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         try:
             self._recover()
-        except ConfigError as exc:
-            self._fail_unless_sent(progress, exc)
-            return
-        except Exception:
-            if not progress.sent:
-                raise
-            # Accepted records must not be raised back to a caller that would republish them.
-            logger.exception("RabbitMQ publisher recover failed after confirm")
-            return
-        try:
             self._publish_from(messages, progress)
         except Exception as exc:
-            if isinstance(exc, _rabbitmq_publish_errors()) or progress.sent:
-                self._fail_unless_sent(progress, exc)
-                return
-            raise
-
-    def _fail_unless_sent(self, progress: _Progress, exc: BaseException) -> None:
-        if progress.sent:
-            logger.exception("RabbitMQ publish stopped after confirm; accepted records are not retried")
-            return
-        raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+            if not isinstance(exc, (ConfigError, *_rabbitmq_publish_errors())) and not progress.sent:
+                raise
+            # Callers republish every user; consumers dedupe on the stable message_id.
+            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
     def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         channel = self._require()

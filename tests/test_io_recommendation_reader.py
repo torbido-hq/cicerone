@@ -6,7 +6,6 @@ import threading
 import boto3
 import pandas as pd
 import pytest
-from moto import mock_aws
 
 from cicerone.config import ConfigError
 from cicerone.io.recommendation_reader import (
@@ -477,20 +476,6 @@ def test_dataset_reader_construction_tolerates_missing_file(tmp_path):
     assert reader.get_recommendations("u1", k=10).empty
     assert reader.get_items() is None
     assert reader.get_cold_start_fallback(k=5).empty
-
-
-@pytest.fixture
-def s3_options():
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="test-bucket")
-        yield {
-            "storage_backend": "s3",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-            "bucket": "test-bucket",
-            "prefix": "recommendations/latest",
-        }
 
 
 def test_dataset_reader_s3_backend_returns_top_k(s3_options):

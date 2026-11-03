@@ -24,18 +24,18 @@ from cicerone.events.s3_parse import (
     SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     Batch,
-    as_int,
     events_from_body,
     normalize_prefix,
     optional_aws_region,
-    positive_float,
-    positive_int,
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
 from cicerone.io.options import build_s3_client, read_s3_body, require_option
+from cicerone.option_parse import as_int, optional_float, optional_int
 
 logger = logging.getLogger(__name__)
+
+_EVENTS_PREFIX = "events.options"
 
 
 class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
@@ -50,14 +50,16 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         self._queue_url = str(options["queue_url"]) if self._mode == "sqs" else None
         self._marker_path = Path(options["marker_path"]) if options.get("marker_path") else None
         self._marker_key = str(options.get("initial_marker") or "")
-        self._wait_time_seconds = max(0, as_int(options, "wait_time_seconds", 0))
-        self._max_messages = max(1, min(10, as_int(options, "max_messages", 10)))
-        self._list_page_size = positive_int(options, "list_page_size", DEFAULT_LIST_PAGE_SIZE)
-        self._sqs_lag_cache_ttl_seconds = positive_float(
-            options, "sqs_lag_cache_ttl_seconds", DEFAULT_SQS_LAG_CACHE_TTL_SECONDS
+        self._wait_time_seconds = max(0, as_int(options, "wait_time_seconds", 0, prefix=_EVENTS_PREFIX))
+        self._max_messages = max(1, min(10, as_int(options, "max_messages", 10, prefix=_EVENTS_PREFIX)))
+        self._list_page_size = optional_int(
+            options, "list_page_size", DEFAULT_LIST_PAGE_SIZE, prefix=_EVENTS_PREFIX, minimum=1
         )
-        self._sqs_client_timeout_seconds = positive_float(
-            options, "sqs_client_timeout_seconds", DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS
+        self._sqs_lag_cache_ttl_seconds = optional_float(
+            options, "sqs_lag_cache_ttl_seconds", DEFAULT_SQS_LAG_CACHE_TTL_SECONDS, prefix=_EVENTS_PREFIX
+        )
+        self._sqs_client_timeout_seconds = optional_float(
+            options, "sqs_client_timeout_seconds", DEFAULT_SQS_CLIENT_TIMEOUT_SECONDS, prefix=_EVENTS_PREFIX
         )
         self._s3 = None
         self._sqs = None
@@ -97,9 +99,16 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
 
     def close(self) -> None:
         with self._lock:
+            s3, sqs = self._s3, self._sqs
             self._s3 = None
             self._sqs = None
             self._connected = False
+        try:
+            if s3 is not None:
+                s3.close()
+        finally:
+            if sqs is not None:
+                sqs.close()
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
@@ -253,14 +262,11 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         bucket: str,
         key: str,
         etag: str = "",
-        *,
-        max_bytes: int | None = None,
     ) -> list[NormalizedEvent]:
-        limit = DEFAULT_MAX_STORAGE_READ_BYTES if max_bytes is None else max_bytes
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         return events_from_body(
-            read_s3_body(obj, max_bytes=limit),
+            read_s3_body(obj, max_bytes=DEFAULT_MAX_STORAGE_READ_BYTES),
             bucket=bucket,
             key=key,
             etag=resolved_etag,
