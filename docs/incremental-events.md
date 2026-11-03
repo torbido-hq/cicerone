@@ -205,7 +205,9 @@ trimmed `event_id` or `idempotency_key` (`0` counts as blank), else `id`,
 else the table's SQLite `rowid` or Postgres `ctid` (none for `WITHOUT
 ROWID` tables, views and `events_query`), else the payload. Identities
 compare by code point; `id:` plus up to 20 digits compares numerically.
-The source must not expose a column named `cicerone_cursor`.
+The source must not expose a column named `cicerone_cursor`. On Postgres
+the query also keeps `occurred_at >=` the watermark time, so an index on
+`occurred_at` serves polls and the lag count; SQLite scans the source.
 When an `event_id` column exists, every row must have a non-blank
 `event_id` or `idempotency_key`. A row with neither is rejected like an
 invalid row below and never holds the watermark. `event_id` and

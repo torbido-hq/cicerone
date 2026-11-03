@@ -278,3 +278,40 @@ def test_postgres_view_without_ctid_pages_by_id():
         source.close()
         with engine.begin() as conn:
             conn.execute(text(f'DROP VIEW "{_TABLE}_view"'))
+
+
+def test_postgres_prefilter_keeps_rows_at_the_watermark_time(tmp_path):
+    times = {"d": "11:59", "a": "12:00", "b": "12:00", "c": "12:01"}
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f'CREATE TABLE "{_TABLE}" (user_id TEXT, item_id TEXT, event_type TEXT, '
+                "occurred_at TIMESTAMPTZ, event_id TEXT)"
+            )
+        )
+        for event_id, at in times.items():
+            conn.execute(
+                text(f"INSERT INTO \"{_TABLE}\" VALUES ('u1', :id, 'purchase', :at, :id)"),
+                {"id": event_id, "at": f"2026-08-13T{at}:00Z"},
+            )
+    watermark = tmp_path / "wm.json"
+    watermark.write_text('{"occurred_at": "2026-08-13T12:00:00+00:00", "event_id": "a"}\n')
+    options = {"database_url": TEST_DATABASE_URL, "events_table": _TABLE, "watermark_path": str(watermark)}
+    legacy = DbEventSource(options)
+    legacy.connect()
+    try:
+        assert "occurred_at >= CAST(:watermark_at AS timestamptz)" in legacy._source_sql(engine)
+        assert legacy.health().lag == 3
+        first = list(legacy.poll(1))
+        assert [event.event_id for event in first] == ["a"]
+        legacy.ack(["a"])
+    finally:
+        legacy.close()
+    resumed = DbEventSource(options)
+    resumed.connect()
+    try:
+        assert resumed.health().lag == 2
+        assert poll_one_by_one(resumed) == ["b", "c"]
+    finally:
+        resumed.close()

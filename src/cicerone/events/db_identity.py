@@ -30,6 +30,7 @@ class _CursorSql(NamedTuple):
     identity: str
     sep: str
     collate: str
+    prefilter: str
 
 
 # Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
@@ -57,6 +58,7 @@ _CURSOR_SQL = {
         ),
         sep="char(31)",
         collate="BINARY",
+        prefilter="",
     ),
     "postgresql": _CursorSql(
         row_identity="ctid",
@@ -75,6 +77,8 @@ _CURSOR_SQL = {
         ),
         sep="chr(31)",
         collate='"C"',
+        # Implied by the key predicate; lets an occurred_at index serve polls and lag counts.
+        prefilter=" WHERE {at} >= CAST(:watermark_at AS timestamptz)",
     ),
 }
 CURSOR_DIALECTS = frozenset(_CURSOR_SQL)
@@ -103,7 +107,10 @@ def keyed_source_sql(dialect: str, source: str, columns: Mapping[str, str]) -> s
     terms.append(" || ".join([sql.sep, *(f"{part} || {sql.sep}" for part in payload)]))
     projected = ", ".join(f"{column} AS {name}" for name, column in columns.items())
     identity = terms[0] if len(terms) == 1 else f"COALESCE({', '.join(terms)})"
-    identified = f"(SELECT {projected}, {identity} AS {_IDENTITY} FROM {source}) AS cicerone_identified"
+    prefilter = sql.prefilter.format(at=columns["occurred_at"])
+    identified = (
+        f"(SELECT {projected}, {identity} AS {_IDENTITY} FROM {source}{prefilter}) AS cicerone_identified"
+    )
     key = f"{sql.timestamp.format(at='occurred_at')} || {sql.sep} || {sql.identity}"
     return f"(SELECT {', '.join(columns)}, {key} AS {CURSOR_COLUMN} FROM {identified}) AS cicerone_keyed"
 
