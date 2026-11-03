@@ -38,9 +38,7 @@ _TRACK_TABLE = (
     ("generated_at", "TEXT"),
 )
 _TRACK_NAMES = tuple(name for name, _kind in _TRACK_TABLE)
-_REQUIRED_TEXT = frozenset(
-    name for name, kind in _TRACK_TABLE if kind in {"TEXT PRIMARY KEY", "TEXT NOT NULL"}
-)
+_TEXT_DEFAULTED = frozenset({"event_id", "kind", "user_id", "item_id", "occurred_at"})
 _EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
 
@@ -91,9 +89,9 @@ class TrackDbBackend:
             insert_sql(engine, table, _TRACK_NAMES)
             + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
         )
-        params = [
+        params: list[dict[str, Any]] = [
             {
-                name: str(row.get(name) or "") if name in _REQUIRED_TEXT else row.get(name)
+                name: str(row.get(name) or "") if name in _TEXT_DEFAULTED else row.get(name)
                 for name in _TRACK_NAMES
             }
             for row in unique_event_rows(rows)

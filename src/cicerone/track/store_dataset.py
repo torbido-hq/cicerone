@@ -32,6 +32,7 @@ from cicerone.io.options import (
     exclusive_file_lock,
     is_s3_not_found,
     local_path,
+    read_s3_parquet,
     s3_location,
     validate_storage_options,
 )
@@ -89,7 +90,7 @@ class TrackDatasetBackend:
             encoded = encode_jsonl(fresh)
             self._fence.ensure()
             append_storage_bytes(self._options, TRACK_FILENAME, encoded)
-            known.update(str(row.get("event_id") or "") for row in fresh)
+            known.update(event_id for row in fresh if (event_id := str(row.get("event_id") or "")))
             self._track_size = (self._track_size or 0) + len(encoded)
             return fresh
 
@@ -148,11 +149,11 @@ class TrackDatasetBackend:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
                     paths = [path for path in paths if not history_stem_before(path.stem, since)]
-            return _collect_frames([partial(_read_history_part, self._options, path.name) for path in paths])
+            return _collect_frames([partial(pd.read_parquet, path) for path in paths])
         bucket, prefix = s3_location(self._options, f"{HISTORY_DIR}/")
         client = build_s3_client(self._options)
         if generated_ats is not None:
-            return _s3_history_frames(self._options, client, bucket, prefix, generated_ats)
+            return _s3_history_frames(client, bucket, prefix, generated_ats)
         try:
             keys = _list_s3_parquet_keys(client, bucket, prefix)
         except S3_READ_ERRORS as exc:
@@ -161,9 +162,7 @@ class TrackDatasetBackend:
             raise
         if since:
             keys = [key for key in keys if not history_stem_before(Path(key).stem, since)]
-        return _collect_frames(
-            [partial(_read_history_part, self._options, key.removeprefix(prefix)) for key in sorted(keys)]
-        )
+        return _collect_frames([partial(_s3_parquet_frame, client, bucket, key) for key in sorted(keys)])
 
     def _iter_track_lines(self) -> Iterator[bytes]:
         # Appends are local-only; stream so the id refresh has no size cap.
@@ -229,12 +228,16 @@ def _local_history_paths(root: Path, generated_ats: set[str]) -> list[Path]:
     ]
 
 
-def _read_history_part(options: dict[str, Any], name: str) -> pd.DataFrame | None:
-    return read_parquet_if_exists(options, f"{HISTORY_DIR}/{name}")
+def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None:
+    try:
+        return read_s3_parquet(client, bucket, key)
+    except S3_READ_ERRORS as exc:
+        if is_s3_not_found(exc):
+            return None
+        raise
 
 
 def _s3_history_frames(
-    options: dict[str, Any],
     client: Any,
     bucket: str,
     prefix: str,
@@ -243,21 +246,21 @@ def _s3_history_frames(
     frames: list[pd.DataFrame] = []
     loaded: set[str] = set()
     missing: set[str] = set()
-    exact = [(stamp, history_part_name(stamp)) for stamp in generated_ats]
+    exact = [(stamp, f"{prefix}{history_part_name(stamp)}") for stamp in generated_ats]
 
     def _one(item: tuple[str, str]) -> tuple[str, str, pd.DataFrame | None]:
-        stamp, name = item
-        return stamp, name, _read_history_part(options, name)
+        stamp, key = item
+        return stamp, key, _s3_parquet_frame(client, bucket, key)
 
     if exact:
         workers = min(_HISTORY_READ_WORKERS, len(exact))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             results = list(pool.map(_one, exact))
-        for stamp, name, frame in results:
+        for stamp, key, frame in results:
             if frame is None:
                 missing.add(stamp)
                 continue
-            loaded.add(name)
+            loaded.add(key)
             if not frame.empty:
                 frames.append(frame)
     if not missing:
@@ -270,12 +273,12 @@ def _s3_history_frames(
         raise
     missing_names = {history_part_name(stamp) for stamp in missing}
     extra = [
-        name
-        for name in (key.removeprefix(prefix) for key in keys)
-        if name not in loaded
-        and (Path(name).name in missing_names or history_part_matches(Path(name).stem, missing))
+        key
+        for key in keys
+        if key not in loaded
+        and (Path(key).name in missing_names or history_part_matches(Path(key).stem, missing))
     ]
-    frames.extend(_collect_frames([partial(_read_history_part, options, name) for name in extra]))
+    frames.extend(_collect_frames([partial(_s3_parquet_frame, client, bucket, key) for key in extra]))
     return frames
 
 

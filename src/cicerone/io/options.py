@@ -281,7 +281,11 @@ def read_parquet(
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
     except _PYARROW_S3_FALLBACK_ERRORS:
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
-    obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
+    return read_s3_parquet(build_s3_client(options), bucket, key, **read_kwargs)
+
+
+def read_s3_parquet(client: Any, bucket: str, key: str, **read_kwargs: Any) -> pd.DataFrame:
+    obj = client.get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
 
 
