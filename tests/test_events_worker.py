@@ -6,7 +6,9 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 from support.events import dataset_updater, event_payload
+from support.fakes import patch_module_ref
 from support.prometheus_metrics import registry_metric_value
+from support.waits import WAIT_SECONDS, call_in_thread, wait_until
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent
@@ -348,8 +350,6 @@ def test_event_worker_health_config_error_raises(tmp_path, feature_config: Featu
 
 
 def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         top_k=3,
@@ -375,9 +375,7 @@ def test_event_worker_loop_survives_source_error(tmp_path, feature_config: Featu
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and polls["n"] < 2:
-        time.sleep(0.01)
+    assert wait_until(lambda: polls["n"] >= 2)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert polls["n"] >= 2
@@ -496,8 +494,6 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
 
 
 def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         top_k=3,
@@ -528,9 +524,7 @@ def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_conf
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 3:
-        time.sleep(0.01)
+    assert wait_until(lambda: connects["n"] >= 3)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert connects["n"] >= 3
@@ -742,7 +736,6 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
 
 def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -778,9 +771,7 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     poll_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "poll-start" in order
     assert "close" in order
     assert order.index("poll-start") < order.index("close")
@@ -834,7 +825,6 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
 
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -879,9 +869,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     ack_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "ack-done" in order
     assert "close" in order
     assert order.index("ack-done") < order.index("close")
@@ -1648,8 +1636,6 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -1680,17 +1666,13 @@ def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and not polls_at_connect:
-        time.sleep(0.01)
+    connected = wait_until(lambda: polls_at_connect)
     worker.stop(join_timeout_seconds=2.0)
-    assert polls_at_connect
+    assert connected
     assert polls_at_connect[0] >= 2
 
 
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
@@ -1716,21 +1698,19 @@ def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 2:
-        time.sleep(0.01)
+    reconnected = wait_until(lambda: connects["n"] >= 2)
     worker.stop(join_timeout_seconds=2.0)
-    assert connects["n"] >= 2
+    assert reconnected
 
 
 def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
     connects = {"n": 0}
     closes = {"n": 0}
 
@@ -1739,7 +1719,7 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(1.0)
+                release.wait()
             super().connect()
 
         def close(self) -> None:
@@ -1761,21 +1741,21 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
         poll_interval_seconds=0.01,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    try:
+        assert reconnect_started.wait(WAIT_SECONDS)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while the reconnect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -1786,7 +1766,7 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     class _SlowSecondConnect(WebhookEventSource):
         def connect(self) -> None:
             if started.is_set():
-                release.wait(timeout=2)
+                release.wait()
                 return
             started.set()
             super().connect()
@@ -1807,15 +1787,22 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     assert worker._thread is not None and worker._thread.is_alive() is False
     starter = threading.Thread(target=worker.start)
     starter.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and worker._source_guard.acquire(blocking=False):
+
+    def _source_guard_held() -> bool:
+        if not worker._source_guard.acquire(blocking=False):
+            return True
         worker._source_guard.release()
-        time.sleep(0.01)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    release.set()
-    starter.join(timeout=2)
+        return False
+
+    try:
+        assert wait_until(_source_guard_held)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while the restart's connect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    starter.join(timeout=WAIT_SECONDS)
 
 
 def test_event_worker_start_never_acquires_tick_while_holding_source(tmp_path, feature_config: FeatureConfig):
@@ -1993,7 +1980,6 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
 
 def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -2005,7 +1991,7 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     class _SlowStart(WebhookEventSource):
         def connect(self) -> None:
             started.set()
-            release.wait(timeout=2)
+            release.wait()
             super().connect()
 
         def close(self) -> None:
@@ -2025,22 +2011,21 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     )
     starter = threading.Thread(target=worker.start)
     starter.start()
-    assert started.wait(timeout=2)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    release.set()
-    starter.join(timeout=2)
+    try:
+        assert started.wait(WAIT_SECONDS)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while start's connect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    starter.join(timeout=WAIT_SECONDS)
     assert worker._thread is None or worker._thread.is_alive() is False
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -2084,9 +2069,7 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert closes["n"] == 1
     assert worker._finalized is True
     frame = pd.read_parquet(out / "recommendations.parquet")
@@ -2097,7 +2080,6 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
 
 def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -2149,9 +2131,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert errors
     assert closes["n"] == 1
     assert worker._finalized is True
@@ -2250,12 +2230,12 @@ def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, featur
 
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
     closes = {"n": 0}
     connects = {"n": 0}
 
@@ -2264,7 +2244,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(0.2)
+                release.wait(WAIT_SECONDS)
                 raise OSError("broker down")
             super().connect()
 
@@ -2287,28 +2267,25 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
         poll_interval_seconds=0.01,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    worker.stop(join_timeout_seconds=0.05)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    try:
+        assert reconnect_started.wait(WAIT_SECONDS)
+        worker.stop(join_timeout_seconds=0.05)
+    finally:
+        release.set()
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config: FeatureConfig):
-    import threading
-    import time
-
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
     )
-    reconnect_started = threading.Event()
     polls = {"n": 0}
+    polls_at_reconnect: list[int] = []
 
     class _FailReconnect(WebhookEventSource):
         def connect(self) -> None:
             if polls["n"] > 0:
-                reconnect_started.set()
+                polls_at_reconnect.append(polls["n"])
                 raise OSError("broker down")
             super().connect()
 
@@ -2331,11 +2308,10 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
         poll_interval_seconds=0.02,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    after = polls["n"]
-    time.sleep(0.08)
-    assert polls["n"] == after
+    # A tick between failed reconnects would poll, so every reconnect would see a new count.
+    assert wait_until(lambda: len(polls_at_reconnect) >= 3)
     worker.stop(join_timeout_seconds=1.0)
+    assert len(set(polls_at_reconnect)) == 1
 
 
 def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):
@@ -2367,7 +2343,6 @@ def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureC
 
 def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -2404,9 +2379,7 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     health_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "health-start" in order
     assert "close" in order
     assert order.index("health-start") < order.index("close")
@@ -3104,7 +3077,6 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
 
 def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -3151,9 +3123,7 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
 
     stopper = threading.Thread(target=_stop)
     stopper.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and first.is_alive():
-        time.sleep(0.01)
+    assert wait_until(lambda: not first.is_alive())
     assert first.is_alive() is False
     worker.start()
     second = worker._thread
@@ -3229,7 +3199,6 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
@@ -3251,23 +3220,18 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
         ),
         poll_interval_seconds=0.01,
     )
-    original_start = threading.Thread.start
 
-    def _start(self: threading.Thread) -> None:
-        if self.name == "cicerone-events":
-            worker._stop.set()
-            worker._stop_epoch += 1
-        original_start(self)
+    class _StopOnStart(threading.Thread):
+        def start(self) -> None:
+            if self.name == "cicerone-events":
+                worker._stop.set()
+                worker._stop_epoch += 1
+            super().start()
 
-    threading.Thread.start = _start  # type: ignore[method-assign]
-    try:
+    with pytest.MonkeyPatch.context() as patch:
+        patch_module_ref(patch, "cicerone.events.worker.threading", Thread=_StopOnStart)
         worker.start()
-    finally:
-        threading.Thread.start = original_start  # type: ignore[method-assign]
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
     assert worker._thread is None or worker._thread.is_alive() is False
     assert worker._tick_guard.acquire(blocking=False)
     worker._tick_guard.release()
@@ -3621,18 +3585,20 @@ def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
     source.connect()
     applies: list[str] = []
     worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
-    started: list[str] = []
-    real_start = threading.Thread.start
+    # Threads alive during apply, by name: independent of which module starts the heartbeat.
+    live_during_apply: list[str] = []
+    original_apply = worker._updater.apply
 
-    def _record_start(thread: threading.Thread) -> None:
-        started.append(thread.name)
-        real_start(thread)
+    def _apply_snapshot(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+        live_during_apply.extend(thread.name for thread in threading.enumerate())
+        return original_apply(events, persist_online=persist_online)
 
-    monkeypatch.setattr(threading.Thread, "start", _record_start)
+    worker._updater.apply = _apply_snapshot  # type: ignore[method-assign]
     worker._buffer.extend(source.poll(1))
     assert worker._flush_ready(worker._buffer.flush()) == 1
     assert applies == ["k1"]
-    assert started == []
+    assert live_during_apply
+    assert "cicerone-events-heartbeat" not in live_during_apply
     source.close()
 
 

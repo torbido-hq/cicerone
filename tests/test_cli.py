@@ -10,10 +10,7 @@ from cicerone import __version__
 from cicerone.cli import main
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
-
-@pytest.fixture(autouse=True)
-def _isolate_config_env(monkeypatch):
-    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+pytestmark = pytest.mark.usefixtures("isolated_config_path")
 
 
 def _write_config(tmp_path, *, mode: str = "batch", users_path: str | None = None) -> str:
