@@ -1224,7 +1224,7 @@ def test_dashboard_promote_lock_error_flashes_the_lock_message(monkeypatch, erro
     import cicerone.dashboard as dash
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
-    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: error)
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _store, _variant: error)
     experiment = ExperimentSettings(
         enabled=True,
         id="exp-1",
@@ -1276,8 +1276,14 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
 def test_dashboard_promote_success_redirects(monkeypatch):
     import cicerone.dashboard as dash
     from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore
 
-    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: None)
+    stores: list[object] = []
+    original = dash.experiment_context
+    monkeypatch.setattr(
+        dash, "experiment_context", lambda settings, store: stores.append(store) or original(settings, store)
+    )
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, store, _variant: stores.append(store))
     experiment = ExperimentSettings(
         enabled=True,
         id="exp-1",
@@ -1300,6 +1306,9 @@ def test_dashboard_promote_success_redirects(monkeypatch):
     flash = _flash_cookie(response)
     assert flash.startswith("ok:Promoted")
     assert "control" not in flash
+    assert len(stores) == 2
+    assert isinstance(stores[0], ExperimentStore)
+    assert stores[1] is stores[0]
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):

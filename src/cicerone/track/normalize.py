@@ -10,7 +10,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION, TRACK_KINDS
-from cicerone.events.normalize import EventNormalizeError, parse_occurred_at
+from cicerone.events.normalize import EventNormalizeError, parse_occurred_at, supplied_event_id
 
 _REQUIRED = ("kind", "user_id", "item_id", "occurred_at")
 
@@ -92,7 +92,7 @@ def normalize_track(payload: Any) -> NormalizedTrack:
     variant = _optional_str(raw, "variant")
     experiment_id = _optional_str(raw, "experiment_id")
     generated_at = _optional_str(raw, "generated_at")
-    event_id = _optional_str(raw, "event_id") or _optional_str(raw, "idempotency_key")
+    event_id = supplied_event_id(raw)
     if event_id is None:
         event_id = _stable_event_id(
             kind=kind,
