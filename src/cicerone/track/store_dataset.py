@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from io import BytesIO
@@ -104,7 +104,8 @@ class TrackDatasetBackend:
         self, *, kind: str | None, experiment_id: str | None, since: str | None
     ) -> list[dict[str, Any]]:
         # ``since`` is applied while reading the file.
-        rows = self._read_rows_dataset(since=since)
+        raw = read_storage_bytes(self._options, TRACK_FILENAME)
+        rows = self._read_rows_dataset(BytesIO(raw or b""), since=since)
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=None)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
@@ -171,23 +172,17 @@ class TrackDatasetBackend:
         return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
 
     def _iter_track_lines(self) -> Iterator[bytes]:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
-            if not path.exists():
-                return
-            with path.open("rb") as handle:
-                yield from handle
+        # Appends are local-only; stream so the id refresh has no size cap.
+        path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
+        if not path.exists():
             return
-        raw = read_storage_bytes(self._options, TRACK_FILENAME)
-        if raw is None:
-            return
-        yield from raw.splitlines()
+        with path.open("rb") as handle:
+            yield from handle
 
-    def _read_rows_dataset(self, *, since: str | None = None) -> list[dict[str, Any]]:
+    def _read_rows_dataset(self, lines: Iterable[bytes], *, since: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         known: set[str] | None = set() if self._known_ids is None else None
-        for parsed in iter_jsonl_objects(self._iter_track_lines()):
+        for parsed in iter_jsonl_objects(lines):
             if known is not None:
                 event_id = str(parsed.get("event_id") or "")
                 if event_id:
@@ -210,7 +205,7 @@ class TrackDatasetBackend:
         if self._known_ids is not None and self._track_size == size:
             return self._known_ids
         self._known_ids = None
-        self._read_rows_dataset()
+        self._read_rows_dataset(self._iter_track_lines())
         assert self._known_ids is not None
         self._track_size = size
         return self._known_ids

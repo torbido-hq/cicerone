@@ -306,6 +306,23 @@ def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
     assert rows[0]["event_id"] == "imp-1"
 
 
+def test_track_jsonl_read_rejects_file_over_storage_cap(tmp_path, monkeypatch) -> None:
+    output = local_output(tmp_path)
+    (tmp_path / "track.jsonl").write_text(json.dumps(_row()) + "\n", encoding="utf-8")
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
+    with pytest.raises(ValueError, match="max is 8"):
+        TrackStore(output).read_rows()
+
+
+def test_track_jsonl_append_streams_file_over_storage_cap(tmp_path, monkeypatch) -> None:
+    output = local_output(tmp_path)
+    (tmp_path / "track.jsonl").write_text(json.dumps(_row()) + "\n", encoding="utf-8")
+    monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
+    store = TrackStore(output)
+    assert store.append_rows([_row()]) == 0
+    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
+
+
 def test_track_eval_roundtrip_s3(s3_options) -> None:
     output = IOSettings(kind="dataset", options=s3_options)
     store = TrackStore(output)
