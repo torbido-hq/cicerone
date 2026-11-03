@@ -69,9 +69,8 @@ def test_postgres_duplicate_payload_without_event_id_uses_ctid():
     source = _source()
     source.connect()
     polled = list(source.poll(10))
-    assert source._has_event_id_column is False
-    assert source._select_clause is not None
-    assert "ctid" in source._select_clause
+    assert source._keyed_source is not None
+    assert "ctid" in source._keyed_source
     assert len(polled) == 2
     ids = [event.event_id for event in polled]
     assert ids[0] != ids[1]
@@ -241,3 +240,41 @@ def test_postgres_event_id_order_ignores_the_column_collation():
     source = _source()
     source.connect()
     assert poll_one_by_one(source) == ["B", "a", "b"]
+
+
+def test_postgres_microsecond_timestamps_page_in_time_order():
+    _seed_same_time_rows(", event_id TEXT", [", 'z'", ", 'a'"])
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        later = "occurred_at + interval '1 microsecond'"
+        conn.execute(text(f"UPDATE \"{_TABLE}\" SET occurred_at = {later} WHERE event_id = 'a'"))
+    source = _source()
+    source.connect()
+    assert poll_one_by_one(source) == ["z", "a"]
+
+
+def test_postgres_keyless_rows_at_one_timestamp_are_each_delivered_as_rejected():
+    _seed_same_time_rows(", event_id TEXT", [", NULL"] * 12)
+    source = _source()
+    source.connect()
+    rejected = []
+    while batch := list(source.poll(1)):
+        rejected.append(batch[0].rejected)
+        assert source.ack([batch[0].event_id]) == (batch[0].event_id,)
+    assert len(rejected) == 12
+    assert all("event_id or idempotency_key is required" in (reason or "") for reason in rejected)
+
+
+def test_postgres_view_without_ctid_pages_by_id():
+    _seed_same_time_rows(", id INTEGER", [f", {n}" for n in range(1, 13)])
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE VIEW "{_TABLE}_view" AS SELECT * FROM "{_TABLE}"'))
+    source = DbEventSource({"database_url": TEST_DATABASE_URL, "events_table": f"{_TABLE}_view"})
+    source.connect()
+    try:
+        assert poll_one_by_one(source) == [f"id:{n}" for n in range(1, 13)]
+    finally:
+        source.close()
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP VIEW "{_TABLE}_view"'))

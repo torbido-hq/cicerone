@@ -167,15 +167,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the same trimmed id as Python. With an `event_id` column, a row
   with neither `event_id` nor `idempotency_key` is now rejected (logged,
   acked, not applied) instead of keyed by `id` or its payload.
-- The db events source no longer strands or skips rows at the watermark's
-  timestamp: a table without `event_id` pages through them by `id`,
-  `rowid` or `ctid`; ids other than `id:`/`rowid:` plus up to 20 digits
-  (negative, longer, `id:+5`, `ID:5`) compare as plain text in SQL and in
-  the cursor alike; and Postgres compares ids by code point, whatever the
-  column collation. Rows skipped this way before are delivered after the
-  upgrade. Once after upgrading, rows with those id shapes, or in a
-  Postgres column with a non-C collation, may be skipped if they sit at
-  the saved watermark's exact timestamp.
+- The db events source pages by one cursor key that SQL computes per row:
+  UTC `occurred_at` at full precision, then the trimmed `event_id` or
+  `idempotency_key`, else `id`, else `rowid`/`ctid`. Rows at one timestamp
+  are no longer stranded or skipped (sub-millisecond SQLite times, padded
+  or `ctid:`-like ids, rows without an id, `WITHOUT ROWID` tables, an
+  `events_query` projecting `id`), and Postgres compares ids by code point
+  whatever the column collation.
+- The db events watermark file also stores that key as `cursor`. A file
+  without it resumes at the start of its `occurred_at`: rows at that exact
+  time are delivered again and acked through the applied-event dedupe.
+  The undocumented `initial_watermark_event_id` option is ignored.
+- The db events source refuses databases other than SQLite and Postgres
+  when built, and a source column named `cicerone_cursor` on first poll.
+- A db events row whose `occurred_at` the database can't read as a time
+  is never fetched (it was logged on each fetch for tables without
+  `event_id`). DB `cicerone_events_source_lag` is an exact count on
+  SQLite too, instead of `-1` past 10 000 rows.
 
 ### Removed
 

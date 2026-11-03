@@ -8,13 +8,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from support.events import event_payload, poll_one_by_one
 
-from cicerone.events.db import (
-    DbEventSource,
-    identity_bind_sort_key,
-)
+from cicerone.config import ConfigError
+from cicerone.events.db import DbEventSource
 from cicerone.events.db_identity import (
-    _identity_sort_key,
-    _is_numeric_identity,
     _row_identity,
     _stable_event_id,
 )
@@ -246,10 +242,9 @@ def test_db_events_query_and_stable_id_without_event_id(tmp_path):
     )
     source.connect()
     assert source.health().lag == 2
-    assert source._has_event_id_column is False
-    assert source._select_clause is not None
-    assert "extra_unused" not in source._select_clause
-    assert "occurred_at" in source._select_clause
+    assert source._keyed_source is not None
+    assert "extra_unused" not in source._keyed_source
+    assert "occurred_at" in source._keyed_source
     polled = list(source.poll(5))
     assert len(polled) == 2
     assert polled[0].occurred_at == datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
@@ -271,9 +266,8 @@ def test_db_duplicate_payload_without_event_id_uses_rowid(tmp_path):
     source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
     source.connect()
     polled = list(source.poll(10))
-    assert source._has_event_id_column is False
-    assert source._select_clause is not None
-    assert "rowid" in source._select_clause
+    assert source._keyed_source is not None
+    assert "rowid" in source._keyed_source
     assert len(polled) == 2
     ids = [event.event_id for event in polled]
     assert ids[0] != ids[1]
@@ -432,7 +426,6 @@ def test_db_event_id_column_numeric_identity_does_not_skip_id_10(tmp_path):
     source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
     source.connect()
     first = list(source.poll(1))
-    assert source._has_event_id_column is True
     assert first[0].event_id == "id:9"
     source.ack([first[0].event_id])
     assert source.health().lag == 2
@@ -467,44 +460,9 @@ def test_db_numeric_identity_same_timestamp_fetch_is_bounded(tmp_path):
         source.ack([batch[0].event_id])
     assert source._watermark_event_id == "id:9"
     assert source._engine is not None
-    rows = source._fetch_rows(source._engine, source._watermark_at, source._watermark_event_id, limit=5)
+    rows = source._fetch_rows(source._engine, source._watermark_cursor, source._watermark_at, limit=5)
     assert len(rows) == 5
     assert [row["event_id"] for row in rows] == [f"id:{n}" for n in range(10, 15)]
-
-
-def test_identity_bind_sort_key_matches_identity_sort_order():
-    ids = [
-        "e1",
-        "id:9",
-        "id:10",
-        "id:11",
-        "rowid:00000000000000000002",
-        "ctid:(0,9)",
-        "ctid:(0,10)",
-    ]
-    assert sorted(ids, key=_identity_sort_key) == sorted(ids, key=identity_bind_sort_key)
-
-
-def test_sqlite_identity_sql_matches_bind_key_for_prefixed_non_numeric_ids(tmp_path):
-    from cicerone.events.db_identity import _SQLITE_IDENTITY_SORT
-
-    ids = [
-        "e1",
-        "id:9",
-        "id:10",
-        "id:order-123",
-        "id:550e8400-e29b",
-        "rowid:not-an-int",
-        "ctid:(0,9)",
-        "ctid:not-a-tuple",
-    ]
-    url = _sqlite_url(tmp_path)
-    engine = create_engine(url)
-    pd.DataFrame({"event_id": ids}).to_sql("events", engine, if_exists="replace", index=False)
-    with engine.connect() as conn:
-        rows = conn.execute(text(f"SELECT event_id, ({_SQLITE_IDENTITY_SORT}) AS sort_key FROM events"))
-        got = {row.event_id: row.sort_key for row in rows}
-    assert got == {event_id: identity_bind_sort_key(event_id) for event_id in ids}
 
 
 def test_db_subsecond_timestamps_do_not_skip_later_event(tmp_path):
@@ -572,27 +530,6 @@ def test_db_prefixed_non_numeric_event_id_does_not_skip_later_row(tmp_path):
     assert [event.event_id for event in rest] == ["id:zzz"]
 
 
-def test_identity_sort_key_orders_numeric_ids_and_ctid():
-    assert _identity_sort_key("id:9") < _identity_sort_key("id:10")
-    assert _identity_sort_key("id:9") < _identity_sort_key("id:11")
-    assert _identity_sort_key("rowid:00000000000000000009") < _identity_sort_key("rowid:00000000000000000010")
-    assert _identity_sort_key("ctid:(0,9)") < _identity_sort_key("ctid:(0,10)")
-    parsed = _identity_sort_key("ctid:(0,9)")
-    junk = _identity_sort_key("ctid:not-a-tuple")
-    assert parsed != junk
-    assert parsed < junk or junk < parsed
-    numeric = _identity_sort_key("id:9")
-    raw = _identity_sort_key("id:not-an-int")
-    assert numeric != raw
-    assert numeric < raw or raw < numeric
-    assert _is_numeric_identity("id:9")
-    assert _is_numeric_identity("rowid:00000000000000000010")
-    assert _is_numeric_identity("ctid:(0,10)")
-    assert not _is_numeric_identity("e1")
-    assert not _is_numeric_identity("id:not-an-int")
-    assert not _is_numeric_identity("ctid:not-a-tuple")
-
-
 def test_row_identity_prefers_id_then_rowid_then_ctid():
     occurred = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
     assert _row_identity({"id": 7, "rowid": 1, "ctid": "(0,1)"}) == "id:7"
@@ -602,30 +539,6 @@ def test_row_identity_prefers_id_then_rowid_then_ctid():
     assert _row_identity({"ctid": "(0,1)"}) == "ctid:(0,1)"
     assert _stable_event_id({"idempotency_key": "ik", "id": 1}, occurred) == "ik"
     assert _stable_event_id({"id": 9}, occurred) == "id:9"
-
-
-def test_db_health_lag_none_when_scan_hits_cap(tmp_path, monkeypatch):
-    import cicerone.events.db as db_mod
-
-    monkeypatch.setattr(db_mod, "_LAG_SCAN_LIMIT", 2)
-    url = _sqlite_url(tmp_path)
-    _seed_events(
-        url,
-        [
-            {
-                "user_id": "u1",
-                "item_id": f"i{i}",
-                "event_type": "view",
-                "quantity": 1,
-                "occurred_at": f"2026-08-13T12:0{i}:00Z",
-                "event_id": f"e{i}",
-            }
-            for i in range(3)
-        ],
-    )
-    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
-    source.connect()
-    assert source.health().lag is None
 
 
 def test_db_corrupt_watermark_falls_back_to_initial(tmp_path, caplog):
@@ -722,8 +635,6 @@ def test_db_rejects_unsafe_events_query(tmp_path, events_query):
 
 
 def test_db_missing_occurred_at_raises_config_error(tmp_path):
-    from cicerone.config import ConfigError
-
     url = _sqlite_url(tmp_path)
     engine = create_engine(url)
     pd.DataFrame([{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1}]).to_sql(
@@ -787,64 +698,6 @@ def test_db_health_unexpected_error_propagates(tmp_path, monkeypatch):
     monkeypatch.setattr(source, "_count_after", boom)
     with pytest.raises(RuntimeError, match="lag bug"):
         source.health()
-
-
-def test_db_count_after_sql_error_scans_rows(tmp_path, monkeypatch):
-    from sqlalchemy.exc import OperationalError
-
-    url = _sqlite_url(tmp_path)
-    _seed_events(
-        url,
-        [
-            {
-                "user_id": "u1",
-                "item_id": "i1",
-                "event_type": "purchase",
-                "quantity": 1,
-                "occurred_at": "2026-08-13T12:00:00Z",
-                "event_id": "e1",
-            }
-        ],
-    )
-    source = DbEventSource({"database_url": url, "initial_watermark": "2026-08-01T00:00:00Z"})
-    source.connect()
-    source.health()
-    monkeypatch.setattr(source._engine.dialect, "name", "postgresql")
-
-    def boom(engine, watermark_at, watermark_event_id):
-        raise OperationalError("count", {}, Exception("down"))
-
-    monkeypatch.setattr(source, "_count_after_sql", boom)
-    monkeypatch.setattr(source, "_count_after_rows", lambda engine, watermark_at, watermark_event_id: 4)
-    assert source._count_after(source._engine, source._watermark_at, source._watermark_event_id) == 4
-
-
-def test_db_count_after_unexpected_sql_error_propagates(tmp_path, monkeypatch):
-    url = _sqlite_url(tmp_path)
-    _seed_events(
-        url,
-        [
-            {
-                "user_id": "u1",
-                "item_id": "i1",
-                "event_type": "purchase",
-                "quantity": 1,
-                "occurred_at": "2026-08-13T12:00:00Z",
-                "event_id": "e1",
-            }
-        ],
-    )
-    source = DbEventSource({"database_url": url})
-    source.connect()
-    source.health()
-    monkeypatch.setattr(source._engine.dialect, "name", "postgresql")
-
-    def boom(engine, watermark_at, watermark_event_id):
-        raise RuntimeError("count bug")
-
-    monkeypatch.setattr(source, "_count_after_sql", boom)
-    with pytest.raises(RuntimeError, match="count bug"):
-        source._count_after(source._engine, source._watermark_at, source._watermark_event_id)
 
 
 def test_db_unexpected_watermark_error_propagates(tmp_path, monkeypatch):
@@ -1077,11 +930,11 @@ def test_db_zero_event_id_falls_back_to_idempotency_key_in_sql_too(tmp_path):
 def test_db_row_without_event_id_or_idempotency_key_is_rejected_without_blocking(tmp_path):
     rows = [_event_row("e1", 0), _event_row("bad", 0, event_id=None), _event_row("e3", 1)]
     source, options = _watermarked_source(tmp_path, rows)
-    first = list(source.poll(1))
-    assert [event.event_id for event in first] == [""]
-    assert "event_id or idempotency_key is required" in (first[0].rejected or "")
-    assert source.ack([""]) == ("",)
-    assert poll_one_by_one(source) == ["e1", "e3"]
+    first = list(source.poll(2))
+    assert [event.event_id for event in first] == ["e1", ""]
+    assert "event_id or idempotency_key is required" in (first[1].rejected or "")
+    assert source.ack(["e1", ""]) == ("e1", "")
+    assert poll_one_by_one(source) == ["e3"]
     assert _saved_event_id(tmp_path) == "e3"
     assert _restarted_ids(options) == []
 
@@ -1101,3 +954,104 @@ def test_db_odd_identity_shapes_are_each_delivered_once(tmp_path):
     source, _options = _watermarked_source(tmp_path, [_event_row(event_id, 0) for event_id in ids])
     seen = poll_one_by_one(source)
     assert sorted(seen) == sorted(ids)
+
+
+def test_db_sub_millisecond_timestamps_page_in_time_order(tmp_path):
+    rows = [
+        _event_row("z", 0, occurred_at="2026-08-13T12:00:00.100100+00:00"),
+        _event_row("a", 0, occurred_at="2026-08-13T14:00:00.100400+02:00"),
+        _event_row("m", 0, occurred_at="2026-08-13T12:00:00.1002Z"),
+    ]
+    source, _options = _watermarked_source(tmp_path, rows)
+    assert poll_one_by_one(source) == ["z", "m", "a"]
+
+
+def test_db_padded_event_ids_page_by_their_trimmed_value(tmp_path):
+    source, _options = _watermarked_source(tmp_path, [_event_row(" x", 0), _event_row("!x", 0)])
+    assert poll_one_by_one(source) == ["!x", "x"]
+
+
+def test_db_ctid_shaped_event_ids_are_each_delivered_once(tmp_path):
+    ids = ["CTID:(0,1)", "ctid:(0,2)", "ctid:(0,10)", "ctid:a b", "ctid:ab", "ctid:", "ctid:(0,x)"]
+    source, _options = _watermarked_source(tmp_path, [_event_row(event_id, 0) for event_id in ids])
+    seen = poll_one_by_one(source)
+    assert sorted(seen) == sorted(ids)
+
+
+def test_db_keyless_rows_at_one_timestamp_are_each_delivered_as_rejected(tmp_path):
+    keyless = [_event_row(f"k{n}", 0, event_id=None, item_id=f"i{n}") for n in range(12)]
+    source, options = _watermarked_source(tmp_path, [*keyless, _event_row("late", 1)])
+    rejected = []
+    while batch := list(source.poll(1)):
+        rejected.append(batch[0].rejected)
+        assert source.ack([batch[0].event_id]) == (batch[0].event_id,)
+    assert len(rejected) == 13
+    assert all("event_id or idempotency_key is required" in (reason or "") for reason in rejected[:12])
+    assert rejected[12] is None
+    assert _saved_event_id(tmp_path) == "late"
+    assert _restarted_ids(options) == []
+
+
+def test_db_rejects_dialects_other_than_sqlite_and_postgres():
+    with pytest.raises(ConfigError, match="sqlite and postgresql"):
+        DbEventSource({"database_url": "mysql+pymysql://user@localhost/events"})
+
+
+@pytest.mark.parametrize(
+    ("extra", "events_query"),
+    [({"Cicerone_Cursor": "x"}, None), ({}, "SELECT *, 'x' AS cicerone_cursor FROM events")],
+)
+def test_db_source_column_named_like_the_cursor_is_a_config_error(tmp_path, extra, events_query):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [{**_event_row("e1", 0), **extra}])
+    source = DbEventSource({"database_url": url, "events_query": events_query})
+    source.connect()
+    with pytest.raises(ConfigError, match="cicerone_cursor"):
+        source.poll(1)
+
+
+def test_db_without_rowid_table_pages_by_id(tmp_path):
+    url = _sqlite_url(tmp_path)
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE events (id INTEGER PRIMARY KEY, user_id TEXT, item_id TEXT,"
+                " event_type TEXT, quantity INTEGER, occurred_at TEXT) WITHOUT ROWID"
+            )
+        )
+        for n in range(1, 13):
+            conn.execute(
+                text("INSERT INTO events VALUES (:id, 'u1', :item, 'purchase', 1, '2026-08-13T12:00:00Z')"),
+                {"id": n, "item": f"i{n}"},
+            )
+    source = DbEventSource({"database_url": url})
+    source.connect()
+    assert poll_one_by_one(source) == [f"id:{n}" for n in range(1, 13)]
+
+
+def test_db_events_query_projecting_id_pages_past_the_first_page(tmp_path):
+    url = _sqlite_url(tmp_path)
+    _seed_events(url, [_event_row(f"e{n}", 0, id=n) for n in range(1, 13)])
+    query = "SELECT id, user_id, item_id, event_type, quantity, occurred_at FROM events"
+    source = DbEventSource({"database_url": url, "events_query": query})
+    source.connect()
+    assert poll_one_by_one(source) == [f"id:{n}" for n in range(1, 13)]
+
+
+def test_db_watermark_file_stores_the_sql_cursor_and_resumes_after_it(tmp_path):
+    rows = [_event_row(f"e{n}", 0) for n in (1, 2, 3)]
+    source, options = _watermarked_source(tmp_path, rows)
+    assert [event.event_id for event in source.poll(2)] == ["e1", "e2"]
+    source.ack(["e1", "e2"])
+    saved = json.loads((tmp_path / "wm.json").read_text())
+    assert saved["event_id"] == "e2"
+    assert saved["cursor"].endswith("e2")
+    assert _restarted_ids(options) == ["e3"]
+
+
+def test_db_watermark_file_without_cursor_resumes_at_its_timestamp(tmp_path):
+    rows = [_event_row("e0", 0), _event_row("e1", 1), _event_row("e2", 1), _event_row("e3", 2)]
+    _source, options = _watermarked_source(tmp_path, rows)
+    (tmp_path / "wm.json").write_text('{"occurred_at": "2026-08-13T12:01:00+00:00", "event_id": "e2"}\n')
+    assert _restarted_ids(options) == ["e1", "e2", "e3"]
