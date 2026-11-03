@@ -5,6 +5,7 @@ import json
 import pandas as pd
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader
+from support.prometheus_metrics import registry_metric_value
 from test_serve import _feature_config, _settings
 
 from cicerone.config import IOSettings
@@ -235,6 +236,25 @@ def test_recommendations_log_exposures_when_enabled(tmp_path):
     assert row["user_id"] == "u1"
     assert row["experiment_id"] == "rrf-vs-blend"
     assert row["variant"] in {"control", "treatment"}
+
+
+def test_recommendations_drop_the_exposure_when_the_append_queue_is_full(tmp_path, monkeypatch):
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    monkeypatch.setattr("cicerone.serve.app._MAX_PENDING_APPENDS", 0)
+    dropped_metric = ("cicerone_serve_appends_dropped_total", {"kind": "exposure"})
+    dropped = registry_metric_value(*dropped_metric)
+    app = create_app(
+        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        FakeReader(_variant_recs()),
+        manifest_reader=FakeManifest(),
+        feature_config=_feature_config(),
+    )
+    with TestClient(app) as client:
+        assert (
+            client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).status_code == 200
+        )
+    assert registry_metric_value(*dropped_metric) == dropped + 1
+    assert not (tmp_path / "exposures.jsonl").exists()
 
 
 def test_recommendations_exposure_generated_at_matches_response(tmp_path):

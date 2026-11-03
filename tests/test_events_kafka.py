@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from support.events import event_payload
-from support.fake_kafka import install_fake_kafka, kafka_source_options
+from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
 from support.fakes import hide_module
 
 from cicerone.config import ConfigError
@@ -175,16 +175,29 @@ def test_nack_allows_repoll(monkeypatch):
     assert list(source.poll(10)) == []
 
 
-def test_missing_event_id_uses_partition_offset(monkeypatch):
+@pytest.mark.parametrize(
+    ("ids", "expected"),
+    [
+        ({}, "0-0"),
+        ({"event_id": 0}, "0-0"),
+        ({"event_id": ""}, "0-0"),
+        ({"event_id": "", "idempotency_key": 0}, "0-0"),
+        ({"event_id": 0, "idempotency_key": "k"}, "k"),
+        ({"event_id": "0"}, "0"),
+    ],
+    ids=["absent", "zero", "empty", "empty-key-zero", "zero-with-key", "string-zero"],
+)
+def test_missing_event_id_uses_partition_offset(monkeypatch, ids, expected):
     broker = install_fake_kafka(monkeypatch)
     payload = event_payload()
     payload.pop("event_id")
+    payload.update(ids)
     broker.add("cicerone.events", payload)
     source = KafkaEventSource(kafka_source_options())
     source.connect()
     events = list(source.poll(10))
     assert len(events) == 1
-    assert events[0].event_id == "0-0"
+    assert events[0].event_id == expected
 
 
 def test_poison_entry_is_committed(monkeypatch):
@@ -438,6 +451,21 @@ def test_connect_list_topics_failure(monkeypatch):
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
     assert created[0].closed is True
+
+
+def test_connect_subscribe_failure_closes_consumer(monkeypatch):
+    install_fake_kafka(monkeypatch)
+    created = _capture_consumers(monkeypatch)
+    source = KafkaEventSource(kafka_source_options())
+    source.connect()
+    assert created[0].closed is False
+    monkeypatch.setattr(
+        FakeConsumer, "subscribe", lambda *_args, **_kwargs: (_ for _ in ()).throw(KafkaException("sub"))
+    )
+    with pytest.raises(KafkaException, match="sub"):
+        source.connect()
+    assert created[1].closed is True
+    assert created[0].closed is False
 
 
 def test_connect_list_topics_unexpected_error_propagates(monkeypatch):

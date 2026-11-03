@@ -10,7 +10,7 @@ from typing import Any
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import RedisError
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
 from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
@@ -71,21 +71,26 @@ class RedisStreamsEventSource(QueuedEventSource):
         from cicerone.redis_client import redis_from_url
 
         client = redis_from_url(self._redis_url, decode_responses=True)
+        ready = False
         try:
-            client.ping()
-        except RedisError as exc:
-            raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
-
-        try:
-            client.xgroup_create(
-                self._stream,
-                self._group,
-                id=self._group_start_id,
-                mkstream=True,
-            )
-        except redis.ResponseError as exc:
-            if "BUSYGROUP" not in str(exc):
-                raise
+            try:
+                client.ping()
+            except RedisError as exc:
+                raise EventSourceError(f"events.options.redis_url is unreachable: {exc}") from exc
+            try:
+                client.xgroup_create(
+                    self._stream,
+                    self._group,
+                    id=self._group_start_id,
+                    mkstream=True,
+                )
+            except redis.ResponseError as exc:
+                if "BUSYGROUP" not in str(exc):
+                    raise
+            ready = True
+        finally:
+            if not ready:
+                self._release(client)
 
         with self._lock:
             previous = self._client
@@ -263,7 +268,7 @@ class RedisStreamsEventSource(QueuedEventSource):
                 if entry_id in self._held_entries:
                     continue
             payload = {str(key): value for key, value in fields.items()}
-            if payload.get("event_id") in (None, "") and payload.get("idempotency_key") in (None, ""):
+            if supplied_event_id(payload) is None:
                 payload["event_id"] = entry_id
             try:
                 event = normalize_event(payload)

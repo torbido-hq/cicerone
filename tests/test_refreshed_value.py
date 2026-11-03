@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import threading
-import time
 
 import pytest
+from support.waits import WAIT_SECONDS, wait_until
 
 from cicerone.refreshed_value import RefreshedValue
 
@@ -83,14 +83,29 @@ def test_concurrent_expired_gets_load_once() -> None:
         release.wait(5)
         return len(calls)
 
+    class _CountingLock:
+        def __init__(self) -> None:
+            self._lock = threading.Lock()
+            self.arrivals: list[int] = []
+
+        def __enter__(self) -> None:
+            self.arrivals.append(1)
+            self._lock.acquire()
+
+        def __exit__(self, *_exc: object) -> None:
+            self._lock.release()
+
     value = RefreshedValue(slow_load, ttl_seconds=60.0)
+    lock = _CountingLock()
+    value._lock = lock  # type: ignore[assignment]
     results: list[int] = []
     threads = [threading.Thread(target=lambda: results.append(value.get())) for _ in range(4)]
     threads[0].start()
-    assert started.wait(5)
+    assert started.wait(WAIT_SECONDS)
     for thread in threads[1:]:
         thread.start()
-    time.sleep(0.1)  # let the other gets block on the in-flight load
+    # Every other get is queued on the in-flight load before it finishes.
+    assert wait_until(lambda: len(lock.arrivals) == 4)
     release.set()
     for thread in threads:
         thread.join(5)

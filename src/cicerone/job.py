@@ -15,8 +15,9 @@ import pandas as pd
 from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, build_artifact, dumps_artifact
 from cicerone.automl import CandidateResult, evaluate_candidates, select_best_candidate
 from cicerone.blending import COLD_START_USER_ID
+from cicerone.cli import configure_logging
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_LOG_FORMAT
+from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.dataset import BuiltDataset, build_dataset
 from cicerone.errors import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
 from cicerone.errors import PUBLISH_ERRORS as _PUBLISH_ERRORS
@@ -850,7 +851,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
+    configure_logging(None, None)
     try:
         run()
     except Exception as exc:

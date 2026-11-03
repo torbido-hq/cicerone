@@ -9,6 +9,7 @@ import pytest
 from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from support.fakes import fake_monotonic
 from support.settings import make_settings
 from support.system_spec import SKIP_NO_TEST_DB
 
@@ -86,11 +87,17 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
 
 
 @pytest.fixture
+def isolated_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset ``CICERONE_CONFIG_PATH`` and restore it after ``cli.main`` sets it."""
+    # setenv first so monkeypatch records the restore even when the variable was unset.
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "")
+    monkeypatch.delenv("CICERONE_CONFIG_PATH")
+
+
+@pytest.fixture
 def refresh_clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Monotonic clock for ``RefreshedValue`` TTLs; advance ``refresh_clock.now``."""
-    clock = SimpleNamespace(now=0.0)
-    monkeypatch.setattr("cicerone.refreshed_value.time", SimpleNamespace(monotonic=lambda: clock.now))
-    return clock
+    return fake_monotonic(monkeypatch, "cicerone.refreshed_value.time")
 
 
 @pytest.fixture
