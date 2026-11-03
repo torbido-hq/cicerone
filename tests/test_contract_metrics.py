@@ -30,6 +30,7 @@ EXPECTED_FAMILIES = {
     "cicerone_request_latency_seconds": ("histogram", ["endpoint"]),
     "cicerone_requests": ("counter", ["endpoint", "method", "status"]),
     "cicerone_retrain_trigger": ("counter", ["source", "status"]),
+    "cicerone_serve_appends_dropped": ("counter", ["kind"]),
     "cicerone_track_ingest": ("counter", ["kind", "status"]),
     "cicerone_up": ("gauge", []),
 }
