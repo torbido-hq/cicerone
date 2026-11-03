@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -101,6 +104,36 @@ def patch_parquet_reads(
 def hide_module(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     """Make ``import name`` fail as if its optional extra were not installed."""
     monkeypatch.setitem(sys.modules, name, None)
+
+
+def patch_module_ref(monkeypatch: pytest.MonkeyPatch, target: str, **overrides: Any) -> None:
+    """Replace ``target`` (``"pkg.mod.time"``) with a copy carrying ``overrides``; the real module stays."""
+    owner, name = target.rsplit(".", 1)
+    real = getattr(importlib.import_module(owner), name)
+    monkeypatch.setattr(target, SimpleNamespace(**{**vars(real), **overrides}))
+
+
+def fake_monotonic(monkeypatch: pytest.MonkeyPatch, target: str) -> SimpleNamespace:
+    """Drive ``target`` (``"pkg.mod.time"``)'s ``monotonic`` from ``clock.now``; advance it to move time."""
+    clock = SimpleNamespace(now=0.0)
+    patch_module_ref(monkeypatch, target, monotonic=lambda: clock.now)
+    return clock
+
+
+def hold_threads(monkeypatch: pytest.MonkeyPatch, target: str) -> list[dict[str, Any]]:
+    """Patch ``target`` (``"pkg.mod.threading"``) so started threads are recorded (their kwargs), not run."""
+    started: list[dict[str, Any]] = []
+
+    class _HeldThread(threading.Thread):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._held_kwargs = kwargs
+
+        def start(self) -> None:
+            started.append(self._held_kwargs)
+
+    patch_module_ref(monkeypatch, target, Thread=_HeldThread)
+    return started
 
 
 class FakeReader:
@@ -201,8 +234,13 @@ class FenceCheck:
         return self.calls < self.fail_at
 
 
-def raising(exc: BaseException) -> Callable[..., Any]:
-    def _raise(*_args: Any, **_kwargs: Any) -> Any:
-        raise exc
+class raising:
+    """Callable that raises ``exc``; ``calls`` counts invocations so tests can prove the patch was reached."""
 
-    return _raise
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+        self.calls = 0
+
+    def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls += 1
+        raise self.exc

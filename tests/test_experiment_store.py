@@ -7,7 +7,7 @@ import threading
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from support.fakes import FakeLock, FenceCheck, raising
+from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
@@ -552,10 +552,10 @@ def test_read_state_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> 
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql", raising(DatabaseError("no such table: experiment_state"))
-    )
+    boom = raising(DatabaseError("no such table: experiment_state"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_state() is None
+    assert boom.calls >= 1
 
 
 def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, monkeypatch) -> None:
@@ -570,7 +570,7 @@ def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, mon
             raise DatabaseError("no such column: promoted_at")
         return pd.DataFrame([{"experiment_id": "exp", "promoted_variant": "treatment", "payload": None}])
 
-    monkeypatch.setattr("cicerone.experiment.store_db.pd.read_sql", _read)
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=_read)
     state = store.read_state()
     assert state is not None
     assert state["promoted_variant"] == "treatment"
@@ -582,10 +582,10 @@ def test_read_exposures_db_pandas_database_error_is_empty(tmp_path, monkeypatch)
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql", raising(DatabaseError("no such table: exposures"))
-    )
+    boom = raising(DatabaseError("no such table: exposures"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_exposures() == []
+    assert boom.calls >= 1
 
 
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
@@ -593,8 +593,10 @@ def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch)
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql", raising(SQLAlchemyError("no such table: exposures"))
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(SQLAlchemyError("no such table: exposures")),
     )
     monkeypatch.setattr("cicerone.experiment.store_db.is_missing_table_error", lambda _exc: True)
     assert store.read_exposures() == []
@@ -603,8 +605,10 @@ def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch)
 def test_read_exposures_db_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql", raising(RuntimeError("no such table: exposures"))
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(RuntimeError("no such table: exposures")),
     )
     monkeypatch.setattr("cicerone.experiment.store_db.is_missing_table_error", lambda _exc: True)
     with pytest.raises(RuntimeError, match="no such table"):
@@ -614,7 +618,9 @@ def test_read_exposures_db_unexpected_error_ignores_missing_table_helper(tmp_pat
 def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> None:
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr("cicerone.experiment.store_db.pd.read_sql", raising(RuntimeError("db down")))
+    patch_module_ref(
+        monkeypatch, "cicerone.experiment.store_db.pd", read_sql=raising(RuntimeError("db down"))
+    )
     with pytest.raises(RuntimeError, match="db down"):
         store.read_exposures()
 
@@ -624,9 +630,10 @@ def test_read_exposures_db_operational_error_reraises(tmp_path, monkeypatch) -> 
 
     store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql",
-        raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
     )
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_exposures()
@@ -718,9 +725,10 @@ def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatc
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql",
-        raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
     )
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_state()
@@ -734,9 +742,10 @@ def test_read_state_db_reraises_unclassified_programming_error(tmp_path, monkeyp
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
 
-    monkeypatch.setattr(
-        "cicerone.experiment.store_db.pd.read_sql",
-        raising(ProgrammingError("SELECT 1", {}, Exception("permission denied"))),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(ProgrammingError("SELECT 1", {}, Exception("permission denied"))),
     )
     with pytest.raises(ProgrammingError, match="permission denied"):
         store.read_state()
@@ -1045,7 +1054,6 @@ def test_dataset_writes_encode_before_taking_the_writer_lock(tmp_path) -> None:
 
 
 def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) -> None:
-    import cicerone.experiment.store_db as store_db
 
     output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(
@@ -1065,7 +1073,7 @@ def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) 
     def _bad_frame(_rows):
         raise ValueError("bad exposure rows")
 
-    monkeypatch.setattr(store_db.pd, "DataFrame", _bad_frame)
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", DataFrame=_bad_frame)
     with pytest.raises(ValueError, match="bad exposure rows"):
         store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": "control"}])
 
