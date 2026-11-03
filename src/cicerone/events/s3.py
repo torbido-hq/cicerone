@@ -99,9 +99,16 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
 
     def close(self) -> None:
         with self._lock:
+            s3, sqs = self._s3, self._sqs
             self._s3 = None
             self._sqs = None
             self._connected = False
+        try:
+            if s3 is not None:
+                s3.close()
+        finally:
+            if sqs is not None:
+                sqs.close()
 
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
@@ -255,14 +262,11 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         bucket: str,
         key: str,
         etag: str = "",
-        *,
-        max_bytes: int | None = None,
     ) -> list[NormalizedEvent]:
-        limit = DEFAULT_MAX_STORAGE_READ_BYTES if max_bytes is None else max_bytes
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         return events_from_body(
-            read_s3_body(obj, max_bytes=limit),
+            read_s3_body(obj, max_bytes=DEFAULT_MAX_STORAGE_READ_BYTES),
             bucket=bucket,
             key=key,
             etag=resolved_etag,

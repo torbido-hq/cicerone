@@ -10,11 +10,33 @@ import pandas as pd
 
 from cicerone.config import Settings
 from cicerone.experiment.assignment import AssignmentOverlay, assign_user, snapshot_variant_names
+from cicerone.experiment.store import ExperimentStore
+from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.recommendation_schema import VARIANT_COLUMN, has_variant_column, pick_fallback_variant
-from cicerone.serve.item_filters import ItemsFilterCache, filter_recommendations
+from cicerone.serve.item_filters import ItemsFilterCache, build_items_cache, filter_recommendations
 
 logger = logging.getLogger(__name__)
+
+
+def read_assignment_overlay(settings: Settings, store: ExperimentStore | None) -> AssignmentOverlay:
+    if store is None or not settings.experiment.enabled:
+        return None, None
+    return store.assignment_overlay(settings.experiment.id)
+
+
+def build_recommendation_service(
+    settings: Settings,
+    reader: RecommendationReader,
+    feature_config: FeatureConfig | None,
+    assignment_overlay: Callable[[], AssignmentOverlay],
+) -> RecommendationService:
+    return RecommendationService(
+        settings,
+        reader,
+        items_cache=build_items_cache(settings, reader, feature_config),
+        assignment_overlay=assignment_overlay,
+    )
 
 
 @dataclass(frozen=True)
@@ -39,6 +61,10 @@ class RecommendationService:
         self._items_cache = items_cache
         self._assignment_overlay = assignment_overlay
         self._missing_category_warned = False
+
+    @property
+    def items_cache(self) -> ItemsFilterCache:
+        return self._items_cache
 
     def get(
         self,

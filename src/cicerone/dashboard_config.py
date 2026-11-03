@@ -152,7 +152,7 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "dashboard.enabled": {"text": "Whether this config starts the dashboard process."},
     "dashboard.users_path": {"text": "TOML of dashboard usernames to bcrypt hashes."},
-    "dashboard.lookup_k": {"text": "Max recommendation rows shown in Inspect user."},
+    "dashboard.lookup_k": {"text": "Deprecated, no effect: Inspect user shows serve.default_k rows."},
     "dashboard.lookup_events": {"text": "Max recent input events shown in Inspect user."},
     "events": {
         "text": "Incremental ingest between full retrains, plus optional online LightFM.",

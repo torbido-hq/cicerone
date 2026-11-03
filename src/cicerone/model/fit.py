@@ -122,8 +122,8 @@ def _fit_strategy(
             build_content_fallback_model(
                 feature_columns=content_feature_columns or [],
                 max_neighbors=content_max_neighbors,
-                items=content_items,  # type: ignore[arg-type]
-                interactions=content_interactions,  # type: ignore[arg-type]
+                items=content_items,
+                interactions=content_interactions,
             )
         )
     elif strategy.factory is not None:
@@ -140,7 +140,7 @@ def _fit_strategy(
         fit_with_epoch_metrics(
             model,
             dataset,
-            epoch_interactions,  # type: ignore[arg-type]
+            epoch_interactions,
             settings=epoch_metrics,
             top_k=epoch_metrics_top_k,
             label="Collaborative" if name == "collaborative" else "Sequential",

@@ -9,9 +9,7 @@ from cicerone.cli import main
 GLOBAL_OPTIONS = ["--config", "--help", "--log-format", "--log-level", "-c", "-h"]
 
 
-@pytest.fixture(autouse=True)
-def _isolate_config_env(monkeypatch):
-    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+pytestmark = pytest.mark.usefixtures("isolated_config_path")
 
 
 def _help(capsys, argv: list[str]) -> str:

@@ -28,13 +28,6 @@ def validate_kafka_event_options(options: dict[str, Any]) -> None:
     optional_nonempty_str(options, "consumer_name", prefix=_EVENTS_PREFIX)
 
 
-def _close_quietly(consumer: Any, message: str) -> None:
-    try:
-        consumer.close()
-    except KafkaException:
-        logger.exception(message)
-
-
 class KafkaEventSource(QueuedEventSource):
     """Consume JSON events from one topic; ack advances the commit watermark."""
 
@@ -64,16 +57,17 @@ class KafkaEventSource(QueuedEventSource):
             "auto.offset.reset": "earliest",
         }
         consumer = confluent_kafka.Consumer(conf)
-        connected = False
+        ready = False
         try:
             consumer.list_topics(topic=self._topic, timeout=self._timeout_seconds)
-            connected = True
         except KafkaException as exc:
             raise EventSourceError(f"events.options.bootstrap_servers is unreachable: {exc}") from exc
+        else:
+            consumer.subscribe([self._topic], on_revoke=self._on_revoke, on_lost=self._on_revoke)
+            ready = True
         finally:
-            if not connected:
-                _close_quietly(consumer, "Failed to close Kafka consumer after connect error")
-        consumer.subscribe([self._topic], on_revoke=self._on_revoke, on_lost=self._on_revoke)
+            if not ready:
+                self._release(consumer)
 
         with self._lock:
             previous = self._detach_unlocked()
@@ -94,7 +88,10 @@ class KafkaEventSource(QueuedEventSource):
         return consumer
 
     def _release(self, consumer: Any) -> None:
-        _close_quietly(consumer, "Kafka consumer close failed")
+        try:
+            consumer.close()
+        except KafkaException:
+            logger.exception("Kafka consumer close failed")
 
     def _on_revoke(self, consumer: Any, partitions: Sequence[Any]) -> None:
         # Another member now owns these partitions: their deliveries are no longer ours to commit.

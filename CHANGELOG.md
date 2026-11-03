@@ -23,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
   with `events.options.<key> is required`, like Kafka, without the
   `when events.kind = "redis_streams"` suffix.
+- Importing `cicerone.serve.app`, `cicerone.dashboard` or `cicerone.scheduler`
+  no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
+  still configure logging).
+
+### Deprecated
+
+- `dashboard.lookup_k` has no effect and is not validated; it logs a
+  warning when set with the dashboard enabled, and will be removed in 0.9.0.
 
 ### Fixed
 
@@ -40,6 +48,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the S3 list marker already did, and both sync a newly created
   positions directory into its parent, so the saved position survives a
   crash.
+- Kafka and Redis Streams event sources close the new consumer or client
+  when `connect` fails after creating it (Kafka `subscribe`, Redis `PING`
+  or `XGROUP CREATE`), and the S3 event source closes its S3 and SQS
+  clients on `close`, instead of leaking the connections.
 - Dashboard **Resume split** under Thompson allocation fails with
   "Experiment state could not be read" when the state read fails, instead
   of overwriting the stored champion, challenger and arms.
@@ -139,6 +151,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Serve writes exposures and impressions on one dedicated thread instead
   of the request threadpool, so busy-lock retries no longer hold request
   workers; pending writes finish on shutdown.
+- Dashboard Inspect user shows what `GET /recommendations/{user_id}`
+  returns with default parameters: `serve.default_k` rows, variant
+  fallback, unavailable items dropped (`features.toml`), ranks renumbered.
 
 ### Removed
 

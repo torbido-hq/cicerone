@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import threading
-import time
 from unittest.mock import MagicMock, call
 
 import pytest
 from sqlalchemy.exc import OperationalError
 from support.fakes import FakeLock, hide_module
 from support.settings import make_settings
+from support.waits import wait_until
 
 from cicerone import locks as locks_mod
 from cicerone.config import (
@@ -119,16 +119,8 @@ def test_build_redis_lock_without_url_is_programming_error():
 
 
 def test_advisory_keys_stable_for_default_and_differ_by_lock_key():
-    from cicerone.locks import PG_ADVISORY_KEY1, PG_ADVISORY_KEY2
-
-    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
-    assert advisory_keys_from_lock_key("other-job") != (
-        PG_ADVISORY_KEY1,
-        PG_ADVISORY_KEY2,
-    )
+    assert advisory_keys_from_lock_key("cicerone:scheduler:run_guard") == (613056429, 691498606)
+    assert advisory_keys_from_lock_key("other-job") != (613056429, 691498606)
 
 
 def test_build_redis_lock_uses_configured_key_and_ttl(monkeypatch):
@@ -249,10 +241,7 @@ def test_run_guard_releases_backend_after_run():
     guard = RunGuard(debounce_seconds=0, run_fn=fake_run, lock_backend=lock)
     assert guard.trigger("cron") is True
     assert done.wait(timeout=5)
-    for _ in range(50):
-        if events[-1:] == ["release"]:
-            break
-        time.sleep(0.05)
+    assert wait_until(lambda: events[-1:] == ["release"])
     assert events == ["acquire", "run:cron", "release"]
 
 
@@ -663,8 +652,8 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
 
     releaser = threading.Thread(target=do_release)
     releaser.start()
-    # Give release() time to set stop and begin joining before refresh returns 0.
-    time.sleep(0.05)
+    # release() must have stopped the refresher before refresh returns 0.
+    assert wait_until(lambda: lock._stop_refresh.is_set())
     allow_refresh_return.set()
     releaser.join(timeout=5)
     assert release_done.is_set()
