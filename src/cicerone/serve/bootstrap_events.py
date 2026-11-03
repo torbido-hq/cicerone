@@ -25,6 +25,7 @@ from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import assign_user, experiment_variant_names
 from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
@@ -50,19 +51,24 @@ class EventsRuntime:
     publisher: RecommendationPublisher | None = None
 
     def stop(self) -> bool:
-        stopped = True
         try:
-            if self.worker is not None:
-                stopped = self.worker.stop()
-                if not stopped:
-                    logger.warning("Event worker did not stop in time")
-                    return False
-            return True
-        finally:
-            try:
-                _close_publisher(self.publisher)
-            finally:
-                self.publisher = None
+            stopped = self.worker is None or self.worker.stop()
+        except BaseException:
+            cleanup_after_failure(self._close_publisher, "Recommendation publisher close failed", logger)
+            raise
+        self._close_publisher()
+        if not stopped:
+            logger.warning("Event worker did not stop in time")
+        return stopped
+
+    def _close_publisher(self) -> None:
+        publisher, self.publisher = self.publisher, None
+        if publisher is None:
+            return
+        try:
+            publisher.close()
+        except PUBLISH_ERRORS:
+            logger.exception("Recommendation publisher close failed")
 
 
 def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
@@ -98,24 +104,6 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
         return snapshot
 
     return read_users
-
-
-def _cleanup_after_startup_failure(cleanup: Callable[[], object] | None, what: str) -> None:
-    if cleanup is None:
-        return
-    try:
-        cleanup()
-    except Exception:  # noqa: BLE001 - runs while the startup error propagates; that error must win
-        logger.exception("%s after startup failure", what)
-
-
-def _close_publisher(publisher: RecommendationPublisher | None) -> None:
-    if publisher is None:
-        return
-    try:
-        publisher.close()
-    except PUBLISH_ERRORS:
-        logger.exception("Recommendation publisher close failed")
 
 
 def start_events_runtime(
@@ -261,7 +249,9 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            _cleanup_after_startup_failure(worker.stop if worker else None, "Event worker stop")
-            _cleanup_after_startup_failure(
-                publisher.close if publisher else None, "Recommendation publisher close"
-            )
+            if worker is not None:
+                cleanup_after_failure(worker.stop, "Event worker stop after startup failure", logger)
+            if publisher is not None:
+                cleanup_after_failure(
+                    publisher.close, "Recommendation publisher close after startup failure", logger
+                )

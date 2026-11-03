@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from cicerone.broker_errors import RABBITMQ_IO_ERRORS
 from cicerone.option_parse import (
     MAX_BROKER_TIMEOUT_SECONDS,
     optional_float,
@@ -14,23 +12,8 @@ from cicerone.option_parse import (
     require_nonempty_str,
 )
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_PREFETCH = 100
 DEFAULT_TIMEOUT_SECONDS = 10.0
-
-
-def close_amqp_handle(handle: Any, label: str) -> BaseException | None:
-    """Close a pika channel or connection; a broker error is logged and returned, not raised."""
-    closer = getattr(handle, "close", None)
-    if not callable(closer):
-        return None
-    try:
-        closer()
-    except RABBITMQ_IO_ERRORS as exc:
-        logger.exception("Failed to close RabbitMQ %s", label)
-        return exc
-    return None
 
 
 def amqp_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:

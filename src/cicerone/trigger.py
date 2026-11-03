@@ -86,7 +86,7 @@ class RunGuard:
                 self._run_fn(triggered_by=triggered_by)
             else:
                 self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
-        except Exception as exc:  # noqa: BLE001 - run thread's top level; the guard records the error
+        except Exception as exc:
             logger.exception("Triggered run (%s) failed", triggered_by)
             with self._lock:
                 self._last_error = exc
@@ -128,10 +128,18 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
         )
         return
 
-    last_marker = _current_marker(input_settings)
+    def checked_marker() -> str | None:
+        # Poller thread's top level: an unexpected error must not stop polling.
+        try:
+            return _current_marker(input_settings)
+        except Exception:
+            logger.exception("Input poll failed; treating as unchanged")
+            return None
+
+    last_marker = checked_marker()
     while True:
         time.sleep(interval_seconds)
-        marker = _current_marker(input_settings)
+        marker = checked_marker()
         if marker is not None and marker != last_marker:
             last_marker = marker
             guard.trigger("s3-poll")

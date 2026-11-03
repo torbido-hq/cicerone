@@ -55,7 +55,8 @@ def inflight_heartbeat(
         while not stop.wait(interval_seconds):
             try:
                 beat(events)
-            except Exception as exc:  # noqa: BLE001 - handed to the apply thread, which re-raises it
+            except Exception as exc:
+                # The caller is blocked in apply; record and stop this thread.
                 logger.exception("Event source heartbeat failed")
                 caught.append(exc)
                 failed.set()

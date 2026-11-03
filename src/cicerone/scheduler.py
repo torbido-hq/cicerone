@@ -35,7 +35,7 @@ def _cron_loop(schedule: str, run: Callable[[], None]) -> None:
 
         try:
             run()
-        except Exception as exc:  # noqa: BLE001 - cron loop's top level; the next tick must still run
+        except Exception as exc:
             logger.exception(
                 "Scheduled run failed (%s: %s); will retry at the next scheduled time",
                 type(exc).__name__,

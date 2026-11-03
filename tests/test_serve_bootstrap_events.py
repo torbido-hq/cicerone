@@ -751,7 +751,7 @@ def test_publisher_close_does_not_replace_worker_stop_error(tmp_path, feature_co
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    pub = _Pub(PublishError("close failed"))
+    pub = _Pub(RuntimeError("close failed"))
 
     from cicerone.serve import bootstrap_events as bootstrap
 

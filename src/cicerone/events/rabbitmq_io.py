@@ -9,9 +9,9 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
-from cicerone.amqp_options import close_amqp_handle
 from cicerone.broker_errors import RABBITMQ_IO_ERRORS
 from cicerone.events.base import EventSourceError
+from cicerone.failure_cleanup import cleanup_after_failure
 
 logger = logging.getLogger(__name__)
 
@@ -197,10 +197,10 @@ class PikaIo:
         self._abandon_channel = None
         self._abandon_connection = None
         close_handles(channel, connection)
-        if leftover_channel is not None and leftover_channel is not channel:
-            close_amqp_handle(leftover_channel, "channel")
-        if leftover_connection is not None and leftover_connection is not connection:
-            close_amqp_handle(leftover_connection, "connection")
+        close_handles(
+            leftover_channel if leftover_channel is not channel else None,
+            leftover_connection if leftover_connection is not connection else None,
+        )
 
     def _loop(self) -> None:
         while True:
@@ -219,7 +219,7 @@ class PikaIo:
                     self._busy += 1
                 try:
                     self._pump()
-                except Exception:  # noqa: BLE001 - I/O thread's top level; failing it releases blocked callers
+                except Exception:
                     self._mark_failed()
                     logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
@@ -301,7 +301,6 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
 
 
 def close_handles(channel: Any, connection: Any) -> None:
-    try:
-        close_amqp_handle(channel, "channel")
-    finally:
-        close_amqp_handle(connection, "connection")
+    for handle, label in ((channel, "channel"), (connection, "connection")):
+        if handle is not None:
+            cleanup_after_failure(handle.close, f"Failed to close RabbitMQ {label}", logger)

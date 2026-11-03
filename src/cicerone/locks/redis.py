@@ -108,6 +108,8 @@ class RedisLock:
                             logger.exception("Failed to refresh Redis lock TTL")
                             self._mark_lost(generation)
                             break
+                except Exception:
+                    logger.exception("Unexpected Redis lock refresh failure")
                 finally:
                     if not self._stop_refresh.is_set():
                         self._mark_lost(generation)

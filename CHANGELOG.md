@@ -162,15 +162,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
 - The RabbitMQ and Kafka publishers retry or wrap as `PublishError` only
-  broker and client errors. A programming error (e.g. `TypeError`) after
-  part of a publish was sent now propagates unchanged instead of being
-  retried or reported as a publish failure.
-- Unexpected errors are no longer logged and swallowed in the S3/SQS
-  events source (object load, ack delete, nack visibility, lag lookup),
-  the trigger input poller, the serve `X-Generated-At` manifest read,
-  serve exposure/impression writes, RabbitMQ handle close, publisher
-  close on serve startup failure and the Redis lock refresh thread; only
-  storage and broker errors are.
+  broker and client errors. Any other error (e.g. `KeyError`, `TypeError`)
+  now propagates unchanged, even after part of a publish was sent: the job
+  fails after its write instead of logging a publish failure. Incremental
+  publish still reports a `TypeError` as a publish failure.
+- The S3/SQS events source (object load, ack delete, nack visibility, lag
+  lookup) logs and absorbs only storage errors; any other error now
+  propagates.
+- An unexpected error reading the manifest for `X-Generated-At` now fails
+  serve startup instead of omitting the header.
 - When the experiment state read fails, the dashboard experiments page
   shows that dashboard's own last read or written state, instead of an
   unlocked process-wide copy.

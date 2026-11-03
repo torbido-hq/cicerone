@@ -518,7 +518,7 @@ def test_kafka_publisher_connect_flush_failure_keeps_original_error(monkeypatch)
 
     def _boom(self, timeout=None):  # type: ignore[no-untyped-def]
         self.broker.flush_calls.append(timeout)
-        raise KafkaException("flush down")
+        raise RuntimeError("flush bug")
 
     monkeypatch.setattr(FakeProducer, "flush", _boom)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t", "timeout_seconds": 2})
@@ -585,7 +585,7 @@ def test_rabbitmq_publisher_connect_close_failure_keeps_original_error(monkeypat
 
     def _boom(self) -> None:
         del self
-        raise AMQPError("close down")
+        raise RuntimeError("close bug")
 
     monkeypatch.setattr(FakeConnection, "close", _boom)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})

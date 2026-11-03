@@ -98,7 +98,7 @@ def _run_job() -> int:
 
     try:
         run()
-    except Exception:  # noqa: BLE001 - CLI entry point; any job failure becomes exit code 1
+    except Exception:
         logger.exception("Recommendation job failed")
         return 1
     return 0

@@ -463,22 +463,16 @@ def test_close_handles_closes_connection_when_channel_close_fails():
             if self.error is not None:
                 raise self.error
 
-    channel = _Handle(AMQPError("channel"))
+    channel = _Handle(RuntimeError("channel"))
     connection = _Handle()
     close_handles(channel, connection)
     assert channel.closed is True
     assert connection.closed is True
 
-    channel = _Handle(AMQPError("channel"))
-    connection = _Handle(OSError("connection"))
+    channel = _Handle(RuntimeError("channel"))
+    connection = _Handle(RuntimeError("connection"))
     close_handles(channel, connection)
     assert channel.closed is True
-    assert connection.closed is True
-
-    channel = _Handle(RuntimeError("channel bug"))
-    connection = _Handle()
-    with pytest.raises(RuntimeError, match="channel bug"):
-        close_handles(channel, connection)
     assert connection.closed is True
 
 
@@ -532,7 +526,7 @@ def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
         state.close = _close
         return state
 
-    channel = _handle(AMQPError("channel"))
+    channel = _handle(RuntimeError("channel"))
     connection = _handle()
     io = PikaIo(timeout_seconds=0.05)
     io._abandon_channel = channel

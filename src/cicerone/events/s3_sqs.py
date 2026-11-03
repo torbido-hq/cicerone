@@ -157,7 +157,7 @@ class S3SqsPoll:
                         exc_info=exc,
                     )
                     pairs = list(exc.valid_pairs)
-                except ValueError:
+                except (ValueError, RecursionError):
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     if _delete_poison_message(sqs, queue_url, receipt):
                         made_progress = True

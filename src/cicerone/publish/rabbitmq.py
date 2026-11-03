@@ -12,7 +12,6 @@ import pandas as pd
 from cicerone.amqp_options import (
     amqp_timeout_seconds,
     apply_amqp_timeouts,
-    close_amqp_handle,
     optional_exchange,
     optional_routing_key,
     require_amqp_url,
@@ -20,6 +19,7 @@ from cicerone.amqp_options import (
 )
 from cicerone.broker_errors import RABBITMQ_IO_ERRORS
 from cicerone.config.constants import ConfigError, import_extra
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -32,6 +32,18 @@ _RETRY_ERRORS: tuple[type[BaseException], ...] = (ConfigError, *RABBITMQ_IO_ERRO
 @dataclass
 class _Progress:
     sent: int = 0
+
+
+def _close_handle(handle: Any, label: str) -> BaseException | None:
+    """Close a pika channel or connection; a broker error is logged and returned, not raised."""
+    if handle is None:
+        return None
+    try:
+        handle.close()
+    except RABBITMQ_IO_ERRORS as exc:
+        logger.exception("Failed to close RabbitMQ publisher %s", label)
+        return exc
+    return None
 
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
@@ -78,7 +90,11 @@ class RabbitMQPublisher:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         finally:
             if connection is not None and not connected:
-                close_amqp_handle(connection, "publisher connection after connect error")
+                cleanup_after_failure(
+                    connection.close,
+                    "Failed to close RabbitMQ publisher connection after connect error",
+                    logger,
+                )
         self._connection = connection
         self._channel = channel
         self._connected_once = True
@@ -141,9 +157,9 @@ class RabbitMQPublisher:
         self._connection = None
         channel_exc: BaseException | None = None
         try:
-            channel_exc = close_amqp_handle(channel, "publisher channel")
+            channel_exc = _close_handle(channel, "channel")
         finally:
-            connection_exc = close_amqp_handle(connection, "publisher connection")
+            connection_exc = _close_handle(connection, "connection")
         close_exc = channel_exc or connection_exc
         if close_exc is not None:
             raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc

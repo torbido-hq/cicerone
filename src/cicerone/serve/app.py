@@ -21,7 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
-from cicerone.errors import OPTIONAL_IO_ERRORS, SINK_WRITE_ERRORS
+from cicerone.errors import OPTIONAL_IO_ERRORS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
@@ -83,7 +83,8 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
                 _APPEND_BUSY_ATTEMPTS,
             )
             time.sleep(0.05 * attempt)
-        except SINK_WRITE_ERRORS:
+        except Exception:
+            # Append-pool thread's top level: nobody reads the future.
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
@@ -112,9 +113,10 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 
 
 def _refresh_step(step: RecommendationReader | RefreshedValue[Any]) -> bool:
+    # Readers are pluggable; one failed step must not end the loop.
     try:
         return step.refresh() is not False
-    except Exception:  # noqa: BLE001 - refresh thread's top level; readers are pluggable, the loop must go on
+    except Exception:
         logger.exception("Background refresh of %s failed; retrying next tick", type(step).__name__)
         return False
 

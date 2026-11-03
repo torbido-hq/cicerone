@@ -38,7 +38,7 @@ class FakeRedis:
     def close(self) -> None:
         self.closed = True
 
-    def xadd(self, name: str, fields: dict[str, Any], id: str = "*") -> str:  # noqa: A002
+    def xadd(self, name: str, fields: dict[str, Any], id: str = "*") -> str:
         self._seq += 1
         entry_id = f"{self._seq}-0" if id == "*" else id
         self.streams.setdefault(name, []).append((entry_id, {str(k): str(v) for k, v in fields.items()}))
