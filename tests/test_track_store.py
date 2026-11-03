@@ -6,7 +6,7 @@ from io import BytesIO
 
 import pandas as pd
 import pytest
-from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, raising
+from support.fakes import FakeLock, FakeS3Body, FakeS3Client, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
@@ -452,7 +452,7 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
     assert store.read_rows() == []
     assert store.read_eval() is None
 
-    monkeypatch.setattr(pd, "read_sql", raising(RuntimeError("db down")))
+    patch_module_ref(monkeypatch, "cicerone.io.sql_rows.pd", read_sql=raising(RuntimeError("db down")))
     with pytest.raises(RuntimeError, match="db down"):
         store.read_rows()
     with pytest.raises(RuntimeError, match="db down"):
@@ -724,10 +724,8 @@ def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, 
 
     store = TrackStore(sqlite_output(tmp_path / "track.db"))
     store.append_rows([_row()])
-    monkeypatch.setattr(
-        pd,
-        "read_sql",
-        raising(DatabaseError("connection refused")),
+    patch_module_ref(
+        monkeypatch, "cicerone.io.sql_rows.pd", read_sql=raising(DatabaseError("connection refused"))
     )
     with pytest.raises(DatabaseError, match="connection refused"):
         store.read_rows()
@@ -737,7 +735,7 @@ def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_pa
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     store.append_rows([_row()])
-    monkeypatch.setattr(pd, "read_sql", raising(RuntimeError("x")))
+    patch_module_ref(monkeypatch, "cicerone.io.sql_rows.pd", read_sql=raising(RuntimeError("x")))
     monkeypatch.setattr("cicerone.io.sql_rows.is_missing_table_error", lambda _exc: True)
     with pytest.raises(RuntimeError, match="x"):
         store.read_rows()
@@ -758,9 +756,10 @@ def test_s3_parquet_frame_closes_body(monkeypatch) -> None:
     from cicerone.track.store_dataset import _s3_parquet_frame
 
     body = FakeS3Body(b"parquet")
-    monkeypatch.setattr(
-        "cicerone.track.store_dataset.pd.read_parquet",
-        lambda _buf: pd.DataFrame({"x": [1]}),
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.track.store_dataset.pd",
+        read_parquet=lambda _buf: pd.DataFrame({"x": [1]}),
     )
     frame = _s3_parquet_frame(FakeS3Client(body), "recs", "history/part.parquet")
     assert frame is not None

@@ -438,6 +438,33 @@ def test_s3_poll_after_close_raises_controlled_error():
         source.poll(10)
 
 
+@mock_aws
+def test_s3_close_closes_clients(mocker):
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    queue_url = sqs.create_queue(QueueName="events")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    s3_close = mocker.spy(source._s3, "close")
+    sqs_close = mocker.spy(source._sqs, "close")
+    source.close()
+    s3_close.assert_called_once()
+    sqs_close.assert_called_once()
+    source.close()
+    s3_close.assert_called_once()
+
+
+@mock_aws
+def test_s3_list_close_closes_s3_client(mocker):
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    assert source._sqs is None
+    s3_close = mocker.spy(source._s3, "close")
+    source.close()
+    s3_close.assert_called_once()
+    source.close()
+    s3_close.assert_called_once()
+
+
 def test_s3_tuning_options_and_rejects_non_positive():
     source = S3EventSource(
         _creds(

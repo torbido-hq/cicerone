@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pandas as pd
@@ -172,7 +171,6 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
 
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
     reader.refresh()
-    time.sleep(0.01)
 
     app = create_app(_settings(), reader)
     metrics = TestClient(app).get("/metrics", headers=_metrics_headers()).text

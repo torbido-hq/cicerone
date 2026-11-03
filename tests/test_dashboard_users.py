@@ -5,6 +5,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from support.fakes import patch_module_ref
 
 from cicerone.dashboard_users import (
     _restrict_owner_only,
@@ -62,14 +63,17 @@ def test_save_users_does_not_truncate_destination(tmp_path, monkeypatch):
     path = tmp_path / "dashboard_users.toml"
     path.write_text("stale-secret\n")
     original_open = os.open
+    opened: list[str | os.PathLike[str]] = []
 
     def guarded(name: str | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        opened.append(name)
         if Path(name).resolve() == path.resolve() and flags & os.O_TRUNC:
             raise AssertionError("truncated destination")
         return original_open(name, flags, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(os, "open", guarded)
+    patch_module_ref(monkeypatch, "cicerone.dashboard_users.os", open=guarded)
     save_users(path, {"alice": "hash-a"})
+    assert opened
     assert "stale-secret" not in path.read_text()
     assert load_users(path) == {"alice": "hash-a"}
 
@@ -93,9 +97,13 @@ def test_save_users_closes_fd_if_fdopen_fails(tmp_path, monkeypatch):
         closed.append(fd)
         real_close(fd)
 
-    monkeypatch.setattr(os, "open", tracked_open)
-    monkeypatch.setattr(os, "fdopen", failing_fdopen)
-    monkeypatch.setattr(os, "close", tracked_close)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.dashboard_users.os",
+        open=tracked_open,
+        fdopen=failing_fdopen,
+        close=tracked_close,
+    )
 
     with pytest.raises(OSError, match="fdopen failed"):
         save_users(path, {"alice": "hash-a"})
@@ -123,9 +131,13 @@ def test_save_users_closes_fd_when_fdopen_fails_unexpectedly(tmp_path, monkeypat
         closed.append(fd)
         real_close(fd)
 
-    monkeypatch.setattr(os, "open", tracked_open)
-    monkeypatch.setattr(os, "fdopen", failing_fdopen)
-    monkeypatch.setattr(os, "close", tracked_close)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.dashboard_users.os",
+        open=tracked_open,
+        fdopen=failing_fdopen,
+        close=tracked_close,
+    )
 
     with pytest.raises(RuntimeError, match="fdopen bug"):
         save_users(path, {"alice": "hash-a"})
@@ -156,9 +168,13 @@ def test_save_users_keeps_open_error_when_close_fails(tmp_path, monkeypatch, cap
         closed.append(fd)
         raise OSError("close failed")
 
-    monkeypatch.setattr(os, "open", tracked_open)
-    monkeypatch.setattr(os, "fdopen", failing_fdopen)
-    monkeypatch.setattr(os, "close", failing_close)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.dashboard_users.os",
+        open=tracked_open,
+        fdopen=failing_fdopen,
+        close=failing_close,
+    )
 
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="fdopen bug"):
         save_users(path, {"alice": "hash-a"})
