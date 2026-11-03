@@ -309,9 +309,11 @@ def _metrics_at_ks(
     reco: pd.DataFrame,
     relevant: pd.DataFrame,
     ks: Sequence[int],
+    *,
     metric_defs: Callable[[int], dict[str, object]],
-    failure: str,
-    **calc_kwargs: Any,
+    label: str,
+    catalog: list[str] | None = None,
+    prev_interactions: pd.DataFrame | None = None,
 ) -> dict[str, float]:
     metrics: dict[str, float] = {}
     for k in ks:
@@ -324,11 +326,12 @@ def _metrics_at_ks(
                 metric_defs(k),
                 reco=reco_k,
                 interactions=relevant.assign(weight=1.0),
-                **calc_kwargs,
+                catalog=catalog,
+                prev_interactions=prev_interactions,
             )
             metrics.update({key: float(value) for key, value in computed.items()})
         except OPTIONAL_EVAL_ERRORS as exc:
-            log_caught(f"{failure} k={k}", exc, log=logger)
+            log_caught(f"{label} k={k}", exc, log=logger)
             metrics[f"HitRate@{k}"] = _hit_rate(reco, relevant, k=k)
     return metrics
 
@@ -383,11 +386,11 @@ def evaluate_served(
         recs,
         relevant,
         ks,
-        lambda k: {
+        metric_defs=lambda k: {
             **_ranking_metric_defs(k),
             **_catalog_metric_defs(k, with_prev=prev_interactions is not None),
         },
-        "RecTools calc_metrics failed for",
+        label="RecTools calc_metrics failed for",
         catalog=_served_catalog(catalog, recs, all_events),
         prev_interactions=prev_interactions,
     )
@@ -398,8 +401,8 @@ def evaluate_served(
                 group,
                 relevant,
                 ks,
-                lambda k: {f"HitRate@{k}": HitRate(k=k)},
-                f"RecTools HitRate failed for source={source}",
+                metric_defs=lambda k: {f"HitRate@{k}": HitRate(k=k)},
+                label=f"RecTools HitRate failed for source={source}",
             )
             for source, group in recs.groupby(SOURCE_COLUMN, dropna=True)
         }

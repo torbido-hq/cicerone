@@ -42,6 +42,10 @@ class _FakeEngine:
         return None
 
 
+class Boom(Exception):
+    pass
+
+
 def _patch_metric_sql(monkeypatch: pytest.MonkeyPatch, read_sql) -> None:
     monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _FakeEngine())
     patch_module_ref(monkeypatch, "cicerone.evaluation.context.pd", read_sql=read_sql)
@@ -754,11 +758,11 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.load_recommendations_frame",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("recs")),
+        raising(OSError("recs")),
     )
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+        raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
@@ -780,7 +784,7 @@ def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, ca
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+        raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
@@ -1009,10 +1013,9 @@ def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypa
         ]
     )
 
-    def _boom(self):
-        raise RuntimeError("state bug")
-
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    monkeypatch.setattr(
+        "cicerone.experiment.store.ExperimentStore.read_state", raising(RuntimeError("state bug"))
+    )
     settings = make_settings(
         track={"enabled": True},
         eval={"enabled": True},
@@ -1085,21 +1088,21 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("history")),
+        raising(OSError("history")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_served",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("served")),
+        raising(ValueError("served")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is None
 
 
-def test_evaluation_remaining_branches(monkeypatch) -> None:
+def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
     from datetime import timedelta
 
     from cicerone.evaluation import annotate_impression_source, merge_asof_events, recs_from_history
@@ -1287,33 +1290,35 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     assert recs_from_history(hist, events).empty
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("x")),
+        raising(ValueError("x")),
     )
-    failed = evaluate_served(
-        pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "alice",
-                    "item_id": "ipa",
-                    "event_type": "purchase",
-                    "occurred_at": "2026-08-28T12:00:00Z",
-                }
-            ]
-        ),
-        generated_at=None,
-        ks=(1,),
-        event_types=("purchase",),
-    )
+    with caplog.at_level("ERROR", logger="cicerone.evaluation.served"):
+        failed = evaluate_served(
+            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "alice",
+                        "item_id": "ipa",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    }
+                ]
+            ),
+            generated_at=None,
+            ks=(1,),
+            event_types=("purchase",),
+        )
     assert failed is not None
-    assert "HitRate@1" in failed.metrics
-
-    class Boom(Exception):
-        pass
+    assert failed.metrics["HitRate@1"] == 1.0
+    assert failed.by_source["personalized"]["HitRate@1"] == 1.0
+    logged = [record.getMessage() for record in caplog.records]
+    assert "RecTools calc_metrics failed for k=1 (ValueError: x)" in logged
+    assert "RecTools HitRate failed for source=personalized k=1 (ValueError: x)" in logged
 
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         evaluate_served(
@@ -1437,6 +1442,94 @@ def test_evaluate_served_uses_assigned_variant_only() -> None:
     )
     assert report is not None
     assert report.metrics["HitRate@1"] == pytest.approx(0.0)
+
+
+def test_evaluate_served_history_recs_respect_assignment() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "porter", "rank": 1, "variant": "control"},
+            {"user_id": "bob", "item_id": "porter", "rank": 1, "variant": "control"},
+        ]
+    )
+    snapshot = "2026-08-28T01:00:00Z"
+    history = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "lager",
+                "rank": 1,
+                "variant": "control",
+                "generated_at": snapshot,
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "variant": "treatment",
+                "generated_at": snapshot,
+            },
+            {"user_id": "bob", "item_id": "stout", "rank": 1, "variant": "control", "generated_at": snapshot},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at=None,
+        ks=(1,),
+        event_types=("purchase",),
+        history=history,
+        assigned={"alice": "control"},
+    )
+    assert report is not None
+    assert report.metrics["HitRate@1"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("with_prior", [True, False])
+def test_evaluate_served_popularity_metrics_need_prior_events(with_prior: bool) -> None:
+    rows = [
+        {
+            "user_id": "alice",
+            "item_id": "ipa",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-28T12:00:00Z",
+        }
+    ]
+    if with_prior:
+        rows.append(
+            {
+                "user_id": "bob",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T01:00:00Z",
+            }
+        )
+    report = evaluate_served(
+        pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1}]),
+        pd.DataFrame(rows),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+    )
+    assert report is not None
+    assert "CatalogCoverage@1" in report.metrics
+    assert ("MeanInvUserFreq@1" in report.metrics) is with_prior
+    assert ("AvgRecPopularity@1" in report.metrics) is with_prior
 
 
 def test_evaluate_tracking_orphan_click_does_not_count_click_through() -> None:
@@ -2309,15 +2402,11 @@ def test_load_metric_events_query_subquery_limit_still_wraps(monkeypatch) -> Non
 def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
 
-    def _boom(*_args, **_kwargs):
-        raise OSError("sql down")
+    _patch_metric_sql(monkeypatch, raising(OSError("sql down")))
 
-    _patch_metric_sql(monkeypatch, _boom)
-
-    def _source(_inp):
-        raise AssertionError("unbounded fallback")
-
-    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.build_input_source", raising(AssertionError("unbounded fallback"))
+    )
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
@@ -2327,10 +2416,9 @@ def test_load_metric_events_db_engine_failure_is_empty(monkeypatch) -> None:
 
     monkeypatch.setattr("cicerone.evaluation.context.engine_for", raising(OSError("engine down")))
 
-    def _source(_inp):
-        raise AssertionError("unbounded fallback")
-
-    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.build_input_source", raising(AssertionError("unbounded fallback"))
+    )
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
@@ -2340,12 +2428,9 @@ def test_load_metric_events_dataset_propagates_unexpected_errors(tmp_path, monke
         input=local_output(tmp_path),
     )
 
-    class Boom(Exception):
-        pass
-
     monkeypatch.setattr(
         "cicerone.evaluation.context.read_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
@@ -2391,7 +2476,7 @@ def test_load_metric_events_dataset_propagates_type_error(tmp_path, monkeypatch)
 def test_evaluate_served_propagates_rectools_type_error(monkeypatch) -> None:
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(TypeError("bug")),
+        raising(TypeError("bug")),
     )
     with pytest.raises(TypeError, match="bug"):
         evaluate_served(
@@ -2441,12 +2526,9 @@ def test_load_metric_events_dataset_arrow_memory_propagates(tmp_path, monkeypatc
 def test_load_metric_events_db_propagates_unexpected_errors(monkeypatch) -> None:
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
 
-    class Boom(Exception):
-        pass
-
     monkeypatch.setattr(
         "cicerone.evaluation.context.engine_for",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
