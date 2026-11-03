@@ -656,13 +656,16 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     assert pub.closed == 1
 
 
-def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config: FeatureConfig):
+@pytest.mark.parametrize("close_error", [PublishError("close failed"), TypeError("close bug")])
+def test_startup_error_survives_publisher_close_failure(
+    tmp_path, feature_config: FeatureConfig, close_error: Exception
+):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    pub = _Pub(PublishError("close failed"))
+    pub = _Pub(close_error)
 
     from cicerone.events.worker import EventWorker
     from cicerone.serve import bootstrap_events as bootstrap

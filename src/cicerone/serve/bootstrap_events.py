@@ -100,13 +100,13 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
     return read_users
 
 
-def _stop_worker_quietly(worker: EventWorker | None) -> None:
-    if worker is None:
+def _cleanup_after_startup_failure(cleanup: Callable[[], None] | None, what: str) -> None:
+    if cleanup is None:
         return
     try:
-        worker.stop()
+        cleanup()
     except Exception:  # noqa: BLE001 - runs while the startup error propagates; that error must win
-        logger.exception("Event worker stop after startup failure")
+        logger.exception("%s after startup failure", what)
 
 
 def _close_publisher(publisher: RecommendationPublisher | None) -> None:
@@ -261,5 +261,5 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            _stop_worker_quietly(worker)
-            _close_publisher(publisher)
+            _cleanup_after_startup_failure(worker and worker.stop, "Event worker stop")
+            _cleanup_after_startup_failure(publisher and publisher.close, "Recommendation publisher close")
