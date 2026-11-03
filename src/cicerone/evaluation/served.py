@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,8 +23,9 @@ from rectools.metrics import (
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config.constants import TRACK_KIND_IMPRESSION
-from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio
-from cicerone.evaluation.tracking import filter_events_by_types
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, log_caught
+from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio, with_str_ids
+from cicerone.evaluation.tracking import filter_events_by_types, variant_blank
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -36,7 +37,6 @@ from cicerone.io.recommendation_schema import (
 from cicerone.ranking import drop_seen_pairs
 
 logger = logging.getLogger(__name__)
-_RECTOOLS_ERRORS = (ValueError, LookupError)
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,12 @@ def filter_recs_to_assigned(
     return recommendations.loc[expected.isna() | (recommendations[VARIANT_COLUMN].astype(str) == expected)]
 
 
+def _served_recs(recommendations: pd.DataFrame, assigned: Mapping[str, str] | None) -> pd.DataFrame:
+    recs = with_str_ids(recommendations)
+    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
+    return filter_recs_to_assigned(recs, assigned)
+
+
 def filter_events_to_recommended(
     events: pd.DataFrame,
     recommendations: pd.DataFrame,
@@ -82,16 +88,8 @@ def filter_events_to_recommended(
 ) -> pd.DataFrame:
     if events.empty or recommendations.empty:
         return events.iloc[0:0].copy() if not events.empty else events
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-    recs = filter_recs_to_assigned(recs, assigned)
-    keys = recs.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    frame = events.copy()
-    frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
-    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
-    return frame.merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
+    keys = _served_recs(recommendations, assigned).loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    return with_str_ids(events).merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
 
 
 def _hit_rate(reco: pd.DataFrame, relevant: pd.DataFrame, *, k: int) -> float:
@@ -164,12 +162,9 @@ def _attach_recommendation_fields(
     columns = [*keys, *[column for column in extra if column not in keys]]
     if "generated_at" in recommendations.columns:
         columns.append("generated_at")
-    lookup = recommendations.loc[:, columns].copy()
-    lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
-    lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
+    lookup = with_str_ids(recommendations.loc[:, columns])
     if on_variant and VARIANT_COLUMN in lookup.columns:
-        blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
-        lookup = lookup.loc[~blank]
+        lookup = lookup.loc[~variant_blank(lookup[VARIANT_COLUMN])]
     if "generated_at" in lookup.columns:
         lookup["generated_at"] = pd.to_datetime(lookup["generated_at"], utc=True, errors="coerce")
         lookup = lookup.sort_values("generated_at", kind="mergesort", na_position="first")
@@ -227,7 +222,7 @@ def recs_from_impressions(
     frame = pd.DataFrame(rows)
     frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
     if recommendations is not None and not recommendations.empty and VARIANT_COLUMN in frame.columns:
-        blank = frame[VARIANT_COLUMN].isna() | frame[VARIANT_COLUMN].astype(str).str.strip().eq("")
+        blank = variant_blank(frame[VARIANT_COLUMN])
         stamped = frame.loc[~blank].drop_duplicates(
             subset=[USER_COLUMN, ITEM_COLUMN, VARIANT_COLUMN], keep="first"
         )
@@ -282,6 +277,62 @@ def _served_catalog(
     return list(dict.fromkeys(seen))
 
 
+def _window_events(
+    events: pd.DataFrame, generated_at: str | None, event_types: Sequence[str]
+) -> pd.DataFrame:
+    window = events
+    if generated_at and OCCURRED_AT in window.columns:
+        start = pd.to_datetime(generated_at, utc=True, errors="coerce")
+        if pd.notna(start):
+            window = window[window[OCCURRED_AT] > start]
+    return filter_events_by_types(window, event_types)
+
+
+def _recs_at_first_event(
+    recs: pd.DataFrame,
+    history: pd.DataFrame,
+    window_events: pd.DataFrame,
+    *,
+    generated_at: str | None,
+    assigned: Mapping[str, str] | None,
+) -> pd.DataFrame:
+    combined = history
+    if generated_at:
+        combined = pd.concat([history, recs.assign(generated_at=generated_at)], ignore_index=True)
+    hist_recs = recs_from_history(combined, window_events)
+    if not hist_recs.empty:
+        hist_recs = _served_recs(hist_recs, assigned)
+    return recs if hist_recs.empty else hist_recs
+
+
+def _metrics_at_ks(
+    reco: pd.DataFrame,
+    relevant: pd.DataFrame,
+    ks: Sequence[int],
+    metric_defs: Callable[[int], dict[str, object]],
+    failure: str,
+    **calc_kwargs: Any,
+) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for k in ks:
+        if relevant.empty or reco.empty:
+            metrics[f"HitRate@{k}"] = _hit_rate(reco, relevant, k=k)
+            continue
+        reco_k = reco[reco[RANK_COLUMN] <= k] if RANK_COLUMN in reco.columns else reco
+        try:
+            computed = calc_metrics(
+                metric_defs(k),
+                reco=reco_k,
+                interactions=relevant.assign(weight=1.0),
+                **calc_kwargs,
+            )
+            metrics.update({key: float(value) for key, value in computed.items()})
+        except OPTIONAL_EVAL_ERRORS as exc:
+            log_caught(f"{failure} k={k}", exc, log=logger)
+            metrics[f"HitRate@{k}"] = _hit_rate(reco, relevant, k=k)
+    return metrics
+
+
 def evaluate_served(
     recommendations: pd.DataFrame,
     events: pd.DataFrame,
@@ -296,23 +347,14 @@ def evaluate_served(
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-    recs = filter_recs_to_assigned(recs, assigned)
+    recs = _served_recs(recommendations, assigned)
     if recs.empty:
         return None
-    used_impressions = False
-    if impressions is not None and not impressions.empty:
-        recs = impressions.copy()
-        recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-        recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-        recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-        recs = filter_recs_to_assigned(recs, assigned)
+    used_impressions = impressions is not None and not impressions.empty
+    if used_impressions:
+        recs = _served_recs(impressions, assigned)
         if recs.empty:
             return None
-        used_impressions = True
     all_events = normalized_frame(events)
     if all_events.empty:
         return ServedEvalReport(
@@ -322,96 +364,48 @@ def evaluate_served(
             by_source={},
             generated_at=generated_at,
         )
-    window_events = all_events
-    if generated_at and OCCURRED_AT in window_events.columns:
-        start = pd.to_datetime(generated_at, utc=True, errors="coerce")
-        if pd.notna(start):
-            window_events = window_events[window_events[OCCURRED_AT] > start]
-    window_events = filter_events_by_types(window_events, event_types)
+    window_events = _window_events(all_events, generated_at, event_types)
     if (
         not used_impressions
         and history is not None
         and not history.empty
         and OCCURRED_AT in window_events.columns
     ):
-        live = recs.copy()
-        if generated_at:
-            live["generated_at"] = generated_at
-            combined = pd.concat([history, live], ignore_index=True)
-        else:
-            combined = history
-        hist_recs = recs_from_history(combined, window_events)
-        if not hist_recs.empty:
-            hist_recs = hist_recs[hist_recs[USER_COLUMN] != COLD_START_USER_ID]
-            hist_recs = filter_recs_to_assigned(hist_recs, assigned)
-        if not hist_recs.empty:
-            recs = hist_recs
+        recs = _recs_at_first_event(
+            recs, history, window_events, generated_at=generated_at, assigned=assigned
+        )
     prev = _prev_interactions(all_events, generated_at)
     relevant = _unseen_relevant(window_events, prev)
-    if used_impressions and not recs.empty and not relevant.empty:
-        served_users = set(recs[USER_COLUMN].astype(str))
-        relevant = relevant.loc[relevant[USER_COLUMN].isin(served_users)]
-    n_users = int(recs[USER_COLUMN].nunique())
-    n_with_events = int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0
-    catalog_ids = _served_catalog(catalog, recs, all_events)
-    metrics: dict[str, float] = {}
-    for k in ks:
-        if not relevant.empty and not recs.empty:
-            reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
-            interactions = relevant.copy()
-            interactions["weight"] = 1.0
-            extra: dict[str, object] = {}
-            extra.update(_catalog_metric_defs(k, with_prev=not prev.empty))
-            try:
-                computed = calc_metrics(
-                    {**_ranking_metric_defs(k), **extra},
-                    reco=reco_k,
-                    interactions=interactions,
-                    catalog=catalog_ids,
-                    prev_interactions=prev if not prev.empty else None,
-                )
-                metrics.update({key: float(value) for key, value in computed.items()})
-            except _RECTOOLS_ERRORS as exc:
-                logger.exception(
-                    "RecTools calc_metrics failed for k=%s (%s: %s)",
-                    k,
-                    type(exc).__name__,
-                    exc,
-                )
-                metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
-        else:
-            metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+    if used_impressions and not relevant.empty:
+        relevant = relevant.loc[relevant[USER_COLUMN].isin(set(recs[USER_COLUMN]))]
+    prev_interactions = None if prev.empty else prev
+    metrics = _metrics_at_ks(
+        recs,
+        relevant,
+        ks,
+        lambda k: {
+            **_ranking_metric_defs(k),
+            **_catalog_metric_defs(k, with_prev=prev_interactions is not None),
+        },
+        "RecTools calc_metrics failed for",
+        catalog=_served_catalog(catalog, recs, all_events),
+        prev_interactions=prev_interactions,
+    )
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
-        for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):
-            source_metrics: dict[str, float] = {}
-            for k in ks:
-                if not relevant.empty and not group.empty:
-                    reco_k = group[group[RANK_COLUMN] <= k] if RANK_COLUMN in group.columns else group
-                    interactions = relevant.copy()
-                    interactions["weight"] = 1.0
-                    try:
-                        computed = calc_metrics(
-                            {f"HitRate@{k}": HitRate(k=k)},
-                            reco=reco_k,
-                            interactions=interactions,
-                        )
-                        source_metrics.update({key: float(value) for key, value in computed.items()})
-                    except _RECTOOLS_ERRORS as exc:
-                        logger.exception(
-                            "RecTools HitRate failed for source=%s k=%s (%s: %s)",
-                            source,
-                            k,
-                            type(exc).__name__,
-                            exc,
-                        )
-                        source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
-                else:
-                    source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
-            by_source[str(source)] = source_metrics
+        by_source = {
+            str(source): _metrics_at_ks(
+                group,
+                relevant,
+                ks,
+                lambda k: {f"HitRate@{k}": HitRate(k=k)},
+                f"RecTools HitRate failed for source={source}",
+            )
+            for source, group in recs.groupby(SOURCE_COLUMN, dropna=True)
+        }
     return ServedEvalReport(
-        n_users=n_users,
-        n_users_with_events=n_with_events,
+        n_users=int(recs[USER_COLUMN].nunique()),
+        n_users_with_events=int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0,
         metrics=metrics,
         by_source=by_source,
         generated_at=generated_at,
@@ -420,9 +414,7 @@ def evaluate_served(
 
 def recs_from_history(history: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Use each user's newest snapshot with generated_at <= that user's first event."""
-    hist = history.copy()
-    hist[USER_COLUMN] = hist[USER_COLUMN].astype(str)
-    hist[ITEM_COLUMN] = hist[ITEM_COLUMN].astype(str)
+    hist = with_str_ids(history)
     hist["generated_at"] = pd.to_datetime(hist["generated_at"], utc=True, errors="coerce")
     hist = hist.dropna(subset=["generated_at"])
     hist = hist.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN, "generated_at"], keep="last")

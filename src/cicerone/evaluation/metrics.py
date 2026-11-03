@@ -39,14 +39,18 @@ class SliceMetrics:
         }
 
 
+def with_str_ids(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    for column in (USER_COLUMN, ITEM_COLUMN):
+        if column in frame.columns:
+            frame[column] = frame[column].astype(str)
+    return frame
+
+
 def normalized_frame(rows: Sequence[Mapping[str, Any]] | pd.DataFrame) -> pd.DataFrame:
-    frame = rows.copy() if isinstance(rows, pd.DataFrame) else pd.DataFrame(list(rows))
+    frame = with_str_ids(rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(list(rows)))
     if frame.empty:
         return pd.DataFrame()
-    if USER_COLUMN in frame.columns:
-        frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
-    if ITEM_COLUMN in frame.columns:
-        frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
     if OCCURRED_AT in frame.columns:
         frame[OCCURRED_AT] = pd.to_datetime(frame[OCCURRED_AT], utc=True, errors="coerce")
     return frame
