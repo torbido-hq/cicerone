@@ -100,7 +100,7 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
     return read_users
 
 
-def _cleanup_after_startup_failure(cleanup: Callable[[], None] | None, what: str) -> None:
+def _cleanup_after_startup_failure(cleanup: Callable[[], object] | None, what: str) -> None:
     if cleanup is None:
         return
     try:
@@ -261,5 +261,7 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            _cleanup_after_startup_failure(worker and worker.stop, "Event worker stop")
-            _cleanup_after_startup_failure(publisher and publisher.close, "Recommendation publisher close")
+            _cleanup_after_startup_failure(worker.stop if worker else None, "Event worker stop")
+            _cleanup_after_startup_failure(
+                publisher.close if publisher else None, "Recommendation publisher close"
+            )
