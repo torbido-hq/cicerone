@@ -130,8 +130,11 @@ row per **item in the HTTP response** (after filters / `limit`). That is
 a returned recommendation, not a browser render and not proof a shopper
 saw the item. Each row gets a new `uuid4` `event_id`. Writes run on one
 serve append thread, drained at shutdown: the **200 can return before the
-track row exists**, and store errors are swallowed so GET still succeeds. Clicks
-are always host-reported via `POST /track`.
+track row exists**, and store errors are swallowed so GET still succeeds. When
+1000 appends are already pending, a request's rows are dropped instead of
+waiting; watch `cicerone_serve_appends_dropped_total{kind="impression"}` and
+treat CTR as incomplete while it rises. Clicks are always host-reported via
+`POST /track`.
 
 Storage is the same track store (`track.jsonl` or
 `recommendation_track`).
