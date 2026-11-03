@@ -36,6 +36,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A Kafka message whose `event_id` is `0` gets the stable
+  partition-offset id like a missing one, instead of a random id that
+  broke duplicate detection on redelivery.
+- Event sources trim whitespace around a supplied `event_id` or
+  `idempotency_key`, as `/track` already did: `" abc "` is the id
+  `"abc"`, and a blank id counts as missing.
+- S3 and db events whose `event_id` is empty and whose
+  `idempotency_key` is `0` or `false` get their stable fallback id,
+  instead of all sharing the id `"0"` or `"False"` and being dropped as
+  duplicates.
+- The db events watermark file syncs its directory after the rename, as
+  the S3 list marker already did, and both sync a newly created
+  positions directory into its parent, so the saved position survives a
+  crash.
 - Serve answers at once when its append queue (1000 pending) is full,
   dropping the exposure or impression append, instead of stalling.
 - Kafka and Redis Streams event sources close the new consumer or client
