@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import normalize_event, parse_occurred_at
+from cicerone.events.normalize import (
+    EventNormalizeError,
+    normalize_event,
+    parse_occurred_at,
+    supplied_event_id,
+)
 from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 ROW_IDENTITY_KEYS = ("id", "rowid", "ctid")
@@ -57,6 +62,21 @@ _POSTGRES_IDENTITY_SORT = (
     " THEN 'ctid:' || chr(31) || chr(31) || replace(substring(event_id from 6), ' ', '')"
     " ELSE chr(31) || event_id END"
 )
+# Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
+ID_WHITESPACE = "".join(char for char in map(chr, range(0x3001)) if char.isspace())
+# `supplied_event_id` for one column: numeric 0 is missing, text is stripped, empty is missing.
+_SUPPLIED_ID_SQL = {
+    "sqlite": (
+        "CASE WHEN typeof({col}) IN ('integer', 'real') AND {col} = 0 THEN NULL"
+        " ELSE NULLIF(trim(CAST({col} AS TEXT), :id_whitespace), '') END"
+    ),
+    "postgresql": (
+        "CASE WHEN pg_typeof({col}) IN ('smallint'::regtype, 'integer'::regtype, 'bigint'::regtype,"
+        " 'numeric'::regtype, 'real'::regtype, 'double precision'::regtype)"
+        " AND CAST({col} AS TEXT) ~ '^-?0+(\\.0+)?$' THEN NULL"
+        " ELSE NULLIF(btrim(CAST({col} AS TEXT), :id_whitespace), '') END"
+    ),
+}
 
 
 def db_occurred_at(value: Any) -> datetime:
@@ -117,12 +137,18 @@ def identity_bind_sort_key(event_id: str) -> str:
     return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)
 
 
-def identity_sql_sort_expr(dialect: str, event_id: str) -> str | None:
-    if dialect == "sqlite":
-        return _SQLITE_IDENTITY_SORT.replace("event_id", event_id)
-    if dialect == "postgresql":
-        return _POSTGRES_IDENTITY_SORT.replace("event_id", event_id)
-    return None
+def identity_sql_sort_expr(
+    dialect: str, event_id: str, idempotency_key: str | None, row_id: str | None
+) -> str | None:
+    """Sort key of the ``_stable_event_id`` of a row from an event_id-column source (quoted columns)."""
+    templates = {"sqlite": _SQLITE_IDENTITY_SORT, "postgresql": _POSTGRES_IDENTITY_SORT}
+    if dialect not in templates:
+        return None
+    supplied = (column for column in (event_id, idempotency_key) if column is not None)
+    terms = [_SUPPLIED_ID_SQL[dialect].format(col=column) for column in supplied]
+    if row_id is not None:
+        terms.append(f"'id:' || NULLIF(CAST({row_id} AS TEXT), '')")
+    return templates[dialect].replace("event_id", f"COALESCE({', '.join(terms)}, '')")
 
 
 def occurred_at_predicates(dialect: str, occurred_at: str) -> tuple[str, str, str]:
@@ -140,12 +166,15 @@ def cursor_tuple(occurred_at: datetime, event_id: str) -> tuple[datetime, tuple[
 
 
 def _stable_event_id(payload: dict[str, Any], occurred_at: datetime) -> str:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    if existing not in (None, ""):
-        return str(existing)
+    existing = supplied_event_id(payload)
+    if existing is not None:
+        return existing
     identity = _row_identity(payload)
     if identity is not None:
         return identity
+    if "event_id" in payload:
+        # Keyless row of an event_id-column source (rejected): '' is where the SQL cursor places it.
+        return ""
     quantity = payload.get("quantity", 1)
     return "|".join(
         (
@@ -173,6 +202,8 @@ def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[st
 
 
 def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
+    if "event_id" in payload and supplied_event_id(payload) is None:
+        raise EventNormalizeError("event_id or idempotency_key is required when the source has event_id")
     occurred_at = db_occurred_at(payload.get("occurred_at"))
     return normalize_event(
         {

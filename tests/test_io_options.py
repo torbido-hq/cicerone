@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 from pyarrow.lib import ArrowInvalid
-from support.fakes import FakeS3Body, patch_parquet_reads
+from support.fakes import FakeS3Body, patch_module_ref, patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.options import (
@@ -356,7 +356,7 @@ def test_read_parquet_s3_uses_pyarrow_filesystem(mocker, enable_native_arrow_s3)
     [OSError("no sdk"), ArrowInvalid("bad schema")],
     ids=["oserror", "arrow"],
 )
-def test_read_parquet_s3_falls_back_to_get_object(mocker, error):
+def test_read_parquet_s3_falls_back_to_get_object(mocker, monkeypatch, error):
     import pandas as pd
 
     from cicerone.io.options import read_parquet
@@ -366,7 +366,9 @@ def test_read_parquet_s3_falls_back_to_get_object(mocker, error):
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
-    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
+    patch_module_ref(
+        monkeypatch, "cicerone.io.options.pd", read_parquet=lambda *_args, **_kwargs: pd.DataFrame({"x": [1]})
+    )
     frame = read_parquet(
         {
             "storage_backend": "s3",
@@ -443,7 +445,7 @@ def test_s3_filesystem_parses_endpoint_override(mocker):
     )
 
 
-def test_read_parquet_s3_skips_native_arrow_in_tests(mocker):
+def test_read_parquet_s3_skips_native_arrow_in_tests(mocker, monkeypatch):
     import pandas as pd
 
     from cicerone.io.options import read_parquet
@@ -453,7 +455,9 @@ def test_read_parquet_s3_skips_native_arrow_in_tests(mocker):
     client = mocker.Mock()
     client.get_object.return_value = {"Body": body}
     mocker.patch("cicerone.io.options.build_s3_client", return_value=client)
-    mocker.patch("cicerone.io.options.pd.read_parquet", return_value=pd.DataFrame({"x": [1]}))
+    patch_module_ref(
+        monkeypatch, "cicerone.io.options.pd", read_parquet=lambda *_args, **_kwargs: pd.DataFrame({"x": [1]})
+    )
     frame = read_parquet(
         {
             "storage_backend": "s3",
