@@ -459,7 +459,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
   Tailwind CSS, all vendored under `src/cicerone/static/` — no CDN at
   runtime and no Node/npm dependency at runtime or for end users. Tailwind
   is compiled ahead of time in a dedicated `frontend` Docker build stage
-  (`node:26.12.1-slim`, pinned via `package.json`/`package-lock.json`) whose only
+  (a pinned `node:*-slim` tag; Tailwind pinned via `package.json` /
+  `package-lock.json`) whose only
   output (`static/tailwind.css`) is copied into the runtime image and the
   PyPI wheel (`package` Docker stage).
 
