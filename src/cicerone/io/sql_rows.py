@@ -22,7 +22,7 @@ def jsonish(value: Any) -> Any:
             return value.item()
         except (ValueError, AttributeError):
             pass
-    if pd.isna(value):  # type: ignore[arg-type]
+    if pd.isna(value):
         return None
     return value
 

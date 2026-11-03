@@ -457,8 +457,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
         cold = self._cold_start_rows(
             prior_cold,
-            popular_ranking,
-            latest_ranking,
             allowed=cold_allowed,
             allowed_by_variant=cold_allowed_by_variant,
         )

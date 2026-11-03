@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import socket
 import threading
-import time
 from pathlib import Path
 
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader
+from support.waits import wait_until
 from test_serve import _feature_config, _items_df, _recs_df, _settings
 
 from cicerone.export_serve_openapi import build_openapi
@@ -151,10 +151,7 @@ def live_serve_url():
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    deadline = time.time() + 5
-    while not server.started and time.time() < deadline:
-        time.sleep(0.01)
-    if not server.started:
+    if not wait_until(lambda: server.started):
         raise RuntimeError("uvicorn failed to start for ServeClient test")
     try:
         yield f"http://127.0.0.1:{port}"

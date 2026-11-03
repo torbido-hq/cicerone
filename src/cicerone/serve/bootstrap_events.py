@@ -67,15 +67,6 @@ class EventsRuntime:
                 self.publisher = None
 
 
-def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
-    active = [check for check in checks if check is not None]
-    if not active:
-        return None
-    if len(active) == 1:
-        return active[0]
-    return lambda: any(check() for check in active)
-
-
 def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
     if not settings.experiment.enabled:
         return None
@@ -139,7 +130,6 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
-    busy_check: Callable[[], bool] | None = None,
     start_worker: bool = True,
 ) -> EventsRuntime:
     if not settings.events.enabled:
@@ -171,10 +161,7 @@ def start_events_runtime(
             settings.events.ha,
         )
 
-    combined_busy = _combine_busy_checks(
-        busy_check,
-        (retrain_probe.is_locked if retrain_probe is not None else None),
-    )
+    retrain_busy = retrain_probe.is_locked if retrain_probe is not None else None
 
     sink = build_output_sink(
         settings.output,
@@ -225,11 +212,11 @@ def start_events_runtime(
             feature_config=feature_config,
             top_k=settings.top_k,
             busy_check=(
-                RefreshedValue(combined_busy, ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS).get
-                if combined_busy is not None
+                RefreshedValue(retrain_busy, ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS).get
+                if retrain_busy is not None
                 else None
             ),
-            write_busy_check=combined_busy,
+            write_busy_check=retrain_busy,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
             on_success=reader.refresh,
             online=online,

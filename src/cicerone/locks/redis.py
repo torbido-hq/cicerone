@@ -132,10 +132,6 @@ class RedisLock:
             )
             self._refresh_thread.start()
 
-    def _stop_refresh_thread(self) -> None:
-        with self._refresh_lifecycle:
-            self._stop_refresh_thread_unlocked()
-
     def _stop_refresh_thread_unlocked(self) -> None:
         thread = self._refresh_thread
         if thread is None:

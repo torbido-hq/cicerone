@@ -267,8 +267,8 @@ def user_track_outcomes(
         n_conv = float(conversion_counts.get(user, 0)) if not conversion_counts.empty else 0.0
         if primary_metric == "ctr":
             capped_clicks = min(n_clicks, float(n_imp))
-            report_users[user] = capped_clicks / float(n_imp) if n_imp else 0.0
+            report_users[user] = capped_clicks / float(n_imp)
         else:
             capped = min(n_conv, float(n_imp))
-            report_users[user] = capped / float(n_imp) if n_imp else 0.0
+            report_users[user] = capped / float(n_imp)
     return report_users
