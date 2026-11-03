@@ -158,6 +158,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- When the experiment state read fails, the dashboard experiments page
+  shows that dashboard's own last read or written state, instead of an
+  unlocked process-wide copy.
+- Dashboard promote and **Resume split** refuse with "Experiment state
+  could not be read" for every allocation when the state read fails,
+  instead of writing from a possibly stale cached state.
 - The db events source no longer loses earlier events on restart when a
   later one was acked first: the watermark moves only over the leading run
   of acked events. A nacked event holds it until redelivered and acked; an
