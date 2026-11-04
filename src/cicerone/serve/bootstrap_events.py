@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from cicerone.cleanup import cleanup_logging_errors
 from cicerone.config import Settings
 from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
@@ -25,7 +26,6 @@ from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import assign_user, experiment_variant_names
 from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
-from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
@@ -54,7 +54,7 @@ class EventsRuntime:
         try:
             stopped = self.worker is None or self.worker.stop()
         except BaseException:
-            cleanup_after_failure(self._close_publisher, "Recommendation publisher close failed", logger)
+            cleanup_logging_errors(self._close_publisher, "Recommendation publisher close failed", logger)
             raise
         self._close_publisher()
         if not stopped:
@@ -249,9 +249,8 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            if worker is not None:
-                cleanup_after_failure(worker.stop, "Event worker stop after startup failure", logger)
-            if publisher is not None:
-                cleanup_after_failure(
-                    publisher.close, "Recommendation publisher close after startup failure", logger
-                )
+            cleanup_logging_errors(
+                EventsRuntime(webhook_source=None, worker=worker, publisher=publisher).stop,
+                "Events runtime stop after startup failure",
+                logger,
+            )

@@ -669,7 +669,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
             run.publisher.close()
         except _PUBLISH_ERRORS as exc:
             _log_caught("Failed to close recommendation publisher", exc, log=logger)
-        except Exception as exc:  # noqa: BLE001 - re-raised below, after the manifest records the failure
+        except Exception as exc:
             _log_caught("Failed to close recommendation publisher", exc, log=logger)
             close_exc = exc
     if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
@@ -685,7 +685,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
                 recommendations=run.recommendations,
                 generated_at=str(manifest["generated_at"]),
             )
-        except Exception as exc:  # noqa: BLE001 - re-raised below, after the manifest records the failure
+        except Exception as exc:
             manifest["status"] = "failed"
             manifest["error"] = truncate_job_error(exc)
             manifest_written = False
@@ -854,6 +854,6 @@ if __name__ == "__main__":
     configure_logging(None, None)
     try:
         run()
-    except Exception as exc:  # noqa: BLE001 - module entry point; any job failure becomes exit code 1
+    except Exception as exc:
         _log_caught("Recommendation job failed", exc, log=logger)
         sys.exit(1)

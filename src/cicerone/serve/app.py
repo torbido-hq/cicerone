@@ -21,7 +21,6 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
-from cicerone.errors import OPTIONAL_IO_ERRORS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
@@ -31,7 +30,6 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.recommendation_reader import SOURCE_COLUMN
 from cicerone.locks import (
     WriteFence,
@@ -61,7 +59,6 @@ from cicerone.track.store import TrackStore
 logger = logging.getLogger(__name__)
 
 
-_MANIFEST_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS)
 _APPEND_BUSY_ATTEMPTS = 3
 # Appends waiting for the writer thread; a request past this drops its append.
 _MAX_PENDING_APPENDS = 1000
@@ -84,7 +81,6 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
             )
             time.sleep(0.05 * attempt)
         except Exception:
-            # Append-pool thread's top level: nobody reads the future.
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
@@ -146,7 +142,7 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
         return None
     try:
         latest = manifest_reader.read_latest()
-    except _MANIFEST_READ_ERRORS:
+    except Exception:
         logger.exception("Failed to read latest manifest for generated_at; omitting header")
         return None
     if not latest:

@@ -6,7 +6,9 @@ import logging
 import threading
 from collections import deque
 from collections.abc import Sequence
+from functools import partial
 
+from cicerone.cleanup import cleanup_logging_errors
 from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
@@ -387,6 +389,13 @@ class EventWorker:
         if rejected:
             self._restore_buffer(rejected)
 
+    def _return_events_after_error(self, events: Sequence[NormalizedEvent]) -> None:
+        cleanup_logging_errors(
+            partial(self._return_events, events),
+            "Failed to return events to the source after an error",
+            logger,
+        )
+
     def _reconnect_source(self) -> bool:
         with self._tick_guard:
             with self._source_guard:
@@ -484,7 +493,7 @@ class EventWorker:
             repaired = True
         finally:
             if not repaired and ready:
-                self._return_events(ready)
+                self._return_events_after_error(ready)
         return self._flush_ready(ready) if ready else 0
 
     def _repair_post_write(self) -> None:
@@ -579,7 +588,7 @@ class EventWorker:
         except Exception as exc:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
-            self._return_events(ready)
+            self._return_events_after_error(ready)
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -703,7 +712,7 @@ class EventWorker:
             logger.exception("Event source ack failed for already-applied event(s); retrying later")
         except Exception:
             record_events_flush(status="error")
-            self._return_events(fresh)
+            self._return_events_after_error(fresh)
             raise
         return fresh
 

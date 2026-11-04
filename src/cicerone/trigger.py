@@ -12,18 +12,15 @@ from typing import Any, Protocol
 from fastapi import FastAPI, HTTPException
 
 from cicerone import job
-from cicerone.config import ConfigError, IOSettings, Settings
+from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
-from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import build_s3_client, object_key, validate_storage_options
 from cicerone.locks import LockBackend
 from cicerone.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
-
-_MARKER_CHECK_ERRORS: tuple[type[BaseException], ...] = (ConfigError, OSError, *S3_READ_ERRORS)
 
 
 class _RunFn(Protocol):
@@ -114,7 +111,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
         key = object_key(options, EVENTS_FILENAME)
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
-    except _MARKER_CHECK_ERRORS:
+    except Exception:
         logger.exception("Failed to check input source for changes; treating as unchanged")
         return None
 
@@ -128,18 +125,10 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
         )
         return
 
-    def checked_marker() -> str | None:
-        # Poller thread's top level: an unexpected error must not stop polling.
-        try:
-            return _current_marker(input_settings)
-        except Exception:
-            logger.exception("Input poll failed; treating as unchanged")
-            return None
-
-    last_marker = checked_marker()
+    last_marker = _current_marker(input_settings)
     while True:
         time.sleep(interval_seconds)
-        marker = checked_marker()
+        marker = _current_marker(input_settings)
         if marker is not None and marker != last_marker:
             last_marker = marker
             guard.trigger("s3-poll")

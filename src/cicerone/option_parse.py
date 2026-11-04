@@ -82,6 +82,7 @@ def _type_name(value: object) -> str:
 def _option_detail(raw: Any) -> str:
     try:
         rendered = repr(raw)
-    except Exception as exc:  # noqa: BLE001 - repr of an arbitrary value; the config error must still be raised
+    except Exception as exc:
+        # The configuration error must still be raised.
         rendered = f"<{_type_name(raw)} {_type_name(exc)}>"
     return f", got {rendered}"

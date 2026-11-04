@@ -8,9 +8,9 @@ from support.events import event_payload
 from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
 from support.fakes import hide_module
 
-from cicerone.broker_errors import KafkaException
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
+from cicerone.events.errors import KafkaException
 from cicerone.events.ha import ingest_is_fanout
 from cicerone.events.kafka import KafkaEventSource, validate_kafka_event_options
 from cicerone.events.registry import build_event_source, registered_event_source_kinds

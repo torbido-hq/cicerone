@@ -161,16 +161,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
-- The RabbitMQ and Kafka publishers retry or wrap as `PublishError` only
-  broker and client errors. Any other error (e.g. `KeyError`, `TypeError`)
-  now propagates unchanged, even after part of a publish was sent: the job
-  fails after its write instead of logging a publish failure. Incremental
-  publish still reports a `TypeError` as a publish failure.
-- The S3/SQS events source (object load, ack delete, nack visibility, lag
-  lookup) logs and absorbs only storage errors; any other error now
-  propagates.
-- An unexpected error reading the manifest for `X-Generated-At` now fails
-  serve startup instead of omitting the header.
+- When the event worker returns events to the source after a failed
+  lookup, repair or ack, a failure to return them is logged and the
+  original error wins, instead of replacing it.
 - When the experiment state read fails, the dashboard experiments page
   shows that dashboard's own last read or written state, instead of an
   unlocked process-wide copy.

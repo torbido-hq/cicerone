@@ -15,12 +15,12 @@ from cicerone.amqp_options import (
     require_amqp_url,
     require_queue,
 )
-from cicerone.broker_errors import RABBITMQ_IO_ERRORS
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
+    RABBITMQ_IO_ERRORS,
     PikaIo,
     abandoned_error,
     close_handles,

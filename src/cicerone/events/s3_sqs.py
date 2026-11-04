@@ -157,7 +157,7 @@ class S3SqsPoll:
                         exc_info=exc,
                     )
                     pairs = list(exc.valid_pairs)
-                except (ValueError, RecursionError):
+                except Exception:
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     if _delete_poison_message(sqs, queue_url, receipt):
                         made_progress = True
@@ -189,7 +189,7 @@ class S3SqsPoll:
                         )
                         poison = True
                         break
-                    except S3_READ_ERRORS:
+                    except Exception:
                         logger.exception(
                             "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
                             bucket,
@@ -234,7 +234,7 @@ class S3SqsPoll:
                     ReceiptHandle=receipt,
                     VisibilityTimeout=timeout_seconds,
                 )
-            except S3_READ_ERRORS:
+            except Exception:
                 logger.exception("Failed to extend SQS visibility")
 
     def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:

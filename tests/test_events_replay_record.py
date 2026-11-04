@@ -160,6 +160,32 @@ def test_worker_returns_the_batch_when_the_record_lookup_fails(tmp_path, feature
     assert source.health().lag == 1
 
 
+@pytest.mark.parametrize("lookup_error", [OSError("storage unreachable"), KeyError("lookup bug")])
+def test_a_failed_return_does_not_replace_the_lookup_error(
+    tmp_path, feature_config, caplog, lookup_error: Exception
+) -> None:
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="lookup-fails", user_id="u1", item_id="i9"))
+    worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, source)
+
+    def _lookup_fails(_events):  # type: ignore[no-untyped-def]
+        raise lookup_error
+
+    def _nack_fails(_events):  # type: ignore[no-untyped-def]
+        raise RuntimeError("nack bug")
+
+    updater.applied_before = _lookup_fails  # type: ignore[method-assign]
+    source.nack = _nack_fails  # type: ignore[method-assign]
+    if isinstance(lookup_error, OSError):
+        assert worker.tick() == 0
+    else:
+        with pytest.raises(KeyError) as caught:
+            worker.tick()
+        assert caught.value is lookup_error
+    assert "Failed to return events to the source after an error" in caplog.text
+    assert updater.events_applied == 0
+
+
 @pytest.mark.parametrize("kind", ["dataset", "db"])
 def test_an_expired_key_no_longer_counts_before_any_prune(tmp_path, monkeypatch, kind) -> None:
     sink = build_output_sink(_outputs(tmp_path)[kind])

@@ -602,7 +602,7 @@ def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
                     filter_viewed=True,
                 )
             )
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             errors.append(exc)
 
     worker = threading.Thread(target=run)

@@ -5,10 +5,21 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from typing import TYPE_CHECKING
 
-from cicerone.broker_errors import RedisError
 from cicerone.config.constants import DEFAULT_LOCK_KEY, import_extra
 from cicerone.locks.keys import REDIS_LOCK_TTL_MS
+
+if TYPE_CHECKING:
+    from redis.exceptions import RedisError
+else:
+    try:
+        from redis.exceptions import RedisError
+    except ImportError:
+
+        class RedisError(Exception):
+            pass
+
 
 logger = logging.getLogger(__name__)
 

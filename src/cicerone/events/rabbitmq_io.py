@@ -9,11 +9,13 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
-from cicerone.broker_errors import RABBITMQ_IO_ERRORS
+from cicerone.amqp_options import close_amqp_handle
 from cicerone.events.base import EventSourceError
-from cicerone.failure_cleanup import cleanup_after_failure
+from cicerone.events.errors import AMQPError
 
 logger = logging.getLogger(__name__)
+
+RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -197,10 +199,10 @@ class PikaIo:
         self._abandon_channel = None
         self._abandon_connection = None
         close_handles(channel, connection)
-        close_handles(
-            leftover_channel if leftover_channel is not channel else None,
-            leftover_connection if leftover_connection is not connection else None,
-        )
+        if leftover_channel is not None and leftover_channel is not channel:
+            close_amqp_handle(leftover_channel, "channel", logger)
+        if leftover_connection is not None and leftover_connection is not connection:
+            close_amqp_handle(leftover_connection, "connection", logger)
 
     def _loop(self) -> None:
         while True:
@@ -240,7 +242,8 @@ class PikaIo:
                 return
             try:
                 result = job.fn()
-            except Exception as exc:  # noqa: BLE001 - handed to the blocked caller, which re-raises it
+            except Exception as exc:
+                # The caller is blocked on this reply.
                 payload: tuple[str, Any] = ("err", exc)
             else:
                 payload = ("err", abandoned_error()) if self._failed else ("ok", result)
@@ -301,7 +304,5 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
 
 
 def close_handles(channel: Any, connection: Any) -> None:
-    for handle, label in ((channel, "channel"), (connection, "connection")):
-        closer = getattr(handle, "close", None)
-        if callable(closer):
-            cleanup_after_failure(closer, f"Failed to close RabbitMQ {label}", logger)
+    close_amqp_handle(channel, "channel", logger)
+    close_amqp_handle(connection, "connection", logger)
