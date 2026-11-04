@@ -36,10 +36,11 @@ class _Progress:
 
 def _close_handle(handle: Any, label: str) -> BaseException | None:
     """Close a pika channel or connection; a broker error is logged and returned, not raised."""
-    if handle is None:
+    closer = getattr(handle, "close", None)
+    if not callable(closer):
         return None
     try:
-        handle.close()
+        closer()
     except RABBITMQ_IO_ERRORS as exc:
         logger.exception("Failed to close RabbitMQ publisher %s", label)
         return exc

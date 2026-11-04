@@ -279,6 +279,17 @@ def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
         publisher.close()
 
 
+def test_rabbitmq_publisher_close_skips_handle_without_close(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+    publisher._channel = object()
+    publisher.close()
+    assert broker.connection.closed is True
+    assert publisher._channel is None
+    assert publisher._connection is None
+
+
 def test_build_publisher_disabled():
     settings = make_settings()
     assert settings.publish.enabled is False
