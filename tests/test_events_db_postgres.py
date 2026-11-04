@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import create_engine, text
 from support.events import poll_one_by_one
 from support.postgres_defaults import resolve_test_database_url
 
+from cicerone.config import ConfigError
 from cicerone.events.db import DbEventSource
 
 TEST_DATABASE_URL = resolve_test_database_url()
@@ -302,16 +305,61 @@ def test_postgres_prefilter_keeps_rows_at_the_watermark_time(tmp_path):
     legacy.connect()
     try:
         assert "occurred_at >= CAST(:watermark_at AS timestamptz)" in legacy._source_sql(engine)
-        assert legacy.health().lag == 3
+        assert legacy.health().lag == 2
         first = list(legacy.poll(1))
-        assert [event.event_id for event in first] == ["a"]
-        legacy.ack(["a"])
+        assert [event.event_id for event in first] == ["b"]
+        legacy.ack(["b"])
     finally:
         legacy.close()
     resumed = DbEventSource(options)
     resumed.connect()
     try:
-        assert resumed.health().lag == 2
-        assert poll_one_by_one(resumed) == ["b", "c"]
+        assert resumed.health().lag == 1
+        assert poll_one_by_one(resumed) == ["c"]
     finally:
         resumed.close()
+
+
+def test_postgres_row_inserted_past_ctid_offset_nine_at_the_watermark_time_is_delivered(tmp_path):
+    _seed_same_time_rows("", [""] * 9)
+    options = {
+        "database_url": TEST_DATABASE_URL,
+        "events_table": _TABLE,
+        "watermark_path": str(tmp_path / "wm"),
+    }
+    source = DbEventSource(options)
+    source.connect()
+    try:
+        assert poll_one_by_one(source) == [f"ctid:(0,{n})" for n in range(1, 10)]
+        engine = create_engine(TEST_DATABASE_URL)
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"INSERT INTO \"{_TABLE}\" VALUES ('u1', 'late', 'purchase', 1, '2026-08-13T12:00:00Z')")
+            )
+        assert poll_one_by_one(source) == ["ctid:(0,10)"]
+    finally:
+        source.close()
+    legacy = {"occurred_at": "2026-08-13T12:00:00+00:00", "event_id": "ctid:(0,9)"}
+    (tmp_path / "wm").write_text(json.dumps(legacy))
+    restarted = DbEventSource(options)
+    restarted.connect()
+    try:
+        assert [event.event_id for event in restarted.poll(10)] == ["ctid:(0,10)"]
+    finally:
+        restarted.close()
+
+
+def test_postgres_view_without_an_identity_is_a_config_error():
+    _seed_same_time_rows("", [""])
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE VIEW "{_TABLE}_view" AS SELECT * FROM "{_TABLE}"'))
+    source = DbEventSource({"database_url": TEST_DATABASE_URL, "events_table": f"{_TABLE}_view"})
+    source.connect()
+    try:
+        with pytest.raises(ConfigError, match="no row identity"):
+            source.poll(1)
+    finally:
+        source.close()
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP VIEW "{_TABLE}_view"'))

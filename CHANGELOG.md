@@ -181,20 +181,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `idempotency_key`, else `id`, else `rowid`/`ctid`. Rows at one timestamp
   are no longer stranded or skipped (sub-millisecond SQLite times, padded
   or `ctid:`-like ids, rows without an id, `WITHOUT ROWID` tables, an
-  `events_query` projecting `id`), and Postgres compares ids by code point
-  whatever the column collation.
+  `events_query` projecting `id`). `id:` digits and Postgres `ctid` sort
+  numerically, other ids by code point whatever the column collation.
 - The db events watermark file also stores that key as `cursor`. A file
-  without it resumes at the start of its `occurred_at`: rows at that exact
-  time are delivered again and acked through the applied-event dedupe.
-  The undocumented `initial_watermark_event_id` option is ignored.
-- The db events source supports MySQL/MariaDB with the same SQL cursor
-  key (checked by SQL-shape tests only until a MySQL CI service lands). It
-  refuses other databases when built, and a source column named
-  `cicerone_cursor` on first poll.
+  without it, like `initial_watermark` with `initial_watermark_event_id`,
+  resumes exactly after that `occurred_at` and `event_id`: SQL builds their
+  key the same way.
+- The db events source refuses databases other than SQLite and Postgres
+  when built. On first poll it refuses a source column named
+  `cicerone_cursor`, and a source with no `event_id`, `idempotency_key` or
+  `id` column and no `rowid`/`ctid` (a view or an `events_query` without
+  one), instead of sharing a cursor between identical rows.
 - A db events row whose `occurred_at` the database can't read as a time
   is never fetched (it was logged on each fetch for tables without
-  `event_id`). DB `cicerone_events_source_lag` is an exact count on
-  SQLite too, instead of `-1` past 10 000 rows.
+  `event_id`).
 
 ### Removed
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -22,16 +22,8 @@ _IDENTITY = "cicerone_identity"
 _PAYLOAD_KEYS = ("user_id", "item_id", "event_type", "quantity")
 
 
-def _pipes(*parts: str) -> str:
-    return " || ".join(parts)
-
-
-def _concat(*parts: str) -> str:
-    return f"CONCAT({', '.join(parts)})"
-
-
 class _CursorSql(NamedTuple):
-    row_identity: str | None
+    row_identity: str
     row_identity_key: str
     supplied_id: str
     timestamp: str
@@ -39,15 +31,14 @@ class _CursorSql(NamedTuple):
     sep: str
     collate: str
     prefilter: str
-    concat: Callable[..., str] = _pipes
-    text: str = "TEXT"
 
 
 # Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
 ID_WHITESPACE = "".join(char for char in map(chr, range(0x3001)) if char.isspace())
-# Key = UTC occurred_at at full precision, a separator, then the row identity; `id:<1-20 digits>` sorts
-# numerically, followed by the raw identity so the key stays distinct. SQLite date functions keep only
-# milliseconds, so its fraction is read from the stored text (up to 9 digits).
+# Key = UTC occurred_at at full precision, a separator, then the row identity ({i}). `id:<digits>` and
+# Postgres `ctid:(block,offset)` sort numerically, then the raw identity follows so the key stays
+# distinct. SQLite date functions keep only milliseconds, so its fraction is read from the stored text
+# (up to 9 digits).
 _CURSOR_SQL = {
     "sqlite": _CursorSql(
         row_identity="rowid",
@@ -62,9 +53,9 @@ _CURSOR_SQL = {
             " || '000000000', 1, 9)"
         ),
         identity=(
-            f"CASE WHEN {_IDENTITY} GLOB 'id:[0-9]*' AND substr({_IDENTITY}, 4) NOT GLOB '*[^0-9]*'"
-            f" AND length({_IDENTITY}) <= 23 THEN 'id:' || substr('00000000000000000000'"
-            f" || substr({_IDENTITY}, 4), -20) || char(31) || {_IDENTITY} ELSE {_IDENTITY} END"
+            "CASE WHEN {i} GLOB 'id:[0-9]*' AND substr({i}, 4) NOT GLOB '*[^0-9]*' AND length({i}) <= 23"
+            " THEN 'id:' || substr('00000000000000000000' || substr({i}, 4), -20) || char(31) || {i}"
+            " ELSE {i} END"
         ),
         sep="char(31)",
         collate="BINARY",
@@ -81,41 +72,23 @@ _CURSOR_SQL = {
         ),
         timestamp="to_char(CAST({at} AS timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US')",
         identity=(
-            f"CASE WHEN {_IDENTITY} ~ '^id:[0-9]{{1,20}}$'"
-            f" THEN 'id:' || lpad(substr({_IDENTITY}, 4), 20, '0') || chr(31) || {_IDENTITY}"
-            f" ELSE {_IDENTITY} END"
+            "CASE WHEN {i} ~ '^id:[0-9]{{1,20}}$'"
+            " THEN 'id:' || lpad(substr({i}, 4), 20, '0') || chr(31) || {i}"
+            " WHEN {i} ~ '^ctid:\\([0-9]{{1,20}},[0-9]{{1,20}}\\)$' THEN 'ctid:'"
+            " || lpad(split_part(substr({i}, 7), ',', 1), 20, '0') || ','"
+            " || lpad(rtrim(split_part({i}, ',', 2), ')'), 20, '0') || chr(31) || {i}"
+            " ELSE {i} END"
         ),
         sep="chr(31)",
         collate='"C"',
         # Implied by the key predicate; lets an occurred_at index serve polls and lag counts.
         prefilter=" WHERE {at} >= CAST(:watermark_at AS timestamptz)",
     ),
-    # No row identity; `||` is OR unless PIPES_AS_CONCAT; the session runs in UTC (_utc_connection).
-    "mysql": _CursorSql(
-        row_identity=None,
-        row_identity_key="",
-        supplied_id=(
-            "CASE WHEN CAST({col} AS CHAR) REGEXP '^-?0+([.]0+)?$' THEN NULL"
-            " ELSE NULLIF(TRIM(CAST({col} AS CHAR)), '') END"
-        ),
-        timestamp="DATE_FORMAT({at}, '%Y-%m-%d %H:%i:%s.%f')",
-        identity=(
-            f"CASE WHEN {_IDENTITY} REGEXP '^id:[0-9]{{1,20}}$' THEN CONCAT('id:',"
-            f" LPAD(SUBSTRING({_IDENTITY}, 4), 20, '0'), CHAR(31 USING utf8mb4), {_IDENTITY})"
-            f" ELSE {_IDENTITY} END"
-        ),
-        sep="CHAR(31 USING utf8mb4)",
-        collate="utf8mb4_bin",
-        prefilter=" WHERE {at} >= :watermark_at",
-        concat=_concat,
-        text="CHAR",
-    ),
 }
-_CURSOR_SQL["mariadb"] = _CURSOR_SQL["mysql"]
 CURSOR_DIALECTS = frozenset(_CURSOR_SQL)
 
 
-def row_identity_column(dialect: str) -> str | None:
+def row_identity_column(dialect: str) -> str:
     return _CURSOR_SQL[dialect].row_identity
 
 
@@ -131,26 +104,31 @@ def keyed_source_sql(dialect: str, source: str, columns: Mapping[str, str]) -> s
         if name in columns
     ]
     if "id" in columns:
-        terms.append(sql.concat("'id:'", f"NULLIF(CAST({columns['id']} AS {sql.text}), '')"))
+        terms.append(f"'id:' || NULLIF(CAST({columns['id']} AS TEXT), '')")
     if sql.row_identity in columns:
         terms.append(sql.row_identity_key.format(col=columns[sql.row_identity]))
-    payload = [f"COALESCE(CAST({columns[n]} AS {sql.text}), '')" for n in _PAYLOAD_KEYS if n in columns]
-    terms.append(sql.concat(sql.sep, *(part for column in payload for part in (column, sql.sep))))
+    payload = [f"COALESCE(CAST({columns[name]} AS TEXT), '')" for name in _PAYLOAD_KEYS if name in columns]
+    terms.append(" || ".join([sql.sep, *(f"{part} || {sql.sep}" for part in payload)]))
     projected = ", ".join(f"{column} AS {name}" for name, column in columns.items())
     identity = terms[0] if len(terms) == 1 else f"COALESCE({', '.join(terms)})"
     prefilter = sql.prefilter.format(at=columns["occurred_at"])
     identified = (
         f"(SELECT {projected}, {identity} AS {_IDENTITY} FROM {source}{prefilter}) AS cicerone_identified"
     )
-    key = sql.concat(sql.timestamp.format(at="occurred_at"), sql.sep, sql.identity)
+    key = f"{sql.timestamp.format(at='occurred_at')} || {sql.sep} || {sql.identity.format(i=_IDENTITY)}"
     return f"(SELECT {', '.join(columns)}, {key} AS {CURSOR_COLUMN} FROM {identified}) AS cicerone_keyed"
 
 
 def after_watermark_sql(dialect: str) -> tuple[str, str]:
-    """WHERE and ORDER BY for keys after ``:watermark_cursor`` (or, when NULL, ``:watermark_at``)."""
+    """WHERE and ORDER BY for keys after ``:watermark_cursor``.
+
+    When it is NULL (no key saved yet), the key of ``:watermark_at`` and ``:watermark_event_id`` is
+    built the way a row's is, so resuming from an older watermark file is exact.
+    """
     sql = _CURSOR_SQL[dialect]
     key = f"{CURSOR_COLUMN} COLLATE {sql.collate}"
-    start = sql.timestamp.format(at=":watermark_at")
+    identity = sql.identity.format(i="CAST(:watermark_event_id AS TEXT)")
+    start = f"{sql.timestamp.format(at=':watermark_at')} || {sql.sep} || {identity}"
     return f"{key} > COALESCE(:watermark_cursor, {start})", f"{key} ASC"
 
 

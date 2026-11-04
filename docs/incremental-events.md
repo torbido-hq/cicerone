@@ -195,30 +195,30 @@ are a separate cheap path between those runs.
 
 ### `db`
 
-Watermark poll over `events_table` / `events_query` (SQLite, Postgres or
-MySQL/MariaDB; other databases are refused). MySQL is checked by SQL-shape
-tests only until a MySQL CI service lands. No `POST /events`.
+Watermark poll over `events_table` / `events_query` (SQLite or Postgres;
+other databases are refused). No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
 flush `ack`. SQL computes one cursor key per row and poll pages by it:
 UTC `occurred_at` at full precision, then the row's identity, which is the
 trimmed `event_id` or `idempotency_key` (`0` counts as blank), else `id`,
 else the table's SQLite `rowid` or Postgres `ctid` (none for `WITHOUT
-ROWID` tables, views, MySQL and `events_query`), else the payload. Identities
-compare by code point; `id:` plus up to 20 digits compares numerically.
+ROWID` tables, views and `events_query`). A source with none of these is
+refused at first poll: add or project one. A row with none (e.g. a NULL
+`id`) falls back to its payload. Identities compare by code point; `id:`
+plus up to 20 digits and Postgres `ctid` compare numerically.
 The source must not expose a column named `cicerone_cursor`. On Postgres
-and MySQL the query also keeps `occurred_at >=` the watermark time, so an
-index on `occurred_at` serves polls and the lag count; SQLite scans the
-source. MySQL sessions are set to UTC: `TIMESTAMP` values are read in UTC
-and `DATETIME` values are taken as UTC.
+the query also keeps `occurred_at >=` the watermark time, so an index on
+`occurred_at` serves polls and the lag count; SQLite scans the source and
+its lag count stops at 10 000 rows (reported as unknown).
 When an `event_id` column exists, every row must have a non-blank
 `event_id` or `idempotency_key`. A row with neither is rejected like an
 invalid row below and never holds the watermark. `event_id` and
 `idempotency_key` must be text or integer columns.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
-It has no table identity: project `event_id` or `id`; otherwise same-payload twins
-share a cursor. An invalid row (e.g. no `user_id`, `quantity` below 1) is
+It has no table identity: project `event_id`, `idempotency_key` or `id`.
+An invalid row (e.g. no `user_id`, `quantity` below 1) is
 delivered in cursor order as a rejected event: the worker does not apply it,
 logs it once by its identity columns only, and acks it with its batch, so the
 watermark moves past it like any other row. Fixing it in place later does not
@@ -229,9 +229,9 @@ fetch page made only of such rows stalls the source until they are fixed or
 given an offset.
 
 The watermark file holds the last acked row's `occurred_at`, `event_id`
-and SQL `cursor` key. A file without `cursor` (older versions) resumes at
-the start of its `occurred_at`, so rows at that exact time are delivered
-again and acked through the applied-event dedupe.
+and SQL `cursor` key. A file without `cursor` (older versions), and
+`initial_watermark` with `initial_watermark_event_id`, resume exactly after
+that `occurred_at` and `event_id`: SQL builds their key like a row's.
 
 ### `s3`
 

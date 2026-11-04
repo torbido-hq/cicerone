@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
+# Bound for SQLite health lag (keys are computed per row there); None means more.
+_LAG_SCAN_LIMIT = 10_000
 # Columns an invalid row is reported by; user and item ids stay out of the log.
 _ROW_LOG_KEYS = ("event_id", "idempotency_key", *ROW_IDENTITY_KEYS, "occurred_at")
 # Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
@@ -81,9 +83,6 @@ def _utc_connection(engine: Engine) -> Iterator[Connection]:
         if engine.dialect.name == "postgresql":
             # Naive occurred_at values are UTC (db_occurred_at), so compare them in UTC, not the session zone.
             conn.execute(text("SET LOCAL TIME ZONE 'UTC'"))
-        elif engine.dialect.name in ("mysql", "mariadb"):
-            # Session-wide on MySQL (no SET LOCAL): TIMESTAMP columns read in UTC, DATETIME as stored.
-            conn.execute(text("SET time_zone = '+00:00'"))
         yield conn
 
 
@@ -106,9 +105,7 @@ class DbEventSource(EventSource):
         self._database_url = require_option(options, "database_url", "db")
         dialect = make_url(self._database_url).get_backend_name()
         if dialect not in CURSOR_DIALECTS:
-            raise ConfigError(
-                f"events db source supports sqlite, postgresql and mysql/mariadb, not {dialect!r}"
-            )
+            raise ConfigError(f"events db source supports sqlite and postgresql databases, not {dialect!r}")
         self._events_table = table_option(options, "events_table", DEFAULT_EVENTS_TABLE)
         self._events_query = options.get("events_query")
         if self._events_query is not None:
@@ -118,8 +115,8 @@ class DbEventSource(EventSource):
         self._watermark_path = Path(options["watermark_path"]) if options.get("watermark_path") else None
         initial = options.get("initial_watermark")
         self._watermark_at = db_occurred_at(initial) if initial not in (None, "") else _EPOCH
-        self._watermark_event_id = ""
-        # SQL cursor key of the last acked row; None starts from the beginning of _watermark_at.
+        self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
+        # SQL cursor key of the last acked row; None: SQL builds it from _watermark_at and _event_id.
         self._watermark_cursor: str | None = None
         self._engine: Engine | None = None
         self._lock = threading.Lock()
@@ -163,7 +160,7 @@ class DbEventSource(EventSource):
         with self._lock:
             if self._engine is None:
                 raise EventSourceError("DbEventSource.connect() required before poll")
-            watermark = (self._watermark_cursor, self._watermark_at)
+            watermark = (self._watermark_cursor, self._watermark_at, self._watermark_event_id)
             limit = max_events + len(self._in_flight) + 8
             engine = self._engine
         rows = self._fetch_rows(engine, *watermark, limit=limit)
@@ -261,7 +258,7 @@ class DbEventSource(EventSource):
             connected = self._connected
             last_event_at = self._last_event_at
             engine = self._engine
-            watermark = (self._watermark_cursor, self._watermark_at)
+            watermark = (self._watermark_cursor, self._watermark_at, self._watermark_event_id)
             in_flight = len(self._in_flight)
         # COUNT already includes unacked rows past the watermark — do not add in_flight.
         lag: int | None = in_flight
@@ -304,6 +301,11 @@ class DbEventSource(EventSource):
         identity = None if self._events_query else _table_row_identity(engine, source)
         if identity is not None:
             columns[identity] = identity
+        elif not {"event_id", "idempotency_key", "id"} & columns.keys():
+            raise ConfigError(
+                f"events DB source has no row identity (from {source}): add or project an event_id,"
+                " idempotency_key or id column, or poll a table with a SQLite rowid / Postgres ctid"
+            )
         keyed = keyed_source_sql(engine.dialect.name, source, columns)
         with self._lock:
             if self._keyed_source is None:
@@ -311,32 +313,47 @@ class DbEventSource(EventSource):
             return self._keyed_source
 
     def _after_watermark(
-        self, engine: Engine, cursor: str | None, watermark_at: datetime
+        self, engine: Engine, cursor: str | None, watermark_at: datetime, watermark_event_id: str
     ) -> tuple[str, str, str, dict[str, Any]]:
         """FROM, WHERE and ORDER BY for rows whose SQL key is after the watermark, and their params."""
         where, order = after_watermark_sql(engine.dialect.name)
         params = {
             "watermark_cursor": cursor,
-            # Naive UTC text: MariaDB and older MySQL reject offsets in datetime literals.
-            "watermark_at": watermark_at.astimezone(UTC).replace(tzinfo=None).isoformat(" "),
+            "watermark_at": watermark_at.isoformat(),
+            "watermark_event_id": watermark_event_id,
             "id_whitespace": ID_WHITESPACE,
         }
         return self._source_sql(engine), where, order, params
 
     def _fetch_rows(
-        self, engine: Engine, cursor: str | None, watermark_at: datetime, *, limit: int
+        self,
+        engine: Engine,
+        cursor: str | None,
+        watermark_at: datetime,
+        watermark_event_id: str,
+        *,
+        limit: int,
     ) -> list[dict[str, Any]]:
-        source, where, order, params = self._after_watermark(engine, cursor, watermark_at)
+        source, where, order, params = self._after_watermark(engine, cursor, watermark_at, watermark_event_id)
         sql = text(f"SELECT * FROM {source} WHERE {where} ORDER BY {order} LIMIT :limit")
         with _utc_connection(engine) as conn:
             result = conn.execute(sql, {**params, "limit": max(limit, 1)})
             return [dict(row) for row in result.mappings()]
 
-    def _count_after(self, engine: Engine, cursor: str | None, watermark_at: datetime) -> int:
-        source, where, _order, params = self._after_watermark(engine, cursor, watermark_at)
-        sql = text(f"SELECT COUNT(*) AS n FROM {source} WHERE {where}")
+    def _count_after(
+        self, engine: Engine, cursor: str | None, watermark_at: datetime, watermark_event_id: str
+    ) -> int | None:
+        source, where, _order, params = self._after_watermark(
+            engine, cursor, watermark_at, watermark_event_id
+        )
+        # SQLite has no prefilter, so every row's key is computed: bound the count like a scan.
+        capped = engine.dialect.name == "sqlite"
+        rows = f"SELECT 1 FROM {source} WHERE {where}" + (f" LIMIT {_LAG_SCAN_LIMIT}" if capped else "")
         with _utc_connection(engine) as conn:
-            return int(conn.execute(sql, params).scalar() or 0)
+            count = int(
+                conn.execute(text(f"SELECT COUNT(*) FROM ({rows}) AS cicerone_after"), params).scalar() or 0
+            )
+        return None if capped and count >= _LAG_SCAN_LIMIT else count
 
     def _load_watermark_unlocked(self) -> None:
         if self._watermark_path is None:
@@ -349,7 +366,8 @@ class DbEventSource(EventSource):
             occurred_at = raw.get("occurred_at")
             if occurred_at:
                 watermark_at = db_occurred_at(occurred_at)
-            # A file without a cursor (written before it existed) resumes at the start of occurred_at.
+            watermark_event_id = str(raw.get("event_id") or "")
+            # A file without a cursor (written before it existed) resumes after occurred_at and event_id.
             cursor = raw.get("cursor")
         except (OSError, ValueError):
             logger.exception(
@@ -359,6 +377,7 @@ class DbEventSource(EventSource):
             )
             return
         self._watermark_at = watermark_at
+        self._watermark_event_id = watermark_event_id
         self._watermark_cursor = str(cursor) if cursor else None
 
     def _persist_watermark_unlocked(self) -> None:
@@ -377,8 +396,6 @@ class DbEventSource(EventSource):
 def _table_row_identity(engine: Engine, source: str) -> str | None:
     """SQLite ``rowid`` / Postgres ``ctid`` when the table has one (not WITHOUT ROWID tables or views)."""
     name = row_identity_column(engine.dialect.name)
-    if name is None:
-        return None
     try:
         with engine.connect() as conn:
             conn.execute(text(f"SELECT {name} FROM {source} LIMIT 0"))
