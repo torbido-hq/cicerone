@@ -1294,7 +1294,12 @@ def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
     )
     with caplog.at_level("ERROR", logger="cicerone.evaluation.served"):
         failed = evaluate_served(
-            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"},
+                    {"user_id": "bob", "item_id": "lager", "rank": 1, "source": "personalized"},
+                ]
+            ),
             pd.DataFrame(
                 [
                     {
@@ -1302,7 +1307,13 @@ def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
                         "item_id": "ipa",
                         "event_type": "purchase",
                         "occurred_at": "2026-08-28T12:00:00Z",
-                    }
+                    },
+                    {
+                        "user_id": "bob",
+                        "item_id": "stout",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    },
                 ]
             ),
             generated_at=None,
@@ -1310,11 +1321,14 @@ def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
             event_types=("purchase",),
         )
     assert failed is not None
-    assert failed.metrics["HitRate@1"] == 1.0
-    assert failed.by_source["personalized"]["HitRate@1"] == 1.0
-    logged = [record.getMessage() for record in caplog.records]
-    assert "RecTools calc_metrics failed for k=1 (ValueError: x)" in logged
-    assert "RecTools HitRate failed for source=personalized k=1 (ValueError: x)" in logged
+    assert failed.metrics["HitRate@1"] == pytest.approx(0.5)
+    assert failed.by_source["personalized"]["HitRate@1"] == pytest.approx(0.5)
+    logged = {record.getMessage(): record for record in caplog.records}
+    for message in (
+        "RecTools calc_metrics failed for k=1 (ValueError: x)",
+        "RecTools HitRate failed for source=personalized k=1 (ValueError: x)",
+    ):
+        assert logged[message].exc_info
 
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
@@ -1500,6 +1514,47 @@ def test_evaluate_served_history_recs_respect_assignment() -> None:
     assert report.metrics["HitRate@1"] == pytest.approx(0.5)
 
 
+def test_evaluate_served_history_filters_assignment_after_snapshot_choice() -> None:
+    def _snap(user_id: str, item_id: str, variant: str, generated_at: str) -> dict:
+        return {
+            "user_id": user_id,
+            "item_id": item_id,
+            "rank": 1,
+            "variant": variant,
+            "generated_at": generated_at,
+        }
+
+    def _purchase(user_id: str, item_id: str) -> dict:
+        return {
+            "user_id": user_id,
+            "item_id": item_id,
+            "event_type": "purchase",
+            "occurred_at": "2026-08-28T12:00:00Z",
+        }
+
+    history = pd.DataFrame(
+        [
+            _snap("alice", "ipa", "control", "2026-08-28T00:30:00Z"),
+            _snap("alice", "ipa", "treatment", "2026-08-28T01:00:00Z"),
+            _snap("bob", "stout", "control", "2026-08-28T01:00:00Z"),
+            _snap(COLD_START_USER_ID, "stout", "control", "2026-08-28T01:00:00Z"),
+        ]
+    )
+    report = evaluate_served(
+        pd.DataFrame([{"user_id": "bob", "item_id": "porter", "rank": 1, "variant": "control"}]),
+        pd.DataFrame(
+            [_purchase("alice", "ipa"), _purchase("bob", "stout"), _purchase(COLD_START_USER_ID, "stout")]
+        ),
+        generated_at=None,
+        ks=(1,),
+        event_types=("purchase",),
+        history=history,
+        assigned={"alice": "control"},
+    )
+    assert report is not None
+    assert report.n_users == 1
+
+
 @pytest.mark.parametrize("with_prior", [True, False])
 def test_evaluate_served_popularity_metrics_need_prior_events(with_prior: bool) -> None:
     rows = [
@@ -1530,6 +1585,8 @@ def test_evaluate_served_popularity_metrics_need_prior_events(with_prior: bool) 
     assert "CatalogCoverage@1" in report.metrics
     assert ("MeanInvUserFreq@1" in report.metrics) is with_prior
     assert ("AvgRecPopularity@1" in report.metrics) is with_prior
+    if with_prior:
+        assert report.metrics["AvgRecPopularity@1"] == pytest.approx(1.0)
 
 
 def test_evaluate_tracking_orphan_click_does_not_count_click_through() -> None:

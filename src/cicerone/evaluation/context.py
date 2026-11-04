@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
+from pyarrow.lib import ArrowNotImplementedError
 from sqlalchemy import Engine, bindparam, text
 
 from cicerone.config.settings import Settings
@@ -19,7 +20,6 @@ from cicerone.io.engines import engine_for, quote_identifier, release_engine, sq
 from cicerone.io.factory import build_input_source
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
-    PARQUET_PUSHDOWN_ERRORS,
     read_parquet,
     readonly_select,
     require_option,
@@ -28,7 +28,7 @@ from cicerone.io.options import (
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.track.store_common import since_date_floor
 
-_METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *PARQUET_PUSHDOWN_ERRORS)
+_METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, ArrowNotImplementedError)
 
 REQUIRED_EVENT_COLUMNS = (USER_COLUMN, "item_id", "event_type", "occurred_at")
 EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
