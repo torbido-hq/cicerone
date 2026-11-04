@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -15,11 +14,11 @@ from cicerone.config.settings import IOSettings
 from cicerone.io.options import (
     build_s3_client,
     is_s3_not_found,
-    object_key,
+    local_path,
     read_capped,
     read_parquet,
     read_s3_body,
-    require_option,
+    s3_location,
     storage_backend,
     validate_storage_options,
 )
@@ -47,14 +46,13 @@ def read_storage_bytes(
 ) -> bytes | None:
     backend = validate_storage_options(options)
     if backend == "local":
-        path = Path(require_option(options, "path", "local")) / filename
+        path = local_path(options, filename)
         try:
             with path.open("rb") as handle:
                 return read_capped(handle.read, DEFAULT_MAX_STORAGE_READ_BYTES)
         except FileNotFoundError:
             return None
-    bucket = require_option(options, "bucket", "s3")
-    key = object_key(options, filename)
+    bucket, key = s3_location(options, filename)
     client = build_s3_client(options)
     try:
         response = client.get_object(Bucket=bucket, Key=key)
@@ -68,20 +66,19 @@ def read_storage_bytes(
 def write_storage_bytes(options: dict[str, Any], filename: str, payload: bytes, content_type: str) -> None:
     backend = validate_storage_options(options)
     if backend == "local":
-        path = Path(require_option(options, "path", "local")) / filename
+        path = local_path(options, filename)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.tmp")
         tmp.write_bytes(payload)
         tmp.replace(path)
         return
-    bucket = require_option(options, "bucket", "s3")
-    key = object_key(options, filename)
+    bucket, key = s3_location(options, filename)
     client = build_s3_client(options)
     client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType=content_type)
 
 
 def append_storage_bytes(options: dict[str, Any], filename: str, payload: bytes) -> None:
-    path = Path(require_option(options, "path", "local")) / filename
+    path = local_path(options, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("ab") as handle:
         handle.write(payload)

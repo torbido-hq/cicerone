@@ -16,7 +16,6 @@ import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -41,11 +40,11 @@ from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
     is_s3_not_found,
-    object_key,
+    local_path,
     read_parquet,
     read_parquet_attrs,
     read_parquet_pushdown,
-    require_option,
+    s3_location,
     validate_storage_options,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
@@ -128,7 +127,7 @@ class DatasetOutputSink:
         if self._backend != "local":
             yield
             return
-        path = Path(require_option(self._options, "path", "local")) / filename
+        path = local_path(self._options, filename)
         with exclusive_file_lock(path):
             yield
 
@@ -172,11 +171,10 @@ class DatasetOutputSink:
 
     def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
         if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
+            path = local_path(self._options, filename)
             logger.info("Writing %s", path)
         else:
-            bucket = require_option(self._options, "bucket", "s3")
-            logger.info("Writing s3://%s/%s", bucket, object_key(self._options, filename))
+            logger.info("Writing s3://%s/%s", *s3_location(self._options, filename))
         write_storage_bytes(self._options, filename, payload, content_type)
 
     def ensure_writer_held(self) -> None:
@@ -299,15 +297,14 @@ class DatasetOutputSink:
         from cicerone.artifact import ARTIFACT_FILENAME
 
         if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / ARTIFACT_FILENAME
+            path = local_path(self._options, ARTIFACT_FILENAME)
             try:
                 stat = path.stat()
             except FileNotFoundError:
                 return None
             return f"local:{stat.st_mtime_ns}:{stat.st_size}"
 
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, ARTIFACT_FILENAME)
+        bucket, key = s3_location(self._options, ARTIFACT_FILENAME)
         client = build_s3_client(self._options)
         try:
             head = client.head_object(Bucket=bucket, Key=key)

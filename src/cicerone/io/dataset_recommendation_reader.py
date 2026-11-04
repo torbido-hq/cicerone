@@ -6,7 +6,6 @@ import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -19,8 +18,8 @@ from cicerone.io.base import BaseRecommendationReader
 from cicerone.io.blob import S3_READ_ERRORS, STORAGE_READ_ERRORS, is_storage_not_found
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import (
+    local_path,
     read_parquet,
-    require_option,
     validate_storage_options,
 )
 from cicerone.io.recommendation_reader_common import (
@@ -82,7 +81,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         )
         if wanted is None or self._backend != "local":
             return None
-        path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
+        path = local_path(self._options, ITEMS_SNAPSHOT_FILENAME)
         if not path.exists():
             return None
         present = set(pq.read_schema(path).names)
@@ -100,7 +99,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     ) -> pd.DataFrame | None:
         try:
             if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
+                path = local_path(self._options, ITEMS_SNAPSHOT_FILENAME)
                 if not path.exists():
                     return None
             frame = read_parquet(
