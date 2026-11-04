@@ -20,6 +20,7 @@ from cicerone.evaluation.metrics import (
     metrics_for_impression_slice,
     normalized_frame,
     with_join_keys,
+    with_str_ids,
 )
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -75,7 +76,7 @@ def conversion_events(
     return filter_events_by_types(events, conversion_event_types(configured, primary_metric=primary_metric))
 
 
-def _variant_blank(values: pd.Series) -> pd.Series:
+def variant_blank(values: pd.Series) -> pd.Series:
     return values.isna() | values.astype(str).str.strip().eq("")
 
 
@@ -89,13 +90,11 @@ def annotate_impression_source(
         if SOURCE_COLUMN not in frame.columns:
             frame[SOURCE_COLUMN] = None
         return frame
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
+    recs = with_str_ids(recommendations)
     join_keys = [USER_COLUMN, ITEM_COLUMN]
     if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in recs.columns:
-        blank = _variant_blank(frame[VARIANT_COLUMN])
-        rec_blank = _variant_blank(recs[VARIANT_COLUMN])
+        blank = variant_blank(frame[VARIANT_COLUMN])
+        rec_blank = variant_blank(recs[VARIANT_COLUMN])
         if bool(blank.any()):
             parts: list[pd.DataFrame] = []
             if bool((~blank).any()):
