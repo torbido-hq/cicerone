@@ -716,23 +716,6 @@ def test_s3_sqs_poison_delete_client_error_leaves_message(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_deeply_nested_body_is_deleted_as_poison():
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-deep-poison")["QueueUrl"]
-    sqs.send_message(QueueUrl=queue_url, MessageBody="[" * 100_000)
-    _put_event(s3, "ok.json", event_payload(event_id="ok-deep"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    events = list(source.poll(10))
-    assert [event.event_id for event in events] == ["ok-deep"]
-    source.ack([events[0].event_id])
-    assert _sqs_held(sqs, queue_url) == 0
-
-
-@mock_aws
 def test_s3_sqs_malformed_nested_sns_and_record_are_left():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")

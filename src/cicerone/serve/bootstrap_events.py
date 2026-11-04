@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
 
-from cicerone.cleanup import cleanup_logging_errors
 from cicerone.config import Settings
 from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
@@ -51,24 +51,20 @@ class EventsRuntime:
     publisher: RecommendationPublisher | None = None
 
     def stop(self) -> bool:
+        stopped = True
         try:
-            stopped = self.worker is None or self.worker.stop()
-        except BaseException:
-            cleanup_logging_errors(self._close_publisher, "Recommendation publisher close failed", logger)
-            raise
-        self._close_publisher()
-        if not stopped:
-            logger.warning("Event worker did not stop in time")
-        return stopped
-
-    def _close_publisher(self) -> None:
-        publisher, self.publisher = self.publisher, None
-        if publisher is None:
-            return
-        try:
-            publisher.close()
-        except PUBLISH_ERRORS:
-            logger.exception("Recommendation publisher close failed")
+            if self.worker is not None:
+                stopped = self.worker.stop()
+                if not stopped:
+                    logger.warning("Event worker did not stop in time")
+                    return False
+            return True
+        finally:
+            try:
+                # A pending worker-stop error must still propagate.
+                _close_publisher(self.publisher, quiet=sys.exception() is not None)
+            finally:
+                self.publisher = None
 
 
 def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
@@ -104,6 +100,29 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
         return snapshot
 
     return read_users
+
+
+def _stop_worker_quietly(worker: EventWorker | None) -> None:
+    if worker is None:
+        return
+    try:
+        worker.stop()
+    except Exception:
+        # The startup error must still propagate.
+        logger.exception("Event worker stop after startup failure")
+
+
+def _close_publisher(publisher: RecommendationPublisher | None, *, quiet: bool = False) -> None:
+    if publisher is None:
+        return
+    try:
+        publisher.close()
+    except PUBLISH_ERRORS:
+        logger.exception("Recommendation publisher close failed")
+    except Exception:
+        if not quiet:
+            raise
+        logger.exception("Recommendation publisher close failed")
 
 
 def start_events_runtime(
@@ -249,8 +268,5 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            cleanup_logging_errors(
-                EventsRuntime(webhook_source=None, worker=worker, publisher=publisher).stop,
-                "Events runtime stop after startup failure",
-                logger,
-            )
+            _stop_worker_quietly(worker)
+            _close_publisher(publisher, quiet=True)

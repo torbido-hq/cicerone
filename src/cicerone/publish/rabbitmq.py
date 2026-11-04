@@ -12,7 +12,6 @@ import pandas as pd
 from cicerone.amqp_options import (
     amqp_timeout_seconds,
     apply_amqp_timeouts,
-    close_amqp_handle,
     optional_exchange,
     optional_routing_key,
     require_amqp_url,
@@ -37,6 +36,14 @@ def _rabbitmq_publish_errors() -> tuple[type[BaseException], ...]:
     from cicerone.events.errors import AMQPError
 
     return (AMQPError, OSError, TimeoutError)
+
+
+def _close_quietly(connection: Any) -> None:
+    try:
+        connection.close()
+    except Exception:
+        # Connect's original error must still propagate.
+        logger.exception("Failed to close RabbitMQ publisher connection after connect error")
 
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
@@ -83,7 +90,7 @@ class RabbitMQPublisher:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         finally:
             if connection is not None and not connected:
-                close_amqp_handle(connection, "publisher connection after connect error", logger)
+                _close_quietly(connection)
         self._connection = connection
         self._channel = channel
         self._connected_once = True
@@ -148,19 +155,28 @@ class RabbitMQPublisher:
         connection = self._connection
         self._channel = None
         self._connection = None
-        errors = [
-            exc
-            for exc in (
-                close_amqp_handle(channel, "publisher channel", logger),
-                close_amqp_handle(connection, "publisher connection", logger),
-            )
-            if exc is not None
-        ]
-        unexpected = [exc for exc in errors if not isinstance(exc, _rabbitmq_publish_errors())]
-        if unexpected:
-            raise unexpected[0]
-        if errors:
-            raise PublishError(f"RabbitMQ publisher close failed: {errors[0]}") from errors[0]
+        close_exc: BaseException | None = None
+        unexpected: BaseException | None = None
+        for handle, label in ((channel, "channel"), (connection, "connection")):
+            if handle is None:
+                continue
+            closer = getattr(handle, "close", None)
+            if not callable(closer):
+                continue
+            try:
+                closer()
+            except Exception as exc:
+                logger.exception("Failed to close RabbitMQ publisher %s", label)
+                if isinstance(exc, _rabbitmq_publish_errors()):
+                    if close_exc is None:
+                        close_exc = exc
+                    continue
+                if unexpected is None:
+                    unexpected = exc
+        if unexpected is not None:
+            raise unexpected
+        if close_exc is not None:
+            raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 
     def _require(self) -> Any:
         if self._channel is None:

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from functools import partial
 from typing import Any
 
 import pandas as pd
 
-from cicerone.cleanup import cleanup_logging_errors
 from cicerone.config.constants import ConfigError, import_extra
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
 from cicerone.option_parse import require_nonempty_str
@@ -26,6 +24,14 @@ def _kafka_publish_errors() -> tuple[type[BaseException], ...]:
     from cicerone.events.errors import KafkaException
 
     return (KafkaException, BufferError)
+
+
+def _flush_quietly(producer: Any, timeout: float) -> None:
+    try:
+        producer.flush(timeout)
+    except Exception:
+        # Connect's original error must still propagate.
+        logger.exception("Kafka publisher flush after connect failure")
 
 
 def validate_kafka_publish_options(options: dict[str, Any]) -> None:
@@ -55,11 +61,7 @@ class KafkaPublisher:
             raise ConfigError(f"publish.options.bootstrap_servers is unreachable: {exc}") from exc
         finally:
             if producer is not None and not connected:
-                cleanup_logging_errors(
-                    partial(producer.flush, self._timeout_seconds),
-                    "Kafka publisher flush after connect failure",
-                    logger,
-                )
+                _flush_quietly(producer, self._timeout_seconds)
         self._producer = producer
 
     def publish(self, df: pd.DataFrame, *, user_ids: Sequence[str] | None = None) -> None:

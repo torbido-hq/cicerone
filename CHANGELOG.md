@@ -164,9 +164,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
-- When the event worker returns events to the source after a failed
-  lookup, repair or ack, a failure to return them is logged and the
-  original error wins, instead of replacing it.
+- When the event worker returns events to the source because an
+  applied-event lookup, post-write repair, apply or already-applied ack
+  raised, a failure of that return (nack) is logged and the events stay
+  buffered; the original error is raised, or the tick returns 0 for a
+  handled apply error, instead of the nack error replacing it.
 - When the experiment state read fails, the dashboard experiments page
   shows that dashboard's own last read or written state, instead of an
   unlocked process-wide copy.

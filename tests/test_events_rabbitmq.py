@@ -69,9 +69,6 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
     executed = threading.Event()
 
     class _Conn:
-        def close(self) -> None:
-            pass
-
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             entered.set()
@@ -98,9 +95,6 @@ def test_pika_io_marks_failed_when_pump_raises():
     from cicerone.events.rabbitmq_io import PikaIo
 
     class _Conn:
-        def close(self) -> None:
-            pass
-
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             raise ConnectionError("socket closed")
@@ -372,9 +366,7 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
 
     io = PikaIo(timeout_seconds=0.05)
     acks: list[int] = []
-    io._channel = SimpleNamespace(
-        basic_ack=lambda delivery_tag: acks.append(delivery_tag), close=lambda: None
-    )
+    io._channel = SimpleNamespace(basic_ack=lambda delivery_tag: acks.append(delivery_tag))
     entered = threading.Event()
     release = threading.Event()
     source = RabbitMQEventSource(_options())
@@ -429,11 +421,8 @@ def test_broker_ops_raise_when_channel_is_detached():
             declares.append(str(kwargs.get("queue")))
             or SimpleNamespace(method=SimpleNamespace(message_count=0))
         ),
-        close=lambda: None,
     )
-    io._connection = SimpleNamespace(
-        process_data_events=lambda time_limit=0: pumps.append(time_limit), close=lambda: None
-    )
+    io._connection = SimpleNamespace(process_data_events=lambda time_limit=0: pumps.append(time_limit))
     io._mark_failed()
     source = RabbitMQEventSource(_options())
     with pytest.raises(RuntimeError, match="abandoned"):
@@ -615,9 +604,6 @@ def test_pika_io_wakes_queued_submit_when_pump_fails():
     entered = threading.Event()
 
     class _Conn:
-        def close(self) -> None:
-            pass
-
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             entered.set()
@@ -711,9 +697,6 @@ def test_pika_io_busy_survives_overlapping_pump():
     hold_job = threading.Event()
 
     class _Conn:
-        def close(self) -> None:
-            pass
-
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             entered.set()
@@ -826,10 +809,8 @@ def test_amqp_callbacks_use_io_handles(monkeypatch):
     io_channel.basic_ack = _ack  # type: ignore[method-assign]
     io_channel.queue_declare = _declare  # type: ignore[method-assign]
     io_connection.process_data_events = _pump  # type: ignore[method-assign]
-    source._channel = SimpleNamespace(
-        basic_get=_fail, basic_ack=_fail, queue_declare=_fail, close=lambda: None
-    )
-    source._connection = SimpleNamespace(process_data_events=_fail, close=lambda: None)
+    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
+    source._connection = SimpleNamespace(process_data_events=_fail)
 
     assert source._basic_get(io) == (None, None, None)
     source._basic_ack(io, 9)

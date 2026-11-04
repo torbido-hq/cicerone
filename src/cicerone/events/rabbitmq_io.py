@@ -9,7 +9,6 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
-from cicerone.amqp_options import close_amqp_handle
 from cicerone.events.base import EventSourceError
 from cicerone.events.errors import AMQPError
 
@@ -200,9 +199,9 @@ class PikaIo:
         self._abandon_connection = None
         close_handles(channel, connection)
         if leftover_channel is not None and leftover_channel is not channel:
-            close_amqp_handle(leftover_channel, "channel", logger)
+            _close_quietly(leftover_channel, "channel")
         if leftover_connection is not None and leftover_connection is not connection:
-            close_amqp_handle(leftover_connection, "connection", logger)
+            _close_quietly(leftover_connection, "connection")
 
     def _loop(self) -> None:
         while True:
@@ -304,5 +303,17 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
 
 
 def close_handles(channel: Any, connection: Any) -> None:
-    close_amqp_handle(channel, "channel", logger)
-    close_amqp_handle(connection, "connection", logger)
+    _close_quietly(channel, "channel")
+    _close_quietly(connection, "connection")
+
+
+def _close_quietly(handle: Any, label: str) -> None:
+    if handle is None:
+        return
+    closer = getattr(handle, "close", None)
+    if not callable(closer):
+        return
+    try:
+        closer()
+    except Exception:
+        logger.exception("Failed to close RabbitMQ %s", label)

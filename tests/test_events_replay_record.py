@@ -160,30 +160,65 @@ def test_worker_returns_the_batch_when_the_record_lookup_fails(tmp_path, feature
     assert source.health().lag == 1
 
 
-@pytest.mark.parametrize("lookup_error", [OSError("storage unreachable"), KeyError("lookup bug")])
-def test_a_failed_return_does_not_replace_the_lookup_error(
-    tmp_path, feature_config, caplog, lookup_error: Exception
-) -> None:
+def _raise(error: BaseException):  # type: ignore[no-untyped-def]
+    def _fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise error
+
+    return _fail
+
+
+def _worker_failing_at(tmp_path, feature_config, monkeypatch, site: str, error: BaseException):  # type: ignore[no-untyped-def]
     source = WebhookEventSource({})
-    source.ingest(event_payload(event_id="lookup-fails", user_id="u1", item_id="i9"))
-    worker, updater = _worker(_outputs(tmp_path)["dataset"], feature_config, source)
+    event_ids = ["e1", "e2"] if site == "replayed_ack" else ["e1"]
+    for n, event_id in enumerate(event_ids):
+        source.ingest(event_payload(event_id=event_id, user_id="u1", item_id=f"i{n}"))
+    worker, updater = _worker(
+        _outputs(tmp_path)["dataset"], feature_config, source, batch_size=len(event_ids)
+    )
+    source.nack = _raise(TypeError("nack bug"))  # type: ignore[method-assign]
+    if site == "lookup":
+        updater.applied_before = _raise(error)  # type: ignore[method-assign]
+    elif site == "repair":
+        monkeypatch.setattr(IncrementalUpdater, "post_write_pending", property(lambda _self: True))
+        updater.repair_post_write = _raise(error)  # type: ignore[method-assign]
+    elif site == "apply":
+        updater.apply = _raise(error)  # type: ignore[method-assign]
+    elif site == "replayed_ack":
+        updater.applied_before = lambda events: [events[0]]  # type: ignore[method-assign]
+        source.ack = _raise(error)  # type: ignore[method-assign]
+    return worker
 
-    def _lookup_fails(_events):  # type: ignore[no-untyped-def]
-        raise lookup_error
 
-    def _nack_fails(_events):  # type: ignore[no-untyped-def]
-        raise RuntimeError("nack bug")
+@pytest.mark.parametrize("site", ["lookup", "repair", "apply", "replayed_ack"])
+def test_a_failed_return_does_not_replace_the_original_error(
+    tmp_path, feature_config, monkeypatch, caplog, site: str
+) -> None:
+    original = KeyError(f"{site} bug")
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, original)
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert len(worker._buffer) == 1
+    assert "failed to return events to the source after an error" in caplog.text
 
-    updater.applied_before = _lookup_fails  # type: ignore[method-assign]
-    source.nack = _nack_fails  # type: ignore[method-assign]
-    if isinstance(lookup_error, OSError):
-        assert worker.tick() == 0
-    else:
-        with pytest.raises(KeyError) as caught:
-            worker.tick()
-        assert caught.value is lookup_error
-    assert "Failed to return events to the source after an error" in caplog.text
-    assert updater.events_applied == 0
+
+@pytest.mark.parametrize("site", ["lookup", "apply"])
+def test_a_failed_return_keeps_an_apply_error_handled(
+    tmp_path, feature_config, monkeypatch, site: str
+) -> None:
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, OSError("storage unreachable"))
+    assert worker.tick() == 0
+    assert len(worker._buffer) == 1
+
+
+def test_a_nack_bug_outside_an_error_path_still_propagates(tmp_path, feature_config, monkeypatch) -> None:
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", OSError("unused"))
+    # Apply reports busy (0 applied): the nack is the normal return path, not error cleanup.
+    worker._updater.apply = lambda *_args, **_kwargs: 0  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="nack bug") as caught:
+        worker.tick()
+    assert type(caught.value) is TypeError
+    assert len(worker._buffer) == 1
 
 
 @pytest.mark.parametrize("kind", ["dataset", "db"])

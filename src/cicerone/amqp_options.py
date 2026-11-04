@@ -1,11 +1,9 @@
-"""Shared AMQP options and handle close for events ingest and recs publish."""
+"""Shared AMQP options for events ingest and recs publish."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from cicerone.cleanup import cleanup_logging_errors
 from cicerone.option_parse import (
     MAX_BROKER_TIMEOUT_SECONDS,
     optional_float,
@@ -16,12 +14,6 @@ from cicerone.option_parse import (
 
 DEFAULT_PREFETCH = 100
 DEFAULT_TIMEOUT_SECONDS = 10.0
-
-
-def close_amqp_handle(handle: Any, label: str, log: logging.Logger) -> Exception | None:
-    if handle is None:
-        return None
-    return cleanup_logging_errors(handle.close, f"Failed to close RabbitMQ {label}", log)
 
 
 def amqp_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:

@@ -55,6 +55,11 @@ def inflight_heartbeat(
         while not stop.wait(interval_seconds):
             try:
                 beat(events)
+            except EVENT_SOURCE_ERRORS as exc:
+                logger.exception("Event source heartbeat failed")
+                caught.append(exc)
+                failed.set()
+                return
             except Exception as exc:
                 # The caller is blocked in apply; record and stop this thread.
                 logger.exception("Event source heartbeat failed")

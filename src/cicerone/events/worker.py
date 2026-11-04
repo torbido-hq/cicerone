@@ -5,10 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
-from collections.abc import Sequence
-from functools import partial
+from collections.abc import Callable, Sequence
 
-from cicerone.cleanup import cleanup_logging_errors
 from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
     DEFAULT_EVENTS_POLL_INTERVAL_SECONDS,
@@ -69,6 +67,14 @@ class _BoundedSeen:
 
 
 __all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
+
+
+def _return_after_error(return_events: Callable[[], object]) -> None:
+    # Runs while another error propagates: a failed return is logged so that error wins.
+    try:
+        return_events()
+    except Exception:
+        logger.exception("Event worker failed to return events to the source after an error")
 
 
 class EventWorker:
@@ -389,13 +395,6 @@ class EventWorker:
         if rejected:
             self._restore_buffer(rejected)
 
-    def _return_events_after_error(self, events: Sequence[NormalizedEvent]) -> None:
-        cleanup_logging_errors(
-            partial(self._return_events, events),
-            "Failed to return events to the source after an error",
-            logger,
-        )
-
     def _reconnect_source(self) -> bool:
         with self._tick_guard:
             with self._source_guard:
@@ -493,7 +492,7 @@ class EventWorker:
             repaired = True
         finally:
             if not repaired and ready:
-                self._return_events_after_error(ready)
+                _return_after_error(lambda: self._return_events(ready))
         return self._flush_ready(ready) if ready else 0
 
     def _repair_post_write(self) -> None:
@@ -588,7 +587,7 @@ class EventWorker:
         except Exception as exc:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
-            self._return_events_after_error(ready)
+            _return_after_error(lambda: self._return_events(ready))
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -638,7 +637,7 @@ class EventWorker:
             return self._reject(ready, "busy")
         except Exception as exc:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
-            self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -712,7 +711,7 @@ class EventWorker:
             logger.exception("Event source ack failed for already-applied event(s); retrying later")
         except Exception:
             record_events_flush(status="error")
-            self._return_events_after_error(fresh)
+            _return_after_error(lambda: self._return_events(fresh))
             raise
         return fresh
 
