@@ -1314,7 +1314,7 @@ def test_track_db_inserts_in_key_order_on_mysql_and_reports_in_input_order(mysql
     accepted = store.append_accepted_rows([_row(event_id="b"), _row(event_id="a")])
 
     assert [row["event_id"] for row in accepted] == ["b", "a"]
-    assert [params[0] for params in batches[-1]] == ["a", "b"]
+    assert [params["event_id"] for params in batches[-1]] == ["a", "b"]
 
 
 def test_track_db_rejects_values_mysql_would_clamp(mysql_track_output) -> None:
