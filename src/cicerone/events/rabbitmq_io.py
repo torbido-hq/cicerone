@@ -302,5 +302,6 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
 
 def close_handles(channel: Any, connection: Any) -> None:
     for handle, label in ((channel, "channel"), (connection, "connection")):
-        if handle is not None:
-            cleanup_after_failure(handle.close, f"Failed to close RabbitMQ {label}", logger)
+        closer = getattr(handle, "close", None)
+        if callable(closer):
+            cleanup_after_failure(closer, f"Failed to close RabbitMQ {label}", logger)
