@@ -33,25 +33,28 @@ _REQUIRED_KEYS = (
 _HOST_SIDE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
-@lru_cache(maxsize=1)
-def load_postgres_defaults() -> dict[str, str]:
-    """Parse docker/postgres/defaults.env into a dict (no shell expansion)."""
-    if not _DEFAULTS_PATH.is_file():
+def load_env_defaults(path: Path, required_keys: tuple[str, ...]) -> dict[str, str]:
+    """Parse a docker/*/defaults.env into a dict (no shell expansion)."""
+    if not path.is_file():
         raise FileNotFoundError(
-            f"Missing Postgres defaults file at {_DEFAULTS_PATH}. "
-            "It is the canonical source for local/CI DB credentials."
+            f"Missing defaults file at {path}. It is the canonical source for local/CI DB credentials."
         )
     values: dict[str, str] = {}
-    for raw_line in _DEFAULTS_PATH.read_text().splitlines():
+    for raw_line in path.read_text().splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
         values[key.strip()] = value.strip()
-    missing = [key for key in _REQUIRED_KEYS if key not in values]
+    missing = [key for key in required_keys if key not in values]
     if missing:
-        raise ValueError(f"{_DEFAULTS_PATH} missing required keys: {missing}")
+        raise ValueError(f"{path} missing required keys: {missing}")
     return values
+
+
+@lru_cache(maxsize=1)
+def load_postgres_defaults() -> dict[str, str]:
+    return load_env_defaults(_DEFAULTS_PATH, _REQUIRED_KEYS)
 
 
 def _default(key: str) -> str:

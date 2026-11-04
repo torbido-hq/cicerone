@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import boto3
 import pandas as pd
 import pytest
 from moto import mock_aws
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from support.fakes import fake_monotonic
+from support.mysql_defaults import resolve_mysql_test_database_url
+from support.postgres_defaults import resolve_test_database_url
 from support.settings import make_settings
 from support.system_spec import SKIP_NO_TEST_DB
 
+from cicerone.config import IOSettings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
-from cicerone.io.engines import dispose_engines
+from cicerone.io.engines import dispose_engines, quote_identifier
 from cicerone.locks import hold as lock_hold
 
 # Re-export for existing `from conftest import make_settings` call sites.
@@ -65,8 +70,6 @@ def _dispose_shared_engines() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
-    from support.postgres_defaults import resolve_test_database_url
-
     url = resolve_test_database_url()
     if not url:
         pytest.skip(SKIP_NO_TEST_DB)
@@ -84,6 +87,24 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
     reset_schema(db_engine)
     yield
     reset_schema(db_engine)
+
+
+@pytest.fixture(params=["sqlite", "postgres", "mysql"])
+def track_db_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
+    """A db output with its own track table, on each backend; skips a server that isn't configured."""
+    url = {
+        "sqlite": lambda: f"sqlite+pysqlite:///{tmp_path / 'track.db'}",
+        "postgres": resolve_test_database_url,
+        "mysql": resolve_mysql_test_database_url,
+    }[request.param]()
+    if not url:
+        pytest.skip(f"{request.param} test server not configured (POSTGRES_TEST_HOST / MYSQL_TEST_HOST)")
+    table = f"track_{uuid4().hex}"
+    yield IOSettings(kind="db", options={"database_url": url, "track_table": table})
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(conn, table)}"))
+    engine.dispose()
 
 
 @pytest.fixture

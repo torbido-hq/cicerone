@@ -43,6 +43,7 @@ enabled = true
 **rendered** (or a list / `{"events":[...]}`) — not one row per GET.
 Impressions require `rank >= 1`. Clicks may omit `rank`. Optional
 `variant`, `experiment_id`, `generated_at`, `event_id` (idempotency).
+On a MySQL output, an `event_id` over 255 characters returns 400.
 Bodies larger than the configured limit return 413; the default is 1 MiB.
 The endpoint shares the events request-body limit; override it, even in a
 track-only deployment, with:

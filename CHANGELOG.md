@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The track table works on MySQL through the `mysql` extra and a
+  `mysql+pymysql://` `database_url`; `/track` answers 400 for an `event_id`
+  over 255 characters there.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
   impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings

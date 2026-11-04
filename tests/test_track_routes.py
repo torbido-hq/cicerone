@@ -141,6 +141,22 @@ def test_post_track_normalization_error_returns_400(tmp_path):
     assert "occurred_at" in str(response.json()["detail"])
 
 
+def test_post_track_oversize_event_id_returns_400_on_mysql_only(tmp_path, track_db_output):
+    app = create_app(_settings(tmp_path, output=track_db_output), FakeReader(_recs_df()))
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret"},
+        json=[_impression(), _impression(event_id="x" * 256)],
+    )
+    if track_db_output.options["database_url"].startswith("mysql"):
+        assert response.status_code == 400
+        assert "255 characters" in response.json()["detail"]
+        assert app.state.track_store.read_rows() == []
+    else:
+        assert response.status_code == 202
+        assert response.json()["accepted"] == 2
+
+
 def test_post_track_idempotent(tmp_path):
     app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
     client = TestClient(app)

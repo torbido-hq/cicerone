@@ -29,6 +29,10 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
     return bind.dialect.identifier_preparer.quote(name)
 
 
+def is_mysql_family(bind: Engine | Connection) -> bool:
+    return bind.dialect.name in ("mysql", "mariadb")
+
+
 def create_table_sql(bind: Engine | Connection, table: str, columns: Sequence[tuple[str, str]]) -> str:
     """``CREATE TABLE IF NOT EXISTS`` for ``(name, type)`` columns, every identifier quoted."""
     spec = ", ".join(f"{quote_identifier(bind, name)} {kind}" for name, kind in columns)

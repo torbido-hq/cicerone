@@ -83,6 +83,11 @@ Host vs container hostname for the same Postgres:
 - **App containers on the compose network**: host `postgres`.
 - **CI** (`docker-compose.ci.yml`): `POSTGRES_TEST_HOST=db-test`.
 
+The track store tests also run on MySQL when `MYSQL_TEST_HOST` is set (CI:
+`mysql-test`); credentials are in
+[`docker/mysql/defaults.env`](docker/mysql/defaults.env), read by
+`tests/support/mysql_defaults.py`.
+
 `ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
 `docker-compose.ci.yml`. Schema reset only proceeds when the database name
 looks like a dedicated test DB (`test_*` / `*_test`), and only drops

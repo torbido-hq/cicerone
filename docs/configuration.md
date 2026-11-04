@@ -51,8 +51,14 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `incremental_applied_events` (incremental event keys, see
 [incremental events](incremental-events.md)).
 
-The db events source and the track, eval and experiment-state tables
-support Postgres and SQLite, not MySQL.
+The db events source and the eval and experiment-state tables support
+Postgres and SQLite, not MySQL. The track table also supports MySQL: install
+`pip install 'cicerone-recommender[mysql]'` (or `requirements-mysql.txt`) and
+use `database_url = "mysql+pymysql://user:password@host:3306/db"`. MySQL's
+default `caching_sha2_password` auth also needs `pip install 'PyMySQL[rsa]'`.
+The Docker image doesn't ship the driver, so extend it to use MySQL. On MySQL,
+`event_id` is limited to 255 characters and `POST /track` answers 400 for a
+longer one; other columns are `TEXT`, limited to 64 KB.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.

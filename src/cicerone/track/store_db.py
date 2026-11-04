@@ -5,15 +5,21 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable, Sequence
+from functools import cached_property
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, bindparam, text
+from sqlalchemy import Column, Engine, Insert, Integer, MetaData, String, Table, Text, bindparam, text
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.schema import CreateTable
 
-from cicerone.io.engines import LazyEngine, create_table_sql, insert_sql, quote_identifier
+from cicerone.io.engines import LazyEngine, create_table_sql, is_mysql_family, quote_identifier
 from cicerone.io.options import require_option, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
 from cicerone.locks import WriteFence
+from cicerone.track.normalize import TrackNormalizeError
 from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
     DEFAULT_HISTORY_TABLE,
@@ -26,18 +32,11 @@ from cicerone.track.store_common import (
     unique_matching_rows,
 )
 
-_TRACK_TABLE = (
-    ("event_id", "TEXT PRIMARY KEY"),
-    ("kind", "TEXT NOT NULL"),
-    ("user_id", "TEXT NOT NULL"),
-    ("item_id", "TEXT NOT NULL"),
-    ("rank", "INTEGER"),
-    ("occurred_at", "TEXT NOT NULL"),
-    ("variant", "TEXT"),
-    ("experiment_id", "TEXT"),
-    ("generated_at", "TEXT"),
+_MYSQL_EVENT_ID_CHARS = 255
+# MySQL can't index plain TEXT; a binary collation keeps ids that differ only by case or accent distinct.
+_EVENT_ID_TYPE = Text().with_variant(
+    String(_MYSQL_EVENT_ID_CHARS, collation="utf8mb4_bin"), "mysql", "mariadb"
 )
-_TRACK_NAMES = tuple(name for name, _kind in _TRACK_TABLE)
 _TEXT_DEFAULTED = frozenset({"event_id", "kind", "user_id", "item_id", "occurred_at"})
 _EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
@@ -79,31 +78,44 @@ class TrackDbBackend:
     def engine(self) -> Engine:
         return self._engine.get()
 
-    def _ensure_track_table(self, conn: Any, table: str) -> None:
-        conn.execute(text(create_table_sql(conn, table, _TRACK_TABLE)))
+    @cached_property
+    def _track_table(self) -> Table:
+        return Table(
+            table_option(self._options, "track_table", DEFAULT_TRACK_TABLE),
+            MetaData(),
+            Column("event_id", _EVENT_ID_TYPE, primary_key=True),
+            Column("kind", Text, nullable=False),
+            Column("user_id", Text, nullable=False),
+            Column("item_id", Text, nullable=False),
+            Column("rank", Integer),
+            Column("occurred_at", Text, nullable=False),
+            Column("variant", Text),
+            Column("experiment_id", Text),
+            Column("generated_at", Text),
+            mysql_charset="utf8mb4",
+        )
+
+    def _ensure_track_table(self, conn: Any) -> None:
+        conn.execute(CreateTable(self._track_table, if_not_exists=True))
 
     def _append_rows_db(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
+        table = self._track_table
         engine = self.engine()
-        row_sql = text(
-            insert_sql(engine, table, _TRACK_NAMES)
-            + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
-        )
+        names = [column.name for column in table.c]
         params: list[dict[str, Any]] = [
-            {
-                name: str(row.get(name) or "") if name in _TEXT_DEFAULTED else row.get(name)
-                for name in _TRACK_NAMES
-            }
+            {name: str(row.get(name) or "") if name in _TEXT_DEFAULTED else row.get(name) for name in names}
             for row in unique_event_rows(rows)
         ]
+        if is_mysql_family(engine) and any(len(row["event_id"]) > _MYSQL_EVENT_ID_CHARS for row in params):
+            raise TrackNormalizeError(f"event_id is longer than {_MYSQL_EVENT_ID_CHARS} characters")
         with engine.begin() as conn:
-            self._ensure_track_table(conn, table)
-            existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
+            self._ensure_track_table(conn)
+            existing = _existing_event_ids(conn, table.name, [row["event_id"] for row in params])
             fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
             if not fresh:
                 return []
             self._fence.ensure()
-            conn.execute(row_sql, fresh)
+            conn.execute(_insert_ignoring_duplicates(engine, table), fresh)
             self._fence.ensure()
             return fresh
 
@@ -163,6 +175,15 @@ class TrackDbBackend:
             stmt = stmt.bindparams(bindparam("generated_ats", expanding=True))
         frame = read_sql_or_missing(engine, stmt, table, params)
         return empty_history_frame() if frame is None else frame
+
+
+def _insert_ignoring_duplicates(engine: Engine, table: Table) -> Insert:
+    # Not INSERT IGNORE: that also turns too-long values and NOT NULL violations into warnings.
+    if is_mysql_family(engine):
+        stmt = mysql_insert(table)
+        return stmt.on_duplicate_key_update(event_id=stmt.inserted.event_id)
+    dialect_insert = postgresql_insert if engine.dialect.name == "postgresql" else sqlite_insert
+    return dialect_insert(table).on_conflict_do_nothing(index_elements=["event_id"])
 
 
 def _existing_event_ids(conn: Any, table: str, event_ids: Sequence[str]) -> set[str]:
