@@ -134,6 +134,14 @@ def object_key(options: dict[str, Any], filename: str) -> str:
     return f"{prefix}/{filename}" if prefix else filename
 
 
+def local_path(options: dict[str, Any], filename: str) -> Path:
+    return Path(require_option(options, "path", "local")) / filename
+
+
+def s3_location(options: dict[str, Any], filename: str) -> tuple[str, str]:
+    return require_option(options, "bucket", "s3"), object_key(options, filename)
+
+
 def sql_identifier(name: str, *, option: str) -> str:
     if not isinstance(name, str) or not _SQL_IDENTIFIER.fullmatch(name):
         raise ValueError(
@@ -263,18 +271,21 @@ def read_parquet(
     if filters is not None:
         read_kwargs["filters"] = list(filters)
     if backend == "local":
-        path = Path(require_option(options, "path", "local")) / filename
+        path = local_path(options, filename)
         logger.info("Reading %s", path)
         return pd.read_parquet(path, **read_kwargs)
 
-    bucket = require_option(options, "bucket", "s3")
-    key = object_key(options, filename)
+    bucket, key = s3_location(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
     try:
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
     except _PYARROW_S3_FALLBACK_ERRORS:
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
-    obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
+    return read_s3_parquet(build_s3_client(options), bucket, key, **read_kwargs)
+
+
+def read_s3_parquet(client: Any, bucket: str, key: str, **read_kwargs: Any) -> pd.DataFrame:
+    obj = client.get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
 
 
@@ -319,10 +330,9 @@ def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]
 
     backend = validate_storage_options(options)
     if backend == "local":
-        schema = pq.read_schema(Path(require_option(options, "path", "local")) / filename)
+        schema = pq.read_schema(local_path(options, filename))
     else:
-        bucket = require_option(options, "bucket", "s3")
-        key = object_key(options, filename)
+        bucket, key = s3_location(options, filename)
         try:
             schema = pq.read_schema(f"{bucket}/{key}", filesystem=_s3_filesystem(options))
         except _PYARROW_S3_FALLBACK_ERRORS:
