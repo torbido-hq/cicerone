@@ -51,8 +51,9 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 `incremental_applied_events` (incremental event keys, see
 [incremental events](incremental-events.md)).
 
-The db events source and the track, eval and experiment-state tables
-support Postgres and SQLite, not MySQL.
+The db events source supports Postgres, SQLite and MySQL/MariaDB. The
+track, eval and experiment-state tables support Postgres and SQLite, not
+MySQL.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.

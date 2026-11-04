@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
@@ -22,8 +22,16 @@ _IDENTITY = "cicerone_identity"
 _PAYLOAD_KEYS = ("user_id", "item_id", "event_type", "quantity")
 
 
+def _pipes(*parts: str) -> str:
+    return " || ".join(parts)
+
+
+def _concat(*parts: str) -> str:
+    return f"CONCAT({', '.join(parts)})"
+
+
 class _CursorSql(NamedTuple):
-    row_identity: str
+    row_identity: str | None
     row_identity_key: str
     supplied_id: str
     timestamp: str
@@ -31,6 +39,8 @@ class _CursorSql(NamedTuple):
     sep: str
     collate: str
     prefilter: str
+    concat: Callable[..., str] = _pipes
+    text: str = "TEXT"
 
 
 # Characters str.strip() removes (U+3000 is the highest whitespace code point), bound as :id_whitespace.
@@ -80,11 +90,32 @@ _CURSOR_SQL = {
         # Implied by the key predicate; lets an occurred_at index serve polls and lag counts.
         prefilter=" WHERE {at} >= CAST(:watermark_at AS timestamptz)",
     ),
+    # No row identity; `||` is OR unless PIPES_AS_CONCAT; the session runs in UTC (_utc_connection).
+    "mysql": _CursorSql(
+        row_identity=None,
+        row_identity_key="",
+        supplied_id=(
+            "CASE WHEN CAST({col} AS CHAR) REGEXP '^-?0+([.]0+)?$' THEN NULL"
+            " ELSE NULLIF(TRIM(CAST({col} AS CHAR)), '') END"
+        ),
+        timestamp="DATE_FORMAT({at}, '%Y-%m-%d %H:%i:%s.%f')",
+        identity=(
+            f"CASE WHEN {_IDENTITY} REGEXP '^id:[0-9]{{1,20}}$' THEN CONCAT('id:',"
+            f" LPAD(SUBSTRING({_IDENTITY}, 4), 20, '0'), CHAR(31 USING utf8mb4), {_IDENTITY})"
+            f" ELSE {_IDENTITY} END"
+        ),
+        sep="CHAR(31 USING utf8mb4)",
+        collate="utf8mb4_bin",
+        prefilter=" WHERE {at} >= :watermark_at",
+        concat=_concat,
+        text="CHAR",
+    ),
 }
+_CURSOR_SQL["mariadb"] = _CURSOR_SQL["mysql"]
 CURSOR_DIALECTS = frozenset(_CURSOR_SQL)
 
 
-def row_identity_column(dialect: str) -> str:
+def row_identity_column(dialect: str) -> str | None:
     return _CURSOR_SQL[dialect].row_identity
 
 
@@ -100,18 +131,18 @@ def keyed_source_sql(dialect: str, source: str, columns: Mapping[str, str]) -> s
         if name in columns
     ]
     if "id" in columns:
-        terms.append(f"'id:' || NULLIF(CAST({columns['id']} AS TEXT), '')")
+        terms.append(sql.concat("'id:'", f"NULLIF(CAST({columns['id']} AS {sql.text}), '')"))
     if sql.row_identity in columns:
         terms.append(sql.row_identity_key.format(col=columns[sql.row_identity]))
-    payload = [f"COALESCE(CAST({columns[name]} AS TEXT), '')" for name in _PAYLOAD_KEYS if name in columns]
-    terms.append(" || ".join([sql.sep, *(f"{part} || {sql.sep}" for part in payload)]))
+    payload = [f"COALESCE(CAST({columns[n]} AS {sql.text}), '')" for n in _PAYLOAD_KEYS if n in columns]
+    terms.append(sql.concat(sql.sep, *(part for column in payload for part in (column, sql.sep))))
     projected = ", ".join(f"{column} AS {name}" for name, column in columns.items())
     identity = terms[0] if len(terms) == 1 else f"COALESCE({', '.join(terms)})"
     prefilter = sql.prefilter.format(at=columns["occurred_at"])
     identified = (
         f"(SELECT {projected}, {identity} AS {_IDENTITY} FROM {source}{prefilter}) AS cicerone_identified"
     )
-    key = f"{sql.timestamp.format(at='occurred_at')} || {sql.sep} || {sql.identity}"
+    key = sql.concat(sql.timestamp.format(at="occurred_at"), sql.sep, sql.identity)
     return f"(SELECT {', '.join(columns)}, {key} AS {CURSOR_COLUMN} FROM {identified}) AS cicerone_keyed"
 
 

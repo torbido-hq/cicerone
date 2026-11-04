@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import mysql
 from support.events import event_payload, poll_one_by_one
 
 from cicerone.config import ConfigError
@@ -13,6 +14,8 @@ from cicerone.events.db import DbEventSource
 from cicerone.events.db_identity import (
     _row_identity,
     _stable_event_id,
+    after_watermark_sql,
+    keyed_source_sql,
 )
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -992,9 +995,31 @@ def test_db_keyless_rows_at_one_timestamp_are_each_delivered_as_rejected(tmp_pat
     assert _restarted_ids(options) == []
 
 
-def test_db_rejects_dialects_other_than_sqlite_and_postgres():
-    with pytest.raises(ConfigError, match="sqlite and postgresql"):
-        DbEventSource({"database_url": "mysql+pymysql://user@localhost/events"})
+@pytest.mark.parametrize("database_url", ["mssql+pyodbc://user@localhost/events", "oracle://user@localhost"])
+def test_db_rejects_dialects_without_a_sql_cursor(database_url):
+    with pytest.raises(ConfigError, match="sqlite, postgresql and mysql/mariadb"):
+        DbEventSource({"database_url": database_url})
+
+
+@pytest.mark.parametrize(
+    "database_url", ["mysql+pymysql://user@localhost/events", "mariadb://user@localhost/e"]
+)
+def test_db_mysql_cursor_sql_concatenates_formats_in_utc_and_compares_binary(database_url):
+    DbEventSource({"database_url": database_url})
+    columns = {name: f"`{name}`" for name in ("user_id", "occurred_at", "event_id", "id")}
+    where, order = after_watermark_sql("mysql")
+    sql = text(
+        f"SELECT * FROM {keyed_source_sql('mysql', '`events`', columns)} WHERE {where} ORDER BY {order}"
+    )
+    compiled = str(sql.compile(dialect=mysql.dialect()))
+    assert "||" not in compiled
+    assert "AS TEXT" not in compiled
+    assert compiled.count("DATE_FORMAT(occurred_at, '%%Y-%%m-%%d %%H:%%i:%%s.%%f')") == 1
+    assert "CONCAT('id:', NULLIF(CAST(`id` AS CHAR), ''))" in compiled
+    assert "CONCAT('id:', LPAD(SUBSTRING(cicerone_identity, 4), 20, '0'), CHAR(31 USING utf8mb4)" in compiled
+    assert "FROM `events` WHERE `occurred_at` >= %s)" in compiled
+    assert "WHERE cicerone_cursor COLLATE utf8mb4_bin > COALESCE(%s, DATE_FORMAT(%s," in compiled
+    assert compiled.endswith("ORDER BY cicerone_cursor COLLATE utf8mb4_bin ASC")
 
 
 @pytest.mark.parametrize(

@@ -187,8 +187,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   without it resumes at the start of its `occurred_at`: rows at that exact
   time are delivered again and acked through the applied-event dedupe.
   The undocumented `initial_watermark_event_id` option is ignored.
-- The db events source refuses databases other than SQLite and Postgres
-  when built, and a source column named `cicerone_cursor` on first poll.
+- The db events source supports MySQL/MariaDB with the same SQL cursor
+  key (checked by SQL-shape tests only until a MySQL CI service lands). It
+  refuses other databases when built, and a source column named
+  `cicerone_cursor` on first poll.
 - A db events row whose `occurred_at` the database can't read as a time
   is never fetched (it was logged on each fetch for tables without
   `event_id`). DB `cicerone_events_source_lag` is an exact count on

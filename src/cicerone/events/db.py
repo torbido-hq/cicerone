@@ -81,6 +81,9 @@ def _utc_connection(engine: Engine) -> Iterator[Connection]:
         if engine.dialect.name == "postgresql":
             # Naive occurred_at values are UTC (db_occurred_at), so compare them in UTC, not the session zone.
             conn.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+        elif engine.dialect.name in ("mysql", "mariadb"):
+            # Session-wide on MySQL (no SET LOCAL): TIMESTAMP columns read in UTC, DATETIME as stored.
+            conn.execute(text("SET time_zone = '+00:00'"))
         yield conn
 
 
@@ -103,7 +106,9 @@ class DbEventSource(EventSource):
         self._database_url = require_option(options, "database_url", "db")
         dialect = make_url(self._database_url).get_backend_name()
         if dialect not in CURSOR_DIALECTS:
-            raise ConfigError(f"events db source supports sqlite and postgresql databases, not {dialect!r}")
+            raise ConfigError(
+                f"events db source supports sqlite, postgresql and mysql/mariadb, not {dialect!r}"
+            )
         self._events_table = table_option(options, "events_table", DEFAULT_EVENTS_TABLE)
         self._events_query = options.get("events_query")
         if self._events_query is not None:
@@ -312,7 +317,8 @@ class DbEventSource(EventSource):
         where, order = after_watermark_sql(engine.dialect.name)
         params = {
             "watermark_cursor": cursor,
-            "watermark_at": watermark_at.isoformat(),
+            # Naive UTC text: MariaDB and older MySQL reject offsets in datetime literals.
+            "watermark_at": watermark_at.astimezone(UTC).replace(tzinfo=None).isoformat(" "),
             "id_whitespace": ID_WHITESPACE,
         }
         return self._source_sql(engine), where, order, params
@@ -371,6 +377,8 @@ class DbEventSource(EventSource):
 def _table_row_identity(engine: Engine, source: str) -> str | None:
     """SQLite ``rowid`` / Postgres ``ctid`` when the table has one (not WITHOUT ROWID tables or views)."""
     name = row_identity_column(engine.dialect.name)
+    if name is None:
+        return None
     try:
         with engine.connect() as conn:
             conn.execute(text(f"SELECT {name} FROM {source} LIMIT 0"))

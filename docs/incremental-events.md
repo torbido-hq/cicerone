@@ -195,19 +195,22 @@ are a separate cheap path between those runs.
 
 ### `db`
 
-Watermark poll over `events_table` / `events_query` (SQLite or Postgres;
-other databases are refused). No `POST /events`.
+Watermark poll over `events_table` / `events_query` (SQLite, Postgres or
+MySQL/MariaDB; other databases are refused). MySQL is checked by SQL-shape
+tests only until a MySQL CI service lands. No `POST /events`.
 Required: `events.options.database_url`. Optional durable `watermark_path`
 and `initial_watermark`. The watermark advances only after a successful
 flush `ack`. SQL computes one cursor key per row and poll pages by it:
 UTC `occurred_at` at full precision, then the row's identity, which is the
 trimmed `event_id` or `idempotency_key` (`0` counts as blank), else `id`,
 else the table's SQLite `rowid` or Postgres `ctid` (none for `WITHOUT
-ROWID` tables, views and `events_query`), else the payload. Identities
+ROWID` tables, views, MySQL and `events_query`), else the payload. Identities
 compare by code point; `id:` plus up to 20 digits compares numerically.
 The source must not expose a column named `cicerone_cursor`. On Postgres
-the query also keeps `occurred_at >=` the watermark time, so an index on
-`occurred_at` serves polls and the lag count; SQLite scans the source.
+and MySQL the query also keeps `occurred_at >=` the watermark time, so an
+index on `occurred_at` serves polls and the lag count; SQLite scans the
+source. MySQL sessions are set to UTC: `TIMESTAMP` values are read in UTC
+and `DATETIME` values are taken as UTC.
 When an `event_id` column exists, every row must have a non-blank
 `event_id` or `idempotency_key`. A row with neither is rejected like an
 invalid row below and never holds the watermark. `event_id` and
