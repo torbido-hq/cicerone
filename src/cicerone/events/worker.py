@@ -74,7 +74,7 @@ def _return_after_error(return_events: Callable[[], object]) -> None:
     try:
         return_events()
     except Exception:
-        logger.exception("Event worker failed to return events to the source after an error")
+        logger.exception("Event worker cleanup after an error failed")
 
 
 class EventWorker:

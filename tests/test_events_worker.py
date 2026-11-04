@@ -6,7 +6,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 from support.events import dataset_updater, event_payload
-from support.fakes import patch_module_ref
+from support.fakes import FakeLock, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
 from support.waits import WAIT_SECONDS, call_in_thread, wait_until
 
@@ -18,9 +18,10 @@ from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker
+from cicerone.events.worker import EventWorker, HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.metrics import update_events_leader
 
 
@@ -3678,3 +3679,144 @@ def test_event_worker_rejects_ephemeral_source_without_fingerprint_dedupe(
         MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         updater,
     )
+
+
+_CLEANUP_FAILED = "Event worker cleanup after an error failed"
+
+
+def _nack_failing_worker(tmp_path, feature_config, *, apply_lock=None):  # type: ignore[no-untyped-def]
+    source = WebhookEventSource({})
+    for n in range(2):
+        source.ingest(event_payload(event_id=f"e{n}", user_id="u1", item_id=f"i{n}"))
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(
+        source, MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0), updater, apply_lock=apply_lock
+    )
+    source.nack = raising(TypeError("nack bug"))  # type: ignore[method-assign]
+    return worker
+
+
+def _fail_lookup(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.applied_before = raising(error)
+
+
+def _fail_repair(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(IncrementalUpdater, "post_write_pending", property(lambda _self: True))
+    worker._updater.repair_post_write = raising(error)
+
+
+def _fail_apply(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.apply = raising(error)
+
+
+def _fail_replayed_ack(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.applied_before = lambda events: [events[0]]
+    worker._source.ack = raising(error)
+
+
+def _buffered_ids(worker) -> list[str]:  # type: ignore[no-untyped-def]
+    return [event.event_id for event in worker._take_buffered()]
+
+
+@pytest.mark.parametrize(
+    ("fail", "buffered"),
+    [
+        (_fail_lookup, ["e0", "e1"]),
+        (_fail_repair, ["e0", "e1"]),
+        (_fail_apply, ["e0", "e1"]),
+        # e0 counts as applied once replayed, so only e1 is returned.
+        (_fail_replayed_ack, ["e1"]),
+    ],
+)
+def test_event_worker_failed_nack_does_not_replace_the_original_error(
+    tmp_path, feature_config, monkeypatch, caplog, fail, buffered
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("site bug")
+    fail(worker, monkeypatch, original)
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == buffered
+
+
+@pytest.mark.parametrize(
+    ("fail", "error", "status"),
+    [
+        (_fail_lookup, OSError("storage unreachable"), "error"),
+        (_fail_apply, OSError("storage unreachable"), "error"),
+        (_fail_apply, HeartbeatError("heartbeat failed"), "error"),
+        (_fail_apply, LockLostError("lease lost", kind="apply"), "error"),
+        (_fail_apply, WriterLockBusyError("writer busy"), "busy"),
+    ],
+)
+def test_event_worker_failed_nack_after_a_handled_error_returns_zero(
+    tmp_path, feature_config, monkeypatch, caplog, fail, error, status
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    fail(worker, monkeypatch, error)
+    before = registry_metric_value("cicerone_events_flush_total", {"status": status})
+    assert worker.tick() == 0
+    assert registry_metric_value("cicerone_events_flush_total", {"status": status}) == before + 1
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_nack_bug_outside_an_error_still_propagates(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    # Apply reports busy (0 applied): the nack is the normal return path, not error cleanup.
+    worker._updater.apply = lambda *_args, **_kwargs: 0
+    with pytest.raises(TypeError, match="nack bug"):
+        worker.tick()
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_stop_drain_flush_error_wins_over_a_failed_pending_nack(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    original = KeyError("apply bug")
+    worker._updater.apply = raising(original)
+    with pytest.raises(KeyError) as caught:
+        worker._drain_buffer_on_stop()
+    assert caught.value is original
+    assert worker._source.nack.calls == 2
+    assert caplog.text.count(_CLEANUP_FAILED) == 2
+    # The buffer holds two events; the returned pending ack overflows into _held, as on main.
+    assert [event.event_id for event in worker._held] == ["pending"]
+    assert _buffered_ids(worker) == ["e0", "e1", "pending"]
+
+
+def test_event_worker_stop_drain_after_a_clean_flush_propagates_a_pending_nack_bug(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    with pytest.raises(TypeError, match="nack bug"):
+        worker._drain_buffer_on_stop()
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["pending"]
+
+
+def test_event_worker_stop_drain_with_lease_held_elsewhere_propagates_a_nack_bug(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config, apply_lock=FakeLock(acquires=False))
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    with pytest.raises(TypeError, match="nack bug"):
+        worker._drain_buffer_on_stop()
+    # Pending acks join the leftover nack, so the except branch has nothing left to return.
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["e0", "e1", "pending"]

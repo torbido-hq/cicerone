@@ -16,13 +16,12 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker, HeartbeatError
+from cicerone.events.worker import EventWorker
 from cicerone.feature_config import FeatureConfig
 from cicerone.io import applied_events
 from cicerone.io.applied_events import merge_applied_keys, replay_key
 from cicerone.io.base import AppliedEventLog
 from cicerone.io.factory import build_output_sink
-from cicerone.locks import LockLostError, WriterLockBusyError
 
 
 def _outputs(tmp_path) -> dict[str, IOSettings]:  # type: ignore[no-untyped-def]
@@ -159,104 +158,6 @@ def test_worker_returns_the_batch_when_the_record_lookup_fails(tmp_path, feature
     assert worker.tick() == 0
     assert updater.events_applied == 0
     assert source.health().lag == 1
-
-
-def _raise(error: BaseException):  # type: ignore[no-untyped-def]
-    def _fail(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-        raise error
-
-    return _fail
-
-
-def _worker_failing_at(tmp_path, feature_config, monkeypatch, site: str, error: BaseException):  # type: ignore[no-untyped-def]
-    source = WebhookEventSource({})
-    event_ids = ["e1", "e2"] if site == "replayed_ack" else ["e1"]
-    for n, event_id in enumerate(event_ids):
-        source.ingest(event_payload(event_id=event_id, user_id="u1", item_id=f"i{n}"))
-    worker, updater = _worker(
-        _outputs(tmp_path)["dataset"], feature_config, source, batch_size=len(event_ids)
-    )
-    source.nack = _raise(TypeError("nack bug"))  # type: ignore[method-assign]
-    if site == "lookup":
-        updater.applied_before = _raise(error)  # type: ignore[method-assign]
-    elif site == "repair":
-        monkeypatch.setattr(IncrementalUpdater, "post_write_pending", property(lambda _self: True))
-        updater.repair_post_write = _raise(error)  # type: ignore[method-assign]
-    elif site == "apply":
-        updater.apply = _raise(error)  # type: ignore[method-assign]
-    elif site == "replayed_ack":
-        updater.applied_before = lambda events: [events[0]]  # type: ignore[method-assign]
-        source.ack = _raise(error)  # type: ignore[method-assign]
-    return worker
-
-
-@pytest.mark.parametrize("site", ["lookup", "repair", "apply", "replayed_ack"])
-def test_a_failed_return_does_not_replace_the_original_error(
-    tmp_path, feature_config, monkeypatch, caplog, site: str
-) -> None:
-    original = KeyError(f"{site} bug")
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, original)
-    with pytest.raises(KeyError) as caught:
-        worker.tick()
-    assert caught.value is original
-    assert len(worker._buffer) == 1
-    assert "failed to return events to the source after an error" in caplog.text
-
-
-@pytest.mark.parametrize(
-    ("site", "error"),
-    [
-        ("lookup", OSError("storage unreachable")),
-        ("apply", OSError("storage unreachable")),
-        ("apply", HeartbeatError("heartbeat failed")),
-        ("apply", LockLostError("lease lost", kind="apply")),
-        ("apply", WriterLockBusyError("writer busy")),
-    ],
-)
-def test_a_failed_return_keeps_a_handled_error_handled(
-    tmp_path, feature_config, monkeypatch, site: str, error: Exception
-) -> None:
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, error)
-    assert worker.tick() == 0
-    assert len(worker._buffer) == 1
-
-
-def test_a_nack_bug_outside_an_error_path_still_propagates(tmp_path, feature_config, monkeypatch) -> None:
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", OSError("unused"))
-    # Apply reports busy (0 applied): the nack is the normal return path, not error cleanup.
-    worker._updater.apply = lambda *_args, **_kwargs: 0  # type: ignore[method-assign]
-    with pytest.raises(TypeError, match="nack bug") as caught:
-        worker.tick()
-    assert type(caught.value) is TypeError
-    assert len(worker._buffer) == 1
-
-
-def test_a_failed_pending_return_loses_to_the_stop_drain_flush_error(
-    tmp_path, feature_config, monkeypatch, caplog
-) -> None:
-    original = KeyError("apply bug")
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", original)
-    worker._buffer.extend([_event("drained")])
-    worker._retry_acks = [_event("pending")]
-    with pytest.raises(KeyError) as caught:
-        worker._drain_buffer_on_stop()
-    assert caught.value is original
-    # The buffer holds one event (batch_size=1); the restored pending ack overflows into _held.
-    assert len(worker._buffer) == 1
-    assert [event.event_id for event in worker._held] == ["pending"]
-    assert [event.event_id for event in worker._take_buffered()] == ["drained", "pending"]
-    assert "failed to return events to the source after an error" in caplog.text
-
-
-def test_a_failed_pending_return_on_a_clean_stop_drain_propagates(
-    tmp_path, feature_config, monkeypatch
-) -> None:
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", OSError("unused"))
-    worker._retry_acks = [_event("pending")]
-    with pytest.raises(TypeError, match="nack bug") as caught:
-        worker._drain_buffer_on_stop()
-    assert type(caught.value) is TypeError
-    assert len(worker._buffer) == 1
 
 
 @pytest.mark.parametrize("kind", ["dataset", "db"])
