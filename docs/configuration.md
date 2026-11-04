@@ -54,10 +54,13 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 The db events source and the eval and experiment-state tables support
 Postgres and SQLite, not MySQL. The track table also supports MySQL: install
 `pip install 'cicerone-recommender[mysql]'` (or `requirements-mysql.txt`) and
-use `database_url = "mysql+pymysql://user:password@host:3306/db"`.
-The Docker image doesn't ship the driver, so extend it to use MySQL. On MySQL,
-`event_id` is limited to 255 characters and `POST /track` answers 400 for a
-longer one; other columns are `TEXT`, limited to 64 KB.
+use `database_url = "mysql+pymysql://user:password@host:3306/db"`. PyMySQL
+only uses TLS when asked, so add `?ssl_ca=/path/to/ca.pem` to the URL on an
+untrusted network. The Docker image doesn't ship the driver, so extend it to
+use MySQL. On MySQL, `POST /track` answers 400 for an `event_id` over 255
+characters or another text value over 65,535 UTF-8 bytes, and nothing from
+that batch is written. The job skips the eval report and recommendation
+history on MySQL with a logged warning; track ingest keeps working.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.

@@ -14,7 +14,7 @@ from sqlalchemy.engine import Engine
 from support.fakes import fake_monotonic
 from support.mysql_defaults import resolve_mysql_test_database_url
 from support.postgres_defaults import resolve_test_database_url
-from support.settings import make_settings
+from support.settings import make_settings, sqlite_output
 from support.system_spec import SKIP_NO_TEST_DB
 
 from cicerone.config import IOSettings
@@ -89,22 +89,36 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
     reset_schema(db_engine)
 
 
-@pytest.fixture(params=["sqlite", "postgres", "mysql"])
-def track_db_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
-    """A db output with its own track table, on each backend; skips a server that isn't configured."""
+def _track_output(backend: str, tmp_path: Path) -> Iterator[IOSettings]:
+    """A db output with its own track table; skips a server that isn't configured."""
     url = {
-        "sqlite": lambda: f"sqlite+pysqlite:///{tmp_path / 'track.db'}",
+        "sqlite": lambda: sqlite_output(tmp_path / "track.db").options["database_url"],
         "postgres": resolve_test_database_url,
         "mysql": resolve_mysql_test_database_url,
-    }[request.param]()
+    }[backend]()
     if not url:
-        pytest.skip(f"{request.param} test server not configured (POSTGRES_TEST_HOST / MYSQL_TEST_HOST)")
+        pytest.skip(f"{backend} test server not configured (POSTGRES_TEST_HOST / MYSQL_TEST_HOST)")
     table = f"track_{uuid4().hex}"
     yield IOSettings(kind="db", options={"database_url": url, "track_table": table})
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(conn, table)}"))
     engine.dispose()
+
+
+@pytest.fixture(params=["sqlite", "postgres", "mysql"])
+def track_db_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output(request.param, tmp_path)
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def non_mysql_track_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output(request.param, tmp_path)
+
+
+@pytest.fixture
+def mysql_track_output(tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output("mysql", tmp_path)
 
 
 @pytest.fixture

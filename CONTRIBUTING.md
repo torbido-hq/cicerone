@@ -127,10 +127,11 @@ docker run --rm cicerone-test mypy src
 ## Dependency vulnerability scanning
 
 [pip-audit](https://github.com/pypa/pip-audit) checks `requirements.txt`/
-`requirements-dev.txt` / `requirements-bandits.txt` pins against known CVEs:
+`requirements-dev.txt` / `requirements-bandits.txt` / `requirements-mysql.txt`
+pins against known CVEs:
 
 ```sh
-docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt
+docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt -r requirements-mysql.txt
 ```
 
 If a vulnerability is found with no available fix yet, don't suppress it
@@ -316,9 +317,10 @@ needs that approval and is pure process drag.
 The PyPI project is **`cicerone-recommender`** (`pip install
 cicerone-recommender`; `import cicerone`). The name `cicerone` is a
 different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`,
-`[sequential]`, and `[bandits]` match `requirements-redis.txt` /
+`[sequential]`, `[bandits]`, and `[mysql]` match `requirements-redis.txt` /
 `requirements-kafka.txt` / `requirements-rabbitmq.txt` /
-`requirements-sequential.txt` / `requirements-bandits.txt`.
+`requirements-sequential.txt` / `requirements-bandits.txt` /
+`requirements-mysql.txt`.
 
 `pyproject.toml` declares compatible ranges (`>=pin,<next breaking`) for
 the package metadata; `requirements*.txt` hold the exact pins the image

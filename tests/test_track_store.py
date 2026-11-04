@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pandas as pd
 import pytest
 from sqlalchemy import event, inspect, text
+from sqlalchemy.exc import DataError
 from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
-from cicerone.io.engines import is_mysql_family, quote_identifier
-from cicerone.job_eval import retrain_fence
+from cicerone.io.engines import quote_identifier
+from cicerone.job_eval import persist_track_outputs, retrain_fence
 from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError, normalize_track
 from cicerone.track.store import TrackStore
@@ -243,45 +246,6 @@ def test_track_store_sqlite_concurrent_engine_init_reuses_one(tmp_path) -> None:
     with ThreadPoolExecutor(max_workers=8) as pool:
         engines = list(pool.map(lambda _: store.backend.engine(), range(8)))
     assert len({id(engine) for engine in engines}) == 1
-
-
-def test_track_store_db_unknown_rowcount_does_not_over_accept(track_db_output) -> None:
-    store = TrackStore(track_db_output)
-    engine = store.backend.engine()
-    real_begin = engine.begin
-
-    class _HideRowcount:
-        def __init__(self, inner: object) -> None:
-            object.__setattr__(self, "_inner", inner)
-            self.rowcount = None
-
-        def __iter__(self):
-            return iter(self._inner)  # type: ignore[arg-type]
-
-        def __getattr__(self, name: str):
-            return getattr(self._inner, name)
-
-    class _Conn:
-        def __init__(self, inner: object) -> None:
-            self._inner = inner
-
-        def execute(self, *args, **kwargs):
-            return _HideRowcount(self._inner.execute(*args, **kwargs))  # type: ignore[union-attr]
-
-        def __enter__(self):
-            return _Conn(self._inner.__enter__())  # type: ignore[union-attr]
-
-        def __exit__(self, *exc):
-            return self._inner.__exit__(*exc)  # type: ignore[union-attr]
-
-        def __getattr__(self, name: str):
-            return getattr(self._inner, name)
-
-    engine.begin = lambda: _Conn(real_begin())  # type: ignore[method-assign]
-    assert store.append_rows([_row(event_id="imp-fallback")]) == 1
-    assert store.append_rows([_row(event_id="imp-fallback")]) == 0
-    mixed = store.append_rows([_row(event_id="imp-fallback"), _row(event_id="imp-2", item_id="ipa-002")])
-    assert mixed == 1
 
 
 def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:
@@ -1188,8 +1152,6 @@ def test_track_writes_encode_before_taking_the_writer_lease(tmp_path, kind) -> N
 
 def test_track_table_quotes_its_columns_for_the_dialect():
     # rank is reserved on MySQL.
-    from types import SimpleNamespace
-
     from sqlalchemy.dialects import mysql
 
     from cicerone.locks import WriteFence
@@ -1197,7 +1159,9 @@ def test_track_table_quotes_its_columns_for_the_dialect():
 
     dialect = mysql.dialect()
     executed: list[str] = []
-    conn = SimpleNamespace(execute=lambda statement: executed.append(str(statement.compile(dialect=dialect))))
+    conn = SimpleNamespace(
+        dialect=dialect, execute=lambda statement: executed.append(str(statement.compile(dialect=dialect)))
+    )
 
     TrackDbBackend(
         {"database_url": "sqlite+pysqlite://", "track_table": "track"}, WriteFence()
@@ -1205,44 +1169,53 @@ def test_track_table_quotes_its_columns_for_the_dialect():
 
     assert "`rank` INTEGER" in executed[0]
     assert executed[0].strip().startswith("CREATE TABLE IF NOT EXISTS track (")
-    assert "event_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL" in executed[0]
+    assert "event_id VARCHAR(255) COLLATE utf8mb4_0900_bin NOT NULL" in executed[0]
     assert "PRIMARY KEY (event_id)" in executed[0]
+    assert "CHARSET=utf8mb4" in executed[0]
+    assert "ENGINE=InnoDB" in executed[0]
 
 
-_TRACK_COLUMN_TYPES = [
-    ("event_id", "TEXT"),
-    ("kind", "TEXT"),
-    ("user_id", "TEXT"),
-    ("item_id", "TEXT"),
-    ("rank", "INTEGER"),
-    ("occurred_at", "TEXT"),
-    ("variant", "TEXT"),
-    ("experiment_id", "TEXT"),
-    ("generated_at", "TEXT"),
+_TRACK_COLUMNS = [
+    ("event_id", "TEXT", False),
+    ("kind", "TEXT", False),
+    ("user_id", "TEXT", False),
+    ("item_id", "TEXT", False),
+    ("rank", "INTEGER", True),
+    ("occurred_at", "TEXT", False),
+    ("variant", "TEXT", True),
+    ("experiment_id", "TEXT", True),
+    ("generated_at", "TEXT", True),
 ]
 
 
-def test_track_db_table_keeps_column_types_and_order(track_db_output) -> None:
-    store = TrackStore(track_db_output)
+def _stored_columns(store, output) -> list[tuple[str, str, bool]]:
     store.append_rows([_row()])
-    engine = store.backend.engine()
-    table = track_db_output.options["track_table"]
-    columns = inspect(engine).get_columns(table)
-    expected = _TRACK_COLUMN_TYPES
-    if is_mysql_family(engine):
-        expected = [("event_id", "VARCHAR"), *_TRACK_COLUMN_TYPES[1:]]
-        assert columns[0]["type"].length == 255
-        assert columns[0]["type"].collation == "utf8mb4_bin"
-    assert [(column["name"], type(column["type"]).__name__.upper()) for column in columns] == expected
-    assert inspect(engine).get_pk_constraint(table)["constrained_columns"] == ["event_id"]
+    table = output.options["track_table"]
+    inspector = inspect(store.backend.engine())
+    assert inspector.get_pk_constraint(table)["constrained_columns"] == ["event_id"]
+    return [
+        (column["name"], type(column["type"]).__name__.upper(), column["nullable"])
+        for column in inspector.get_columns(table)
+    ]
 
 
-def test_track_db_appends_to_a_table_from_the_previous_create_statement(track_db_output) -> None:
-    store = TrackStore(track_db_output)
+def test_track_db_table_keeps_column_types_and_order(non_mysql_track_output) -> None:
+    store = TrackStore(non_mysql_track_output)
+    assert _stored_columns(store, non_mysql_track_output) == _TRACK_COLUMNS
+
+
+def test_track_db_table_on_mysql_bounds_only_event_id(mysql_track_output) -> None:
+    store = TrackStore(mysql_track_output)
+    assert _stored_columns(store, mysql_track_output) == [("event_id", "VARCHAR", False), *_TRACK_COLUMNS[1:]]
+    event_id = inspect(store.backend.engine()).get_columns(mysql_track_output.options["track_table"])[0]
+    assert event_id["type"].length == 255
+    assert event_id["type"].collation == "utf8mb4_0900_bin"
+
+
+def test_track_db_appends_to_a_table_from_the_previous_create_statement(non_mysql_track_output) -> None:
+    store = TrackStore(non_mysql_track_output)
     engine = store.backend.engine()
-    if is_mysql_family(engine):
-        pytest.skip("MySQL never had this table")
-    table = quote_identifier(engine, track_db_output.options["track_table"])
+    table = quote_identifier(engine, non_mysql_track_output.options["track_table"])
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -1251,13 +1224,42 @@ def test_track_db_appends_to_a_table_from_the_previous_create_statement(track_db
                 "variant TEXT, experiment_id TEXT, generated_at TEXT)"
             )
         )
+        conn.execute(
+            text(
+                f"INSERT INTO {table} (event_id, kind, user_id, item_id, occurred_at) "
+                "VALUES ('seed', 'click', 'alice', 'ipa-001', '2026-08-28T12:00:00+00:00')"
+            )
+        )
     assert store.append_rows([_row()]) == 1
     assert store.append_rows([_row()]) == 0
-    assert [row["event_id"] for row in store.read_rows()] == ["imp-1"]
+    assert {row["event_id"] for row in store.read_rows()} == {"seed", "imp-1"}
 
 
 def test_track_db_reads_nothing_before_the_table_exists(track_db_output) -> None:
     assert TrackStore(track_db_output).read_rows() == []
+
+
+def _capture_statements(store) -> list[str]:
+    statements: list[str] = []
+    event.listen(store.backend.engine(), "before_cursor_execute", lambda *args: statements.append(args[2]))
+    return statements
+
+
+def test_track_db_creates_the_table_once_per_store_on_mysql(mysql_track_output) -> None:
+    store = TrackStore(mysql_track_output)
+    statements = _capture_statements(store)
+    store.append_rows([_row()])
+    store.append_rows([_row(event_id="imp-2")])
+    assert sum("CREATE TABLE" in sql for sql in statements) == 1
+    assert len(store.read_rows()) == 2
+
+
+def test_track_db_creates_the_table_on_every_append_on_other_backends(non_mysql_track_output) -> None:
+    store = TrackStore(non_mysql_track_output)
+    statements = _capture_statements(store)
+    store.append_rows([_row()])
+    store.append_rows([_row(event_id="imp-2")])
+    assert sum("CREATE TABLE" in sql for sql in statements) == 2
 
 
 def test_track_db_duplicate_event_ids_keep_the_first_row(track_db_output) -> None:
@@ -1273,21 +1275,76 @@ def test_track_db_insert_ignores_a_duplicate_the_precheck_missed(track_db_output
     store = TrackStore(track_db_output)
     store.append_rows([_row()])
     monkeypatch.setattr("cicerone.track.store_db._existing_event_ids", lambda *_args: set())
-    statements: list[str] = []
-    event.listen(store.backend.engine(), "before_cursor_execute", lambda *args: statements.append(args[2]))
+    statements = _capture_statements(store)
 
-    store.append_rows([_row(item_id="racing-writer")])
+    # Counted as accepted: the store can't tell the insert dropped it.
+    assert store.append_rows([_row(item_id="racing-writer")]) == 1
 
     assert [row["item_id"] for row in store.read_rows()] == ["ipa-001"]
     # VALUES(col) warns as deprecated on MySQL 8.4.
     assert not any("= VALUES(" in sql for sql in statements)
 
 
-def test_track_db_event_ids_differing_by_case_or_accent_stay_distinct(track_db_output) -> None:
+def test_track_db_concurrent_stores_keep_one_row(track_db_output) -> None:
+    stores = [TrackStore(track_db_output) for _ in range(8)]
+    stores[0].append_rows([_row(event_id="created-first")])
+    row = _row()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda store: store.append_rows([row]), stores))
+    assert sorted(row["event_id"] for row in stores[0].read_rows()) == ["created-first", "imp-1"]
+
+
+def test_track_db_rolls_back_rows_when_the_fence_is_lost_after_insert(track_db_output) -> None:
+    from cicerone.locks import LockLostError
+
+    # Checked on the lease, before the insert, then after it.
+    fence = FenceCheck(3)
+    store = TrackStore(track_db_output, fence=retrain_fence(None, fence))
+    with pytest.raises(LockLostError, match="retrain lock lost before write"):
+        store.append_rows([_row()])
+    assert fence.calls == 3
+    assert store.read_rows() == []
+
+
+def test_track_db_inserts_in_key_order_on_mysql_and_reports_in_input_order(mysql_track_output) -> None:
+    store = TrackStore(mysql_track_output)
+    batches: list[Any] = []
+    event.listen(store.backend.engine(), "before_cursor_execute", lambda *args: batches.append(args[3]))
+
+    accepted = store.append_accepted_rows([_row(event_id="b"), _row(event_id="a")])
+
+    assert [row["event_id"] for row in accepted] == ["b", "a"]
+    assert [params[0] for params in batches[-1]] == ["a", "b"]
+
+
+def test_track_db_rejects_values_mysql_would_clamp(mysql_track_output) -> None:
+    # INSERT IGNORE would store the clamped value with only a warning.
+    store = TrackStore(mysql_track_output)
+    row = _row()
+    row["rank"] = 2**40
+    with pytest.raises(DataError):
+        store.append_rows([row])
+    assert store.read_rows() == []
+
+
+def test_insert_for_an_unknown_dialect_fails() -> None:
+    from sqlalchemy import Column, Engine, MetaData, Table, Text
+
+    from cicerone.track.store_db import _insert_ignoring_duplicates
+
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="oracle"))
+    table = Table("track", MetaData(), Column("event_id", Text, primary_key=True))
+    with pytest.raises(KeyError, match="oracle"):
+        _insert_ignoring_duplicates(cast(Engine, engine), table)
+
+
+def test_track_db_event_ids_differing_by_case_accent_or_trailing_space_stay_distinct(track_db_output) -> None:
     store = TrackStore(track_db_output)
-    assert store.append_rows([_row(event_id="ABC"), _row(event_id="abc"), _row(event_id="ábc")]) == 3
-    assert store.append_rows([_row(event_id="abc")]) == 0
-    assert {row["event_id"] for row in store.read_rows()} == {"ABC", "abc", "ábc"}
+    # normalize_track strips ids, so only a direct store call can pass the trailing space.
+    ids = {"ABC", "abc", "ábc", "abc "}
+    assert store.append_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)]) == 4
+    assert store.append_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)]) == 0
+    assert {row["event_id"] for row in store.read_rows()} == ids
 
 
 def test_track_db_read_filters_stay_exact(track_db_output) -> None:
@@ -1315,15 +1372,74 @@ def test_track_db_stores_timestamps_as_written(track_db_output) -> None:
     assert store.read_rows(since="2026-08-28T10:00:01+00:00") == []
 
 
-@pytest.mark.parametrize("char", ["x", "é", "😀"])
-def test_track_db_event_id_limit_counts_characters_on_mysql_only(track_db_output, char) -> None:
+_LONGEST_VALUES = [
+    pytest.param({"event_id": "x" * 255}, id="event_id-ascii"),
+    pytest.param({"event_id": "😀" * 255}, id="event_id-4-byte"),
+    pytest.param({"user_id": "x" * 65535}, id="user_id-ascii"),
+    pytest.param({"item_id": "é" * 32767 + "x"}, id="item_id-2-byte"),
+    pytest.param({"variant": "x" * 65535}, id="variant"),
+    pytest.param({"experiment_id": "x" * 65535}, id="experiment_id"),
+    pytest.param({"generated_at": "x" * 65535}, id="generated_at"),
+]
+_TOO_LONG_VALUES = [
+    pytest.param({"event_id": "x" * 256}, "event_id is longer than 255 characters", id="event_id-ascii"),
+    pytest.param({"event_id": "😀" * 256}, "event_id is longer than 255 characters", id="event_id-4-byte"),
+    pytest.param({"user_id": "x" * 65536}, "user_id is longer than 65535 bytes", id="user_id-ascii"),
+    pytest.param({"item_id": "é" * 32768}, "item_id is longer than 65535 bytes", id="item_id-2-byte"),
+    pytest.param({"variant": "x" * 65536}, "variant is longer than 65535 bytes", id="variant"),
+    pytest.param({"experiment_id": "x" * 65536}, "experiment_id is longer", id="experiment_id"),
+    pytest.param({"generated_at": "x" * 65536}, "generated_at is longer", id="generated_at"),
+]
+
+
+@pytest.mark.parametrize("overrides", _LONGEST_VALUES)
+def test_track_db_stores_the_longest_values_on_every_backend(track_db_output, overrides) -> None:
     store = TrackStore(track_db_output)
-    assert store.append_rows([_row(event_id=char * 255)]) == 1
-    oversize = [_row(event_id="in-the-same-batch"), _row(event_id=char * 256)]
-    if is_mysql_family(store.backend.engine()):
-        with pytest.raises(TrackNormalizeError, match="255 characters"):
-            store.append_rows(oversize)
-        assert [row["event_id"] for row in store.read_rows()] == [char * 255]
-    else:
-        assert store.append_rows(oversize) == 2
-        assert len(store.read_rows()) == 3
+    assert store.append_rows([_row(**overrides)]) == 1
+    (stored,) = store.read_rows()
+    for name, value in overrides.items():
+        assert stored[name] == value
+
+
+@pytest.mark.parametrize(("overrides", "message"), _TOO_LONG_VALUES)
+@pytest.mark.parametrize("too_long_first", [True, False], ids=["too-long-first", "too-long-last"])
+def test_track_db_rejects_a_batch_with_a_too_long_value_on_mysql(
+    mysql_track_output, overrides, message, too_long_first
+) -> None:
+    store = TrackStore(mysql_track_output)
+    batch = [_row(event_id="good"), _row(**{"event_id": "bad", **overrides})]
+    with pytest.raises(TrackNormalizeError, match=message):
+        store.append_rows(batch[::-1] if too_long_first else batch)
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize(("overrides", "message"), _TOO_LONG_VALUES)
+def test_track_db_accepts_too_long_values_on_other_backends(
+    non_mysql_track_output, overrides, message
+) -> None:
+    del message
+    store = TrackStore(non_mysql_track_output)
+    assert store.append_rows([_row(event_id="good"), _row(**{"event_id": "long", **overrides})]) == 2
+    assert len(store.read_rows()) == 2
+
+
+def test_persist_track_outputs_skips_eval_and_history_on_mysql(mysql_track_output, caplog) -> None:
+    store = TrackStore(mysql_track_output)
+    recs = pd.DataFrame([{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "source": "personalized"}])
+    with caplog.at_level("WARNING", logger="cicerone.track.store_db"):
+        persist_track_outputs(
+            store,
+            kind="db",
+            eval_report={"ok": True},
+            recommendations=recs,
+            generated_at="2026-08-28T03:00:00+00:00",
+        )
+    warnings = [record for record in caplog.records if record.name == "cicerone.track.store_db"]
+    assert len(warnings) == 1
+    assert "aren't supported on MySQL" in warnings[0].getMessage()
+    assert store.read_eval() is None
+    assert store.read_history().empty
+    tables = inspect(store.backend.engine()).get_table_names()
+    assert not {"recommendation_eval", "recommendation_history"} & set(tables)
+    assert store.append_rows([_row()]) == 1
+    assert len(store.read_rows()) == 1

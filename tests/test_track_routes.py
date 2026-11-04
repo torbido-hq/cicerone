@@ -141,20 +141,49 @@ def test_post_track_normalization_error_returns_400(tmp_path):
     assert "occurred_at" in str(response.json()["detail"])
 
 
-def test_post_track_oversize_event_id_returns_400_on_mysql_only(tmp_path, track_db_output):
-    app = create_app(_settings(tmp_path, output=track_db_output), FakeReader(_recs_df()))
-    response = TestClient(app).post(
-        "/track",
-        headers={"Authorization": "Bearer secret"},
-        json=[_impression(), _impression(event_id="x" * 256)],
+_TOO_LONG_FOR_MYSQL = [
+    pytest.param({"event_id": "x" * 256}, "event_id", id="event_id"),
+    pytest.param({"event_id": None, "idempotency_key": "x" * 256}, "event_id", id="idempotency_key"),
+    pytest.param({"user_id": "x" * 65536}, "user_id", id="user_id"),
+    pytest.param({"variant": "é" * 32768}, "variant", id="variant-multibyte"),
+]
+
+
+def _post_track(tmp_path, output, *events):
+    app = create_app(_settings(tmp_path, output=output), FakeReader(_recs_df()))
+    response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json=list(events))
+    return app.state.track_store, response
+
+
+@pytest.mark.parametrize(("overrides", "column"), _TOO_LONG_FOR_MYSQL)
+def test_post_track_too_long_value_returns_400_on_mysql(tmp_path, mysql_track_output, overrides, column):
+    store, response = _post_track(
+        tmp_path, mysql_track_output, _impression(), _impression(**{"event_id": "too-long", **overrides})
     )
-    if track_db_output.options["database_url"].startswith("mysql"):
-        assert response.status_code == 400
-        assert "255 characters" in response.json()["detail"]
-        assert app.state.track_store.read_rows() == []
-    else:
-        assert response.status_code == 202
-        assert response.json()["accepted"] == 2
+    assert response.status_code == 400
+    assert column in response.json()["detail"]
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize(("overrides", "column"), _TOO_LONG_FOR_MYSQL)
+def test_post_track_too_long_value_is_accepted_on_other_backends(
+    tmp_path, non_mysql_track_output, overrides, column
+):
+    del column
+    store, response = _post_track(
+        tmp_path, non_mysql_track_output, _impression(), _impression(**{"event_id": "too-long", **overrides})
+    )
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 2
+    assert len(store.read_rows()) == 2
+
+
+def test_post_track_longest_values_are_accepted_on_every_backend(tmp_path, track_db_output):
+    _store, response = _post_track(
+        tmp_path, track_db_output, _impression(event_id="x" * 255, user_id="é" * 32767 + "x")
+    )
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
 
 
 def test_post_track_idempotent(tmp_path):
