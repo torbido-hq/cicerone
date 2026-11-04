@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Container, Iterable, Mapping
 from functools import lru_cache
 from typing import Any
 
@@ -32,17 +32,6 @@ TRACK_LOG_BACKEND_ERROR = (
 )
 TRACK_LOG_HA_ERROR = 'track.enabled with events.ha requires output kind = "db"'
 
-TRACK_COLUMNS: tuple[str, ...] = (
-    "kind",
-    USER_COLUMN,
-    ITEM_COLUMN,
-    RANK_COLUMN,
-    "occurred_at",
-    "event_id",
-    VARIANT_COLUMN,
-    "experiment_id",
-    "generated_at",
-)
 HISTORY_COLUMNS: tuple[str, ...] = (
     USER_COLUMN,
     ITEM_COLUMN,
@@ -158,16 +147,25 @@ def unique_matching_rows(
     since: str | None,
 ) -> list[dict[str, Any]]:
     """First row per ``event_id`` that matches the filters."""
+    return [
+        row
+        for row in unique_event_rows(rows)
+        if row_matches(row, kind=kind, experiment_id=experiment_id, since=since)
+    ]
+
+
+def unique_event_rows(
+    rows: Iterable[dict[str, Any]], known: Container[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """First row per ``event_id`` not in ``known``; rows without one are all kept."""
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
     for row in rows:
         event_id = str(row.get("event_id") or "")
-        if event_id and event_id in seen:
+        if event_id and (event_id in known or event_id in seen):
             continue
         if event_id:
             seen.add(event_id)
-        if not row_matches(row, kind=kind, experiment_id=experiment_id, since=since):
-            continue
         unique.append(row)
     return unique
 
