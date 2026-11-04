@@ -241,7 +241,10 @@ def test_a_failed_pending_return_loses_to_the_stop_drain_flush_error(
     with pytest.raises(KeyError) as caught:
         worker._drain_buffer_on_stop()
     assert caught.value is original
-    assert len(worker._buffer) == 2
+    # The buffer holds one event (batch_size=1); the restored pending ack overflows into _held.
+    assert len(worker._buffer) == 1
+    assert [event.event_id for event in worker._held] == ["pending"]
+    assert [event.event_id for event in worker._take_buffered()] == ["drained", "pending"]
     assert "failed to return events to the source after an error" in caplog.text
 
 
