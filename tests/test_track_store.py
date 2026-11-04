@@ -794,6 +794,7 @@ def test_track_history_s3_part_unexpected_error_reraises(monkeypatch, s3_options
             raise RuntimeError("get failed")
 
     monkeypatch.setattr("cicerone.track.store_dataset.build_s3_client", lambda _options: _Boom())
+    monkeypatch.setattr("cicerone.track.store_dataset.is_s3_not_found", lambda _exc: True)
     with pytest.raises(RuntimeError, match="get failed"):
         TrackStore(IOSettings(kind="dataset", options=s3_options)).read_history(generated_ats=["t"])
 
@@ -836,6 +837,9 @@ def test_track_history_s3_parts_share_one_get_object_client(monkeypatch, caplog,
 
     monkeypatch.setattr(store_dataset, "build_s3_client", _client)
     monkeypatch.setattr(
+        io_options, "build_s3_client", raising(AssertionError("history parts reuse one client"))
+    )
+    monkeypatch.setattr(
         io_options, "_read_s3_parquet_pyarrow", raising(AssertionError("history parts skip pyarrow"))
     )
     with caplog.at_level(logging.INFO, logger="cicerone.io.options"):
@@ -865,9 +869,15 @@ def test_unique_event_rows_skips_known_and_repeated_ids_keeps_blank_ids() -> Non
         {"event_id": "b"},
         {"event_id": "b", "n": 2},
         {"event_id": ""},
+        {"event_id": "", "n": 2},
         {"n": 3},
     ]
-    assert unique_event_rows(rows, {"a"}) == [{"event_id": "b"}, {"event_id": ""}, {"n": 3}]
+    assert unique_event_rows(rows, {"a"}) == [
+        {"event_id": "b"},
+        {"event_id": ""},
+        {"event_id": "", "n": 2},
+        {"n": 3},
+    ]
 
 
 def test_track_dataset_known_ids_skip_blank_event_ids(tmp_path) -> None:
@@ -884,18 +894,28 @@ def test_track_db_stores_null_for_missing_optional_columns(tmp_path) -> None:
 
     store = TrackStore(sqlite_output(tmp_path / "track.db"))
     row = _row()
-    row.update({"rank": None, "variant": None, "experiment_id": None, "generated_at": None, "kind": None})
+    row.update(
+        {
+            "rank": None,
+            "variant": None,
+            "experiment_id": None,
+            "generated_at": None,
+            "kind": None,
+            "user_id": None,
+            "occurred_at": None,
+        }
+    )
     assert store.append_rows([row]) == 1
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'track.db'}")
     with engine.connect() as conn:
         stored = conn.execute(
             text(
-                "SELECT kind, rank IS NULL, variant IS NULL, experiment_id IS NULL, generated_at IS NULL "
-                "FROM recommendation_track"
+                "SELECT kind, user_id, occurred_at, rank IS NULL, variant IS NULL, "
+                "experiment_id IS NULL, generated_at IS NULL FROM recommendation_track"
             )
         ).one()
     engine.dispose()
-    assert tuple(stored) == ("", 1, 1, 1, 1)
+    assert tuple(stored) == ("", "", "", 1, 1, 1, 1)
 
 
 def test_track_read_eval_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
