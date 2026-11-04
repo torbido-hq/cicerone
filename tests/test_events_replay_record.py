@@ -16,12 +16,13 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker
+from cicerone.events.worker import EventWorker, HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io import applied_events
 from cicerone.io.applied_events import merge_applied_keys, replay_key
 from cicerone.io.base import AppliedEventLog
 from cicerone.io.factory import build_output_sink
+from cicerone.locks import LockLostError, WriterLockBusyError
 
 
 def _outputs(tmp_path) -> dict[str, IOSettings]:  # type: ignore[no-untyped-def]
@@ -202,11 +203,20 @@ def test_a_failed_return_does_not_replace_the_original_error(
     assert "failed to return events to the source after an error" in caplog.text
 
 
-@pytest.mark.parametrize("site", ["lookup", "apply"])
-def test_a_failed_return_keeps_an_apply_error_handled(
-    tmp_path, feature_config, monkeypatch, site: str
+@pytest.mark.parametrize(
+    ("site", "error"),
+    [
+        ("lookup", OSError("storage unreachable")),
+        ("apply", OSError("storage unreachable")),
+        ("apply", HeartbeatError("heartbeat failed")),
+        ("apply", LockLostError("lease lost", kind="apply")),
+        ("apply", WriterLockBusyError("writer busy")),
+    ],
+)
+def test_a_failed_return_keeps_a_handled_error_handled(
+    tmp_path, feature_config, monkeypatch, site: str, error: Exception
 ) -> None:
-    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, OSError("storage unreachable"))
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, site, error)
     assert worker.tick() == 0
     assert len(worker._buffer) == 1
 
@@ -217,6 +227,31 @@ def test_a_nack_bug_outside_an_error_path_still_propagates(tmp_path, feature_con
     worker._updater.apply = lambda *_args, **_kwargs: 0  # type: ignore[method-assign]
     with pytest.raises(TypeError, match="nack bug") as caught:
         worker.tick()
+    assert type(caught.value) is TypeError
+    assert len(worker._buffer) == 1
+
+
+def test_a_failed_pending_return_loses_to_the_stop_drain_flush_error(
+    tmp_path, feature_config, monkeypatch, caplog
+) -> None:
+    original = KeyError("apply bug")
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", original)
+    worker._buffer.extend([_event("drained")])
+    worker._retry_acks = [_event("pending")]
+    with pytest.raises(KeyError) as caught:
+        worker._drain_buffer_on_stop()
+    assert caught.value is original
+    assert len(worker._buffer) == 2
+    assert "failed to return events to the source after an error" in caplog.text
+
+
+def test_a_failed_pending_return_on_a_clean_stop_drain_propagates(
+    tmp_path, feature_config, monkeypatch
+) -> None:
+    worker = _worker_failing_at(tmp_path, feature_config, monkeypatch, "apply", OSError("unused"))
+    worker._retry_acks = [_event("pending")]
+    with pytest.raises(TypeError, match="nack bug") as caught:
+        worker._drain_buffer_on_stop()
     assert type(caught.value) is TypeError
     assert len(worker._buffer) == 1
 

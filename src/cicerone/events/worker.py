@@ -569,15 +569,20 @@ class EventWorker:
                     logger.info("Stop drain skipped: apply lease held by another replica")
                     leftover.extend(self._take_pending_acks())
                     self._return_events(leftover)
-                    return
-                try:
-                    self._flush_ready(leftover)
-                finally:
-                    self._release_apply_lock()
-        finally:
-            pending = self._take_pending_acks()
-            if pending:
-                self._return_events(pending)
+                else:
+                    try:
+                        self._flush_ready(leftover)
+                    finally:
+                        self._release_apply_lock()
+        except BaseException:
+            _return_after_error(self._return_pending_acks)
+            raise
+        self._return_pending_acks()
+
+    def _return_pending_acks(self) -> None:
+        pending = self._take_pending_acks()
+        if pending:
+            self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         # Rejected events are never applied; they ride along with the batch to its ack.
@@ -625,16 +630,19 @@ class EventWorker:
                 post_write_failed = True
         except HeartbeatError:
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
-            return self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
+            return 0
         except LockLostError as exc:
             if exc.kind == "apply":
                 update_events_leader(False)
             logger.error("%s; nacking %d event(s)", exc, len(ready))
-            return self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
+            return 0
         except WriterLockBusyError as exc:
             record_events_apply_busy(reason="lock")
             logger.info("%s; nacking %d event(s)", exc, len(ready))
-            return self._reject(ready, "busy")
+            _return_after_error(lambda: self._reject(ready, "busy"))
+            return 0
         except Exception as exc:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
             _return_after_error(lambda: self._reject(ready, "error"))
