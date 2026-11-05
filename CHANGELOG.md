@@ -189,9 +189,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
 - The `POST /events` OpenAPI description of `event_type` says that without a
-  `features.toml` every type counts for the user's own list and the popular
-  and latest rankings, with `quantity` as its weight (online refresh still uses
-  the artifact's config), instead of requiring a `[event_weights]` key.
+  `features.toml` every type counts as a signal and the size of `quantity`
+  affects only the popular ranking (online refresh uses the artifact's config),
+  instead of requiring a `[event_weights]` key.
 
 ### Removed
 
