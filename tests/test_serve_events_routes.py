@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from support.fakes import FakeReader
-from support.serve import recs_df
+from support.serve import recs_df, serve_settings
 from support.settings import make_settings
 
 from cicerone.config import EventsSettings
@@ -158,7 +158,7 @@ def test_events_openapi_documents_occurred_at_union():
 
 def test_events_route_absent_when_disabled():
     app = create_app(
-        make_settings(mode="serve", serve_auth_token="secret"),
+        serve_settings(),
         FakeReader(recs_df()),
     )
     client = TestClient(app)

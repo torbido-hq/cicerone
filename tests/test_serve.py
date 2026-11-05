@@ -143,7 +143,7 @@ def test_recommendations_returns_records_with_valid_token():
 
 
 def test_recommendations_returns_parsed_reasons():
-    recs = recs_df().copy()
+    recs = recs_df()
     recs["reasons"] = [
         (
             '{"sources":[{"label":"personalized","rank":1,"weight":1.0,"contribution":null}],'
