@@ -6,7 +6,15 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from cicerone.events.normalize import EventNormalizeError
+from cicerone.events.base import NormalizedEvent
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+
+
+def delivery_event(raw: Any, fallback_id: str | None = None) -> NormalizedEvent:
+    payload = decode_json_object(raw)
+    if fallback_id is not None and supplied_event_id(payload) is None:
+        payload["event_id"] = fallback_id
+    return normalize_event(payload)
 
 
 def decode_json_object(raw: Any) -> dict[str, Any]:
