@@ -309,7 +309,7 @@ def test_job_failed_rewrite_uses_fresh_generated_at(tmp_path, monkeypatch):
     real = job.write_job_manifest
 
     def _capture(sink, manifest, *, skip_if_newer_than=None):
-        written.append((dict(manifest), skip_if_newer_than))
+        written.append((manifest.as_dict(), skip_if_newer_than))
         return real(sink, manifest, skip_if_newer_than=skip_if_newer_than)
 
     class _Pub:
@@ -1681,7 +1681,7 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
     )
     assert result.manifest_written is True
     assert result.success_generated_at
-    assert manifest["status"] == "success"
+    assert manifest.status == "success"
     assert written[0] is recs
     assert written[1]["models"] == "popular"
 
@@ -2354,7 +2354,7 @@ def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monke
     real_write = job.write_job_manifest
 
     def interrupt_success_write(sink, manifest, **kwargs):
-        if manifest.get("status") == "success":
+        if manifest.status == "success":
             raise KeyboardInterrupt
         return real_write(sink, manifest, **kwargs)
 
@@ -2384,7 +2384,7 @@ def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tm
 
     def commit_then_timeout(sink, manifest, **kwargs):
         written = real_write(sink, manifest, **kwargs)
-        if manifest.get("status") == "success":
+        if manifest.status == "success":
             raise TimeoutError("manifest response lost")
         return written
 
@@ -2412,9 +2412,9 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
     real_write = job.write_job_manifest
 
     def skip_success_after_foreign_write(sink, manifest, **kwargs):
-        if manifest.get("status") != "success":
+        if manifest.status != "success":
             return real_write(sink, manifest, **kwargs)
-        ours = pd.Timestamp(manifest["generated_at"])
+        ours = pd.Timestamp(manifest.generated_at)
         foreign = {
             "status": "success",
             "triggered_by": "other",
@@ -2502,7 +2502,7 @@ def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_pat
     writes: list[str] = []
 
     def record_write(sink, manifest, **kwargs):
-        writes.append(str(manifest.get("status")))
+        writes.append(manifest.status)
         return real_write(sink, manifest, **kwargs)
 
     monkeypatch.setattr(job, "recommendations_write_guard", interrupt_on_first_exit)
