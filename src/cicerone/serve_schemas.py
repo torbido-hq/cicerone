@@ -110,8 +110,9 @@ class InteractionEvent(BaseModel):
     event_type: str = Field(
         description=(
             "Types missing from features.toml [event_weights] carry no weight; "
-            "without a features.toml, popular and latest rankings count every type, "
-            "with quantity as its weight"
+            "without a features.toml, every type counts for the user's own list and the "
+            "popular and latest rankings, with quantity as its weight; online refresh "
+            "still uses the artifact's config"
         ),
     )
     quantity: int = Field(default=1, ge=1, description="Optional count; default 1")

@@ -64,7 +64,7 @@ Same columns as batch input:
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, popular and latest rankings count every type, with `quantity` as its weight |
+| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts for the user's own list and the popular and latest rankings, with `quantity` as its weight; online refresh still uses the artifact's config |
 | `quantity` | no | integer `>= 1`, default `1`. Webhook: a fractional, non-numeric or `< 1` value is a `400`. Other sources reject those too, but truncate a fractional number first (`1.5` applies as `1`, `0.5` is rejected) |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
