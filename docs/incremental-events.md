@@ -214,6 +214,9 @@ with neither is rejected like an invalid row below and never holds the
 watermark. `event_id` and `idempotency_key` must be text or integer columns.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
+Without `event_id`, poll pages by `occurred_at` only: if more than about
+100 rows (plus events still in flight) share one `occurred_at`, the source
+stops advancing at that timestamp. Add an `event_id` column to such tables.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
