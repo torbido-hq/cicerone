@@ -215,7 +215,6 @@ class UpdaterMerge:
             .drop_duplicates()
             .tolist()
         )
-        boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         if allowed is not None:
             boost_items = [item_id for item_id in boost_items if item_id in allowed]
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
@@ -234,11 +233,24 @@ class UpdaterMerge:
                 for index, item_id in enumerate(boost_items[:boost_slots])
             ]
         )
-        preserve_cap = max(0, self._top_k - boost_slots)
-        if not kept.empty:
-            if RANK_COLUMN in kept.columns:
-                kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
-            kept = kept.head(preserve_cap)
+        slot_by_item = {item_id: slot for slot, item_id in enumerate(boost_items[:boost_slots])}
+        moved_ids = slot_by_item.keys() & preserved_ids
+        # Only items new to the list reserve slots; moved rows take just their own.
+        reserved = len(moved_ids) if len(moved_ids) == len(slot_by_item) else boost_slots
+        preserve_cap = max(0, self._top_k - reserved)
+        if RANK_COLUMN in kept.columns:
+            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+        if moved_ids:
+            rows = pd.concat(
+                [frame for frame in (online_part, kept, boost) if not frame.empty], ignore_index=True
+            )
+            boost = (
+                rows.loc[rows[ITEM_COLUMN].astype(str).isin(slot_by_item)]
+                .drop_duplicates(subset=[ITEM_COLUMN], keep="first")
+                .sort_values(ITEM_COLUMN, key=lambda ids: ids.astype(str).map(slot_by_item), kind="mergesort")
+            )
+            kept = kept.loc[~kept[ITEM_COLUMN].astype(str).isin(moved_ids)]
+        kept = kept.head(preserve_cap)
         preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
         preserved = (
             pd.concat(preserved_parts, ignore_index=True)

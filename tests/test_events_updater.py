@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
@@ -199,6 +199,83 @@ def test_incremental_updater_keeps_reasons_when_event_rehits_item(tmp_path, feat
     old = frame[(frame["user_id"] == "u1") & (frame["item_id"] == "old")].iloc[0]
     assert parse_reasons(old["reasons"]).sources[0].label == "personalized"
     assert old["source"] == "personalized"
+
+
+def _list_after_events_on_preserved_rows(
+    tmp_path, feature_config: FeatureConfig, events: list[dict], top_k: int = 3
+) -> pd.DataFrame:
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config, top_k=top_k)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"p{i}",
+                "rank": i,
+                "score": float(100 - i),
+                "source": "personalized",
+            }
+            for i in range(1, top_k + 1)
+        ]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    payloads = [event_payload(user_id="u1", event_id=f"e{n}", **event) for n, event in enumerate(events)]
+    assert updater.apply([normalize_event(payload) for payload in payloads]) == len(events)
+    frame = load_recommendations_frame(settings.output)
+    return frame[frame["user_id"] == "u1"].sort_values("rank")
+
+
+def _at_minute(item_id: str, minute: int) -> dict:
+    return {"item_id": item_id, "occurred_at": f"2026-08-13T12:{minute:02d}:00Z"}
+
+
+def test_incremental_updater_moves_consumed_preserved_item_to_top(tmp_path, feature_config: FeatureConfig):
+    u1 = _list_after_events_on_preserved_rows(tmp_path, feature_config, [{"item_id": "p3"}])
+    assert u1["item_id"].astype(str).tolist() == ["p3", "p1", "p2"]
+    moved = u1.iloc[0]
+    assert moved["source"] == "personalized"
+    assert moved["score"] == 97.0
+
+
+def test_incremental_updater_newest_consumed_preserved_item_takes_boost_slot(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("new", 0), _at_minute("p3", 5)]
+    )
+    assert u1["item_id"].astype(str).tolist() == ["p3", "p1", "p2"]
+
+
+def test_incremental_updater_older_consumed_preserved_item_drops_when_newer_events_fill_slots(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("p3", 0), _at_minute("new", 5)]
+    )
+    assert u1["item_id"].astype(str).tolist() == ["new", "p1", "p2"]
+
+
+def test_incremental_updater_moving_preserved_item_does_not_shrink_list(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(tmp_path, feature_config, [{"item_id": "p10"}], top_k=10)
+    assert u1["item_id"].astype(str).tolist() == ["p10", *(f"p{i}" for i in range(1, 10))]
+
+
+def test_incremental_updater_boost_slots_mix_moved_and_new_items_newest_first(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path,
+        feature_config,
+        [_at_minute("new-old", 0), _at_minute("p10", 5), _at_minute("new-recent", 10)],
+        top_k=10,
+    )
+    assert u1["item_id"].astype(str).tolist() == [
+        "new-recent",
+        "p10",
+        "new-old",
+        *(f"p{i}" for i in range(1, 8)),
+    ]
+    assert u1["source"].tolist()[:3] == [INCREMENTAL_SOURCE, "personalized", INCREMENTAL_SOURCE]
 
 
 def test_incremental_updater_unlabelled_prior_stays_on_control(tmp_path, feature_config: FeatureConfig):
