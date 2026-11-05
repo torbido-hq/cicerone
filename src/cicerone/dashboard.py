@@ -313,12 +313,9 @@ def create_app(
 
     @app.get("/dashboard/quality", dependencies=[Depends(auth)])
     def quality(request: Request):
-        return _html(
-            request,
-            "quality.html",
-            {**quality_context(settings), "page_title": "Quality · Cicerone dashboard"},
-            settings=settings,
-        )
+        context = quality_context(settings)
+        context["page_title"] = "Quality · Cicerone dashboard"
+        return _html(request, "quality.html", context, settings=settings)
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
     def experiments_promote(
