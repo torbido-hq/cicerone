@@ -786,7 +786,7 @@ def test_s3_sqs_malformed_without_receive_count_is_deleted(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch):
+def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -799,8 +799,14 @@ def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch):
         raise BotoCoreError()
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
-    assert list(source.poll(10)) == []
+    with caplog.at_level("ERROR"):
+        assert list(source.poll(10)) == []
     assert _sqs_held(sqs, queue_url) == 1
+    assert (
+        "cicerone.events.s3",
+        logging.ERROR,
+        "Failed to release malformed S3 notification for retry",
+    ) in caplog.record_tuples
 
 
 @mock_aws
@@ -1125,7 +1131,7 @@ def test_s3_list_missing_marker_starts_from_initial_marker(tmp_path):
 
 
 @mock_aws
-def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
+def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1137,9 +1143,11 @@ def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch):
         raise RuntimeError("attrs")
 
     monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
-    health = source.health()
+    with caplog.at_level("ERROR"):
+        health = source.health()
     assert health.connected is True
     assert health.lag == 0
+    assert ("cicerone.events.s3", logging.ERROR, "Failed to estimate SQS event lag") in caplog.record_tuples
 
 
 @mock_aws
