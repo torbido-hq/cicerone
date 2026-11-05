@@ -108,7 +108,10 @@ class InteractionEvent(BaseModel):
     user_id: str = Field(description="User identifier")
     item_id: str = Field(description="Item identifier")
     event_type: str = Field(
-        description="Must match a key in features.toml [event_weights] to affect weights",
+        description=(
+            "Types missing from features.toml [event_weights] carry no weight; "
+            "without a features.toml, every type counts, with quantity as its weight"
+        ),
     )
     quantity: int = Field(default=1, ge=1, description="Optional count; default 1")
     occurred_at: str | int | float = Field(

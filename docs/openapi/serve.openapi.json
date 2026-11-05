@@ -128,7 +128,7 @@
             "title": "Event Id"
           },
           "event_type": {
-            "description": "Must match a key in features.toml [event_weights] to affect weights",
+            "description": "Types missing from features.toml [event_weights] carry no weight; without a features.toml, every type counts, with quantity as its weight",
             "title": "Event Type",
             "type": "string"
           },
