@@ -160,7 +160,9 @@ Existing tables without a `variant` column still serve (no experiment). Adding
 the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.
 Until the next full job, a user whose rows are all NULL counts as having no
 column: an incremental flush keeps their list, and `__cold_start__`, on the
-primary variant (`control`, else the first named).
+primary variant (`control`, else the first named). If that user is assigned to
+another variant, their list stays on the primary and serve returns only the rows
+the flush wrote on the assigned variant until the next job.
 
 ## Serve
 

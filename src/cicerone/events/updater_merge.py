@@ -21,6 +21,7 @@ from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
+    drop_unlabelled_variant_column,
     filter_variant_rows,
     pick_fallback_variant,
     recommendation_output_columns,
@@ -42,7 +43,7 @@ _PRESERVE_LABELS = frozenset(
         "latest",
     }
 )
-# Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
+# Cap on the slots recent interactions take ahead of preserved rows, so they can enter a full top-K.
 _BOOST_SLOT_FRACTION = 0.3
 
 
@@ -126,6 +127,7 @@ class UpdaterMerge:
                 allowed=allowed,
             )
             return self._stamp_collapsed_variant(merged, prior)
+        prior = drop_unlabelled_variant_column(prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         assigned = self._assigned_variant(user_id) or primary
@@ -234,11 +236,8 @@ class UpdaterMerge:
                 for index, item_id in enumerate(boost_items[:boost_slots])
             ]
         )
-        preserve_cap = max(0, self._top_k - boost_slots)
-        if not kept.empty:
-            if RANK_COLUMN in kept.columns:
-                kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
-            kept = kept.head(preserve_cap)
+        if RANK_COLUMN in kept.columns:
+            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
         preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
         preserved = (
             pd.concat(preserved_parts, ignore_index=True)
@@ -298,6 +297,7 @@ class UpdaterMerge:
         if not variants:
             prior = collapse_mixed_variants(prior)
             return self._stamp_collapsed_variant(self._cold_start_one_list(prior, allowed=allowed), prior)
+        prior = drop_unlabelled_variant_column(prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
         parts = []

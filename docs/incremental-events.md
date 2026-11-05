@@ -46,8 +46,10 @@ Preserved personalized / `item_based` / `sequential` / `content_fallback`
 / `blended` rows keep their batch `reasons` unless `[events.online]` replaced
 them. New popular, latest, and
 `incremental` rows get a minimal `{sources:[{label}]}` payload — no
-history-overlap `similar_items` on this path. The boost takes only the slots
-it uses, so preserved rows fill the rest and a full list stays full.
+history-overlap `similar_items` on this path. A flush does not trim preserved
+rows to reserve boost slots it won't use, and popular / latest backfill only
+reaches a list with free slots. `incremental` rows from earlier flushes are not
+preserved, so a later flush can still shorten a list.
 
 Batch I/O and serve packages: [architecture.md](architecture.md).
 

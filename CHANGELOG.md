@@ -41,15 +41,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
-- An incremental flush reserves only the boost slots it uses, so with
-  `top_k` of 7 or more a few new items no longer drop preserved rows and
-  shrink the list until the next job.
+- An incremental flush no longer trims preserved rows to reserve boost slots
+  it won't use (`top_k` of 7 or more). `incremental` rows from earlier flushes
+  are still not preserved, so a later flush can shorten a list.
 - An event with `user_id` `__cold_start__` no longer writes the cold-start
   list twice, with repeated ranks and items, or creates one; the event is
   acked and counted.
 - With experiments on, an incremental flush no longer wipes lists whose
   `variant` is all NULL (as after the documented `ALTER TABLE`): those rows
-  go to the primary variant, like a table without the column.
+  go to the primary variant, like a table without the column. A user assigned
+  to another variant is served only the flush rows there until the next job.
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
