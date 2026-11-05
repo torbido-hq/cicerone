@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import boto3
 import pytest
@@ -1251,7 +1252,7 @@ def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch):
+def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1266,11 +1267,17 @@ def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch):
         raise RuntimeError("delete bug")
 
     monkeypatch.setattr(source._sqs, "delete_message", boom)
-    source.ack([events[0].event_id])
+    with caplog.at_level("ERROR"):
+        source.ack([events[0].event_id])
+    assert (
+        "cicerone.events.s3",
+        logging.ERROR,
+        "Failed to delete SQS message after ack",
+    ) in caplog.record_tuples
 
 
 @mock_aws
-def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch):
+def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1285,7 +1292,9 @@ def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch):
         raise RuntimeError("visibility bug")
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
-    source.nack(events)
+    with caplog.at_level("ERROR"):
+        source.nack(events)
+    assert ("cicerone.events.s3", logging.ERROR, "Failed to extend SQS visibility") in caplog.record_tuples
 
 
 @mock_aws
@@ -1313,7 +1322,7 @@ def test_s3_sqs_load_client_error_leaves_message(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_ack_delete_client_error_is_logged(monkeypatch):
+def test_s3_sqs_ack_delete_client_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1328,11 +1337,17 @@ def test_s3_sqs_ack_delete_client_error_is_logged(monkeypatch):
         raise BotoCoreError()
 
     monkeypatch.setattr(source._sqs, "delete_message", boom)
-    source.ack([events[0].event_id])
+    with caplog.at_level("ERROR"):
+        source.ack([events[0].event_id])
+    assert (
+        "cicerone.events.s3",
+        logging.ERROR,
+        "Failed to delete SQS message after ack",
+    ) in caplog.record_tuples
 
 
 @mock_aws
-def test_s3_sqs_visibility_client_error_is_logged(monkeypatch):
+def test_s3_sqs_visibility_client_error_is_logged(monkeypatch, caplog):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1347,4 +1362,6 @@ def test_s3_sqs_visibility_client_error_is_logged(monkeypatch):
         raise BotoCoreError()
 
     monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
-    source.nack(events)
+    with caplog.at_level("ERROR"):
+        source.nack(events)
+    assert ("cicerone.events.s3", logging.ERROR, "Failed to extend SQS visibility") in caplog.record_tuples
