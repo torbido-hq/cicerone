@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeGuard, cast
+from typing import Any, TypeGuard
 
 import pandas as pd
 from rectools.dataset import Dataset
@@ -94,7 +94,7 @@ def _dump_rectools_model(model: ModelBase) -> bytes:
 
 
 def _load_rectools_model(payload: bytes) -> RecommenderModel:
-    return cast(RecommenderModel, load_model(io.BytesIO(payload)))
+    return load_model(io.BytesIO(payload))  # type: ignore[return-value]
 
 
 def _hmac_key_bytes(hmac_key: str | None) -> bytes | None:

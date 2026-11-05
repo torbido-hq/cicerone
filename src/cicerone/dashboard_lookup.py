@@ -251,9 +251,9 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
     return recs.merge(extra, on=ITEM_COLUMN, how="left")
 
 
-def _coerce_float(value: Any) -> float | None:
+def _coerce_float(value: object) -> float | None:
     try:
-        number = float(value)
+        number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
     if math.isnan(number):

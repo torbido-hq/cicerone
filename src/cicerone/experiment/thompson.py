@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any
 
 import numpy as np
 
@@ -47,21 +47,6 @@ class ArmCounts:
         return self.successes + self.failures
 
 
-class ArmCountsState(TypedDict):
-    successes: int
-    failures: int
-
-
-class ThompsonState(TypedDict):
-    allocation: str
-    champion: str
-    challenger: str
-    arms: dict[str, ArmCountsState]
-    p_best: dict[str, float]
-    pair_impressions: int
-    window_started_at: str
-
-
 @dataclass(frozen=True)
 class ThompsonAllocation:
     champion: str
@@ -72,7 +57,7 @@ class ThompsonAllocation:
     window_started_at: str
     rotated: bool
 
-    def as_state(self) -> ThompsonState:
+    def as_state(self) -> dict[str, Any]:
         return {
             "allocation": ALLOCATION_THOMPSON,
             "champion": self.champion,

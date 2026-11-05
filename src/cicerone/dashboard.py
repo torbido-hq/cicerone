@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import uvicorn
 from croniter import CroniterError, croniter
@@ -118,13 +118,7 @@ def _promotion_redirect(request: Request, error: str | None, message: str) -> Re
     return response
 
 
-class Staleness(TypedDict):
-    is_stale: bool | None
-    expected_next_run: str | None
-    error: str | None
-
-
-def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> Staleness:
+def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> dict[str, Any]:
     """Whether a scheduled run looks overdue per cron_schedule (ignore webhook/poll extras)."""
     if manifest is None or not manifest.get("generated_at"):
         return {"is_stale": True, "expected_next_run": None, "error": None}
@@ -157,7 +151,7 @@ def page_title(
     *,
     user_id: str = "",
     manifest: dict[str, Any] | None = None,
-    staleness: Staleness | None = None,
+    staleness: dict[str, Any] | None = None,
 ) -> str:
     parts: list[str] = []
     if manifest is not None:
@@ -172,10 +166,11 @@ def page_title(
     return " · ".join(parts)
 
 
-def _html(request: Request, template: str, context: Mapping[str, Any], *, settings: Settings | None = None):
+def _html(request: Request, template: str, context: dict[str, Any], *, settings: Settings | None = None):
     token = csrf_token_for(request)
     extra = _chrome(settings) if settings is not None else {}
-    response = _TEMPLATES.TemplateResponse(request, template, {**extra, **context, "csrf_token": token})
+    context = {**extra, **context, "csrf_token": token}
+    response = _TEMPLATES.TemplateResponse(request, template, context)
     set_csrf_cookie(request, response, token)
     return response
 
@@ -318,9 +313,12 @@ def create_app(
 
     @app.get("/dashboard/quality", dependencies=[Depends(auth)])
     def quality(request: Request):
-        context = quality_context(settings)
-        context["page_title"] = "Quality · Cicerone dashboard"
-        return _html(request, "quality.html", context, settings=settings)
+        return _html(
+            request,
+            "quality.html",
+            {**quality_context(settings), "page_title": "Quality · Cicerone dashboard"},
+            settings=settings,
+        )
 
     @app.post("/dashboard/experiments/promote", dependencies=[Depends(auth)])
     def experiments_promote(

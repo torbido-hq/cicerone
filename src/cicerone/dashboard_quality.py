@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
 import pandas as pd
 
@@ -38,7 +38,6 @@ class QualityContext(TypedDict):
     replay_metric_names: list[str]
     error: str | None
     empty_track: bool
-    page_title: NotRequired[str]
 
 
 def quality_context(settings: Settings) -> QualityContext:
