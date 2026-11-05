@@ -17,8 +17,8 @@ from cicerone.amqp_options import (
 )
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
-from cicerone.events.json_payload import delivery_event
-from cicerone.events.normalize import EventNormalizeError
+from cicerone.events.json_payload import decode_json_object
+from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
     RABBITMQ_IO_ERRORS,
     PikaIo,
@@ -343,7 +343,7 @@ class RabbitMQEventSource(QueuedEventSource):
             if self._io is not io or tag in self._held_tags:
                 return None
         try:
-            event = delivery_event(body)
+            event = normalize_event(decode_json_object(body))
         except EventNormalizeError as exc:
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
             self._ack_discard(io, tag)

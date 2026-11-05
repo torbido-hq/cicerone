@@ -1,4 +1,4 @@
-"""Decode broker payloads into JSON objects for event ingest."""
+"""Decode broker payloads and turn deliveries into normalized events."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
 
 
-def delivery_event(raw: Any, fallback_id: str | None = None) -> NormalizedEvent:
+def delivery_event(raw: Any, fallback_id: str) -> NormalizedEvent:
     payload = decode_json_object(raw)
-    if fallback_id is not None and supplied_event_id(payload) is None:
+    if supplied_event_id(payload) is None:
         payload["event_id"] = fallback_id
     return normalize_event(payload)
 

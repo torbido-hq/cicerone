@@ -526,6 +526,15 @@ def test_s3_rejects_sqs_with_endpoint_url():
         )
 
 
+def test_events_from_body_event_ids():
+    no_id = event_payload()
+    no_id.pop("event_id")
+    body = json.dumps([no_id, {**no_id, "idempotency_key": "ik"}, {**no_id, "event_id": " e1 "}]).encode()
+    events = events_from_body(body, bucket="b", key="k", etag="e")
+    assert [event.event_id for event in events] == ["b/k|e|0", "ik", "e1"]
+    assert all(event.generated_event_id is False for event in events)
+
+
 def test_events_from_body_validation():
     assert events_from_body(b"  ", bucket="b", key="k", etag="e") == []
     with pytest.raises(ValueError, match="invalid JSON"):

@@ -1146,6 +1146,33 @@ def test_poison_entry_is_acked(monkeypatch):
     assert 1 in broker.connection.channel_obj.acked
 
 
+def test_invalid_json_is_acked_and_logged(monkeypatch, caplog):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", b"not-json")
+    broker.enqueue("cicerone.events", event_payload(event_id="ok"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.rabbitmq"):
+        events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok"]
+    assert 1 in broker.connection.channel_obj.acked
+    assert "Skipping invalid RabbitMQ message 1" in caplog.text
+    source.close()
+
+
+def test_idempotency_key_is_the_event_id(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    payload = event_payload(idempotency_key="ik")
+    payload.pop("event_id")
+    broker.enqueue("cicerone.events", payload)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ik"]
+    assert events[0].generated_event_id is False
+    source.close()
+
+
 def test_ack_discard_tolerates_ack_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", b"not-json")
