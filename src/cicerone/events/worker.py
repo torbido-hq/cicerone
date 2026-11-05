@@ -700,8 +700,10 @@ class EventWorker:
 
     def _reject(self, ready: list[NormalizedEvent], status: str) -> int:
         record_events_flush(status=status)
-        self._updater.abort_online()
-        self._return_events(ready)
+        try:
+            self._updater.abort_online()
+        finally:
+            self._return_events(ready)
         return 0
 
     def _ack_replayed(

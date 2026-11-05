@@ -3765,6 +3765,19 @@ def test_event_worker_failed_nack_after_a_handled_error_returns_zero(
     assert _buffered_ids(worker) == ["e0", "e1"]
 
 
+def test_event_worker_failed_abort_still_returns_the_batch(tmp_path, feature_config, monkeypatch, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("apply bug")
+    _fail_apply(worker, monkeypatch, original)
+    worker._updater.abort_online = raising(RuntimeError("abort bug"))
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
 def test_event_worker_nack_bug_outside_an_error_still_propagates(tmp_path, feature_config, caplog):
     worker = _nack_failing_worker(tmp_path, feature_config)
     # Apply reports busy (0 applied): the nack is the normal return path, not error cleanup.
