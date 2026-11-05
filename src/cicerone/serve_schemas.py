@@ -110,7 +110,8 @@ class InteractionEvent(BaseModel):
     event_type: str = Field(
         description=(
             "Types missing from features.toml [event_weights] carry no weight; "
-            "without a features.toml, every type counts, with quantity as its weight"
+            "without a features.toml, popular and latest rankings count every type, "
+            "with quantity as its weight"
         ),
     )
     quantity: int = Field(default=1, ge=1, description="Optional count; default 1")
