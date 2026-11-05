@@ -7,12 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from botocore.exceptions import BotoCoreError
-from pyarrow.lib import ArrowInvalid, ArrowIOError, ArrowNotImplementedError, ArrowTypeError
 from sqlalchemy import Engine, bindparam, text
-from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.settings import Settings
+from cicerone.errors import OPTIONAL_IO_ERRORS
 from cicerone.evaluation.tracking import conversion_events, filter_events_by_types
 from cicerone.io.blob import is_storage_not_found
 from cicerone.io.db_errors import is_missing_column_error
@@ -21,26 +19,16 @@ from cicerone.io.engines import engine_for, quote_identifier, release_engine, sq
 from cicerone.io.factory import build_input_source
 from cicerone.io.filenames import EVENTS_FILENAME
 from cicerone.io.options import (
+    PARQUET_PUSHDOWN_ERRORS,
     read_parquet,
     readonly_select,
     require_option,
     table_option,
 )
 from cicerone.io.recommendation_schema import USER_COLUMN
-from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.track.store_common import since_date_floor
 
-_METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (
-    OSError,
-    ValueError,
-    SQLAlchemyError,
-    ArrowIOError,
-    ArrowInvalid,
-    ArrowNotImplementedError,
-    ArrowTypeError,
-    BotoCoreError,
-    RecommendationSchemaError,
-)
+_METRIC_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *PARQUET_PUSHDOWN_ERRORS)
 
 REQUIRED_EVENT_COLUMNS = (USER_COLUMN, "item_id", "event_type", "occurred_at")
 EVENT_METRIC_COLUMNS = (USER_COLUMN, "item_id", "event_type", "quantity", "occurred_at")
@@ -106,6 +94,12 @@ def _with_default_quantity(frame: pd.DataFrame) -> pd.DataFrame:
     frame = frame.copy()
     frame["quantity"] = 1
     return frame
+
+
+def _metric_frame(frame: pd.DataFrame, types: tuple[str, ...] | None, since: str | None) -> pd.DataFrame:
+    keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
+    frame = frame.loc[:, keep] if keep else frame
+    return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
 
 
 def _metric_event_sql(
@@ -213,9 +207,7 @@ def load_metric_events(
                 frame = read_parquet(inp.options, EVENTS_FILENAME)
             except _METRIC_READ_ERRORS:
                 frame = build_input_source(inp).read_events()
-        keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
-        frame = frame.loc[:, keep] if keep else frame
-        return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
+        return _metric_frame(frame, types, since)
     if inp.kind == "db":
         query = inp.options.get("events_query")
         url = require_option(inp.options, "database_url", "db")
@@ -226,12 +218,7 @@ def load_metric_events(
                 if query:
                     cleaned = readonly_select(str(query), option="input.options.events_query")
                     if _sql_has_page(cleaned):
-                        frame = pd.read_sql(text(cleaned), engine)
-                        keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
-                        frame = frame.loc[:, keep] if keep else frame
-                        return _filter_events_since(
-                            filter_events_by_types(_with_default_quantity(frame), types), since
-                        )
+                        return _metric_frame(pd.read_sql(text(cleaned), engine), types, since)
                 else:
                     table = table_option(inp.options, "events_table", DEFAULT_EVENTS_TABLE)
                 source = sql_source(engine, cleaned, table, "_cicerone_metric_events")
@@ -251,11 +238,5 @@ def load_metric_events(
         except _METRIC_READ_ERRORS:
             if floor is not None:
                 return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
-            frame = build_input_source(inp).read_events()
-            keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
-            frame = frame.loc[:, keep] if keep else frame
-            return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
-    frame = build_input_source(inp).read_events()
-    keep = [column for column in EVENT_METRIC_COLUMNS if column in frame.columns]
-    frame = frame.loc[:, keep] if keep else frame
-    return _filter_events_since(filter_events_by_types(_with_default_quantity(frame), types), since)
+            return _metric_frame(build_input_source(inp).read_events(), types, since)
+    return _metric_frame(build_input_source(inp).read_events(), types, since)

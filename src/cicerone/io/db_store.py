@@ -23,6 +23,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Column,
+    Connection,
     DateTime,
     Engine,
     Float,
@@ -39,6 +40,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
@@ -157,24 +159,30 @@ def _manifest_column_type(value: Any) -> Any:
     return Text()
 
 
-def _clear_table_for_replace(conn, table: str) -> None:
+def _mysql_family(bind: Engine | Connection) -> bool:
+    return bind.dialect.name in ("mysql", "mariadb")
+
+
+def _clear_table_for_replace(conn: Connection, table: str) -> None:
     """Empty ``table`` before a full rewrite: TRUNCATE then DELETE, or DELETE only on MySQL/MariaDB.
 
-    Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
-    savepoint and then appending would duplicate rows, so DELETE is tried next.
+    Some backends lack TRUNCATE (SQLite) or refuse it (Postgres foreign keys), so DELETE is tried next;
+    rolling back only the TRUNCATE savepoint and then appending would duplicate rows.
     MySQL/MariaDB TRUNCATE commits implicitly, so a failed rewrite could not roll back.
-    If the table does not exist yet, every attempt fails and ``to_sql`` creates it.
+    A missing table is left to ``to_sql`` to create; a DELETE error raises.
     """
-    mysql_family = conn.dialect.name in ("mysql", "mariadb")
-    verbs = ("DELETE FROM",) if mysql_family else ("TRUNCATE TABLE", "DELETE FROM")
-    for verb in verbs:
+    if not inspect(conn).has_table(table):
+        return
+    quoted = quote_identifier(conn, table)
+    if not _mysql_family(conn):
         savepoint = conn.begin_nested()
         try:
-            conn.execute(text(f"{verb} {quote_identifier(conn, table)}"))
+            conn.execute(text(f"TRUNCATE TABLE {quoted}"))
             savepoint.commit()
             return
-        except MISSING_TABLE_ERRORS:
+        except SQLAlchemyError:
             savepoint.rollback()
+    conn.execute(text(f"DELETE FROM {quoted}"))
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
@@ -312,7 +320,7 @@ class DatabaseOutputSink:
         self._engine = engine_for(require_option(options, "database_url", "db"))
         self._fence = fence or WriteFence()
         self._applied_table_seen = False
-        self._applied_table_checked = False
+        self._lower_case_table_names: int | None = None
         self._check_applied_events_table_name()
 
     @contextmanager
@@ -391,28 +399,32 @@ class DatabaseOutputSink:
         )
         return table
 
-    def _applied_scope(self, recommendations_table: str) -> str:
-        # Unquoted names ignore case on SQLite and Postgres; MySQL table-name case depends on the server.
-        name = (
-            recommendations_table if self._engine.dialect.name == "mysql" else recommendations_table.lower()
-        )
+    def _applied_scope(self, conn: Connection, recommendations_table: str) -> str:
+        # Unquoted names ignore case on SQLite and Postgres; MySQL keeps it if lower_case_table_names=0.
+        keeps_case = _mysql_family(conn) and self._mysql_lower_case_table_names(conn) == 0
+        name = recommendations_table if keeps_case else recommendations_table.lower()
         # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
         return hashlib.sha256(name.encode()).hexdigest()
+
+    def _mysql_lower_case_table_names(self, conn: Connection) -> int:
+        if self._lower_case_table_names is None:
+            self._lower_case_table_names = int(
+                conn.execute(text("SELECT @@lower_case_table_names")).scalar_one()
+            )
+        return self._lower_case_table_names
 
     def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
         wanted = sorted({str(key) for key in keys})
         table = self._applied_events_table()
         if not wanted:
             return set()
-        if not self._applied_table_seen:
-            if not inspect(self._engine).has_table(table.name):
-                return set()
-            self._applied_table_seen = True
-        scope = self._applied_scope(self._recommendations_table_name())
         cutoff = applied_cutoff(datetime.now(UTC))
         found: dict[str, str] = {}
         try:
             with self._engine.connect() as conn:
+                if not self._applied_events_table_exists(conn):
+                    return set()
+                scope = self._applied_scope(conn, self._recommendations_table_name())
                 for part in chunked(wanted):
                     query = select(table.c.event_key, table.c.applied_at).where(
                         table.c.recommendations_table == scope,
@@ -451,10 +463,10 @@ class DatabaseOutputSink:
             return None
         return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
-    def _applied_events_table_exists(self) -> bool:
-        if not self._applied_table_seen and not self._applied_table_checked:
-            self._applied_table_checked = True
-            self._applied_table_seen = inspect(self._engine).has_table(self._applied_events_table().name)
+    def _applied_events_table_exists(self, conn: Connection) -> bool:
+        # Only "exists" is cached: another output sharing the database may create the table later.
+        if not self._applied_table_seen:
+            self._applied_table_seen = inspect(conn).has_table(self._applied_events_table().name)
         return self._applied_table_seen
 
     def _prune_applied_keys(self, conn: Any, now: datetime) -> None:
@@ -465,7 +477,7 @@ class DatabaseOutputSink:
         wanted = sorted({str(key) for key in keys})
         now = datetime.now(UTC)
         table = self._applied_events_table()
-        scope = self._applied_scope(self._recommendations_table_name())
+        scope = self._applied_scope(conn, self._recommendations_table_name())
         self._prune_applied_keys(conn, now)
         for part in chunked(wanted):
             conn.execute(
@@ -482,7 +494,7 @@ class DatabaseOutputSink:
         # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
         table = self._applied_events_table()
         if inspect(conn).has_table(table.name):
-            scope = self._applied_scope(recommendations_table)
+            scope = self._applied_scope(conn, recommendations_table)
             conn.execute(delete(table).where(table.c.recommendations_table == scope))
 
     def _replace_recommendations_for_users_unlocked(
@@ -532,7 +544,7 @@ class DatabaseOutputSink:
                 # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
                 self._fence.ensure()
                 self._record_applied_keys(conn, applied_keys)
-            elif self._applied_events_table_exists():
+            elif self._applied_events_table_exists(conn):
                 # Batches without durable keys still prune, so expired rows never pile up.
                 self._fence.ensure()
                 prune = conn.begin_nested()
@@ -542,7 +554,7 @@ class DatabaseOutputSink:
                 except MISSING_TABLE_ERRORS:
                     # The table was dropped: skip pruning, never the rows write; check again later.
                     prune.rollback()
-                    self._applied_table_seen = self._applied_table_checked = False
+                    self._applied_table_seen = False
             self._fence.ensure()
             count_savepoint = conn.begin_nested()
             try:

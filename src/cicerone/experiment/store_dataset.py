@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 from cicerone.config.settings import IOSettings
@@ -18,7 +17,7 @@ from cicerone.io.blob import (
     read_storage_bytes,
     require_db_or_local_dataset,
 )
-from cicerone.io.options import exclusive_file_lock, require_option
+from cicerone.io.options import exclusive_file_lock, local_path
 from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
@@ -52,7 +51,7 @@ class ExperimentDatasetBackend:
     def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
         require_db_or_local_dataset(self._output, EXPOSURE_LOG_BACKEND_ERROR)
         encoded = encode_jsonl(rows)
-        path = Path(require_option(self._options, "path", "local")) / ".exposures.jsonl.lock"
+        path = local_path(self._options, ".exposures.jsonl.lock")
 
         def _append() -> None:
             with exclusive_file_lock(path):

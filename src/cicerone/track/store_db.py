@@ -22,6 +22,7 @@ from cicerone.track.store_common import (
     filter_history,
     history_sql_filter,
     track_row_sql_filter,
+    unique_event_rows,
     unique_matching_rows,
 )
 
@@ -36,6 +37,8 @@ _TRACK_TABLE = (
     ("experiment_id", "TEXT"),
     ("generated_at", "TEXT"),
 )
+_TRACK_NAMES = tuple(name for name, _kind in _TRACK_TABLE)
+_TEXT_DEFAULTED = frozenset({"event_id", "kind", "user_id", "item_id", "occurred_at"})
 _EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
 
@@ -83,30 +86,16 @@ class TrackDbBackend:
         table = table_option(self._options, "track_table", DEFAULT_TRACK_TABLE)
         engine = self.engine()
         row_sql = text(
-            insert_sql(engine, table, [name for name, _kind in _TRACK_TABLE])
+            insert_sql(engine, table, _TRACK_NAMES)
             + f" ON CONFLICT ({quote_identifier(engine, 'event_id')}) DO NOTHING"
         )
-        params: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for row in rows:
-            event_id = str(row.get("event_id") or "")
-            if event_id and event_id in seen:
-                continue
-            if event_id:
-                seen.add(event_id)
-            params.append(
-                {
-                    "event_id": event_id,
-                    "kind": str(row.get("kind") or ""),
-                    "user_id": str(row.get("user_id") or ""),
-                    "item_id": str(row.get("item_id") or ""),
-                    "rank": row.get("rank"),
-                    "occurred_at": str(row.get("occurred_at") or ""),
-                    "variant": row.get("variant"),
-                    "experiment_id": row.get("experiment_id"),
-                    "generated_at": row.get("generated_at"),
-                }
-            )
+        params: list[dict[str, Any]] = [
+            {
+                name: str(row.get(name) or "") if name in _TEXT_DEFAULTED else row.get(name)
+                for name in _TRACK_NAMES
+            }
+            for row in unique_event_rows(rows)
+        ]
         with engine.begin() as conn:
             self._ensure_track_table(conn, table)
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])

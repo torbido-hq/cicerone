@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import logging
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 from sqlalchemy import Table, create_engine, text
-from sqlalchemy.dialects import mysql, postgresql
+from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.dialects.mysql import mariadb
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import NotSupportedError, OperationalError
 from sqlalchemy.schema import CreateTable
-from support.fakes import RecordingConnection
+from support.fakes import FakeInspector, RecordingConnection
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -458,15 +459,8 @@ def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) ->
 def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
     from cicerone.io import db_store
 
-    class _Inspector:
-        def has_table(self, _table):  # type: ignore[no-untyped-def]
-            return True
-
-        def get_columns(self, _table):  # type: ignore[no-untyped-def]
-            return [{"name": "generated_at"}]
-
     engine = RecordingConnection(mysql.dialect())
-    monkeypatch.setattr(db_store, "inspect", lambda _engine: _Inspector())
+    monkeypatch.setattr(db_store, "inspect", lambda _engine: FakeInspector(columns=("generated_at",)))
     db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
     assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
 
@@ -479,19 +473,69 @@ def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
         (postgresql.dialect(), "TRUNCATE TABLE recommendations"),
     ],
 )
-def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement) -> None:  # type: ignore[no-untyped-def]
+def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from cicerone.io import db_store
 
     conn = RecordingConnection(dialect)
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
     db_store._clear_table_for_replace(conn, "recommendations")
     assert conn.sql == [statement]
 
 
-def test_applied_event_scope_follows_the_dialect_table_name_case(tmp_path, monkeypatch) -> None:
+def test_full_write_clear_falls_back_to_delete_and_raises_its_error(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(postgresql.dialect())
+    errors = {
+        "TRUNCATE TABLE recommendations": NotSupportedError(
+            "TRUNCATE", {}, Exception("cannot truncate a table referenced in a foreign key constraint")
+        ),
+        "DELETE FROM recommendations": OperationalError("DELETE", {}, Exception("lock wait timeout")),
+    }
+
+    def _fail(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        raise errors[str(statement)]
+
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
+    monkeypatch.setattr(conn, "execute", _fail)
+    with pytest.raises(OperationalError, match="lock wait timeout"):
+        db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == ["TRUNCATE TABLE recommendations", "DELETE FROM recommendations"]
+
+
+def test_full_write_clear_skips_a_missing_table(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(postgresql.dialect())
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector(has_table=False))
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == []
+
+
+@pytest.mark.parametrize("dialect", [sqlite.dialect(), postgresql.dialect()])
+def test_applied_event_scope_ignores_the_table_name_case(tmp_path, dialect) -> None:  # type: ignore[no-untyped-def]
     sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
-    assert sink._applied_scope("Recs") == sink._applied_scope("recs")
-    monkeypatch.setattr(sink._engine.dialect, "name", "mysql")
-    assert sink._applied_scope("Recs") != sink._applied_scope("recs")
+    conn = RecordingConnection(dialect)
+    assert sink._applied_scope(conn, "Recs") == sink._applied_scope(conn, "recs")
+    assert conn.sql == []
+
+
+@pytest.mark.parametrize("dialect", [mysql.dialect(), mariadb.MariaDBDialect()])
+@pytest.mark.parametrize(("lower_case_table_names", "keeps_case"), [(0, True), (1, False), (2, False)])
+def test_applied_event_scope_follows_mysql_lower_case_table_names(  # type: ignore[no-untyped-def]
+    tmp_path, monkeypatch, dialect, lower_case_table_names, keeps_case
+) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    conn = RecordingConnection(dialect)
+
+    def _server_setting(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        return SimpleNamespace(scalar_one=lambda: lower_case_table_names)
+
+    monkeypatch.setattr(conn, "execute", _server_setting)
+    assert (sink._applied_scope(conn, "Recs") != sink._applied_scope(conn, "recs")) is keeps_case
+    assert conn.sql == ["SELECT @@lower_case_table_names"]
 
 
 def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:

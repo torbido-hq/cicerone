@@ -89,6 +89,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Full recommendations and item-snapshot writes on MySQL or MariaDB empty
   the table with `DELETE` instead of `TRUNCATE` (which commits implicitly
   there), so a failed write no longer leaves the table empty.
+- A full recommendations or item-snapshot write on db output fails when
+  emptying the table fails for a reason other than a missing table (a lock
+  timeout, missing permissions), instead of appending over the old rows.
 - Serve request metrics label paths with no matching route as `unmatched`
   and unknown HTTP methods as `other`, so random paths and methods no
   longer create unbounded Prometheus series.
