@@ -85,7 +85,7 @@ def apply_recipe(feature_config: FeatureConfig, recipe: ResolvedRecipe) -> Featu
     )
 
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", BoostRule, EligibilityRule)
 
 
 def resolve_boost_policy(
@@ -111,7 +111,7 @@ def resolve_eligibility_policy(
 def _pick_named(inherited: Sequence[_T], names: Sequence[str], *, label: str) -> tuple[_T, ...]:
     by_name: dict[str, _T] = {}
     for rule in inherited:
-        name = rule.name  # type: ignore[attr-defined]
+        name = rule.name
         if name in by_name:
             raise ConfigError(f"{label} duplicate inherited rule name {name!r}")
         by_name[name] = rule
@@ -130,11 +130,7 @@ def _resolve_policy_spec(
     rule_type: type[_T],
 ) -> tuple[_T, ...]:
     if spec is True:
-        return _pick_named(
-            inherited,
-            [rule.name for rule in inherited],  # type: ignore[attr-defined]
-            label=label,
-        )
+        return _pick_named(inherited, [rule.name for rule in inherited], label=label)
     if spec is False:
         return ()
     if not isinstance(spec, (list, tuple)):

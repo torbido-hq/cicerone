@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard, cast
 
 import pandas as pd
 from rectools.dataset import Dataset
@@ -83,7 +83,7 @@ def build_artifact(
     )
 
 
-def _is_rectools_model(model: object) -> bool:
+def _is_rectools_model(model: object) -> TypeGuard[ModelBase]:
     return isinstance(model, ModelBase)
 
 
@@ -94,7 +94,7 @@ def _dump_rectools_model(model: ModelBase) -> bytes:
 
 
 def _load_rectools_model(payload: bytes) -> RecommenderModel:
-    return load_model(io.BytesIO(payload))  # type: ignore[return-value]
+    return cast(RecommenderModel, load_model(io.BytesIO(payload)))
 
 
 def _hmac_key_bytes(hmac_key: str | None) -> bytes | None:
@@ -164,7 +164,7 @@ def dumps_artifact(artifact: ModelArtifact, *, hmac_key: str | None = None) -> b
         _write(_BUNDLE_NAME, pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL))
         for name, model in artifact.fitted.items():
             if _is_rectools_model(model):
-                _write(f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}", _dump_rectools_model(model))  # type: ignore[arg-type]
+                _write(f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}", _dump_rectools_model(model))
             else:
                 _write(
                     f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}",
