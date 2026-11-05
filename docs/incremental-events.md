@@ -46,7 +46,8 @@ Preserved personalized / `item_based` / `sequential` / `content_fallback`
 / `blended` rows keep their batch `reasons` unless `[events.online]` replaced
 them. New popular, latest, and
 `incremental` rows get a minimal `{sources:[{label}]}` payload — no
-history-overlap `similar_items` on this path.
+history-overlap `similar_items` on this path. The boost takes only the slots
+it uses, so preserved rows fill the rest and a full list stays full.
 
 Batch I/O and serve packages: [architecture.md](architecture.md).
 

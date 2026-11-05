@@ -218,7 +218,7 @@ class UpdaterMerge:
         boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         if allowed is not None:
             boost_items = [item_id for item_id in boost_items if item_id in allowed]
-        boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
+        boost_slots = min(len(boost_items), max(1, int(self._top_k * _BOOST_SLOT_FRACTION)))
         boost = pd.DataFrame(
             [
                 {

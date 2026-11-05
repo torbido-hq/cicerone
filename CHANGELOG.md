@@ -41,6 +41,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
+- An incremental flush reserves only the boost slots it uses, so with
+  `top_k` of 7 or more a few new items no longer drop preserved rows and
+  shrink the list until the next job.
 - An event with `user_id` `__cold_start__` no longer writes the cold-start
   list twice, with repeated ranks and items, or creates one; the event is
   acked and counted.

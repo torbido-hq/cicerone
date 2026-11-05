@@ -106,6 +106,42 @@ def test_incremental_updater_reserves_boost_slots(tmp_path, feature_config: Feat
     assert len(u1) == 5
 
 
+@pytest.mark.parametrize(
+    ("new_items", "expected"),
+    [
+        (["n0"], ["n0", *(f"p{i}" for i in range(1, 10))]),
+        (["n0", "n1"], ["n1", "n0", *(f"p{i}" for i in range(1, 9))]),
+        (["n0", "n1", "n2", "n3"], ["n3", "n2", "n1", *(f"p{i}" for i in range(1, 8))]),
+    ],
+)
+def test_incremental_updater_new_items_keep_list_full(
+    tmp_path, feature_config: FeatureConfig, new_items: list[str], expected: list[str]
+):
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config, top_k=10)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"p{i}",
+                "rank": i,
+                "score": float(100 - i),
+                "source": "personalized",
+            }
+            for i in range(1, 11)
+        ]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    events = [
+        event_payload(
+            user_id="u1", item_id=item_id, event_id=item_id, occurred_at=f"2026-08-13T12:{minute:02d}:00Z"
+        )
+        for minute, item_id in enumerate(new_items)
+    ]
+    assert updater.apply([normalize_event(event) for event in events]) == len(events)
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
+    assert u1["item_id"].astype(str).tolist() == expected
+
+
 def test_incremental_updater_preserves_compound_sources(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
