@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 import pandas as pd
 
@@ -27,7 +27,21 @@ logger = logging.getLogger(__name__)
 _TRACK_REC_COLUMNS = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN, "generated_at")
 
 
-def quality_context(settings: Settings) -> dict[str, Any]:
+class QualityContext(TypedDict):
+    track_enabled: bool
+    eval_enabled: bool
+    log_impressions: bool
+    track_eval: dict[str, Any] | None
+    served_eval: dict[str, Any] | None
+    track_as_of: str | None
+    track_live: bool
+    replay_metric_names: list[str]
+    error: str | None
+    empty_track: bool
+    page_title: NotRequired[str]
+
+
+def quality_context(settings: Settings) -> QualityContext:
     store = TrackStore(settings.output)
     report: dict[str, Any] | None = None
     error: str | None = None

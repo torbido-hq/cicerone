@@ -53,6 +53,7 @@ from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, m
 from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.track.normalize import TrackRow
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
 
@@ -313,7 +314,7 @@ def create_app(
                 )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
             occurred = datetime.now(UTC).isoformat()
-            rows = [
+            rows: list[TrackRow] = [
                 {
                     "kind": TRACK_KIND_IMPRESSION,
                     "user_id": user_id,

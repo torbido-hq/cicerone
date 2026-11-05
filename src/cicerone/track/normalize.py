@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 from uuid import NAMESPACE_URL, uuid5
 
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION, TRACK_KINDS
@@ -17,6 +17,18 @@ _REQUIRED = ("kind", "user_id", "item_id", "occurred_at")
 
 class TrackNormalizeError(ValueError):
     """Invalid track payload."""
+
+
+class TrackRow(TypedDict):
+    kind: str
+    user_id: str
+    item_id: str
+    rank: int | None
+    occurred_at: str
+    event_id: str
+    variant: str | None
+    experiment_id: str | None
+    generated_at: str | None
 
 
 @dataclass(frozen=True)
@@ -31,7 +43,7 @@ class NormalizedTrack:
     experiment_id: str | None
     generated_at: str | None
 
-    def as_row(self) -> dict[str, Any]:
+    def as_row(self) -> TrackRow:
         return {
             "kind": self.kind,
             "user_id": self.user_id,
@@ -179,6 +191,7 @@ __all__ = [
     "TRACK_KIND_IMPRESSION",
     "NormalizedTrack",
     "TrackNormalizeError",
+    "TrackRow",
     "assign_missing_event_id",
     "normalize_track",
 ]

@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypedDict
 
 import pandas as pd
 
@@ -127,11 +127,30 @@ def _ship_blocked(report: Any, experiment: ExperimentSettings) -> tuple[str, ...
     return blocked
 
 
+class ThompsonArmView(TypedDict):
+    name: str
+    impressions: int
+    conversions: int
+    cvr_pct: float
+    p_best: float
+    role: str
+
+
+class ThompsonView(TypedDict):
+    champion: str
+    challenger: str
+    arms: list[ThompsonArmView]
+    pair_impressions: int
+    min_impressions: int
+    volume_max: int
+    volume_pct: float
+
+
 def _thompson_view(
     state: Mapping[str, Any] | None,
     experiment: ExperimentSettings,
     min_impressions: int,
-) -> dict[str, Any] | None:
+) -> ThompsonView | None:
     if experiment.allocation != ALLOCATION_THOMPSON:
         return None
     payload = state or {}
@@ -140,7 +159,7 @@ def _thompson_view(
     arms_raw = parse_arm_counts(payload.get("arms"))
     raw_p_best = payload.get("p_best")
     p_best_raw: Mapping[str, Any] = raw_p_best if isinstance(raw_p_best, dict) else {}
-    arms: list[dict[str, Any]] = []
+    arms: list[ThompsonArmView] = []
     for variant in experiment.variants:
         name = variant.name
         counts = arms_raw.get(name, ArmCounts(0, 0))
