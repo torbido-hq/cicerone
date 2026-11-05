@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ExperimentStore` delegates to a db or dataset backend
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
+- Dashboard startup turns recommendation lookup or the history pane off only
+  for store-open errors; any other error now aborts startup.
 - Redis Streams treats an empty `consumer_name` or `group_start_id` as
   unset (host name / `0-0`), like Kafka, instead of rejecting it.
 - A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
@@ -182,6 +184,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the same trimmed id as Python. With an `event_id` column, a row
   with neither `event_id` nor `idempotency_key` is now rejected (logged,
   acked, not applied) instead of keyed by `id` or its payload.
+- Docs match the code for `/metrics` auth, `limit` / `k` bounds, trigger
+  responses and debounce, dashboard routes, `triggered_by` values, `source`
+  labels, output tables and options, `${ENV}` scope, and `[experiment]` /
+  `[events]` rules.
 
 ### Removed
 
@@ -210,6 +216,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PublishError`, like Kafka, instead of logging and reporting success.
   The incremental sidecar retry then republishes every affected user with
   the same `message_id`, which consumers dedupe on.
+- The deprecated `_`-prefixed aliases in `cicerone.evaluation`,
+  `cicerone.io.recommendation_reader`, `cicerone.track.store` and
+  `cicerone.locks`, and the `cicerone.deprecation` module, in 0.8.6 rather
+  than the announced 0.9.0.
+- The `writer_lock` / `fence_*` keyword arguments (use `fence=`) and the
+  `cicerone.serve.metrics` alias (use `cicerone.metrics`).
 
 ## [0.8.5] - 2026-10-14
 
