@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from support.fakes import FakeReader
+from support.settings import make_settings
 
 from cicerone.config import Settings
 from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main

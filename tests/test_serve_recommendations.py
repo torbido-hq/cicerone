@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from conftest import make_settings
+from support.settings import make_settings
 
 from cicerone.serve.recommendations import RecommendationService
 

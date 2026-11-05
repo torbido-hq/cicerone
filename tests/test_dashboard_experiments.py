@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from sqlalchemy import create_engine
 from support.fakes import FakeLock, raising
+from support.settings import make_settings
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings

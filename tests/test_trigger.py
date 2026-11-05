@@ -4,11 +4,11 @@ import threading
 
 import boto3
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from support.fakes import FakeGuard, fake_monotonic, patch_module_ref
 from support.prometheus_metrics import metric_value
+from support.settings import make_settings
 from support.waits import WAIT_SECONDS, wait_until
 
 from cicerone.config import IOSettings, Settings

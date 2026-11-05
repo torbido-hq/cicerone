@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
+from support.settings import make_settings
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app

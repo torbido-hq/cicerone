@@ -4,8 +4,8 @@ import re
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
+from support.settings import make_settings
 
 from cicerone.config import IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
