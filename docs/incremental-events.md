@@ -17,13 +17,19 @@ Sequential never runs `fit_partial`. The default runtime image is
 torch-free. New catalog IDs still wait for a full retrain.
 
 The incremental path injects recency boosts and may backfill popular / latest
-slots for affected users. Those injects use the items-snapshot eligibility
+slots for affected users. For any positive-weight event type, the boost puts
+the user's most recent just-applied items at the top of their list, in up to
+30% of `top_k` slots (at least one), so an item they just consumed (e.g.
+`watched`) comes back at the top; it is not configurable in 0.8.x. The
+exception is an item already in the user's preserved rows (below): it is not
+moved up, and when other items take boost slots it can fall off the list unless
+a popular / latest backfill brings it back. Those injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the serve-start
 users snapshot — an empty users table still applies missing-user handling,
 and serve takes that snapshot only when an applied recipe is user-scoped).
 A list that filters to empty is deleted, and the publish sidecar
-emits an empty-list message for each cleared user. An unknown or
-zero-weight flush keeps the prior list (including `incremental` rows)
+emits an empty-list message for each cleared user. With `features.toml`
+present, an unknown or zero-weight flush keeps the prior list (including `incremental` rows)
 instead of deleting it. Incremental publish
 requires keyword `user_ids=`. Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
@@ -58,8 +64,8 @@ Same columns as batch input:
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | must appear in `features.toml` `[event_weights]` |
-| `quantity` | no | default `1` |
+| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts, with `quantity` as its weight |
+| `quantity` | no | integer `>= 1`, default `1`. Webhook: a fractional, non-numeric or `< 1` value is a `400`. Other sources reject those too, but truncate a fractional number first (`1.5` applies as `1`, `0.5` is rejected) |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
 Optional transport fields:
@@ -107,8 +113,10 @@ fit_min_events = 100            # skip SGD until this many known-ID events
 max_extra_interactions = 50000  # online-only rows on top of the last job artifact
 ```
 
-Startup fails if `[output].artifact_hmac_key` is missing, or if the
-`[output]` store has no artifact — the batch job must set
+Config load fails if `[output].artifact_hmac_key` is missing, if
+`[output]` is S3 (needs `db` or a local dataset path), or if
+`[model.collaborative].cls` is not `LightFMWrapperModel`. Startup fails if
+the `[output]` store has no artifact — the batch job must set
 `[job].save_model_artifact = true`. An event is trained only when both
 its `user_id` and `item_id` already exist in that artifact (including a new
 interaction between two known IDs). Unknown IDs still get popular / latest /
@@ -196,9 +204,9 @@ are a separate cheap path between those runs.
 ### `db`
 
 Watermark poll over `events_table` / `events_query`. No `POST /events`.
-Required: `events.options.database_url`. Optional durable `watermark_path`
-and `initial_watermark`. The watermark advances only after a successful
-flush `ack`. When an `event_id` column exists, poll orders by
+Required: `events.options.database_url`. Optional durable `watermark_path`,
+`initial_watermark` and `initial_watermark_event_id`. The watermark
+advances only after a successful flush `ack`. When an `event_id` column exists, poll orders by
 `(occurred_at, event_id)` so same-timestamp pages cannot skip rows, and
 every row must have a non-blank `event_id` or `idempotency_key` (`0`
 counts as blank, and ids are trimmed). A row
@@ -206,6 +214,9 @@ with neither is rejected like an invalid row below and never holds the
 watermark. `event_id` and `idempotency_key` must be text or integer columns.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
+Without `event_id`, poll pages by `occurred_at` only: if more than about
+100 rows (plus events still in flight) share one `occurred_at`, the source
+stops advancing at that timestamp. Add an `event_id` column to such tables.
 `events_query`, when set, must be a single read-only `SELECT` from
 **trusted deploy-time config** (same rule as `input.options.events_query`).
 It has no table identity: project `event_id` or `id`; otherwise same-payload twins
@@ -220,13 +231,15 @@ such rows stalls the source until they are fixed or given an offset.
 ### `s3`
 
 S3-compatible (R2-first): same `endpoint_url` + credentials shape as
-dataset I/O. Default `mode = "list"` (list/marker under `prefix`; durable
-`marker_path`). Objects are JSON event objects or arrays; missing
+dataset I/O. `mode` defaults to `"sqs"` when `queue_url` is set, else
+`"list"` (list/marker under `prefix`; durable `marker_path`, optional
+`initial_marker`). Objects are JSON event objects or arrays; missing
 `event_id` uses `bucket/key|etag|index`. List mode is a **single consumer**
 per bucket/prefix.
 
-AWS-only `mode = "sqs"` (`queue_url`) is rejected when `endpoint_url` is
-set. `nack` requeues locally and extends SQS visibility so a lock-busy
+AWS-only `mode = "sqs"` (`queue_url`, optional `region_name`) is rejected
+when `endpoint_url` is set. `nack` requeues locally and extends SQS
+visibility so a lock-busy
 replica can retry without waiting out the visibility timeout.
 
 ### `redis_streams`
@@ -325,7 +338,7 @@ not applied again (an id the source generated, e.g. RabbitMQ without `event_id`,
 stays at-least-once): a hash of each event's id is saved in the same write as
 the recommendations — the
 `incremental_applied_events` table on db output
-(`[output].applied_events_table`, a name no other output table uses; keyed
+(`[output.options].applied_events_table`, a name no other output table uses; keyed
 by recommendations table, so outputs sharing a database stay separate), the `recommendations.parquet`
 metadata on dataset output — and an event already recorded is acked
 instead of applied (`cicerone_events_replayed_total`). The key covers the id
@@ -345,7 +358,7 @@ Requires the matching extra.
 Default is **one writer process**. Dataset output is whole-object
 read-modify-write. Multi-replica serve is safe with a postgres or redis
 `lock_backend` (apply / dataset-append lease). `in_process` remains
-single-writer.
+single-writer; `events.ha = true` with `in_process` fails at load.
 
 A postgres or redis `job.trigger.lock_backend` is enough for serve to take
 the apply lease (`{lock_key}:events:apply`) around write-through (not the
@@ -401,7 +414,7 @@ Loads and writes are **user-scoped** (affected users + `__cold_start__`):
 a full-table overwrite. The updater keeps an LRU cache of those rows
 (default 2048 users) between micro-batches.
 
-Serve `/metrics` (when events are enabled):
+Serve `/metrics` (with `[serve].metrics_enabled` and `X-Metrics-Token`):
 
 | Metric | Meaning |
 | --- | --- |
