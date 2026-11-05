@@ -19,7 +19,8 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.evaluation.metrics import SliceMetrics
-from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
+from cicerone.experiment.recipes import ResolvedRecipe
+from cicerone.experiment.stats import pick_control_name
 from cicerone.values import utc_stamp
 
 _EMPTY = np.array([], dtype=object)
@@ -137,9 +138,7 @@ def pick_champion_name(names: Sequence[str], promoted_variant: str | None = None
         raise ValueError("pick_champion_name requires at least one name")
     if promoted_variant is not None and promoted_variant in names:
         return promoted_variant
-    if CONTROL_NAME in names:
-        return CONTROL_NAME
-    return str(names[0])
+    return pick_control_name(names)
 
 
 def _fit_mab(

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from cicerone.blending import COLD_START_USER_ID
 from cicerone.events.store import empty_recommendations_frame
+from cicerone.experiment.stats import pick_control_name
 from cicerone.io.recommendation_reader import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -17,7 +17,6 @@ from cicerone.io.recommendation_reader import (
     USER_COLUMN,
 )
 from cicerone.io.recommendation_schema import (
-    FALLBACK_VARIANT,
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
@@ -127,8 +126,9 @@ class UpdaterMerge:
             )
             return self._stamp_collapsed_variant(merged, prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
-        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
-        assigned = self._assigned_variant(user_id) or primary
+        primary = pick_control_name(variants)
+        # The cold-start sentinel has no events, so nothing is injected and it needs no assignment.
+        assigned = None if batch.empty else self._assigned_variant(user_id) or primary
         empty_batch = batch.iloc[0:0]
         parts = []
         for variant in variants:
@@ -164,13 +164,10 @@ class UpdaterMerge:
         return self._variant_names
 
     def _assigned_variant(self, user_id: str) -> str | None:
-        if self._assign_variant is not None:
-            name = self._assign_variant(user_id)
-            return str(name) if name else None
-        variants = self._variant_names
-        if not variants:
+        if self._assign_variant is None:
             return None
-        return FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
+        name = self._assign_variant(user_id)
+        return str(name) if name else None
 
     def _stamp_collapsed_variant(self, merged: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
         if merged.empty or VARIANT_COLUMN not in prior.columns or prior.empty:
@@ -287,42 +284,3 @@ class UpdaterMerge:
         else:
             kept = empty
         return online, kept
-
-    def _cold_start_rows(
-        self,
-        prior: pd.DataFrame,
-        allowed: frozenset[str] | None,
-        allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
-    ) -> pd.DataFrame:
-        variants = self._variants_for()
-        if not variants:
-            prior = collapse_mixed_variants(prior)
-            return self._stamp_collapsed_variant(self._cold_start_one_list(prior, allowed=allowed), prior)
-        has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
-        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
-        parts = []
-        for variant in variants:
-            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
-            prior_slice = (
-                prior[prior[VARIANT_COLUMN].astype(str) == variant]
-                if has_variant
-                else (prior if variant == primary else empty_recommendations_frame())
-            )
-            merged = self._cold_start_one_list(prior_slice, allowed=variant_allowed)
-            if merged.empty:
-                merged = _restrict_items(prior_slice, variant_allowed)
-                if merged.empty:
-                    continue
-            merged = merged.copy()
-            merged[VARIANT_COLUMN] = variant
-            parts.append(merged)
-        if not parts:
-            return empty_recommendations_frame()
-        return pd.concat(parts, ignore_index=True)
-
-    def _cold_start_one_list(
-        self,
-        prior: pd.DataFrame,
-        allowed: frozenset[str] | None,
-    ) -> pd.DataFrame:
-        return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)

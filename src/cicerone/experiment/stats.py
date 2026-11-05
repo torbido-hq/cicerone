@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from cicerone.experiment.recipes import CONTROL_NAME
@@ -89,7 +90,7 @@ def compare_variants(
     )
 
 
-def pick_control_name(names: list[str]) -> str:
+def pick_control_name(names: Sequence[str]) -> str:
     if CONTROL_NAME in names:
         return CONTROL_NAME
     return names[0]

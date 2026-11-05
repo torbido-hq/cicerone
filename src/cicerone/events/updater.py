@@ -455,8 +455,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             elif not prior.empty or not self._signal_rows(user_batch, weights).empty:
                 replace_ids.append(user_id)
         prior_cold = by_user.get(COLD_START_USER_ID, empty_recommendations_frame())
-        cold = self._cold_start_rows(
+        cold = self._merge_user_rows(
+            COLD_START_USER_ID,
             prior_cold,
+            popular_ranking,
+            latest_ranking,
+            empty_user_batch,
             allowed=cold_allowed,
             allowed_by_variant=cold_allowed_by_variant,
         )
