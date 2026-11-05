@@ -183,7 +183,9 @@ def test_post_track_too_long_value_is_accepted_on_other_backends(tmp_path, non_m
 
 
 def test_post_track_lone_surrogate_returns_400_on_mysql(tmp_path, mysql_track_output):
-    store, response = _post_track(tmp_path, mysql_track_output, _impression(), _impression(user_id="\ud800"))
+    store, response = _post_track(
+        tmp_path, mysql_track_output, _impression(), _impression(event_id="bad", user_id="\ud800")
+    )
     assert response.status_code == 400
     assert store.read_rows() == []
 
