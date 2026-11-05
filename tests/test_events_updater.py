@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
@@ -1980,6 +1980,27 @@ def test_incremental_updater_does_not_restore_ineligible_cold_variant(
     cold = cold[cold["user_id"] == COLD_START_USER_ID]
     assert "cold-oos" not in set(cold["item_id"].astype(str))
     assert "cold-ok" in set(cold["item_id"].astype(str))
+
+
+@pytest.mark.parametrize(
+    ("name", "missing"),
+    [("None", None), ("nan", float("nan")), ("<NA>", pd.NA), ("NaT", pd.NaT)],
+)
+def test_cold_start_missing_variant_does_not_match_variant_named_like_it(
+    tmp_path, feature_config: FeatureConfig, name: str, missing: object
+) -> None:
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config, variant_names=(name, "other"))
+    row = {"user_id": COLD_START_USER_ID, "rank": 1, "score": 0.2, "source": "popular_fallback"}
+    prior = pd.DataFrame(
+        [{**row, "item_id": "unassigned", "variant": missing}, {**row, "item_id": "named", "variant": name}],
+        dtype=object,
+    )
+    empty = pd.DataFrame(columns=["user_id", "item_id"])
+
+    cold = updater._merge_user_rows(COLD_START_USER_ID, prior, empty, empty, empty)
+
+    assert cold["item_id"].tolist() == ["named"]
+    assert cold["variant"].tolist() == [name]
 
 
 def test_incremental_updater_skips_users_read_without_user_scoped_rules(

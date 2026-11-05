@@ -38,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Incremental updates no longer put `__cold_start__` rows with a missing
+  variant under an experiment variant named `None`, `nan`, `<NA>` or
+  `NaT`; such rows are dropped, as real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
