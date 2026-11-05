@@ -182,8 +182,8 @@ class FakeManifest:
         latest: dict[str, Any] | None = _LATEST_MANIFEST,
         history: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._latest = latest
-        self._history = history if history is not None else ([latest] if latest else [])
+        self._latest = dict(latest) if latest is _LATEST_MANIFEST else latest
+        self._history = history if history is not None else ([self._latest] if self._latest else [])
 
     def read_latest(self) -> dict[str, Any] | None:
         return self._latest

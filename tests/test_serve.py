@@ -414,18 +414,10 @@ def test_recommendations_empty_everywhere_returns_404():
 
 
 def test_recommendations_manifest_without_generated_at():
-    class EmptyManifest:
-        def read_latest(self):
-            return {}
-
-        def read_recent(self, limit: int):
-            del limit
-            return []
-
     app = create_app(
         serve_settings(),
         FakeReader(recs_df(), items_df()),
-        manifest_reader=EmptyManifest(),
+        manifest_reader=FakeManifest({}),
         feature_config=serve_feature_config(),
     )
     client = TestClient(app)
