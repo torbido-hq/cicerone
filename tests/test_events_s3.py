@@ -37,7 +37,7 @@ def _put_event(client, key: str, payload: dict | list) -> None:
     client.put_object(Bucket="events-bucket", Key=key, Body=json.dumps(payload).encode())
 
 
-def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
+def _s3_notification(*keys: str, bucket: str = "events-bucket") -> str:
     return json.dumps(
         {
             "Records": [
@@ -45,6 +45,7 @@ def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
                     "eventName": "ObjectCreated:Put",
                     "s3": {"bucket": {"name": bucket}, "object": {"key": key, "eTag": "abc"}},
                 }
+                for key in keys
             ]
         }
     )
@@ -741,6 +742,46 @@ def test_s3_sqs_deletes_message_for_unparsable_object(body):
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
     assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@pytest.mark.parametrize("keys", [("bad.json", "good.json"), ("good.json", "bad.json")])
+@mock_aws
+def test_s3_sqs_unreadable_object_keeps_readable_siblings(keys):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-siblings")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="bad.json", Body=b"not-json")
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification(*keys))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["good"]
+    assert _sqs_held(sqs, queue_url) == 1
+    source.ack(["good"])
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@mock_aws
+def test_s3_sqs_notification_with_only_unreadable_objects_settles():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-all-bad")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="bad-1.json", Body=b"not-json")
+    s3.put_object(Bucket="events-bucket", Key="bad-2.json", Body=b"[" * 200_000)
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad-1.json", "bad-2.json"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("good.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["good"]
+    assert _sqs_held(sqs, queue_url) == 1
+    source.ack(["good"])
     assert _sqs_held(sqs, queue_url) == 0
     source.close()
 

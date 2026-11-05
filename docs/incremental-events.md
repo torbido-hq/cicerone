@@ -240,7 +240,10 @@ per bucket/prefix.
 AWS-only `mode = "sqs"` (`queue_url`, optional `region_name`) is rejected
 when `endpoint_url` is set. `nack` requeues locally and extends SQS
 visibility so a lock-busy
-replica can retry without waiting out the visibility timeout.
+replica can retry without waiting out the visibility timeout. An unreadable
+object in a notification is logged and skipped: events from the notification's
+other objects are delivered, and the message is deleted once they are acked,
+or at once if the notification yields no events.
 
 ### `redis_streams`
 

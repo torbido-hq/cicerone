@@ -191,6 +191,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A Kafka or RabbitMQ message or an S3 object with an integer over 4300 digits
   or very deep JSON nesting is logged and discarded like other invalid JSON,
   instead of stopping the event worker or, for S3 in SQS mode, being retried.
+- An unreadable S3 object in an SQS notification is logged and skipped, and
+  events from the notification's other objects are delivered, instead of the
+  whole message being deleted and those events lost. A notification that
+  yields no events, including one with only empty objects, is deleted.
 
 ### Removed
 
