@@ -766,7 +766,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     error: BaseException | None = None
 
     try:
-        run.publisher = build_publisher(settings, connect=False)
+        run.publisher = build_publisher(settings)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
