@@ -22,9 +22,11 @@ the user's most recent just-applied items at the top of their list, in up to
 30% of `top_k` slots (at least one), so an item they just consumed (e.g.
 `watched`) comes back at the top; it is not configurable in 0.8.x. An item
 already in the user's preserved rows (below) moves up the same way and keeps
-its `source`, `reasons` and `score`. The newest items win: when more items were
-just applied than there are slots, an older one gets no boost slot and can fall
-off the list unless a popular / latest backfill brings it back. Those injects use the items-snapshot eligibility
+its `source`, `reasons` and `score`; later flushes keep it ahead of the other
+preserved rows until the next batch run. The newest items win: when more items
+were just applied than there are slots, an older one gets no boost slot and may
+not appear on the list unless a popular / latest backfill brings it in. Those
+injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the serve-start
 users snapshot — an empty users table still applies missing-user handling,
 and serve takes that snapshot only when an applied recipe is user-scoped).
