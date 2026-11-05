@@ -294,7 +294,7 @@ class DbEventSource(EventSource):
                 return self._select_clause, self._has_event_id_column
         with engine.connect() as conn:
             result = conn.execute(text(f"SELECT * FROM {self._from_clause(engine)} LIMIT 0"))
-            columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
+            columns = frozenset(map(str, result.keys()))
         by_lower = {name.lower(): name for name in columns}
         if "occurred_at" not in by_lower:
             raise ConfigError(
