@@ -387,6 +387,7 @@ def test_invalid_json_is_committed(monkeypatch):
     assert (0, 1) in broker.committed
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
 @pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
 def test_unparsable_body_is_discarded_like_invalid_json(monkeypatch, caplog, body):
     broker = install_fake_kafka(monkeypatch)

@@ -1160,6 +1160,7 @@ def test_invalid_json_is_acked_and_logged(monkeypatch, caplog):
     source.close()
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
 @pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
 def test_unparsable_body_is_discarded_like_invalid_json(monkeypatch, caplog, body):
     broker = install_fake_rabbitmq(monkeypatch)

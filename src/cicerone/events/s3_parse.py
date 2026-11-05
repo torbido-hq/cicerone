@@ -80,7 +80,7 @@ def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[N
         return []
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError(f"invalid JSON in s3://{bucket}/{key}") from exc
     if isinstance(data, dict):
         payloads: list[Any] = [data]

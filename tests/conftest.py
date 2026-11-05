@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from types import SimpleNamespace
 
@@ -41,6 +42,15 @@ def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """A busy writer lock fails at once instead of after the acquire timeout."""
     monkeypatch.setattr(lock_hold, "DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.0)
+
+
+@pytest.fixture
+def default_int_digit_limit() -> Iterator[None]:
+    """Pin the limit UNPARSABLE_JSON_BODIES relies on; PYTHONINTMAXSTRDIGITS can change it."""
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(previous)
 
 
 @pytest.fixture

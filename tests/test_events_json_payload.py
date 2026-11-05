@@ -32,6 +32,7 @@ def test_decode_rejects_invalid():
         decode_json_object(b"\xff")
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
 @pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
 def test_decode_rejects_bodies_the_parser_cannot_read(body):
     with pytest.raises(EventNormalizeError, match="JSON object"):
