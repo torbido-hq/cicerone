@@ -8,6 +8,7 @@ import pytest
 from botocore.exceptions import BotoCoreError
 from moto import mock_aws
 from support.events import event_payload
+from support.fakes import raising
 
 from cicerone.config import ConfigError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -1307,13 +1308,16 @@ def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeyp
 
 @pytest.mark.parametrize("error", [RuntimeError("visibility bug"), BotoCoreError()])
 @mock_aws
-def test_s3_sqs_visibility_error_is_logged_and_events_are_redelivered(monkeypatch, caplog, error):
+def test_s3_sqs_visibility_error_is_logged_and_events_stay_pending_locally(monkeypatch, caplog, error):
     _, _, source, events = _two_batch_sqs_source("events-vis-error")
     calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", error)
     with caplog.at_level("ERROR"):
         assert source.nack(events) == ()
     assert len(set(calls)) == 2
+    receive = raising(AssertionError("pending events must not need another SQS receive"))
+    monkeypatch.setattr(source._sqs, "receive_message", receive)
     assert [event.event_id for event in source.poll(2)] == [event.event_id for event in events]
+    assert receive.calls == 0
     _assert_error_logged_with_traceback(caplog, "Failed to extend SQS visibility")
 
 
