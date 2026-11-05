@@ -31,7 +31,7 @@ from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
 from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_reader_common import group_by_user
-from cicerone.io.recommendation_schema import recommendation_output_columns
+from cicerone.io.recommendation_schema import drop_unlabelled_variant_column, recommendation_output_columns
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,
@@ -383,8 +383,12 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         if USER_COLUMN in existing.columns and not existing.empty:
             existing = existing.copy()
             existing[USER_COLUMN] = existing[USER_COLUMN].astype(str)
+        # With experiments off the column stays, so published rows don't change.
         by_user = (
-            {user_id: group for user_id, group in existing.groupby(USER_COLUMN, sort=False)}
+            {
+                user_id: drop_unlabelled_variant_column(group) if self._variant_names else group
+                for user_id, group in existing.groupby(USER_COLUMN, sort=False)
+            }
             if not existing.empty
             else {}
         )

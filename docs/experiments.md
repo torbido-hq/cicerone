@@ -158,6 +158,9 @@ last successful recipe as control.
 
 Existing tables without a `variant` column still serve (no experiment). Adding
 the column to an existing DB table is `ALTER TABLE … ADD COLUMN variant TEXT`.
+Until the next full job, a user whose rows are all NULL counts as having no
+column: an incremental flush keeps their list, and `__cold_start__`, on the
+primary variant (`control`, else the first named).
 
 ## Serve
 

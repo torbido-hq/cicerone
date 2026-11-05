@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from contextlib import nullcontext
 from dataclasses import replace
 
@@ -17,6 +18,7 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.updater_merge import INCREMENTAL_SOURCE
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.feature_config import EligibilityRule, FeatureConfig
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
 from cicerone.io.factory import build_output_sink
 from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
 from cicerone.locks import LockLostError, WriterLockBusyError
@@ -233,6 +235,127 @@ def test_incremental_updater_unlabelled_prior_stays_on_control(tmp_path, feature
     treatment = u1[u1["variant"] == "treatment"]
     assert "old" in set(control["item_id"].astype(str))
     assert "old" not in set(treatment["item_id"].astype(str))
+
+
+_RECS_BEFORE_VARIANT_COLUMN = pd.DataFrame(
+    [
+        {"user_id": "u1", "item_id": "p1", "rank": 1, "score": 2.0, "source": "personalized"},
+        {"user_id": "u1", "item_id": "p2", "rank": 2, "score": 1.0, "source": "personalized"},
+        {
+            "user_id": COLD_START_USER_ID,
+            "item_id": "c1",
+            "rank": 1,
+            "score": 0.2,
+            "source": "popular_fallback",
+        },
+    ]
+)
+
+
+def _output_after_variant_migration(tmp_path, kind: str) -> IOSettings:
+    if kind == "dataset":
+        out = tmp_path / "out"
+        out.mkdir()
+        _RECS_BEFORE_VARIANT_COLUMN.assign(variant=None).to_parquet(
+            out / "recommendations.parquet", index=False
+        )
+        return IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)})
+    db_path = tmp_path / "out.db"
+    conn = sqlite3.connect(db_path)
+    _RECS_BEFORE_VARIANT_COLUMN.to_sql(DEFAULT_RECOMMENDATIONS_TABLE, conn, index=False)
+    conn.execute(f"ALTER TABLE {DEFAULT_RECOMMENDATIONS_TABLE} ADD COLUMN variant TEXT")
+    conn.commit()
+    conn.close()
+    return IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
+
+
+def _updater_for(output: IOSettings, feature_config: FeatureConfig, **kwargs) -> IncrementalUpdater:
+    return IncrementalUpdater(
+        sink=build_output_sink(output),
+        output_settings=output,
+        feature_config=feature_config,
+        top_k=5,
+        explain_enabled=False,
+        **kwargs,
+    )
+
+
+def _variant_items(frame: pd.DataFrame, user_id: str, variant: str) -> list[str]:
+    rows = frame[(frame["user_id"] == user_id) & (frame["variant"] == variant)].sort_values("rank")
+    return rows["item_id"].astype(str).tolist()
+
+
+@pytest.mark.parametrize("kind", ["dataset", "db"])
+def test_incremental_updater_all_null_variant_goes_to_primary_on_event(
+    tmp_path, feature_config: FeatureConfig, kind: str
+):
+    output = _output_after_variant_migration(tmp_path, kind)
+    updater = _updater_for(output, feature_config, variant_names=("control", "treatment"))
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="new", event_id="m1"))]) == 1
+    frame = load_recommendations_frame(output)
+    assert _variant_items(frame, "u1", "control") == ["new", "p1", "p2"]
+    assert _variant_items(frame, COLD_START_USER_ID, "control") == ["c1"]
+    assert frame[frame["variant"] == "treatment"].empty
+
+
+def test_incremental_updater_all_null_variant_survives_unknown_event(tmp_path, feature_config: FeatureConfig):
+    output = _output_after_variant_migration(tmp_path, "dataset")
+    updater = _updater_for(output, feature_config, variant_names=("control", "treatment"))
+    event = event_payload(user_id="u1", event_type="unknown_type", item_id="ix", event_id="m2")
+    assert updater.apply([normalize_event(event)]) == 1
+    frame = load_recommendations_frame(output)
+    assert _variant_items(frame, "u1", "control") == ["p1", "p2"]
+    assert _variant_items(frame, COLD_START_USER_ID, "control") == ["c1"]
+
+
+def test_incremental_updater_null_variant_is_judged_per_user(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "a",
+                "rank": 1,
+                "score": 1.0,
+                "source": "blended",
+                "variant": "control",
+            },
+            {
+                "user_id": "u1",
+                "item_id": "b",
+                "rank": 1,
+                "score": 1.0,
+                "source": "blended",
+                "variant": "treatment",
+            },
+            {"user_id": "u2", "item_id": "c", "rank": 1, "score": 1.0, "source": "blended", "variant": None},
+        ]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)})
+    updater = _updater_for(output, feature_config, variant_names=("control", "treatment"))
+    events = [
+        event_payload(user_id=user_id, event_type="unknown_type", item_id="ix", event_id=user_id)
+        for user_id in ("u1", "u2")
+    ]
+    assert updater.apply([normalize_event(event) for event in events]) == 2
+    frame = load_recommendations_frame(output)
+    assert _variant_items(frame, "u1", "control") == ["a"]
+    assert _variant_items(frame, "u1", "treatment") == ["b"]
+    assert _variant_items(frame, "u2", "control") == ["c"]
+    assert _variant_items(frame, "u2", "treatment") == []
+
+
+def test_incremental_updater_all_null_variant_column_stays_with_experiments_off(
+    tmp_path, feature_config: FeatureConfig
+):
+    output = _output_after_variant_migration(tmp_path, "dataset")
+    updater = _updater_for(output, feature_config)
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="new", event_id="m3"))]) == 1
+    frame = load_recommendations_frame(output)
+    assert "variant" in frame.columns
+    u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
+    assert u1["item_id"].astype(str).tolist() == ["new", "p1", "p2"]
 
 
 def test_incremental_updater_skips_when_busy(tmp_path, feature_config: FeatureConfig):
