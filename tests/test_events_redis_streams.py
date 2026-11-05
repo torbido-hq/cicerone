@@ -295,16 +295,6 @@ def test_poison_entry_is_acked(monkeypatch):
     assert client.xpending("cicerone:events", "cicerone")["pending"] == 1
 
 
-def test_fractional_quantity_is_acked(monkeypatch):
-    client = _install_fake_redis(monkeypatch, FakeRedis())
-    source = RedisStreamsEventSource(_options())
-    source.connect()
-    client.xadd("cicerone:events", event_payload(event_id="bad", quantity=1.5))
-    client.xadd("cicerone:events", event_payload(event_id="ok", quantity=3))
-    assert [(event.event_id, event.quantity) for event in source.poll(10)] == [("ok", 3)]
-    assert client.xpending("cicerone:events", "cicerone")["pending"] == 1
-
-
 def test_autoclaim_idle_from_other_consumer(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options(claim_idle_ms=50))

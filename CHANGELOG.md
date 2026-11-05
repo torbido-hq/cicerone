@@ -188,12 +188,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
-- Kafka, RabbitMQ, S3 and db events reject a fractional `quantity`, as the
-  webhook does, instead of truncating it (`1.5` applied as `1`). Whole-number
-  forms such as `2.0` and `"3"` still work.
 - The `POST /events` OpenAPI description of `event_type` says that without a
-  `features.toml` every type counts, with `quantity` as its weight, instead of
-  requiring a `[event_weights]` key.
+  `features.toml` the popular and latest rankings count every type, with
+  `quantity` as its weight, instead of requiring a `[event_weights]` key.
 
 ### Removed
 

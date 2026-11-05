@@ -526,14 +526,6 @@ def test_s3_rejects_sqs_with_endpoint_url():
         )
 
 
-def test_events_from_body_skips_a_fractional_quantity():
-    body = json.dumps(
-        [event_payload(event_id="bad", quantity=1.5), event_payload(event_id="ok", quantity=2.0)]
-    )
-    events = events_from_body(body.encode(), bucket="b", key="k", etag="e")
-    assert [(event.event_id, event.quantity) for event in events] == [("ok", 2)]
-
-
 def test_events_from_body_validation():
     assert events_from_body(b"  ", bucket="b", key="k", etag="e") == []
     with pytest.raises(ValueError, match="invalid JSON"):

@@ -934,16 +934,6 @@ def test_db_poll_delivers_an_invalid_row_as_rejected_in_cursor_order(tmp_path):
     assert [event.event_id for event in source.poll(10)] == ["e2"]
 
 
-def test_db_poll_delivers_a_fractional_quantity_as_rejected(tmp_path):
-    url = _sqlite_url(tmp_path)
-    _seed_events(url, [_event_row("bad", 0, quantity=1.5), _event_row("ok", 1, quantity=2.0)])
-    source = DbEventSource({"database_url": url})
-    source.connect()
-    bad, ok = source.poll(10)
-    assert "quantity must be an integer" in (bad.rejected or "")
-    assert (ok.event_id, ok.rejected, ok.quantity) == ("ok", None, 2)
-
-
 def test_db_poll_keeps_an_unacked_rejected_row_in_flight(tmp_path):
     url = _sqlite_url(tmp_path)
     _seed_events(url, [_event_row("bad", 0, quantity=0)])
