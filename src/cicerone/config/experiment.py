@@ -142,7 +142,7 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         from cicerone.experiment.recipes import validate_variant_models
 
         validate_variant_models(models, variant_name=name)
-    weights_key = "weights" if "weights" in raw else "model_weights"
+    weights_key = "weights" if raw.get("weights") is not None else "model_weights"
     weights = weights_field(raw, weights_key, context=f"experiment.variants[{name}].weights")
     validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
     rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None

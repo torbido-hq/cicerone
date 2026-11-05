@@ -86,6 +86,13 @@ def test_load_experiment_rejects_traffic_over_one():
         )
 
 
+def test_load_experiment_variant_null_weights_fall_back_to_model_weights():
+    settings = load_experiment_settings(
+        {"variants": [{"name": "a", "weights": None, "model_weights": {"latest": 1}}]}
+    )
+    assert settings.variants[0].model_weights == {"latest": 1.0}
+
+
 def test_load_experiment_variant_weights_prefer_weights_over_model_weights():
     variants = [
         {"name": "a", "weights": {"popular": 2}, "model_weights": {"latest": 9}},
