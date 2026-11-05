@@ -53,6 +53,7 @@ StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
 DEFAULT_MODE: Mode = "batch"
+StorageBackend = Literal["local", "s3"]
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60

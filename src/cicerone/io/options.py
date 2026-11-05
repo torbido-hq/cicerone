@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, get_args
 
 try:
     import fcntl
@@ -27,7 +27,7 @@ except ImportError:
 import pandas as pd
 from pyarrow.lib import ArrowException, ArrowNotImplementedError, ArrowTypeError
 
-from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
+from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError, StorageBackend
 from cicerone.locks import WriterLockBusyError
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 _PYARROW_S3_FALLBACK_ERRORS = (OSError, ArrowException)
-STORAGE_BACKENDS = frozenset({"s3", "local"})
+STORAGE_BACKENDS: frozenset[str] = frozenset(get_args(StorageBackend))
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 
@@ -229,14 +229,14 @@ def build_s3_client(options: dict[str, Any]):
     )
 
 
-def storage_backend(options: dict[str, Any]) -> str:
+def storage_backend(options: dict[str, Any]) -> StorageBackend:
     backend = options.get("storage_backend", "local")
     if backend not in STORAGE_BACKENDS:
         raise ConfigError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
-    return str(backend)
+    return backend
 
 
-def validate_storage_options(options: dict[str, Any]) -> str:
+def validate_storage_options(options: dict[str, Any]) -> StorageBackend:
     """Validate ``storage_backend`` and required options; return the resolved backend.
 
     Raises ``ConfigError`` for unknown backends or missing required options.
