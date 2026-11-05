@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader
 from support.prometheus_metrics import registry_metric_value
-from test_serve import _feature_config, _settings
+from support.serve import serve_feature_config, serve_settings
 
 from cicerone.config import IOSettings
 from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
@@ -68,10 +68,10 @@ def _variant_recs() -> pd.DataFrame:
 
 def test_recommendations_omit_experiment_fields_when_disabled():
     app = create_app(
-        _settings(),
+        serve_settings(),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] is None
@@ -135,10 +135,10 @@ def test_recommendations_filter_assigned_variant(tmp_path):
     assigned = assign_variant("rrf-vs-blend", "u1", (("control", 0.5), ("treatment", 0.5)))
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] == "rrf-vs-blend"
@@ -153,10 +153,10 @@ def test_recommendations_missing_hashed_variant_uses_leftover(tmp_path):
     recs = recs[recs["variant"] == leftover].reset_index(drop=True)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(recs),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["fallback"] is False
@@ -171,10 +171,10 @@ def test_recommendations_missing_hashed_cold_start_uses_unassigned(tmp_path):
     recs = recs[(recs["user_id"] == "__cold_start__") & (recs["variant"] == leftover)].reset_index(drop=True)
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(recs),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["fallback"] is True
@@ -186,10 +186,10 @@ def test_recommendations_omit_experiment_fields_without_variant_column(tmp_path)
     recs = _variant_recs().drop(columns=["variant"])
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        serve_settings(experiment=_experiment_settings(log_exposures=True), output=output),
         FakeReader(recs),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] is None
@@ -202,7 +202,7 @@ def test_recommendations_filter_automl_challenger_without_variants(tmp_path):
     assigned = assign_variant("auto", "u1", (("control", 0.5), ("treatment", 0.5)))
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(
+        serve_settings(
             experiment=_experiment_settings(
                 id="auto",
                 automl_challenger=True,
@@ -212,7 +212,7 @@ def test_recommendations_filter_automl_challenger_without_variants(tmp_path):
         ),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] == "auto"
@@ -223,10 +223,10 @@ def test_recommendations_filter_automl_challenger_without_variants(tmp_path):
 def test_recommendations_log_exposures_when_enabled(tmp_path):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        serve_settings(experiment=_experiment_settings(log_exposures=True), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     with TestClient(app) as client:
         client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
@@ -244,10 +244,10 @@ def test_recommendations_drop_the_exposure_when_the_append_queue_is_full(tmp_pat
     dropped_metric = ("cicerone_serve_appends_dropped_total", {"kind": "exposure"})
     dropped = registry_metric_value(*dropped_metric)
     app = create_app(
-        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        serve_settings(experiment=_experiment_settings(log_exposures=True), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     with TestClient(app) as client:
         assert (
@@ -260,10 +260,10 @@ def test_recommendations_drop_the_exposure_when_the_append_queue_is_full(tmp_pat
 def test_recommendations_exposure_generated_at_matches_response(tmp_path):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        serve_settings(experiment=_experiment_settings(log_exposures=True), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     with TestClient(app) as client:
         body = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
@@ -278,10 +278,10 @@ def test_recommendations_promoted_variant_read_errors(tmp_path, monkeypatch):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     ExperimentStore(output).write_state(experiment_state("rrf-vs-blend", promoted_variant=None))
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] == "rrf-vs-blend"
@@ -290,10 +290,10 @@ def test_recommendations_promoted_variant_read_errors(tmp_path, monkeypatch):
         lambda self: (_ for _ in ()).throw(RuntimeError("state")),
     )
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     again = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert again.status_code == 200
@@ -326,7 +326,7 @@ def test_recommendations_hash_active_thompson_pair(tmp_path):
         experiment_state("rrf-vs-blend", promoted_variant=None, champion="control", challenger="blend")
     )
     app = create_app(
-        _settings(
+        serve_settings(
             experiment=_experiment_settings(
                 allocation=ALLOCATION_THOMPSON,
                 explore_traffic=1.0,
@@ -341,7 +341,7 @@ def test_recommendations_hash_active_thompson_pair(tmp_path):
         ),
         FakeReader(recs),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["variant"] == "blend"
@@ -362,14 +362,14 @@ def test_recommendations_promoted_overrides_thompson_pair(tmp_path):
         )
     )
     app = create_app(
-        _settings(
+        serve_settings(
             experiment=_experiment_settings(allocation=ALLOCATION_THOMPSON, explore_traffic=1.0),
             output=output,
             track=TrackSettings(enabled=True),
         ),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["variant"] == "treatment"
@@ -394,14 +394,14 @@ def test_serve_skips_snapshot_names_when_pair_is_usable(tmp_path):
     )
     reader = _CountingReader(_variant_recs())
     app = create_app(
-        _settings(
+        serve_settings(
             experiment=_experiment_settings(allocation=ALLOCATION_THOMPSON, explore_traffic=1.0),
             output=output,
             track=TrackSettings(enabled=True),
         ),
         reader,
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["variant"] in {"control", "treatment"}
@@ -420,10 +420,10 @@ def test_serve_skips_snapshot_names_when_experiments_are_off():
 
     reader = _CountingReader(_variant_recs())
     app = create_app(
-        _settings(),
+        serve_settings(),
         reader,
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["experiment_id"] is None
@@ -457,7 +457,7 @@ def test_serve_hashes_snapshot_names_without_overlay(tmp_path):
             return ("control", "blend")
 
     app = create_app(
-        _settings(
+        serve_settings(
             experiment=_experiment_settings(
                 allocation=ALLOCATION_THOMPSON,
                 explore_traffic=1.0,
@@ -472,7 +472,7 @@ def test_serve_hashes_snapshot_names_without_overlay(tmp_path):
         ),
         _SnapshotReader(recs),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     assert body["variant"] in {"control", "blend"}
@@ -495,10 +495,10 @@ def test_serve_uses_cached_assignment_overlay(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ExperimentStore, "assignment_overlay", counting)
     app = create_app(
-        _settings(experiment=_experiment_settings(), output=output),
+        serve_settings(experiment=_experiment_settings(), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     after_init = calls["n"]
     assert after_init >= 1
@@ -530,10 +530,10 @@ def test_recommendations_exposure_append_error_still_serves(tmp_path, monkeypatc
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("exposures")),
     )
     app = create_app(
-        _settings(experiment=_experiment_settings(log_exposures=True), output=output),
+        serve_settings(experiment=_experiment_settings(log_exposures=True), output=output),
         FakeReader(_variant_recs()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
