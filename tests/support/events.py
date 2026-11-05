@@ -8,12 +8,27 @@ from typing import Any
 
 from cicerone.config import make_settings
 from cicerone.events.base import NormalizedEvent
+from cicerone.events.online_result import OnlineRefreshResult
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.io.factory import build_output_sink
 from support.settings import local_output
 from support.waits import WAIT_SECONDS
+
+
+class FakeOnline:
+    """Online refresher whose every refresh returns ``rows`` for one user."""
+
+    def __init__(self, rows: Any) -> None:
+        self._rows = rows
+
+    def refresh(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
+        del events
+        return OnlineRefreshResult(rows=self._rows, users_refreshed=1, fit_partial_epochs=1)
+
+    def invalidate(self) -> None:
+        return None
 
 
 class BeatingSource(WebhookEventSource):

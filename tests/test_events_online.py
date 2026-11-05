@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import FakeOnline, event_payload
 from support.settings import local_output
 
 from cicerone.artifact import ARTIFACT_FILENAME, build_artifact, dumps_artifact, loads_artifact
@@ -399,20 +399,12 @@ def test_incremental_updater_splices_online_rows(tmp_path, feature_config: Featu
         [{"user_id": "u1", "item_id": "fresh", "rank": 1, "score": 2.0, "source": "personalized"}]
     )
 
-    class _FakeOnline:
-        def refresh(self, events):
-            del events
-            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
-
-        def invalidate(self) -> None:
-            return None
-
     updater = IncrementalUpdater(
         sink=sink,
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        online=_FakeOnline(),
+        online=FakeOnline(online_rows),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="splice"))]
     assert updater.apply(events) == 1
@@ -447,20 +439,12 @@ def test_incremental_updater_does_not_cap_online_by_old_ranks(tmp_path, feature_
         ]
     )
 
-    class _FakeOnline:
-        def refresh(self, events):
-            del events
-            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
-
-        def invalidate(self) -> None:
-            return None
-
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        online=_FakeOnline(),
+        online=FakeOnline(online_rows),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="rank-cap"))]
     assert updater.apply(events) == 1
@@ -492,20 +476,12 @@ def test_incremental_updater_splices_overlapping_compound_sources(tmp_path, feat
         [{"user_id": "u1", "item_id": "fresh", "rank": 1, "score": 2.0, "source": "personalized"}]
     )
 
-    class _FakeOnline:
-        def refresh(self, events):
-            del events
-            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
-
-        def invalidate(self) -> None:
-            return None
-
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        online=_FakeOnline(),
+        online=FakeOnline(online_rows),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="compound-splice"))]
     assert updater.apply(events) == 1
@@ -547,20 +523,12 @@ def test_incremental_updater_splices_online_rows_across_variants(tmp_path, featu
         [{"user_id": "u1", "item_id": "fresh", "rank": 1, "score": 2.0, "source": "personalized"}]
     )
 
-    class _FakeOnline:
-        def refresh(self, events):
-            del events
-            return OnlineRefreshResult(rows=online_rows, users_refreshed=1, fit_partial_epochs=1)
-
-        def invalidate(self) -> None:
-            return None
-
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        online=_FakeOnline(),
+        online=FakeOnline(online_rows),
         variant_names=("control", "treatment"),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="variant-splice"))]
