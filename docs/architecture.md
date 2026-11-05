@@ -437,8 +437,8 @@ never imports `cicerone.model`/`dataset`/`automl`.
   user-id lookup fragment — see `templates/_recommendations.html`),
   `GET /dashboard` (Basic Auth, the full page), `GET /dashboard/experiments`
   (Basic Auth, always-valid CIs / catalog guardrails), `GET /dashboard/quality`
-  (Basic Auth, CTR/CVR and replay), `GET /dashboard/logout` (401 to drop
-  the Basic credentials), `GET /dashboard/config`
+  (Basic Auth, CTR/CVR and replay), `GET /dashboard/logout` (401 Basic
+  challenge; browsers may keep cached credentials), `GET /dashboard/config`
   (Basic Auth, read-only loaded Settings and features.toml with secrets
   redacted; known keys open a one-line hint with an optional cicerone.dev
   link), and

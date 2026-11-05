@@ -285,8 +285,9 @@ serve). It never loads lightfm/implicit/torch (it does import `rectools`).
   recipes with always-valid CIs and catalog guardrails, and can **Promote**
   a winner to 100% traffic (`POST …/promote`; `POST …/unpromote` resumes the
   split). `GET /dashboard/quality` shows tracked CTR/conversion and replay
-  metrics when `[track]` or `[job.eval]` is on. `GET /dashboard/logout` drops
-  the Basic credentials. `GET /dashboard/config` shows the Settings this
+  metrics when `[track]` or `[job.eval]` is on. `GET /dashboard/logout`
+  answers 401 with a Basic challenge; browsers may keep sending cached
+  credentials, so clear them in the browser. `GET /dashboard/config` shows the Settings this
   dashboard process loaded (and `features.toml` when present), with tokens,
   URLs, and keys redacted. Section titles and known keys offer a one-line
   hint (`?`), with a Docs link when cicerone.dev covers that setting.

@@ -17,15 +17,19 @@ Sequential never runs `fit_partial`. The default runtime image is
 torch-free. New catalog IDs still wait for a full retrain.
 
 The incremental path injects recency boosts and may backfill popular / latest
-slots for affected users. The boost puts the user's own just-applied items in the top 30% of their
-list for any positive-weight event type, so an item they just consumed (e.g.
-`watched`) comes back at the top; it is not configurable in 0.8.x. Those injects use the items-snapshot eligibility
+slots for affected users. For any positive-weight event type, the boost puts
+the user's most recent just-applied items at the top of their list, in up to
+30% of `top_k` slots (at least one), so an item they just consumed (e.g.
+`watched`) comes back at the top; it is not configurable in 0.8.x. The
+exception is an item already in the user's preserved rows (below): it is not
+moved up, and when other items take boost slots it can fall off the list unless
+a popular / latest backfill brings it back. Those injects use the items-snapshot eligibility
 allowlist (availability always; user-scoped rules from the serve-start
 users snapshot — an empty users table still applies missing-user handling,
 and serve takes that snapshot only when an applied recipe is user-scoped).
 A list that filters to empty is deleted, and the publish sidecar
-emits an empty-list message for each cleared user. An unknown or
-zero-weight flush keeps the prior list (including `incremental` rows)
+emits an empty-list message for each cleared user. With `features.toml`
+present, an unknown or zero-weight flush keeps the prior list (including `incremental` rows)
 instead of deleting it. Incremental publish
 requires keyword `user_ids=`. Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
@@ -60,8 +64,8 @@ Same columns as batch input:
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight |
-| `quantity` | no | integer `>= 1`, default `1` (else `400`) |
+| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts, with `quantity` as its weight |
+| `quantity` | no | integer `>= 1`, default `1`. Webhook: a fractional, non-numeric or `< 1` value is a `400`. Other sources reject those too, but truncate a fractional number first (`1.5` applies as `1`, `0.5` is rejected) |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
 Optional transport fields:
