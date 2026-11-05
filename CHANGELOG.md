@@ -188,6 +188,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- A Kafka or RabbitMQ message with an integer over 4300 digits or very deep
+  JSON nesting is logged and discarded like other invalid JSON, instead of
+  stopping the event worker.
 
 ### Removed
 

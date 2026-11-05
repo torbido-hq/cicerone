@@ -33,7 +33,8 @@ def decode_json_object(raw: Any) -> dict[str, Any]:
         raise EventNormalizeError("event must be a JSON object")
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
+    # ValueError covers JSONDecodeError and the int digit limit.
+    except (ValueError, RecursionError) as exc:
         raise EventNormalizeError("event must be a JSON object") from exc
     if not isinstance(parsed, Mapping):
         raise EventNormalizeError("event must be a JSON object")

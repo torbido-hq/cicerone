@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from support.events import event_payload
+from support.events import UNPARSABLE_JSON_BODIES, event_payload
 
 from cicerone.events.json_payload import decode_json_object, delivery_event
 from cicerone.events.normalize import EventNormalizeError
@@ -30,6 +30,14 @@ def test_decode_rejects_invalid():
         decode_json_object(1)
     with pytest.raises(EventNormalizeError, match="JSON object"):
         decode_json_object(b"\xff")
+
+
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+def test_decode_rejects_bodies_the_parser_cannot_read(body):
+    with pytest.raises(EventNormalizeError, match="JSON object"):
+        decode_json_object(body)
+    with pytest.raises(EventNormalizeError, match="JSON object"):
+        decode_json_object(body.decode())
 
 
 @pytest.mark.parametrize(

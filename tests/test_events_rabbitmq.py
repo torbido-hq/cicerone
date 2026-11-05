@@ -5,7 +5,7 @@ import threading
 from typing import Any
 
 import pytest
-from support.events import event_payload
+from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
 from support.fakes import hide_module
 from support.waits import UNREACHED_SECONDS, WAIT_SECONDS, call_in_thread, wait_until
@@ -1149,6 +1149,21 @@ def test_poison_entry_is_acked(monkeypatch):
 def test_invalid_json_is_acked_and_logged(monkeypatch, caplog):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", b"not-json")
+    broker.enqueue("cicerone.events", event_payload(event_id="ok"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.rabbitmq"):
+        events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok"]
+    assert 1 in broker.connection.channel_obj.acked
+    assert "Skipping invalid RabbitMQ message 1" in caplog.text
+    source.close()
+
+
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+def test_unparsable_body_is_discarded_like_invalid_json(monkeypatch, caplog, body):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", body)
     broker.enqueue("cicerone.events", event_payload(event_id="ok"))
     source = RabbitMQEventSource(_options())
     source.connect()
