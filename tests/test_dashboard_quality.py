@@ -5,6 +5,7 @@ import re
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+from support.fakes import FakeManifest
 from support.settings import make_settings
 
 from cicerone.config import IOSettings
@@ -17,15 +18,6 @@ def _users_with(username: str, password: str) -> dict[str, str]:
     import bcrypt
 
     return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
-
-
-class _FakeReader:
-    def read_latest(self):
-        return None
-
-    def read_recent(self, limit: int):
-        del limit
-        return []
 
 
 def _settings(tmp_path, **overrides):
@@ -59,7 +51,7 @@ def _assert_quality_chrome(response) -> None:
 
 
 def test_quality_page_empty_when_track_off(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(_settings(tmp_path), FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "[track]" in response.text
@@ -68,7 +60,7 @@ def test_quality_page_empty_when_track_off(tmp_path):
 
 
 def test_quality_page_requires_auth(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(_settings(tmp_path), FakeManifest(None), _users_with("alice", "s3cret"))
     assert TestClient(app).get("/dashboard/quality").status_code == 401
 
 
@@ -105,7 +97,7 @@ def test_quality_page_shows_stored_metrics(tmp_path):
             },
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "Impressions" in response.text
@@ -136,7 +128,7 @@ def test_quality_page_live_metrics_from_track_rows(tmp_path):
             ).as_row()
         ]
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Impressions" in response.text
@@ -177,7 +169,7 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
     assert context["track_live"] is True
     assert context["track_as_of"] is None
     assert context["track_eval"]["overall"]["n_impressions"] == 1
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "Live from the track store." in response.text
@@ -366,7 +358,7 @@ def test_quality_page_shows_stored_served_eval(tmp_path):
             },
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "By source" in response.text
@@ -421,7 +413,7 @@ def test_replay_metric_names_unions_sources():
 
 def test_quality_eval_enabled_empty_replay_copy(tmp_path):
     settings = _settings(tmp_path, eval={"enabled": True})
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Production replay is on" in response.text
 

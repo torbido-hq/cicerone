@@ -16,6 +16,8 @@ import pytest
 from cicerone.io.recommendation_reader import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
 
+_LATEST_MANIFEST = {"generated_at": "2026-08-04T12:00:00+00:00"}
+
 
 class RecordingConnection:
     """Records executed SQL; ``begin`` and ``begin_nested`` are no-op transactions."""
@@ -175,13 +177,19 @@ class FakeReader:
 
 
 class FakeManifest:
-    def read_latest(self):
-        return {"generated_at": "2026-08-04T12:00:00+00:00"}
+    def __init__(
+        self,
+        latest: dict[str, Any] | None = _LATEST_MANIFEST,
+        history: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._latest = latest
+        self._history = history if history is not None else ([latest] if latest else [])
 
-    def read_recent(self, limit: int):
-        del limit
-        latest = self.read_latest()
-        return [latest] if latest else []
+    def read_latest(self) -> dict[str, Any] | None:
+        return self._latest
+
+    def read_recent(self, limit: int) -> list[dict[str, Any]]:
+        return self._history[:limit]
 
 
 class FakeGuard:

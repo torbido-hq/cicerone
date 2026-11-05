@@ -4,19 +4,12 @@ from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
+from support.fakes import FakeManifest
 from support.settings import make_settings
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.dashboard_config import MISSING, REDACTED, _normalize, config_display
-
-
-class _FakeReader:
-    def read_latest(self) -> dict | None:
-        return None
-
-    def read_recent(self, limit: int) -> list[dict]:
-        return []
 
 
 def _users_with(username: str, password: str) -> dict[str, str]:
@@ -190,7 +183,9 @@ def test_config_display_empty_model_configs_wraps_missing():
 
 
 def test_config_page_requires_auth():
-    app = create_app(make_settings(dashboard_enabled=True), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(
+        make_settings(dashboard_enabled=True), FakeManifest(None), _users_with("alice", "s3cret")
+    )
     response = TestClient(app).get("/dashboard/config")
     assert response.status_code == 401
 
@@ -202,7 +197,7 @@ def test_config_page_renders_redacted_html(tmp_path):
     features.write_text("[event_weights]\npurchase = 4.0\n")
     app = create_app(
         _secret_settings(top_k=25, feature_config_path=str(features)),
-        _FakeReader(),
+        FakeManifest(None),
         users,
         config_path="/app/config/cicerone.dashboard.toml",
     )
@@ -266,7 +261,7 @@ def test_config_page_unset_token_is_em_dash(tmp_path):
             dashboard_enabled=True,
             feature_config_path=str(tmp_path / "missing.toml"),
         ),
-        _FakeReader(),
+        FakeManifest(None),
         _users_with("alice", "s3cret"),
     )
     html = TestClient(app).get("/dashboard/config", auth=("alice", "s3cret")).text

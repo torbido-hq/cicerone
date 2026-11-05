@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from support.fakes import FakeReader
+from support.fakes import FakeManifest, FakeReader
 from support.settings import make_settings
 
 from cicerone.config import Settings
@@ -23,18 +23,6 @@ def _flash_cookie(response) -> str:
     return (response.cookies.get("cicerone_flash") or "").strip('"')
 
 
-class _FakeReader:
-    def __init__(self, latest: dict | None, history: list[dict] | None = None):
-        self._latest = latest
-        self._history = history if history is not None else ([latest] if latest else [])
-
-    def read_latest(self) -> dict | None:
-        return self._latest
-
-    def read_recent(self, limit: int) -> list[dict]:
-        return self._history[:limit]
-
-
 def _users_with(username: str, password: str) -> dict[str, str]:
     import bcrypt
 
@@ -42,14 +30,14 @@ def _users_with(username: str, password: str) -> dict[str, str]:
 
 
 def test_health_requires_no_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     assert client.get("/health").status_code == 200
 
 
 def test_robots_txt_disallows_all_without_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/robots.txt")
@@ -61,7 +49,7 @@ def test_robots_txt_disallows_all_without_auth():
 
 
 def test_dashboard_responses_are_not_indexable():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
     auth = ("alice", "s3cret")
 
@@ -92,7 +80,7 @@ def test_dashboard_responses_are_not_indexable():
 
 
 def test_dashboard_openapi_docs_are_disabled():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     assert client.get("/docs").status_code == 404
@@ -101,7 +89,7 @@ def test_dashboard_openapi_docs_are_disabled():
 
 
 def test_dashboard_page_requires_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard")
@@ -111,7 +99,7 @@ def test_dashboard_page_requires_auth():
 
 
 def test_dashboard_page_rejects_wrong_password():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("alice", "wrong"))
@@ -120,7 +108,7 @@ def test_dashboard_page_rejects_wrong_password():
 
 
 def test_dashboard_page_rejects_unknown_username():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("ghost", "s3cret"))
@@ -129,7 +117,7 @@ def test_dashboard_page_rejects_unknown_username():
 
 
 def test_dashboard_page_renders_with_valid_credentials():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("alice", "s3cret"))
@@ -178,7 +166,7 @@ def test_status_partial_renders_latest_manifest():
         "models": "collaborative,popular",
         "error": None,
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -222,7 +210,7 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     ]
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="webhook")),
-        _FakeReader(history[1], history=history),
+        FakeManifest(history[1], history=history),
         _users_with("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
@@ -246,7 +234,7 @@ def test_status_partial_hides_incremental_panel_when_events_disabled():
     ]
     app = create_app(
         _settings(),
-        _FakeReader(history[0], history=history),
+        FakeManifest(history[0], history=history),
         _users_with("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
@@ -260,7 +248,7 @@ def test_status_partial_renders_failed_run_with_error():
         "triggered_by": "webhook",
         "error": "boom: something broke",
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -272,7 +260,7 @@ def test_status_partial_renders_failed_run_with_error():
 
 def test_status_partial_marks_stale_run_as_stale():
     manifest = {"status": "success", "generated_at": "2020-01-01T00:00:00+00:00"}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -285,7 +273,7 @@ def test_status_partial_marks_stale_run_as_stale():
 
 def test_status_partial_history_limited_to_a_single_run_shows_dataset_backend_note():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -299,7 +287,7 @@ def test_status_partial_multiple_history_rows_no_dataset_backend_note():
     older = {"status": "failed", "generated_at": "2026-07-27T00:00:00+00:00", "error": "boom"}
     app = create_app(
         _settings(),
-        _FakeReader(manifest, history=[manifest, older]),
+        FakeManifest(manifest, history=[manifest, older]),
         _users_with("alice", "s3cret"),
     )
     client = TestClient(app)
@@ -336,7 +324,7 @@ def _run_main(monkeypatch, *, settings=None, rec_reader=None, history_reader=obj
 
     monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: settings or _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: FakeManifest(None))
     monkeypatch.setattr(
         "cicerone.dashboard.build_recommendation_reader",
         rec_reader or (lambda _output: FakeReader(pd.DataFrame())),
@@ -547,7 +535,7 @@ def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
     app = create_app(
         _settings(cron_schedule="not a cron expression"),
-        _FakeReader(manifest),
+        FakeManifest(manifest),
         _users_with("alice", "s3cret"),
     )
     client = TestClient(app)
@@ -575,7 +563,7 @@ def test_page_title_orders_status_then_user():
 
 def test_status_partial_unknown_status_is_not_success_green():
     manifest = {"status": None, "generated_at": datetime.now(UTC).isoformat()}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
 
     assert response.status_code == 200
@@ -593,7 +581,7 @@ def test_dashboard_page_failed_run_title():
         "generated_at": datetime.now(UTC).isoformat(),
         "error": "boom",
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
 
     assert "<title>failed · Cicerone dashboard</title>" in response.text
@@ -609,7 +597,7 @@ def test_status_partial_history_error_uses_disclosure_not_red_dash():
     }
     app = create_app(
         _settings(),
-        _FakeReader(manifest, history=[manifest, older]),
+        FakeManifest(manifest, history=[manifest, older]),
         _users_with("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
@@ -658,7 +646,7 @@ def _recs_client(
 ) -> TestClient:
     app = create_app(
         _settings(**settings_overrides),
-        _FakeReader(None),
+        FakeManifest(None),
         _users_with("alice", "s3cret"),
         rec_reader,
         history_reader,
@@ -1162,7 +1150,11 @@ def test_dashboard_inspect_matches_serve_response(tmp_path):
     )
     inspect = TestClient(
         create_app(
-            settings, _FakeReader(None), _users_with("alice", "s3cret"), reader, feature_config=feature_config
+            settings,
+            FakeManifest(None),
+            _users_with("alice", "s3cret"),
+            reader,
+            feature_config=feature_config,
         )
     ).get("/partials/recommendations", params={"user_id": user_id}, auth=("alice", "s3cret"))
 
@@ -1388,7 +1380,7 @@ def test_dashboard_docs_are_disabled():
 
 
 def test_dashboard_security_headers_on_health():
-    response = TestClient(create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))).get(
+    response = TestClient(create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))).get(
         "/health"
     )
     assert response.headers["x-frame-options"] == "DENY"
@@ -1397,13 +1389,13 @@ def test_dashboard_security_headers_on_health():
 
 
 def test_dashboard_malformed_bcrypt_hash_is_unauthorized():
-    app = create_app(_settings(), _FakeReader(None), {"alice": "not-a-valid-bcrypt-hash"})
+    app = create_app(_settings(), FakeManifest(None), {"alice": "not-a-valid-bcrypt-hash"})
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
     assert response.status_code == 401
 
 
 def test_dashboard_logout_returns_401():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), _users_with("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/logout")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Basic"
