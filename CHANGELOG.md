@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `mysql+pymysql://` `database_url`; `/track` answers 400 for an `event_id`
   over 255 characters or another text value over 65,535 bytes there. The job
   skips the eval report and recommendation history on MySQL with a warning.
+  Track writes on any other unsupported dialect fail with `ConfigError`.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
   impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings

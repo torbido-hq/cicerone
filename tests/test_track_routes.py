@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from types import SimpleNamespace
@@ -147,11 +148,17 @@ _TOO_LONG_FOR_MYSQL = [
     pytest.param({"user_id": "x" * 65536}, "user_id", id="user_id"),
     pytest.param({"variant": "é" * 32768}, "variant", id="variant-multibyte"),
 ]
+_TOO_LONG_VALUES = [pytest.param(param.values[0], id=param.id) for param in _TOO_LONG_FOR_MYSQL]
 
 
 def _post_track(tmp_path, output, *events):
     app = create_app(_settings(tmp_path, output=output), FakeReader(_recs_df()))
-    response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json=list(events))
+    # Stdlib JSON, because httpx's encoder can't send a lone surrogate.
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret", "Content-Type": "application/json"},
+        content=json.dumps(list(events)),
+    )
     return app.state.track_store, response
 
 
@@ -165,17 +172,20 @@ def test_post_track_too_long_value_returns_400_on_mysql(tmp_path, mysql_track_ou
     assert store.read_rows() == []
 
 
-@pytest.mark.parametrize(("overrides", "column"), _TOO_LONG_FOR_MYSQL)
-def test_post_track_too_long_value_is_accepted_on_other_backends(
-    tmp_path, non_mysql_track_output, overrides, column
-):
-    del column
+@pytest.mark.parametrize("overrides", _TOO_LONG_VALUES)
+def test_post_track_too_long_value_is_accepted_on_other_backends(tmp_path, non_mysql_track_output, overrides):
     store, response = _post_track(
         tmp_path, non_mysql_track_output, _impression(), _impression(**{"event_id": "too-long", **overrides})
     )
     assert response.status_code == 202
     assert response.json()["accepted"] == 2
     assert len(store.read_rows()) == 2
+
+
+def test_post_track_lone_surrogate_returns_400_on_mysql(tmp_path, mysql_track_output):
+    store, response = _post_track(tmp_path, mysql_track_output, _impression(), _impression(user_id="\ud800"))
+    assert response.status_code == 400
+    assert store.read_rows() == []
 
 
 def test_post_track_longest_values_are_accepted_on_every_backend(tmp_path, track_db_output):

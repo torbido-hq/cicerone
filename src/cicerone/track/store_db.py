@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.schema import CreateTable
 
+from cicerone.config.constants import ConfigError
 from cicerone.io.engines import LazyEngine, create_table_sql, is_mysql_family, quote_identifier
 from cicerone.io.options import require_option, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
@@ -39,7 +40,6 @@ _MYSQL_EVENT_ID_CHARS = 255
 _MYSQL_TEXT_BYTES = 65535
 # MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
 _EVENT_ID_TYPE = Text().with_variant(String(_MYSQL_EVENT_ID_CHARS, collation="utf8mb4_0900_bin"), "mysql")
-_ON_CONFLICT_INSERTS: dict[str, Any] = {"postgresql": postgresql_insert, "sqlite": sqlite_insert}
 _EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
 
 
@@ -64,13 +64,13 @@ class TrackDbBackend:
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=since)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
-        encoded = json.dumps(payload)
         if is_mysql_family(self.engine()):
             # Only here: a job always writes eval before history, so this warns once for both.
             logger.warning(
                 "Track eval and recommendation history aren't supported on MySQL yet; skipping them"
             )
             return lambda: None
+        encoded = json.dumps(payload)
         return lambda: self._write_eval_db(encoded)
 
     def read_eval(self) -> dict[str, Any] | None:
@@ -124,9 +124,10 @@ class TrackDbBackend:
             }
             for row in unique_event_rows(rows)
         ]
+        insert_rows = _insert_ignoring_duplicates(engine, table)
         on_mysql = is_mysql_family(engine)
         if on_mysql:
-            _reject_values_too_long_for_mysql(params)
+            _reject_values_mysql_cannot_store(params)
         with engine.begin() as conn:
             self._ensure_track_table(conn)
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
@@ -134,9 +135,8 @@ class TrackDbBackend:
             if not fresh:
                 return []
             self._fence.ensure()
-            # One key order across replicas, so overlapping batches can't deadlock on MySQL's row locks.
-            ordered = sorted(fresh, key=lambda row: row["event_id"]) if on_mysql else fresh
-            conn.execute(_insert_ignoring_duplicates(engine, table), ordered)
+            # Sorted so overlapping batches from other replicas lock in one order on MySQL.
+            conn.execute(insert_rows, sorted(fresh, key=lambda row: row["event_id"]) if on_mysql else fresh)
             self._fence.ensure()
             return fresh
 
@@ -200,12 +200,16 @@ class TrackDbBackend:
 
 def _insert_ignoring_duplicates(engine: Engine, table: Table) -> Insert:
     # Not INSERT IGNORE: that also turns too-long values and NOT NULL violations into warnings.
-    if is_mysql_family(engine):
-        stmt = mysql_insert(table)
-        return stmt.on_duplicate_key_update(event_id=stmt.inserted.event_id)
-    return _ON_CONFLICT_INSERTS[engine.dialect.name](table).on_conflict_do_nothing(
-        index_elements=["event_id"]
-    )
+    match engine.dialect.name:
+        case "mysql":
+            stmt = mysql_insert(table)
+            return stmt.on_duplicate_key_update(event_id=stmt.inserted.event_id)
+        case "postgresql":
+            return postgresql_insert(table).on_conflict_do_nothing(index_elements=["event_id"])
+        case "sqlite":
+            return sqlite_insert(table).on_conflict_do_nothing(index_elements=["event_id"])
+        case name:
+            raise ConfigError(f"The track table supports Postgres, SQLite and MySQL, not {name}")
 
 
 def _existing_event_ids(conn: Any, table: Table, event_ids: Sequence[str]) -> set[str]:
@@ -215,14 +219,13 @@ def _existing_event_ids(conn: Any, table: Table, event_ids: Sequence[str]) -> se
     return set(conn.scalars(select(table.c.event_id).where(table.c.event_id.in_(ids))))
 
 
-def _reject_values_too_long_for_mysql(rows: list[dict[str, Any]]) -> None:
+def _reject_values_mysql_cannot_store(rows: list[dict[str, Any]]) -> None:
     for row in rows:
+        if len(row["event_id"]) > _MYSQL_EVENT_ID_CHARS:
+            raise TrackNormalizeError(f"event_id is longer than {_MYSQL_EVENT_ID_CHARS} characters")
         for name, value in row.items():
-            if not isinstance(value, str):
-                continue
-            if name == "event_id":
-                size, limit, unit = len(value), _MYSQL_EVENT_ID_CHARS, "characters"
-            else:
-                size, limit, unit = len(value.encode()), _MYSQL_TEXT_BYTES, "bytes"
-            if size > limit:
-                raise TrackNormalizeError(f"{name} is longer than {limit} {unit}")
+            try:
+                if isinstance(value, str) and len(value.encode()) > _MYSQL_TEXT_BYTES:
+                    raise TrackNormalizeError(f"{name} is longer than {_MYSQL_TEXT_BYTES} bytes")
+            except UnicodeEncodeError as exc:
+                raise TrackNormalizeError(f"{name} is not valid UTF-8 text") from exc

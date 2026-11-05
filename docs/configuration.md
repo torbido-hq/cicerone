@@ -60,7 +60,13 @@ untrusted network. The Docker image doesn't ship the driver, so extend it to
 use MySQL. On MySQL, `POST /track` answers 400 for an `event_id` over 255
 characters or another text value over 65,535 UTF-8 bytes, and nothing from
 that batch is written. The job skips the eval report and recommendation
-history on MySQL with a logged warning; track ingest keeps working.
+history on MySQL with a logged warning; track ingest keeps working. By-source
+figures (Quality page, manifest) can be wrong on MySQL for impressions from
+older runs, because run history isn't written there yet. Requires MySQL 8.0 or
+later; CI tests 8.4. The store needs the `CREATE` privilege on first append.
+Run MySQL in strict mode: on a non-strict server an out-of-range `rank` can be
+clamped. A track table dropped while the store runs isn't recreated until
+restart.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.

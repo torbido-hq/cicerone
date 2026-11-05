@@ -9,7 +9,7 @@ from typing import Any, cast
 import pandas as pd
 import pytest
 from sqlalchemy import event, inspect, text
-from sqlalchemy.exc import DataError
+from sqlalchemy.exc import DataError, SQLAlchemyError
 from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
@@ -1254,6 +1254,32 @@ def test_track_db_creates_the_table_once_per_store_on_mysql(mysql_track_output) 
     assert len(store.read_rows()) == 2
 
 
+def test_track_db_retries_a_failed_create_on_mysql(mysql_track_output) -> None:
+    store = TrackStore(mysql_track_output)
+    failures = [RuntimeError("create failed")]
+
+    def fail_first_create(*args) -> None:
+        if "CREATE TABLE" in args[2] and failures:
+            raise failures.pop()
+
+    event.listen(store.backend.engine(), "before_cursor_execute", fail_first_create)
+    with pytest.raises(RuntimeError, match="create failed"):
+        store.append_rows([_row()])
+    assert store.append_rows([_row()]) == 1
+
+
+def test_track_db_dropped_table_stays_gone_until_a_new_store_on_mysql(mysql_track_output) -> None:
+    store = TrackStore(mysql_track_output)
+    store.append_rows([_row()])
+    engine = store.backend.engine()
+    with engine.begin() as conn:
+        table = quote_identifier(conn, mysql_track_output.options["track_table"])
+        conn.execute(text(f"DROP TABLE {table}"))
+    with pytest.raises(SQLAlchemyError):
+        store.append_rows([_row()])
+    assert TrackStore(mysql_track_output).append_rows([_row()]) == 1
+
+
 def test_track_db_creates_the_table_on_every_append_on_other_backends(non_mysql_track_output) -> None:
     store = TrackStore(non_mysql_track_output)
     statements = _capture_statements(store)
@@ -1317,6 +1343,12 @@ def test_track_db_inserts_in_key_order_on_mysql_and_reports_in_input_order(mysql
     assert [params["event_id"] for params in batches[-1]] == ["a", "b"]
 
 
+def test_track_db_keeps_input_order_on_other_backends(non_mysql_track_output) -> None:
+    store = TrackStore(non_mysql_track_output)
+    store.append_rows([_row(event_id="b"), _row(event_id="a")])
+    assert [row["event_id"] for row in store.read_rows()] == ["b", "a"]
+
+
 def test_track_db_rejects_values_mysql_would_clamp(mysql_track_output) -> None:
     # INSERT IGNORE would store the clamped value with only a warning.
     store = TrackStore(mysql_track_output)
@@ -1327,14 +1359,14 @@ def test_track_db_rejects_values_mysql_would_clamp(mysql_track_output) -> None:
     assert store.read_rows() == []
 
 
-def test_insert_for_an_unknown_dialect_fails() -> None:
+def test_insert_for_an_unsupported_dialect_names_the_supported_ones() -> None:
     from sqlalchemy import Column, Engine, MetaData, Table, Text
 
     from cicerone.track.store_db import _insert_ignoring_duplicates
 
     engine = SimpleNamespace(dialect=SimpleNamespace(name="oracle"))
     table = Table("track", MetaData(), Column("event_id", Text, primary_key=True))
-    with pytest.raises(KeyError, match="oracle"):
+    with pytest.raises(ConfigError, match="Postgres, SQLite and MySQL, not oracle"):
         _insert_ignoring_duplicates(cast(Engine, engine), table)
 
 
@@ -1356,8 +1388,11 @@ def test_track_db_read_filters_stay_exact(track_db_output) -> None:
             _row(event_id="accent", experiment_id="éxp"),
         ]
     )
+    statements = _capture_statements(store)
     assert {row["event_id"] for row in store.read_rows(experiment_id="exp")} == {"lower"}
+    assert any("experiment_id = " in sql for sql in statements)
     assert store.read_rows(kind="IMPRESSION") == []
+    assert any("kind = " in sql for sql in statements)
     assert len(store.read_rows(kind="impression")) == 3
 
 
@@ -1390,6 +1425,7 @@ _TOO_LONG_VALUES = [
     pytest.param({"experiment_id": "x" * 65536}, "experiment_id is longer", id="experiment_id"),
     pytest.param({"generated_at": "x" * 65536}, "generated_at is longer", id="generated_at"),
 ]
+_TOO_LONG_OVERRIDES = [pytest.param(param.values[0], id=param.id) for param in _TOO_LONG_VALUES]
 
 
 @pytest.mark.parametrize("overrides", _LONGEST_VALUES)
@@ -1413,11 +1449,24 @@ def test_track_db_rejects_a_batch_with_a_too_long_value_on_mysql(
     assert store.read_rows() == []
 
 
-@pytest.mark.parametrize(("overrides", "message"), _TOO_LONG_VALUES)
-def test_track_db_accepts_too_long_values_on_other_backends(
-    non_mysql_track_output, overrides, message
-) -> None:
-    del message
+@pytest.mark.parametrize("column", ["kind", "occurred_at"])
+def test_track_db_rejects_too_long_columns_normalize_bounds_on_mysql(mysql_track_output, column) -> None:
+    store = TrackStore(mysql_track_output)
+    with pytest.raises(TrackNormalizeError, match=f"{column} is longer than 65535 bytes"):
+        store.append_rows([{**_row(), column: "x" * 65536}])
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize("column", ["event_id", "user_id"])
+def test_track_db_rejects_a_lone_surrogate_on_mysql(mysql_track_output, column) -> None:
+    store = TrackStore(mysql_track_output)
+    with pytest.raises(TrackNormalizeError, match=f"{column} is not valid UTF-8 text"):
+        store.append_rows([{**_row(), column: "\ud800"}])
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize("overrides", _TOO_LONG_OVERRIDES)
+def test_track_db_accepts_too_long_values_on_other_backends(non_mysql_track_output, overrides) -> None:
     store = TrackStore(non_mysql_track_output)
     assert store.append_rows([_row(event_id="good"), _row(**{"event_id": "long", **overrides})]) == 2
     assert len(store.read_rows()) == 2
@@ -1439,6 +1488,8 @@ def test_persist_track_outputs_skips_eval_and_history_on_mysql(mysql_track_outpu
     assert "aren't supported on MySQL" in warnings[0].getMessage()
     assert store.read_eval() is None
     assert store.read_history().empty
+    store.write_eval({"ok": True})
+    store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
     tables = inspect(store.backend.engine()).get_table_names()
     assert not {"recommendation_eval", "recommendation_history"} & set(tables)
     assert store.append_rows([_row()]) == 1
