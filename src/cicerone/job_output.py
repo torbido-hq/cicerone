@@ -12,7 +12,7 @@ from cicerone.locks import LockLostError, WriteFence
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class JobManifest:
     triggered_by: str | None = None
     lock_backend: str | None = None

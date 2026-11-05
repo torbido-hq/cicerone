@@ -44,6 +44,7 @@ def test_write_job_manifest_writes_fields_as_dict() -> None:
     assert write_job_manifest(_Sink(), manifest) is True
     assert written[0]["triggered_by"] == "cron"
     assert written[0]["generated_at"] == "t"
+    assert written == [manifest.as_dict()]
 
 
 def test_write_job_manifest_returns_false_when_sink_skips() -> None:

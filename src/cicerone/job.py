@@ -584,8 +584,11 @@ def _write_job_outputs(
                     store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
                 ensure_publication_fence(sink, retrain)
                 # Compute first: a raise here must leave the manifest untouched, status included.
+                n_events = int(len(events))
+                n_target_users = len(target_users)
                 n_users_with_recommendations = _recommendation_user_count(recommendations)
                 n_items = int(built.dataset.item_id_map.external_ids.shape[0])
+                models = ",".join(run_models)
                 automl_metrics = (
                     ",".join(
                         f"{name}={automl_result.metrics[name]:.4f}" for name in sorted(automl_result.metrics)
@@ -596,11 +599,11 @@ def _write_job_outputs(
                 track_eval = json.dumps(run.track_eval_payload) if run.track_eval_payload else ""
                 served_eval = json.dumps(run.served_eval_payload) if run.served_eval_payload else ""
                 manifest.status = "success"
-                manifest.n_events = int(len(events))
-                manifest.n_target_users = len(target_users)
+                manifest.n_events = n_events
+                manifest.n_target_users = n_target_users
                 manifest.n_users_with_recommendations = n_users_with_recommendations
                 manifest.n_items = n_items
-                manifest.models = ",".join(run_models)
+                manifest.models = models
                 manifest.model_weights = model_weights_str
                 manifest.rrf_k = rrf_k if rrf_k is not None else RRF_K
                 manifest.automl_metrics = automl_metrics
@@ -609,7 +612,7 @@ def _write_job_outputs(
                 manifest.generated_at = datetime.now(UTC).isoformat()
                 ensure_publication_fence(sink, retrain)
                 # Set before writing, so a failure rewrite can replace a manifest that committed then raised.
-                result.success_generated_at = manifest.generated_at or ""
+                result.success_generated_at = manifest.generated_at
                 if write_job_manifest(sink, manifest):
                     result.manifest_written = True
                 else:
@@ -650,7 +653,7 @@ def _publish_job_sidecar(run: JobRun) -> None:
         retrain.ensure()
         publisher.connect()
         retrain.ensure()
-        current = sidecar_generation_current(run.settings.output, manifest.generated_at or "")
+        current = sidecar_generation_current(run.settings.output, str(manifest.generated_at))
         if current:
             publisher.publish(run.recommendations)
         else:

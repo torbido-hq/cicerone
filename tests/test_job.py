@@ -2519,7 +2519,11 @@ def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_pat
     assert logged["generated_at"] == manifest["generated_at"]
 
 
-def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
+# TypeError fails the job; ValueError takes the sink-error branch, which rewrites the manifest itself.
+@pytest.mark.parametrize("error_type", [TypeError, ValueError])
+def test_job_leaves_success_fields_unset_when_error_follows_recommendation_write(
+    tmp_path, monkeypatch, error_type
+):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -2531,17 +2535,23 @@ def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
     def boom(recommendations):
-        raise TypeError("bug after write")
+        raise error_type("bug after write")
 
     monkeypatch.setattr(job, "_recommendation_user_count", boom)
 
-    with pytest.raises(TypeError, match="bug after write"):
+    with pytest.raises(error_type, match="bug after write"):
         job.run()
 
     assert (output_dir / "recommendations.parquet").exists()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert manifest["partial_outputs"] is True
+    assert "bug after write" in manifest["error"]
+    assert manifest["n_events"] is None
+    assert manifest["n_target_users"] is None
+    assert manifest["n_users_with_recommendations"] is None
+    assert manifest["n_items"] is None
+    assert manifest["models"] == ""
 
 
 def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):

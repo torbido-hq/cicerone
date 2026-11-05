@@ -297,7 +297,9 @@ def test_build_publisher_kafka(monkeypatch):
     )
     publisher = build_publisher(settings)
     assert publisher is not None
+    assert publisher._producer is None
     publisher.connect()
+    assert publisher._producer is not None
     publisher.close()
 
 
@@ -319,20 +321,22 @@ def test_every_built_publisher_accepts_user_ids(kind):
 
 def test_missing_kafka_extra(monkeypatch):
     hide_module(monkeypatch, "confluent_kafka")
+    publisher = build_publisher(
+        PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
+    )
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
-        build_publisher(
-            PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
-        ).connect()
+        publisher.connect()
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
     hide_module(monkeypatch, "pika")
+    publisher = build_publisher(
+        PublishSettings(
+            enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
+        )
+    )
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
-        build_publisher(
-            PublishSettings(
-                enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
-            )
-        ).connect()
+        publisher.connect()
 
 
 def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig):
