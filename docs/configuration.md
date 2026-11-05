@@ -54,9 +54,10 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 The db events source and the eval and experiment-state tables support
 Postgres and SQLite, not MySQL. The track table also supports MySQL: install
 `pip install 'cicerone-recommender[mysql]'` (or `requirements-mysql.txt`) and
-use `database_url = "mysql+pymysql://user:password@host:3306/db"`. PyMySQL
-only uses TLS when asked, so add `?ssl_ca=/path/to/ca.pem` to the URL on an
-untrusted network. The Docker image doesn't ship the driver, so extend it to
+use `database_url = "mysql+pymysql://user:password@host:3306/db?ssl_ca=/path/to/ca.pem"`.
+`ssl_ca` turns on TLS and verifies the server's certificate and host name;
+PyMySQL uses plaintext without it, which is only suitable on a trusted local
+network. The Docker image doesn't ship the driver, so extend it to
 use MySQL. On MySQL, `POST /track` answers 400 for an `event_id` over 255
 characters or another text value over 65,535 UTF-8 bytes, and nothing from
 that batch is written. The job skips the eval report and recommendation

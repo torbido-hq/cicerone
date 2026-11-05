@@ -122,7 +122,7 @@ class TrackDbBackend:
                 column.name: row.get(column.name) if column.nullable else str(row.get(column.name) or "")
                 for column in table.c
             }
-            for row in unique_event_rows(rows)
+            for row in rows
         ]
         insert_rows = _insert_ignoring_duplicates(engine, table)
         on_mysql = is_mysql_family(engine)
@@ -131,7 +131,7 @@ class TrackDbBackend:
         with engine.begin() as conn:
             self._ensure_track_table(conn)
             existing = _existing_event_ids(conn, table, [row["event_id"] for row in params])
-            fresh = [row for row in params if not row["event_id"] or row["event_id"] not in existing]
+            fresh = unique_event_rows(params, existing)
             if not fresh:
                 return []
             self._fence.ensure()

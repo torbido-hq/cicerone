@@ -190,6 +190,29 @@ def test_post_track_lone_surrogate_returns_400_on_mysql(tmp_path, mysql_track_ou
     assert store.read_rows() == []
 
 
+_BAD_DUPLICATES = [
+    pytest.param({"user_id": "x" * 65536}, id="too-long"),
+    pytest.param({"user_id": "\ud800"}, id="lone-surrogate"),
+]
+
+
+@pytest.mark.parametrize("overrides", _BAD_DUPLICATES)
+def test_post_track_bad_duplicate_row_returns_400_on_mysql(tmp_path, mysql_track_output, overrides):
+    store, response = _post_track(tmp_path, mysql_track_output, _impression(), _impression(**overrides))
+    assert response.status_code == 400
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize("overrides", _BAD_DUPLICATES)
+def test_post_track_bad_duplicate_row_is_dropped_on_other_backends(
+    tmp_path, non_mysql_track_output, overrides
+):
+    store, response = _post_track(tmp_path, non_mysql_track_output, _impression(), _impression(**overrides))
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+    assert [row["user_id"] for row in store.read_rows()] == ["u1"]
+
+
 def test_post_track_longest_values_are_accepted_on_every_backend(tmp_path, track_db_output):
     _store, response = _post_track(
         tmp_path, track_db_output, _impression(event_id="x" * 255, user_id="é" * 32767 + "x")
