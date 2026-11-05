@@ -20,7 +20,7 @@ from cicerone.config.constants import (
 )
 from cicerone.evaluation.metrics import SliceMetrics
 from cicerone.experiment.recipes import ResolvedRecipe
-from cicerone.experiment.stats import pick_control_name
+from cicerone.io.recommendation_schema import pick_control_name
 from cicerone.values import utc_stamp
 
 _EMPTY = np.array([], dtype=object)

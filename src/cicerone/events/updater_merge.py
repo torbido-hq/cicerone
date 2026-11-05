@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from cicerone.events.store import empty_recommendations_frame
-from cicerone.experiment.stats import pick_control_name
 from cicerone.io.recommendation_reader import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -21,6 +20,7 @@ from cicerone.io.recommendation_schema import (
     VARIANT_COLUMN,
     collapse_mixed_variants,
     filter_variant_rows,
+    pick_control_name,
     pick_fallback_variant,
     recommendation_output_columns,
 )
@@ -111,7 +111,7 @@ class UpdaterMerge:
         allowed: frozenset[str] | None = None,
         allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
-        variants = self._variants_for()
+        variants = self._variant_names
         if not variants:
             prior = collapse_mixed_variants(prior)
             merged = self._merge_one_list(
@@ -127,7 +127,7 @@ class UpdaterMerge:
             return self._stamp_collapsed_variant(merged, prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = pick_control_name(variants)
-        # The cold-start sentinel has no events, so nothing is injected and it needs no assignment.
+        # An empty batch injects nothing, so it needs no assignment.
         assigned = None if batch.empty else self._assigned_variant(user_id) or primary
         empty_batch = batch.iloc[0:0]
         parts = []
@@ -159,9 +159,6 @@ class UpdaterMerge:
         if not parts:
             return empty_recommendations_frame()
         return pd.concat(parts, ignore_index=True)
-
-    def _variants_for(self) -> tuple[str, ...]:
-        return self._variant_names
 
     def _assigned_variant(self, user_id: str) -> str | None:
         if self._assign_variant is None:

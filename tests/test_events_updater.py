@@ -10,7 +10,7 @@ from support.events import dataset_updater, event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
-from cicerone.events.normalize import normalize_event
+from cicerone.events.normalize import events_to_dataframe, normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
@@ -1987,7 +1987,7 @@ def test_incremental_updater_does_not_restore_ineligible_cold_variant(
     [("None", None), ("nan", float("nan")), ("<NA>", pd.NA), ("NaT", pd.NaT)],
 )
 def test_cold_start_missing_variant_does_not_match_variant_named_like_it(
-    tmp_path, feature_config: FeatureConfig, name: str, missing: object
+    tmp_path, feature_config: FeatureConfig, monkeypatch, name: str, missing: object
 ) -> None:
     _settings, _sink, updater = dataset_updater(tmp_path, feature_config, variant_names=(name, "other"))
     row = {"user_id": COLD_START_USER_ID, "rank": 1, "score": 0.2, "source": "popular_fallback"}
@@ -1995,12 +1995,42 @@ def test_cold_start_missing_variant_does_not_match_variant_named_like_it(
         [{**row, "item_id": "unassigned", "variant": missing}, {**row, "item_id": "named", "variant": name}],
         dtype=object,
     )
-    empty = pd.DataFrame(columns=["user_id", "item_id"])
+    # A parquet round trip would turn every missing value into null, so load the frame as is.
+    monkeypatch.setattr(updater, "_load_users", lambda _user_ids: prior)
+    batch = events_to_dataframe([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="e1"))])
+    empty = pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
 
-    cold = updater._merge_user_rows(COLD_START_USER_ID, prior, empty, empty, empty)
+    merged, _replace_ids = updater._merge_affected(
+        batch,
+        updater._row_signal_weights(batch),
+        ["u1"],
+        {"u1", COLD_START_USER_ID},
+        empty,
+        empty,
+        {},
+    )
 
+    cold = merged[merged["user_id"] == COLD_START_USER_ID]
     assert cold["item_id"].tolist() == ["named"]
     assert cold["variant"].tolist() == [name]
+
+
+def test_incremental_updater_assigns_variants_only_for_users_with_events(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    assigned: list[str] = []
+
+    def assign(user_id: str) -> str:
+        assigned.append(user_id)
+        return "control"
+
+    _settings, _sink, updater = dataset_updater(
+        tmp_path, feature_config, variant_names=("control", "treatment"), assign_variant=assign
+    )
+
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="e1"))])
+
+    assert assigned == ["u1"]
 
 
 def test_incremental_updater_skips_users_read_without_user_scoped_rules(
