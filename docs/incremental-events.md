@@ -65,7 +65,7 @@ Same columns as batch input:
 | `user_id` | yes | string |
 | `item_id` | yes | string |
 | `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts, with `quantity` as its weight |
-| `quantity` | no | integer `>= 1`, default `1`. Webhook: a fractional, non-numeric or `< 1` value is a `400`. Other sources reject those too, but truncate a fractional number first (`1.5` applies as `1`, `0.5` is rejected) |
+| `quantity` | no | integer `>= 1`, default `1`; `2.0` and `"3"` count as whole numbers. Every source rejects a fractional, non-numeric or `< 1` value: a `400` on the webhook, logged and skipped elsewhere |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
 Optional transport fields:

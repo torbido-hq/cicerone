@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from support.events import event_payload
 
@@ -124,3 +126,17 @@ def test_normalize_more_edge_cases():
 def test_normalize_rejects_an_infinite_quantity(quantity):
     with pytest.raises(EventNormalizeError, match="quantity"):
         normalize_event(event_payload(quantity=quantity))
+
+
+@pytest.mark.parametrize("quantity", [1.5, 0.5, 2.0000001, "1.5", Decimal("1.5"), Decimal("0.5")])
+def test_normalize_rejects_a_fractional_quantity(quantity):
+    with pytest.raises(EventNormalizeError, match="quantity must be an integer"):
+        normalize_event(event_payload(quantity=quantity))
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [(2, 2), (2.0, 2), ("3", 3), (" 3 ", 3), (b"3", 3), (Decimal("2.00"), 2), (True, 1), (None, 1)],
+)
+def test_normalize_accepts_a_whole_number_quantity(quantity, expected):
+    assert normalize_event(event_payload(quantity=quantity)).quantity == expected

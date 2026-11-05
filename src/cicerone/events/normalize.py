@@ -63,6 +63,9 @@ def _parse_quantity(value: Any) -> int:
         return 1
     try:
         quantity = int(value)
+        # int() truncates numbers; text with a fraction already raised.
+        if not isinstance(value, (str, bytes, bytearray)) and quantity != value:
+            raise ValueError(value)
     except NUMBER_PARSE_ERRORS as exc:
         # OverflowError: JSON ``Infinity`` / ``1e400`` parse to float inf.
         raise EventNormalizeError("quantity must be an integer") from exc

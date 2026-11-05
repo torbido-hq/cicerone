@@ -1146,6 +1146,16 @@ def test_poison_entry_is_acked(monkeypatch):
     assert 1 in broker.connection.channel_obj.acked
 
 
+def test_fractional_quantity_is_acked(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", event_payload(event_id="bad", quantity=1.5))
+    broker.enqueue("cicerone.events", event_payload(event_id="ok", quantity=2.0))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    assert [(event.event_id, event.quantity) for event in source.poll(10)] == [("ok", 2)]
+    assert 1 in broker.connection.channel_obj.acked
+
+
 def test_ack_discard_tolerates_ack_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", b"not-json")

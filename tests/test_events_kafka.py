@@ -211,6 +211,16 @@ def test_poison_entry_is_committed(monkeypatch):
     assert (0, 1) in broker.committed
 
 
+def test_fractional_quantity_is_committed(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="bad", quantity=1.5))
+    broker.add("cicerone.events", event_payload(event_id="ok", quantity=2.0))
+    source = KafkaEventSource(kafka_source_options())
+    source.connect()
+    assert [(event.event_id, event.quantity) for event in source.poll(10)] == [("ok", 2)]
+    assert (0, 1) in broker.committed
+
+
 def test_bytes_json_payload(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     broker.add("cicerone.events", json.dumps(event_payload(event_id="e1")).encode())

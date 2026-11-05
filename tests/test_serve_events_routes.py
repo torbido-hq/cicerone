@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from support.events import event_payload
 from support.fakes import FakeReader
 from support.settings import make_settings
 from test_serve import _recs_df
@@ -209,6 +210,29 @@ def test_post_events_list_body_and_invalid_json_shape():
         content=b"null",
     )
     assert bad_shape.status_code == 400
+
+
+def _post_quantity(source: WebhookEventSource, quantity: object):
+    app = create_app(_settings(), FakeReader(_recs_df()), event_source=source)
+    return TestClient(app).post(
+        "/events",
+        headers={"Authorization": "Bearer secret"},
+        json=event_payload(quantity=quantity),
+    )
+
+
+@pytest.mark.parametrize("quantity", [1.5, 0.5, "1.5"])
+def test_post_events_rejects_a_fractional_quantity(quantity):
+    source = WebhookEventSource({})
+    assert _post_quantity(source, quantity).status_code == 400
+    assert source.health().lag == 0
+
+
+@pytest.mark.parametrize(("quantity", "expected"), [(2, 2), (2.0, 2), ("3", 3)])
+def test_post_events_accepts_a_whole_number_quantity(quantity, expected):
+    source = WebhookEventSource({})
+    assert _post_quantity(source, quantity).status_code == 202
+    assert [event.quantity for event in source.poll(1)] == [expected]
 
 
 def test_post_events_normalization_error_returns_400():
