@@ -191,7 +191,8 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
 
         batch = events_to_dataframe(events)
         weights = self._row_signal_weights(batch)
-        affected_users = sorted(set(batch[USER_COLUMN].astype(str)))
+        # The cold-start list has its own merge in _merge_affected.
+        affected_users = sorted(set(batch[USER_COLUMN].astype(str)) - {COLD_START_USER_ID})
         affected_set = set(affected_users) | {COLD_START_USER_ID}
         popular_ranking = self._popular_ranking(batch, weights)
         latest_ranking = self._latest_ranking(batch, weights)

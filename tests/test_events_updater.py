@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
@@ -1750,6 +1750,58 @@ def test_incremental_updater_keeps_batch_popular_and_cold_start(
     assert "viral" in set(u1["item_id"].astype(str))
     cold = frame[frame["user_id"] == COLD_START_USER_ID]
     assert list(cold["item_id"].astype(str)) == ["cold-keep"]
+
+
+def test_incremental_updater_cold_start_user_event_merges_cold_start_once(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "p1", "rank": 1, "score": 1.0, "source": "personalized"},
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "c1",
+                "rank": 1,
+                "score": 0.2,
+                "source": "popular_fallback",
+            },
+            {
+                "user_id": COLD_START_USER_ID,
+                "item_id": "c2",
+                "rank": 2,
+                "score": 0.1,
+                "source": "popular_fallback",
+            },
+        ]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    events = [
+        event_payload(user_id=COLD_START_USER_ID, item_id="x", event_id="s1"),
+        event_payload(user_id="u1", item_id="i9", event_id="s2"),
+    ]
+    assert updater.apply([normalize_event(event) for event in events]) == 2
+    assert updater.events_applied == 2
+    frame = load_recommendations_frame(settings.output)
+    cold = frame[frame["user_id"] == COLD_START_USER_ID].sort_values("rank")
+    assert cold["item_id"].astype(str).tolist() == ["c1", "c2"]
+    assert cold["rank"].astype(int).tolist() == [1, 2]
+    u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
+    assert u1["item_id"].astype(str).tolist() == ["i9", "p1", "x"]
+
+
+def test_incremental_updater_cold_start_user_event_creates_no_list(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "p1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    event = event_payload(user_id=COLD_START_USER_ID, item_id="x", event_id="s3")
+    assert updater.apply([normalize_event(event)]) == 1
+    assert updater.events_applied == 1
+    frame = load_recommendations_frame(settings.output)
+    assert frame[frame["user_id"] == COLD_START_USER_ID].empty
+    assert frame["item_id"].astype(str).tolist() == ["p1"]
 
 
 def test_incremental_updater_keeps_cold_start_top_k_by_rank(tmp_path, feature_config: FeatureConfig) -> None:
