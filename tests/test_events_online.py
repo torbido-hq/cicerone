@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from support.events import event_payload
+from support.settings import local_output
 
 from cicerone.artifact import ARTIFACT_FILENAME, build_artifact, dumps_artifact, loads_artifact
 from cicerone.config import (
@@ -78,9 +79,7 @@ def _write_artifact(
         model_weights=None,
         rrf_k=None,
     )
-    sink = build_output_sink(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)})
-    )
+    sink = build_output_sink(local_output(out))
     sink.write_model_artifact(dumps_artifact(artifact, hmac_key=hmac_key))
     pd.DataFrame(
         [
@@ -112,9 +111,7 @@ def _known_event(event_id: str):
 
 
 def test_online_trainer_rejects_bad_knobs(tmp_path):
-    sink = build_output_sink(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    sink = build_output_sink(local_output(tmp_path))
     with pytest.raises(ValueError, match="top_k"):
         OnlineTrainer(sink=sink, top_k=0, half_life_days=90, fit_partial_epochs=1, fit_min_events=1)
     with pytest.raises(ValueError, match="fit_partial_epochs"):
@@ -139,9 +136,7 @@ def test_online_trainer_rejects_bad_knobs(tmp_path):
             fit_min_events=1,
             max_extra_interactions=0,
         )
-    sink = build_output_sink(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    sink = build_output_sink(local_output(tmp_path))
     trainer = OnlineTrainer(
         sink=sink,
         top_k=3,
@@ -221,9 +216,7 @@ def test_online_trainer_refresh_does_not_persist_until_commit(
 
 
 def test_online_trainer_commit_without_pending(tmp_path):
-    sink = build_output_sink(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    sink = build_output_sink(local_output(tmp_path))
     trainer = OnlineTrainer(
         sink=sink,
         top_k=3,
@@ -398,7 +391,7 @@ def test_incremental_updater_splices_online_rows(tmp_path, feature_config: Featu
         ]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     sink = build_output_sink(settings.output)
@@ -444,7 +437,7 @@ def test_incremental_updater_does_not_cap_online_by_old_ranks(tmp_path, feature_
         ]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     online_rows = pd.DataFrame(
@@ -492,7 +485,7 @@ def test_incremental_updater_splices_overlapping_compound_sources(tmp_path, feat
         ]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     online_rows = pd.DataFrame(
@@ -547,7 +540,7 @@ def test_incremental_updater_splices_online_rows_across_variants(tmp_path, featu
         ]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     online_rows = pd.DataFrame(
@@ -590,7 +583,7 @@ def test_incremental_updater_busy_invalidates_online(tmp_path, feature_config: F
         out / "recommendations.parquet", index=False
     )
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
     )
     calls = {"invalidate": 0, "refresh": 0}
 
@@ -709,7 +702,7 @@ def test_start_events_runtime_challenger_variant_names(tmp_path, feature_config:
 
     runtime = start_events_runtime(
         make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            output=local_output(out),
             events=EventsSettings(
                 enabled=True,
                 kind="webhook",
@@ -820,9 +813,7 @@ def test_online_trainer_lock_lost(tmp_path, feature_config, sample_events, sampl
 
 
 def test_online_trainer_empty_events_skips_load(tmp_path):
-    sink = build_output_sink(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    sink = build_output_sink(local_output(tmp_path))
     trainer = OnlineTrainer(
         sink=sink,
         top_k=3,
@@ -892,9 +883,7 @@ def test_incremental_updater_online_trainer_replaces_personalized(
 ):
     sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
     settings = make_settings(
-        output=IOSettings(
-            kind="dataset", options={"storage_backend": "local", "path": str(tmp_path / "out")}
-        ),
+        output=local_output(tmp_path / "out"),
         top_k=5,
     )
     updater = IncrementalUpdater(
@@ -921,9 +910,7 @@ def test_incremental_updater_unknown_ids_keep_personalized(
 ):
     sink, _enabled = _write_artifact(tmp_path, feature_config, sample_events, sample_users, sample_items)
     settings = make_settings(
-        output=IOSettings(
-            kind="dataset", options={"storage_backend": "local", "path": str(tmp_path / "out")}
-        ),
+        output=local_output(tmp_path / "out"),
         top_k=5,
     )
     updater = IncrementalUpdater(
@@ -961,7 +948,7 @@ def test_incremental_updater_preserves_sequential_without_torch(
     ).to_parquet(out / "recommendations.parquet", index=False)
     monkeypatch.setattr("cicerone.events.online.sequential_extra_available", lambda: False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     updater = IncrementalUpdater(
@@ -986,7 +973,7 @@ def _failing_online_updater(tmp_path, feature_config: FeatureConfig, error: Base
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
 

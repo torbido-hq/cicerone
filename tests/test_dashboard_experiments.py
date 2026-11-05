@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from support.fakes import FakeLock, raising
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
@@ -43,8 +43,8 @@ def _settings(tmp_path, **experiment_overrides):
     experiment = ExperimentSettings(**params)
     return make_settings(
         feature_config_path=str(REPO_FEATURES),
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(inp)}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        input=local_output(inp),
+        output=local_output(out),
         experiment=experiment,
     )
 
@@ -287,7 +287,7 @@ def test_experiment_context_db_events(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -324,7 +324,7 @@ def test_experiment_context_db_events_missing_table(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",

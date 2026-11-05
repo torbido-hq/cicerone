@@ -6,9 +6,8 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 
-from cicerone.config import IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.http_security import CSRF_COOKIE
 from cicerone.track.store import TrackStore
@@ -24,8 +23,8 @@ def _settings(tmp_path, **overrides):
     return make_settings(
         **{
             "dashboard_enabled": True,
-            "output": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
-            "input": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+            "output": local_output(tmp_path),
+            "input": local_output(tmp_path),
             **overrides,
         }
     )

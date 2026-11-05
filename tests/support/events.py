@@ -6,12 +6,13 @@ import threading
 from collections.abc import Sequence
 from typing import Any
 
-from cicerone.config import IOSettings, make_settings
+from cicerone.config import make_settings
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.io.factory import build_output_sink
+from support.settings import local_output
 from support.waits import WAIT_SECONDS
 
 
@@ -61,7 +62,7 @@ def dataset_updater(tmp_path, feature_config, **kwargs):  # type: ignore[no-unty
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     sink = build_output_sink(settings.output)

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 
 from cicerone.config import Settings
 from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main
@@ -1099,7 +1099,7 @@ def test_dashboard_lookup_omits_variant_without_column():
 def test_dashboard_inspect_matches_serve_response(tmp_path):
     import re
 
-    from cicerone.config.settings import ExperimentSettings, IOSettings, VariantSettings
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
     from cicerone.experiment.assignment import assign_variant
     from cicerone.feature_config import FeatureConfig
     from cicerone.serve import create_app as create_serve_app
@@ -1138,7 +1138,7 @@ def test_dashboard_inspect_matches_serve_response(tmp_path):
     settings = _settings(
         mode="serve",
         serve_auth_token="secret",
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -1304,7 +1304,6 @@ def test_dashboard_promote_success_redirects(monkeypatch):
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
     out = tmp_path / "out"
@@ -1319,7 +1318,7 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
     )
     client = _recs_client(
         experiment=experiment,
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
     )
     token = _csrf_token(client)
     response = client.post(

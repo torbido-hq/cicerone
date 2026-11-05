@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from support.settings import local_output
 from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import (
     ConfigError,
-    IOSettings,
     load_eval_settings,
     load_experiment_settings,
     load_settings,
@@ -164,7 +164,7 @@ def test_make_settings_track_and_eval_dicts(tmp_path):
     settings = make_settings(
         track={"enabled": True, "min_impressions": 10},
         eval={"enabled": True, "ks": [5]},
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     assert settings.track.enabled is True
     assert settings.track.min_impressions == 10
