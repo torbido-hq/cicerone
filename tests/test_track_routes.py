@@ -13,7 +13,7 @@ from support.prometheus_metrics import registry_metric_value
 from support.settings import make_settings
 from test_serve import _recs_df
 
-from cicerone.config import EventsSettings, IOSettings
+from cicerone.config import ConfigError, EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.serve import app as serve_app
@@ -219,6 +219,23 @@ def test_post_track_longest_values_are_accepted_on_every_backend(tmp_path, track
     )
     assert response.status_code == 202
     assert response.json()["accepted"] == 1
+
+
+def _db_output(database_url):
+    return IOSettings(kind="db", options={"database_url": database_url})
+
+
+@pytest.mark.parametrize(
+    ("database_url", "backend"),
+    [("oracle+oracledb://u:p@host/db", "oracle"), ("mariadb+pymysql://u:p@host/db", "mariadb")],
+)
+def test_serve_refuses_to_start_on_an_unsupported_track_database(tmp_path, database_url, backend):
+    with pytest.raises(ConfigError, match=f"mysql, postgresql, sqlite, not {backend}"):
+        create_app(_settings(tmp_path, output=_db_output(database_url)), FakeReader(_recs_df()))
+
+
+def test_track_store_for_reads_and_eval_is_still_built_on_an_unsupported_database():
+    assert TrackStore(_db_output("oracle+oracledb://u:p@host/db")).backend is not None
 
 
 def test_post_track_idempotent(tmp_path):

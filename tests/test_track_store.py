@@ -1366,7 +1366,7 @@ def test_insert_for_an_unsupported_dialect_names_the_supported_ones() -> None:
 
     engine = SimpleNamespace(dialect=SimpleNamespace(name="oracle"))
     table = Table("track", MetaData(), Column("event_id", Text, primary_key=True))
-    with pytest.raises(ConfigError, match="Postgres, SQLite and MySQL, not oracle"):
+    with pytest.raises(ConfigError, match="mysql, postgresql, sqlite, not oracle"):
         _insert_ignoring_duplicates(cast(Engine, engine), table)
 
 

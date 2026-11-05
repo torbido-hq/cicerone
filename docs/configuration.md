@@ -67,7 +67,8 @@ older runs, because run history isn't written there yet. Requires MySQL 8.0 or
 later; CI tests 8.4. The store needs the `CREATE` privilege on first append.
 Run MySQL in strict mode: on a non-strict server an out-of-range `rank` can be
 clamped. A track table dropped while the store runs isn't recreated until
-restart.
+restart. With `[track]` enabled, serve refuses to start on a database other
+than Postgres, SQLite or MySQL.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.

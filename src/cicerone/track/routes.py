@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from cicerone.config import Settings
 from cicerone.errors import STORE_UNAVAILABLE_ERRORS, log_caught
 from cicerone.http_auth import optional_bearer_deps
-from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_dataset_writer_lock
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.metrics import record_track_ingest
 from cicerone.serve.code_samples import TRACK_PATH
 from cicerone.serve.events_routes import IngestSpec, read_ingest
@@ -39,16 +39,9 @@ def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
         record_track_ingest(kind=kind, status="accepted", count=count)
 
 
-def mount_track_routes(
-    app: FastAPI, settings: Settings, *, store: TrackStore | None = None
-) -> TrackStore | None:
-    if not settings.track.enabled:
+def mount_track_routes(app: FastAPI, settings: Settings, track_store: TrackStore | None) -> TrackStore | None:
+    if track_store is None:
         return None
-    track_store = (
-        store
-        if store is not None
-        else TrackStore(settings.output, fence=WriteFence(build_dataset_writer_lock(settings)))
-    )
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)
 

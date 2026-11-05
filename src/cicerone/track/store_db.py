@@ -14,6 +14,7 @@ from sqlalchemy import Column, Engine, Insert, Integer, MetaData, String, Table,
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
 from cicerone.config.constants import ConfigError
@@ -198,18 +199,31 @@ class TrackDbBackend:
         return empty_history_frame() if frame is None else frame
 
 
-def _insert_ignoring_duplicates(engine: Engine, table: Table) -> Insert:
+def _on_duplicate_key_insert(table: Table) -> Insert:
     # Not INSERT IGNORE: that also turns too-long values and NOT NULL violations into warnings.
-    match engine.dialect.name:
-        case "mysql":
-            stmt = mysql_insert(table)
-            return stmt.on_duplicate_key_update(event_id=stmt.inserted.event_id)
-        case "postgresql":
-            return postgresql_insert(table).on_conflict_do_nothing(index_elements=["event_id"])
-        case "sqlite":
-            return sqlite_insert(table).on_conflict_do_nothing(index_elements=["event_id"])
-        case name:
-            raise ConfigError(f"The track table supports Postgres, SQLite and MySQL, not {name}")
+    stmt = mysql_insert(table)
+    return stmt.on_duplicate_key_update(event_id=stmt.inserted.event_id)
+
+
+_INSERTS_IGNORING_DUPLICATES: dict[str, Callable[[Table], Insert]] = {
+    "mysql": _on_duplicate_key_insert,
+    "postgresql": lambda table: postgresql_insert(table).on_conflict_do_nothing(index_elements=["event_id"]),
+    "sqlite": lambda table: sqlite_insert(table).on_conflict_do_nothing(index_elements=["event_id"]),
+}
+
+
+def _require_track_dialect(name: str) -> None:
+    if name not in _INSERTS_IGNORING_DUPLICATES:
+        raise ConfigError(f"The track table supports {', '.join(_INSERTS_IGNORING_DUPLICATES)}, not {name}")
+
+
+def require_track_ingest_database(options: dict[str, Any]) -> None:
+    _require_track_dialect(make_url(require_option(options, "database_url", "db")).get_backend_name())
+
+
+def _insert_ignoring_duplicates(engine: Engine, table: Table) -> Insert:
+    _require_track_dialect(engine.dialect.name)
+    return _INSERTS_IGNORING_DUPLICATES[engine.dialect.name](table)
 
 
 def _existing_event_ids(conn: Any, table: Table, event_ids: Sequence[str]) -> set[str]:
