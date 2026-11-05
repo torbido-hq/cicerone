@@ -690,6 +690,42 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     source.ack(["unknown-id", events[0].event_id])
 
 
+def _two_batch_sqs_source(queue_name: str):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName=queue_name)["QueueUrl"]
+    for key in ("first", "second"):
+        _put_event(s3, f"{key}.json", event_payload(event_id=key))
+        sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification(f"{key}.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+    assert len(events) == 2
+    return sqs, queue_url, source, events
+
+
+def _fail_first_call(monkeypatch, client, method: str, error: Exception) -> list[str]:
+    """Patch ``method`` to raise ``error`` once, then call through; returns the receipts it was given."""
+    real = getattr(client, method)
+    receipts: list[str] = []
+
+    def call(**kwargs):
+        receipts.append(kwargs["ReceiptHandle"])
+        if len(receipts) == 1:
+            raise error
+        return real(**kwargs)
+
+    monkeypatch.setattr(client, method, call)
+    return receipts
+
+
+def _assert_error_logged_with_traceback(caplog, message: str) -> None:
+    records = [record for record in caplog.records if record.getMessage() == message]
+    assert [(record.name, record.levelno) for record in records] == [("cicerone.events.s3", logging.ERROR)]
+    assert records[0].exc_info is not None
+
+
 def _sqs_held(sqs, queue_url: str) -> int:
     attrs = sqs.get_queue_attributes(
         QueueUrl=queue_url,
@@ -802,11 +838,7 @@ def test_s3_sqs_malformed_release_client_error_is_logged(monkeypatch, caplog):
     with caplog.at_level("ERROR"):
         assert list(source.poll(10)) == []
     assert _sqs_held(sqs, queue_url) == 1
-    assert (
-        "cicerone.events.s3",
-        logging.ERROR,
-        "Failed to release malformed S3 notification for retry",
-    ) in caplog.record_tuples
+    _assert_error_logged_with_traceback(caplog, "Failed to release malformed S3 notification for retry")
 
 
 @mock_aws
@@ -1147,7 +1179,8 @@ def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch, caplog):
         health = source.health()
     assert health.connected is True
     assert health.lag == 0
-    assert ("cicerone.events.s3", logging.ERROR, "Failed to estimate SQS event lag") in caplog.record_tuples
+    assert "sqs_lag=unavailable" in health.detail
+    _assert_error_logged_with_traceback(caplog, "Failed to estimate SQS event lag")
 
 
 @mock_aws
@@ -1259,50 +1292,29 @@ def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
     assert held == 1
 
 
+@pytest.mark.parametrize("error", [RuntimeError("delete bug"), BotoCoreError()])
 @mock_aws
-def test_s3_sqs_ack_delete_unexpected_error_is_logged(monkeypatch, caplog):
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-delete-unexpected")["QueueUrl"]
-    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    events = list(source.poll(10))
-
-    def boom(**kwargs):
-        raise RuntimeError("delete bug")
-
-    monkeypatch.setattr(source._sqs, "delete_message", boom)
+def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeypatch, caplog, error):
+    sqs, queue_url, source, events = _two_batch_sqs_source("events-delete-error")
+    calls = _fail_first_call(monkeypatch, source._sqs, "delete_message", error)
+    event_ids = [event.event_id for event in events]
     with caplog.at_level("ERROR"):
-        source.ack([events[0].event_id])
-    assert (
-        "cicerone.events.s3",
-        logging.ERROR,
-        "Failed to delete SQS message after ack",
-    ) in caplog.record_tuples
+        assert source.ack(event_ids) == tuple(event_ids)
+    assert len(set(calls)) == 2
+    assert _sqs_held(sqs, queue_url) == 1
+    _assert_error_logged_with_traceback(caplog, "Failed to delete SQS message after ack")
 
 
+@pytest.mark.parametrize("error", [RuntimeError("visibility bug"), BotoCoreError()])
 @mock_aws
-def test_s3_sqs_visibility_unexpected_error_is_logged(monkeypatch, caplog):
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-vis-unexpected")["QueueUrl"]
-    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    events = list(source.poll(10))
-
-    def boom(**kwargs):
-        raise RuntimeError("visibility bug")
-
-    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
+def test_s3_sqs_visibility_error_is_logged_and_events_are_redelivered(monkeypatch, caplog, error):
+    _, _, source, events = _two_batch_sqs_source("events-vis-error")
+    calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", error)
     with caplog.at_level("ERROR"):
-        source.nack(events)
-    assert ("cicerone.events.s3", logging.ERROR, "Failed to extend SQS visibility") in caplog.record_tuples
+        assert source.nack(events) == ()
+    assert len(set(calls)) == 2
+    assert [event.event_id for event in source.poll(2)] == [event.event_id for event in events]
+    _assert_error_logged_with_traceback(caplog, "Failed to extend SQS visibility")
 
 
 @mock_aws
@@ -1327,49 +1339,3 @@ def test_s3_sqs_load_client_error_leaves_message(monkeypatch):
     )["Attributes"]
     held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
     assert held == 1
-
-
-@mock_aws
-def test_s3_sqs_ack_delete_client_error_is_logged(monkeypatch, caplog):
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-delete-client")["QueueUrl"]
-    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    events = list(source.poll(10))
-
-    def boom(**kwargs):
-        raise BotoCoreError()
-
-    monkeypatch.setattr(source._sqs, "delete_message", boom)
-    with caplog.at_level("ERROR"):
-        source.ack([events[0].event_id])
-    assert (
-        "cicerone.events.s3",
-        logging.ERROR,
-        "Failed to delete SQS message after ack",
-    ) in caplog.record_tuples
-
-
-@mock_aws
-def test_s3_sqs_visibility_client_error_is_logged(monkeypatch, caplog):
-    s3 = boto3.client("s3", region_name="us-east-1")
-    sqs = boto3.client("sqs", region_name="us-east-1")
-    s3.create_bucket(Bucket="events-bucket")
-    queue_url = sqs.create_queue(QueueName="events-vis-client")["QueueUrl"]
-    _put_event(s3, "ok.json", event_payload(event_id="ok-sqs"))
-    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
-    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
-    source.connect()
-    events = list(source.poll(10))
-
-    def boom(**kwargs):
-        raise BotoCoreError()
-
-    monkeypatch.setattr(source._sqs, "change_message_visibility", boom)
-    with caplog.at_level("ERROR"):
-        source.nack(events)
-    assert ("cicerone.events.s3", logging.ERROR, "Failed to extend SQS visibility") in caplog.record_tuples
