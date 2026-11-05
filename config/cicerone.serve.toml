@@ -70,7 +70,7 @@ metrics_enabled = false
 # enabled = true
 # attribution_window_hours = 24
 # conversion_event_types = ["purchase"]
-# [serve]
+# and in the [serve] table above:
 # log_impressions = false         # GET lookup is not a view; host should POST /track
 
 # [input] is required by config.load_settings() even in serve mode (kept
