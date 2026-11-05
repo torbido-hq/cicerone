@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
@@ -67,6 +67,14 @@ class _BoundedSeen:
 
 
 __all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
+
+
+def _return_after_error(return_events: Callable[[], object]) -> None:
+    # Runs while another error propagates: a failed return is logged so that error wins.
+    try:
+        return_events()
+    except Exception:
+        logger.exception("Event worker cleanup after an error failed")
 
 
 class EventWorker:
@@ -484,7 +492,7 @@ class EventWorker:
             repaired = True
         finally:
             if not repaired and ready:
-                self._return_events(ready)
+                _return_after_error(lambda: self._return_events(ready))
         return self._flush_ready(ready) if ready else 0
 
     def _repair_post_write(self) -> None:
@@ -561,15 +569,20 @@ class EventWorker:
                     logger.info("Stop drain skipped: apply lease held by another replica")
                     leftover.extend(self._take_pending_acks())
                     self._return_events(leftover)
-                    return
-                try:
-                    self._flush_ready(leftover)
-                finally:
-                    self._release_apply_lock()
-        finally:
-            pending = self._take_pending_acks()
-            if pending:
-                self._return_events(pending)
+                else:
+                    try:
+                        self._flush_ready(leftover)
+                    finally:
+                        self._release_apply_lock()
+        except BaseException:
+            _return_after_error(self._return_pending_acks)
+            raise
+        self._return_pending_acks()
+
+    def _return_pending_acks(self) -> None:
+        pending = self._take_pending_acks()
+        if pending:
+            self._return_events(pending)
 
     def _flush_ready(self, ready: list[NormalizedEvent]) -> int:
         # Rejected events are never applied; they ride along with the batch to its ack.
@@ -579,7 +592,7 @@ class EventWorker:
         except Exception as exc:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
-            self._return_events(ready)
+            _return_after_error(lambda: self._return_events(ready))
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -617,19 +630,22 @@ class EventWorker:
                 post_write_failed = True
         except HeartbeatError:
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
-            return self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
+            return 0
         except LockLostError as exc:
             if exc.kind == "apply":
                 update_events_leader(False)
             logger.error("%s; nacking %d event(s)", exc, len(ready))
-            return self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
+            return 0
         except WriterLockBusyError as exc:
             record_events_apply_busy(reason="lock")
             logger.info("%s; nacking %d event(s)", exc, len(ready))
-            return self._reject(ready, "busy")
+            _return_after_error(lambda: self._reject(ready, "busy"))
+            return 0
         except Exception as exc:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
-            self._reject(ready, "error")
+            _return_after_error(lambda: self._reject(ready, "error"))
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -684,8 +700,10 @@ class EventWorker:
 
     def _reject(self, ready: list[NormalizedEvent], status: str) -> int:
         record_events_flush(status=status)
-        self._updater.abort_online()
-        self._return_events(ready)
+        try:
+            self._updater.abort_online()
+        finally:
+            self._return_events(ready)
         return 0
 
     def _ack_replayed(
@@ -703,7 +721,7 @@ class EventWorker:
             logger.exception("Event source ack failed for already-applied event(s); retrying later")
         except Exception:
             record_events_flush(status="error")
-            self._return_events(fresh)
+            _return_after_error(lambda: self._return_events(fresh))
             raise
         return fresh
 
