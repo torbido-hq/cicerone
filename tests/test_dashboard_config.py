@@ -6,16 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest
 from support.settings import make_settings
+from support.system_spec import dashboard_users
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.dashboard_config import MISSING, REDACTED, _normalize, config_display
-
-
-def _users_with(username: str, password: str) -> dict[str, str]:
-    import bcrypt
-
-    return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
 
 
 def _section(display: dict, section_id: str) -> dict:
@@ -184,14 +179,14 @@ def test_config_display_empty_model_configs_wraps_missing():
 
 def test_config_page_requires_auth():
     app = create_app(
-        make_settings(dashboard_enabled=True), FakeManifest(None), _users_with("alice", "s3cret")
+        make_settings(dashboard_enabled=True), FakeManifest(None), dashboard_users("alice", "s3cret")
     )
     response = TestClient(app).get("/dashboard/config")
     assert response.status_code == 401
 
 
 def test_config_page_renders_redacted_html(tmp_path):
-    users = _users_with("alice", "s3cret")
+    users = dashboard_users("alice", "s3cret")
     hash_value = users["alice"]
     features = tmp_path / "features.toml"
     features.write_text("[event_weights]\npurchase = 4.0\n")
@@ -262,7 +257,7 @@ def test_config_page_unset_token_is_em_dash(tmp_path):
             feature_config_path=str(tmp_path / "missing.toml"),
         ),
         FakeManifest(None),
-        _users_with("alice", "s3cret"),
+        dashboard_users("alice", "s3cret"),
     )
     html = TestClient(app).get("/dashboard/config", auth=("alice", "s3cret")).text
     assert "super-secret" not in html
