@@ -86,6 +86,27 @@ def test_load_experiment_rejects_traffic_over_one():
         )
 
 
+def test_load_experiment_variant_null_weights_fall_back_to_model_weights():
+    settings = load_experiment_settings(
+        {"variants": [{"name": "a", "weights": None, "model_weights": {"latest": 1}}]}
+    )
+    assert settings.variants[0].model_weights == {"latest": 1.0}
+
+
+def test_load_experiment_variant_weights_prefer_weights_over_model_weights():
+    variants = [
+        {"name": "a", "weights": {"popular": 2}, "model_weights": {"latest": 9}},
+        {"name": "b", "model_weights": {"latest": 1}},
+    ]
+    a, b = load_experiment_settings({"variants": variants}).variants
+    assert a.model_weights == {"popular": 2.0}
+    assert b.model_weights == {"latest": 1.0}
+    with pytest.raises(ConfigError, match=r"variants\[b\].weights value\(s\) must be non-negative"):
+        load_experiment_settings({"variants": [{"name": "b", "model_weights": {"latest": -1}}]})
+    with pytest.raises(ConfigError, match=r"variants\[b\].weights must be a table of model name -> weight"):
+        load_experiment_settings({"variants": [{"name": "b", "weights": 1}]})
+
+
 def test_load_experiment_requires_id_and_two_variants():
     with pytest.raises(ConfigError, match="experiment.id"):
         load_experiment_settings({"enabled": True, "variants": [{"name": "a"}, {"name": "b"}]})

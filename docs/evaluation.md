@@ -43,6 +43,8 @@ enabled = true
 **rendered** (or a list / `{"events":[...]}`) — not one row per GET.
 Impressions require `rank >= 1`. Clicks may omit `rank`. Optional
 `variant`, `experiment_id`, `generated_at`, `event_id` (idempotency).
+On a MySQL output, an `event_id` over 255 characters or another text value
+over 65,535 UTF-8 bytes returns 400.
 Bodies larger than the configured limit return 413; the default is 1 MiB.
 The endpoint shares the events request-body limit; override it, even in a
 track-only deployment, with:
@@ -120,7 +122,8 @@ least `min_impressions` **users** (any `primary_metric`). It does not
 change the CTR formula and does not hide the Quality page.
 
 The job writes a compact `track_eval` report (overall, by rank, by `source`,
-by variant). The dashboard **Quality** page reads it.
+by variant). The dashboard **Quality** page reads it. On a MySQL output the
+job skips this report and the recommendation history, with a logged warning.
 
 ## Auto-impressions
 

@@ -172,7 +172,7 @@ def start_events_runtime(
             "apply",
         ),
     )
-    publisher = build_publisher(settings, connect=False)
+    publisher = build_publisher(settings)
     worker: EventWorker | None = None
     ready = False
     try:

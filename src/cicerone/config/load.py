@@ -6,6 +6,7 @@ import logging
 import os
 import tomllib
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +25,7 @@ from cicerone.config.constants import (
     DEFAULT_SERVE_MAX_K,
     DEFAULT_TOP_K,
     LOCK_BACKENDS,
+    MAX_PORT,
     MODES,
     PRIMARY_METRIC_CONVERSION,
     PRIMARY_METRIC_CTR,
@@ -48,6 +50,7 @@ from cicerone.config.unknown_keys import warn_unknown_keys
 from cicerone.config.validation import (
     float_field,
     int_field,
+    require_int_in_range,
     require_non_negative_int,
     require_positive_float,
     require_positive_int,
@@ -55,6 +58,7 @@ from cicerone.config.validation import (
     resolve_epoch_metrics,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,11 +86,13 @@ def _optional_env(raw: dict[str, Any], key: str, path: str) -> Any:
     return resolve_env_placeholders(raw[key], path) if key in raw else None
 
 
-def _serve_default_k(serve_raw: dict[str, Any]) -> int:
-    value = int_field(serve_raw, "serve.default_k", ServeSettings.default_k, require_positive_int)
-    if value > DEFAULT_SERVE_MAX_K:
-        raise ConfigError(f"serve.default_k must be <= {DEFAULT_SERVE_MAX_K}, got {value}")
-    return value
+def _port(raw: dict[str, Any], name: str, default: int) -> int:
+    port = int_field(raw, name, default, partial(require_int_in_range, minimum=0, maximum=MAX_PORT))
+    if port == 0:
+        logger.warning(
+            "%s = 0 (any free port) is deprecated and will be rejected in 0.9.0; set a fixed port", name
+        )
+    return port
 
 
 def _load_serve_settings(serve_raw: dict[str, Any], mode: str) -> ServeSettings:
@@ -105,9 +111,14 @@ def _load_serve_settings(serve_raw: dict[str, Any], mode: str) -> ServeSettings:
         raise ConfigError("serve.metrics_token is required when serve.metrics_enabled = true")
     return ServeSettings(
         host=serve_raw.get("host", ServeSettings.host),
-        port=int(serve_raw.get("port", ServeSettings.port)),
+        port=_port(serve_raw, "serve.port", ServeSettings.port),
         auth_token=auth_token,
-        default_k=_serve_default_k(serve_raw),
+        default_k=int_field(
+            serve_raw,
+            "serve.default_k",
+            ServeSettings.default_k,
+            partial(require_int_in_range, minimum=1, maximum=DEFAULT_SERVE_MAX_K),
+        ),
         refresh_interval_seconds=float_field(
             serve_raw,
             "serve.refresh_interval_seconds",
@@ -141,7 +152,7 @@ def _load_trigger_settings(trigger_raw: dict[str, Any]) -> TriggerSettings:
     return TriggerSettings(
         enabled=enabled,
         host=trigger_raw.get("host", TriggerSettings.host),
-        port=int(trigger_raw.get("port", TriggerSettings.port)),
+        port=_port(trigger_raw, "job.trigger.port", TriggerSettings.port),
         auth_token=auth_token,
         debounce_seconds=float_field(
             trigger_raw,
@@ -187,7 +198,7 @@ def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings
     return DashboardSettings(
         enabled=enabled,
         host=dashboard_raw.get("host", DashboardSettings.host),
-        port=int(dashboard_raw.get("port", DashboardSettings.port)),
+        port=_port(dashboard_raw, "dashboard.port", DashboardSettings.port),
         users_path=dashboard_raw.get("users_path", DashboardSettings.users_path),
         refresh_interval_seconds=float_field(
             dashboard_raw,
@@ -302,19 +313,22 @@ def make_settings(**overrides: Any) -> Settings:
     )
     base.update(overrides)
     if base.get("model_configs") is None:
-        from cicerone.model_config import item_based_k_from_config, resolve_model_configs
-
-        k_neighbors = int(base["item_based_k_neighbors"])
-        k_explicit = "item_based_k_neighbors" in overrides
-        configs = resolve_model_configs(
-            legacy_k_neighbors=k_neighbors,
-            legacy_k_neighbors_explicit=k_explicit,
+        base["model_configs"], base["item_based_k_neighbors"] = _resolve_model_configs(
+            None, overrides.get("item_based_k_neighbors")
         )
-        base["model_configs"] = configs
-        k_from_cfg = item_based_k_from_config(configs["item_based"])
-        if k_from_cfg is not None:
-            base["item_based_k_neighbors"] = k_from_cfg
+    else:
+        require_positive_int(int(base["item_based_k_neighbors"]), name="job.item_based.k_neighbors")
     return _finalize_settings(Settings(**base))
+
+
+def _resolve_model_configs(
+    raw_model: dict[str, Any] | None, k_neighbors: int | None
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """``model_configs`` and the effective item_based ``K``."""
+    from cicerone.model_config import resolve_model_configs
+
+    configs = resolve_model_configs(raw_model, legacy_k_neighbors=k_neighbors)
+    return configs, int(configs["item_based"]["model"]["K"])
 
 
 def _finalize_settings(settings: Settings) -> Settings:
@@ -468,11 +482,7 @@ def load_settings(config_path: str | None = None) -> Settings:
             raise ConfigError(
                 f"job.models contains unknown model(s) {unknown_models}; available: {list(STRATEGY_NAMES)}"
             )
-    model_weights = (
-        {name: float(weight) for name, weight in job["model_weights"].items()}
-        if "model_weights" in job
-        else None
-    )
+    model_weights = weights_field(job, "model_weights", context="job.model_weights")
     validate_model_weights(model_weights, context="job.model_weights")
     if model_weights is not None and models is not None:
         unknown_weights = [name for name in model_weights if name not in models]
@@ -503,23 +513,13 @@ def load_settings(config_path: str | None = None) -> Settings:
     item_based = job.get("item_based", {}) or {}
     content_fallback = job.get("content_fallback", {}) or {}
     sequential = job.get("sequential", {}) or {}
-    legacy_k_explicit = "k_neighbors" in item_based
-    legacy_k_neighbors = int_field(
-        item_based, "job.item_based.k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS, require_positive_int
-    )
-
-    from cicerone.model_config import item_based_k_from_config, resolve_model_configs
-
-    model_configs = resolve_model_configs(
+    model_configs, item_based_k_neighbors = _resolve_model_configs(
         raw.get("model"),
-        legacy_k_neighbors=legacy_k_neighbors,
-        legacy_k_neighbors_explicit=legacy_k_explicit,
-    )
-    resolved_k = item_based_k_from_config(model_configs["item_based"])
-    item_based_k_neighbors = (
-        require_positive_int(resolved_k, name="model.item_based.model.K")
-        if resolved_k is not None
-        else legacy_k_neighbors
+        int_field(
+            item_based, "job.item_based.k_neighbors", DEFAULT_ITEM_BASED_K_NEIGHBORS, require_positive_int
+        )
+        if "k_neighbors" in item_based
+        else None,
     )
 
     settings = Settings(

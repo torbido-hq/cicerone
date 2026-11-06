@@ -106,7 +106,6 @@ def test_build_strategy_model_matches_model_from_config():
 def test_legacy_k_neighbors_translates_to_model_K():
     configs = resolve_model_configs(
         legacy_k_neighbors=15,
-        legacy_k_neighbors_explicit=True,
     )
     assert configs["item_based"]["model"]["K"] == 15
     model = model_from_config(configs["item_based"])
@@ -342,7 +341,6 @@ def test_legacy_k_neighbors_creates_model_dict_when_absent():
     configs = apply_legacy_item_based_k_neighbors(
         {"item_based": {"cls": "ImplicitItemKNNWrapperModel"}},
         k_neighbors=7,
-        k_neighbors_explicit=True,
     )
     assert configs["item_based"]["model"]["K"] == 7
 

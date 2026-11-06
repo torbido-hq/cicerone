@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from cicerone.blending import COLD_START_USER_ID
 from cicerone.events.store import empty_recommendations_frame
 from cicerone.io.recommendation_reader import (
     ITEM_COLUMN,
@@ -17,11 +16,11 @@ from cicerone.io.recommendation_reader import (
     USER_COLUMN,
 )
 from cicerone.io.recommendation_schema import (
-    FALLBACK_VARIANT,
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
     filter_variant_rows,
+    pick_control_name,
     pick_fallback_variant,
     recommendation_output_columns,
 )
@@ -112,7 +111,7 @@ class UpdaterMerge:
         allowed: frozenset[str] | None = None,
         allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
     ) -> pd.DataFrame:
-        variants = self._variants_for()
+        variants = self._variant_names
         if not variants:
             prior = collapse_mixed_variants(prior)
             merged = self._merge_one_list(
@@ -127,8 +126,9 @@ class UpdaterMerge:
             )
             return self._stamp_collapsed_variant(merged, prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
-        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
-        assigned = self._assigned_variant(user_id) or primary
+        primary = pick_control_name(variants)
+        # An empty batch injects nothing, so it needs no assignment.
+        assigned = None if batch.empty else self._assigned_variant(user_id) or primary
         empty_batch = batch.iloc[0:0]
         parts = []
         for variant in variants:
@@ -160,17 +160,11 @@ class UpdaterMerge:
             return empty_recommendations_frame()
         return pd.concat(parts, ignore_index=True)
 
-    def _variants_for(self) -> tuple[str, ...]:
-        return self._variant_names
-
     def _assigned_variant(self, user_id: str) -> str | None:
-        if self._assign_variant is not None:
-            name = self._assign_variant(user_id)
-            return str(name) if name else None
-        variants = self._variant_names
-        if not variants:
+        if self._assign_variant is None:
             return None
-        return FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
+        name = self._assign_variant(user_id)
+        return str(name) if name else None
 
     def _stamp_collapsed_variant(self, merged: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
         if merged.empty or VARIANT_COLUMN not in prior.columns or prior.empty:
@@ -215,15 +209,17 @@ class UpdaterMerge:
             .drop_duplicates()
             .tolist()
         )
-        boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         if allowed is not None:
             boost_items = [item_id for item_id in boost_items if item_id in allowed]
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
+        slots = boost_items[:boost_slots]
+        moved_ids = set(slots) & preserved_ids
+        new_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         boost = pd.DataFrame(
             [
                 {
                     ITEM_COLUMN: item_id,
-                    SCORE_COLUMN: float(len(boost_items) - index),
+                    SCORE_COLUMN: float(len(new_items) - index),
                     SOURCE_COLUMN: INCREMENTAL_SOURCE,
                     **(
                         {REASONS_COLUMN: dump_source_reasons(INCREMENTAL_SOURCE, rank=index + 1)}
@@ -231,14 +227,24 @@ class UpdaterMerge:
                         else {}
                     ),
                 }
-                for index, item_id in enumerate(boost_items[:boost_slots])
+                for index, item_id in enumerate(new_items)
+                if item_id in slots
             ]
         )
-        preserve_cap = max(0, self._top_k - boost_slots)
-        if not kept.empty:
-            if RANK_COLUMN in kept.columns:
-                kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
-            kept = kept.head(preserve_cap)
+        # New-only flushes leave unused slots to popular / latest backfill.
+        preserve_cap = max(0, self._top_k - (len(slots) if moved_ids else boost_slots))
+        if RANK_COLUMN in kept.columns:
+            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+        slot_rows = boost
+        if moved_ids:
+            rows = pd.concat(
+                [frame for frame in (online_part, kept, boost) if not frame.empty], ignore_index=True
+            )
+            slot_rows = rows.loc[rows[ITEM_COLUMN].astype(str).isin(slots)].sort_values(
+                ITEM_COLUMN, key=lambda ids: ids.astype(str).map(slots.index), kind="mergesort"
+            )
+            kept = kept.loc[~kept[ITEM_COLUMN].astype(str).isin(moved_ids)]
+        kept = kept.head(preserve_cap)
         preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
         preserved = (
             pd.concat(preserved_parts, ignore_index=True)
@@ -250,7 +256,7 @@ class UpdaterMerge:
         # Unknown/zero-weight events must not rewrite popular-only users.
         popular = _restrict_items(popular, allowed)
         latest = _restrict_items(latest, allowed)
-        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
+        parts = [frame for frame in (slot_rows, preserved, popular, latest) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()
@@ -287,42 +293,3 @@ class UpdaterMerge:
         else:
             kept = empty
         return online, kept
-
-    def _cold_start_rows(
-        self,
-        prior: pd.DataFrame,
-        allowed: frozenset[str] | None,
-        allowed_by_variant: Mapping[str, frozenset[str] | None] | None,
-    ) -> pd.DataFrame:
-        variants = self._variants_for()
-        if not variants:
-            prior = collapse_mixed_variants(prior)
-            return self._stamp_collapsed_variant(self._cold_start_one_list(prior, allowed=allowed), prior)
-        has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
-        primary = FALLBACK_VARIANT if FALLBACK_VARIANT in variants else variants[0]
-        parts = []
-        for variant in variants:
-            variant_allowed = _allowed_for(variant, allowed, allowed_by_variant)
-            prior_slice = (
-                prior[prior[VARIANT_COLUMN].astype(str) == variant]
-                if has_variant
-                else (prior if variant == primary else empty_recommendations_frame())
-            )
-            merged = self._cold_start_one_list(prior_slice, allowed=variant_allowed)
-            if merged.empty:
-                merged = _restrict_items(prior_slice, variant_allowed)
-                if merged.empty:
-                    continue
-            merged = merged.copy()
-            merged[VARIANT_COLUMN] = variant
-            parts.append(merged)
-        if not parts:
-            return empty_recommendations_frame()
-        return pd.concat(parts, ignore_index=True)
-
-    def _cold_start_one_list(
-        self,
-        prior: pd.DataFrame,
-        allowed: frozenset[str] | None,
-    ) -> pd.DataFrame:
-        return _kept_list(_restrict_items(prior, allowed), COLD_START_USER_ID, self._top_k)

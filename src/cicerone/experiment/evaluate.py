@@ -22,8 +22,13 @@ from cicerone.config.settings import ExperimentSettings
 from cicerone.experiment.assignment import active_pair_traffic, assign_variant
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
-from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
-from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
+from cicerone.experiment.stats import ComparisonResult, compare_variants, variant_metric
+from cicerone.io.recommendation_schema import (
+    USER_COLUMN,
+    VARIANT_COLUMN,
+    filter_variant_rows,
+    pick_control_name,
+)
 from cicerone.values import utc_stamp
 
 

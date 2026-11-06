@@ -6,11 +6,11 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, make_settings
-from cicerone.events.normalize import normalize_event
+from cicerone.events.normalize import events_to_dataframe, normalize_event
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.store import load_recommendations_for_users, load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
@@ -199,6 +199,178 @@ def test_incremental_updater_keeps_reasons_when_event_rehits_item(tmp_path, feat
     old = frame[(frame["user_id"] == "u1") & (frame["item_id"] == "old")].iloc[0]
     assert parse_reasons(old["reasons"]).sources[0].label == "personalized"
     assert old["source"] == "personalized"
+
+
+def _list_after_events_on_preserved_rows(
+    tmp_path, feature_config: FeatureConfig, events: list[dict], top_k: int = 3, **updater_kwargs
+) -> pd.DataFrame:
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config, top_k=top_k, **updater_kwargs)
+    pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": f"p{i}",
+                "rank": i,
+                "score": float(100 - i),
+                "source": "personalized",
+                "reasons": dump_source_reasons("personalized", rank=i),
+            }
+            for i in range(1, top_k + 1)
+        ]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    payloads = [event_payload(user_id="u1", event_id=f"e{n}", **event) for n, event in enumerate(events)]
+    assert updater.apply([normalize_event(payload) for payload in payloads]) == len(events)
+    frame = load_recommendations_frame(settings.output)
+    return frame[frame["user_id"] == "u1"].sort_values("rank")
+
+
+def _at_minute(item_id: str, minute: int) -> dict:
+    return {"item_id": item_id, "occurred_at": f"2026-08-13T12:{minute:02d}:00Z"}
+
+
+def _items(rows: pd.DataFrame) -> list[str]:
+    return rows["item_id"].astype(str).tolist()
+
+
+def _assert_keeps_seeded_fields(rows: pd.DataFrame, item_id: str, seeded_rank: int) -> None:
+    row = rows[rows["item_id"].astype(str) == item_id].iloc[0]
+    assert row["source"] == "personalized"
+    assert row["score"] == float(100 - seeded_rank)
+    assert row["reasons"] == dump_source_reasons("personalized", rank=seeded_rank)
+
+
+def _assert_new_boost_row(rows: pd.DataFrame, item_id: str, score: float, reason_rank: int) -> None:
+    row = rows[rows["item_id"].astype(str) == item_id].iloc[0]
+    assert row["source"] == INCREMENTAL_SOURCE
+    assert row["score"] == score
+    assert parse_reasons(row["reasons"]).sources[0].rank == reason_rank
+
+
+def test_incremental_updater_moves_consumed_preserved_item_to_top(tmp_path, feature_config: FeatureConfig):
+    u1 = _list_after_events_on_preserved_rows(tmp_path, feature_config, [{"item_id": "p3"}])
+    assert _items(u1) == ["p3", "p1", "p2"]
+    _assert_keeps_seeded_fields(u1, "p3", 3)
+
+
+def test_incremental_updater_newest_consumed_preserved_item_takes_boost_slot(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("new", 0), _at_minute("p3", 5)]
+    )
+    assert _items(u1) == ["p3", "p1", "p2"]
+    _assert_keeps_seeded_fields(u1, "p3", 3)
+
+
+def test_incremental_updater_older_consumed_preserved_item_drops_when_newer_events_fill_slots(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("p3", 0), _at_minute("new", 5)]
+    )
+    assert _items(u1) == ["new", "p1", "p2"]
+    _assert_new_boost_row(u1, "new", score=1.0, reason_rank=1)
+
+
+def test_incremental_updater_moving_preserved_item_does_not_shrink_list(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(tmp_path, feature_config, [{"item_id": "p10"}], top_k=10)
+    assert _items(u1) == ["p10", *(f"p{i}" for i in range(1, 10))]
+
+
+def test_incremental_updater_moved_and_new_items_with_free_slot_keep_full_list(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("new", 0), _at_minute("p10", 5)], top_k=10
+    )
+    assert _items(u1) == ["p10", "new", *(f"p{i}" for i in range(1, 9))]
+    _assert_keeps_seeded_fields(u1, "p10", 10)
+    # Numbered among new items only, so a moved row ahead of it changes nothing.
+    _assert_new_boost_row(u1, "new", score=1.0, reason_rank=1)
+
+
+def test_incremental_updater_boost_slots_mix_moved_and_new_items_newest_first(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path,
+        feature_config,
+        [_at_minute("new-old", 0), _at_minute("p10", 5), _at_minute("new-recent", 10)],
+        top_k=10,
+    )
+    assert _items(u1) == ["new-recent", "p10", "new-old", *(f"p{i}" for i in range(1, 8))]
+    _assert_new_boost_row(u1, "new-recent", score=2.0, reason_rank=1)
+    _assert_keeps_seeded_fields(u1, "p10", 10)
+    _assert_new_boost_row(u1, "new-old", score=1.0, reason_rank=2)
+
+
+def test_incremental_updater_moves_two_preserved_items_newest_first(tmp_path, feature_config: FeatureConfig):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [_at_minute("p9", 0), _at_minute("p10", 5)], top_k=10
+    )
+    assert _items(u1) == ["p10", "p9", *(f"p{i}" for i in range(1, 9))]
+    _assert_keeps_seeded_fields(u1, "p10", 10)
+    _assert_keeps_seeded_fields(u1, "p9", 9)
+
+
+def test_incremental_updater_moved_item_stays_ahead_on_later_flush(tmp_path, feature_config: FeatureConfig):
+    _list_after_events_on_preserved_rows(tmp_path, feature_config, [{"item_id": "p10"}], top_k=10)
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config, top_k=10)
+    assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="x", event_id="later"))]) == 1
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
+    assert _items(u1) == ["x", "p10", *(f"p{i}" for i in range(1, 7))]
+    _assert_keeps_seeded_fields(u1, "p10", 10)
+
+
+def test_incremental_updater_consumed_preserved_item_filtered_by_allowed_stays_out(
+    tmp_path, feature_config: FeatureConfig
+):
+    items = pd.DataFrame(
+        [
+            {"item_id": "p1", "published": True, "in_stock": True},
+            {"item_id": "p2", "published": True, "in_stock": True},
+            {"item_id": "p3", "published": True, "in_stock": False},
+        ]
+    )
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [{"item_id": "p3"}], items_provider=lambda: items
+    )
+    assert _items(u1) == ["p1", "p2"]
+
+
+def test_incremental_updater_moved_item_keeps_reasons_with_explain_disabled(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [{"item_id": "p3"}], explain_enabled=False
+    )
+    assert _items(u1) == ["p3", "p1", "p2"]
+    _assert_keeps_seeded_fields(u1, "p3", 3)
+
+
+def test_incremental_updater_moves_consumed_item_on_assigned_variant(tmp_path, feature_config: FeatureConfig):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path, feature_config, [{"item_id": "p3"}], variant_names=("control", "treatment")
+    )
+    assert _items(u1[u1["variant"] == "control"]) == ["p3", "p1", "p2"]
+    assert u1[u1["variant"] == "treatment"].empty
+
+
+def test_incremental_updater_non_assigned_variant_does_not_move_consumed_item(
+    tmp_path, feature_config: FeatureConfig
+):
+    u1 = _list_after_events_on_preserved_rows(
+        tmp_path,
+        feature_config,
+        [{"item_id": "p3"}],
+        variant_names=("control", "treatment"),
+        assign_variant=lambda _user_id: "treatment",
+    )
+    assert _items(u1[u1["variant"] == "control"]) == ["p1", "p2", "p3"]
+    assert _items(u1[u1["variant"] == "treatment"]) == ["p3"]
 
 
 def test_incremental_updater_unlabelled_prior_stays_on_control(tmp_path, feature_config: FeatureConfig):
@@ -1980,6 +2152,57 @@ def test_incremental_updater_does_not_restore_ineligible_cold_variant(
     cold = cold[cold["user_id"] == COLD_START_USER_ID]
     assert "cold-oos" not in set(cold["item_id"].astype(str))
     assert "cold-ok" in set(cold["item_id"].astype(str))
+
+
+@pytest.mark.parametrize(
+    ("name", "missing"),
+    [("None", None), ("nan", float("nan")), ("<NA>", pd.NA), ("NaT", pd.NaT)],
+)
+def test_cold_start_missing_variant_does_not_match_variant_named_like_it(
+    tmp_path, feature_config: FeatureConfig, monkeypatch, name: str, missing: object
+) -> None:
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config, variant_names=(name, "other"))
+    row = {"user_id": COLD_START_USER_ID, "rank": 1, "score": 0.2, "source": "popular_fallback"}
+    prior = pd.DataFrame(
+        [{**row, "item_id": "unassigned", "variant": missing}, {**row, "item_id": "named", "variant": name}],
+        dtype=object,
+    )
+    # A parquet round trip would turn every missing value into null, so load the frame as is.
+    monkeypatch.setattr(updater, "_load_users", lambda _user_ids: prior)
+    batch = events_to_dataframe([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="e1"))])
+    empty = pd.DataFrame(columns=list(RECOMMENDATION_COLUMNS))
+
+    merged, _replace_ids = updater._merge_affected(
+        batch,
+        updater._row_signal_weights(batch),
+        ["u1"],
+        {"u1", COLD_START_USER_ID},
+        empty,
+        empty,
+        {},
+    )
+
+    cold = merged[merged["user_id"] == COLD_START_USER_ID]
+    assert cold["item_id"].tolist() == ["named"]
+    assert cold["variant"].tolist() == [name]
+
+
+def test_incremental_updater_assigns_variants_only_for_users_with_events(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    assigned: list[str] = []
+
+    def assign(user_id: str) -> str:
+        assigned.append(user_id)
+        return "control"
+
+    _settings, _sink, updater = dataset_updater(
+        tmp_path, feature_config, variant_names=("control", "treatment"), assign_variant=assign
+    )
+
+    updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="e1"))])
+
+    assert assigned == ["u1"]
 
 
 def test_incremental_updater_skips_users_read_without_user_scoped_rules(
