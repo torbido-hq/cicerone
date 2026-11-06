@@ -220,6 +220,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   win when there are more than slots.
 - A job whose error can't be formatted after the success manifest now rewrites
   the manifest as `failed` instead of leaving it `success` while the job raises.
+- The dashboard lookup shows an infinite or overflowing rank, score or event
+  `quantity` as missing, instead of answering 500 on `quantity` and printing
+  `inf` as the score.
 
 ### Removed
 

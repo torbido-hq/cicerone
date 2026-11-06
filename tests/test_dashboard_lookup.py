@@ -164,6 +164,15 @@ def test_format_recommendation_rows_formats_score():
     ]
 
 
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), "1e400", 10**400])
+def test_format_recommendation_rows_treats_overflowing_numbers_as_missing(value):
+    recs = pd.DataFrame([{"item_id": "i1", "rank": value, "score": value}], dtype=object)
+    rows = format_recommendation_rows(recs, category_column=None)
+
+    assert rows[0]["rank"] == MISSING
+    assert rows[0]["score"] == MISSING
+
+
 def test_format_event_rows_uses_placeholders():
     events = pd.DataFrame([{"item_id": None, "event_type": None, "quantity": None, "occurred_at": None}])
     rows = format_event_rows(events)
@@ -189,6 +198,36 @@ def test_format_event_rows_formats_quantity_and_timestamp():
     assert rows[0]["event_type"] == "purchase"
     assert rows[0]["quantity"] == "3"
     assert rows[0]["occurred_at"].startswith("2026-08-21")
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), "inf", 10**400])
+def test_format_event_rows_treats_overflowing_quantity_as_missing(value):
+    rows = format_event_rows(pd.DataFrame([{"item_id": "i1", "quantity": value}], dtype=object))
+
+    assert rows[0]["quantity"] == MISSING
+
+
+def test_lookup_inspector_keeps_page_when_event_quantity_is_infinite():
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "u1",
+                "item_id": "i1",
+                "event_type": "view",
+                "quantity": float("inf"),
+                "occurred_at": None,
+            }
+        ]
+    )
+    result = lookup_inspector(
+        make_settings(dashboard_enabled=True),
+        _service(FakeReader(_k_recs())),
+        _History(events),
+        "u1",
+    )
+
+    assert result["events"][0]["quantity"] == MISSING
+    assert result["show_quantity"] is False
 
 
 def test_format_event_rows_treats_naive_datetime_as_utc():
