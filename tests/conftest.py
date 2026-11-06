@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from sqlalchemy.engine import Engine
 from support.fakes import fake_monotonic
 from support.mysql_defaults import resolve_mysql_test_database_url
 from support.postgres_defaults import resolve_test_database_url
-from support.settings import make_settings, sqlite_output
+from support.settings import sqlite_output
 from support.system_spec import SKIP_NO_TEST_DB
 
 from cicerone.config import IOSettings
@@ -22,9 +23,6 @@ from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
 from cicerone.io.engines import dispose_engines, quote_identifier
 from cicerone.locks import hold as lock_hold
-
-# Re-export for existing `from conftest import make_settings` call sites.
-__all__ = ["make_settings"]
 
 _READ_S3_PARQUET_PYARROW = io_options._read_s3_parquet_pyarrow
 
@@ -46,6 +44,15 @@ def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
 def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """A busy writer lock fails at once instead of after the acquire timeout."""
     monkeypatch.setattr(lock_hold, "DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.0)
+
+
+@pytest.fixture
+def default_int_digit_limit() -> Iterator[None]:
+    """Pin the limit UNPARSABLE_JSON_BODIES relies on; PYTHONINTMAXSTRDIGITS can change it."""
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(previous)
 
 
 @pytest.fixture

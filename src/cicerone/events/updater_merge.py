@@ -19,6 +19,7 @@ from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
+    drop_unlabelled_variant_column,
     filter_variant_rows,
     pick_control_name,
     pick_fallback_variant,
@@ -41,7 +42,7 @@ _PRESERVE_LABELS = frozenset(
         "latest",
     }
 )
-# Reserve slots so recent interactions can enter top-K even when preserved rows fill it.
+# Cap on the slots recent interactions take ahead of preserved rows, so they can enter a full top-K.
 _BOOST_SLOT_FRACTION = 0.3
 
 
@@ -125,6 +126,7 @@ class UpdaterMerge:
                 allowed=allowed,
             )
             return self._stamp_collapsed_variant(merged, prior)
+        prior = drop_unlabelled_variant_column(prior)
         has_variant = VARIANT_COLUMN in prior.columns and not prior.empty
         primary = pick_control_name(variants)
         # An empty batch injects nothing, so it needs no assignment.
@@ -211,7 +213,7 @@ class UpdaterMerge:
         )
         if allowed is not None:
             boost_items = [item_id for item_id in boost_items if item_id in allowed]
-        boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
+        boost_slots = min(len(boost_items), max(1, int(self._top_k * _BOOST_SLOT_FRACTION)))
         slots = boost_items[:boost_slots]
         moved_ids = set(slots) & preserved_ids
         new_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
@@ -231,8 +233,6 @@ class UpdaterMerge:
                 if item_id in slots
             ]
         )
-        # New-only flushes leave unused slots to popular / latest backfill.
-        preserve_cap = max(0, self._top_k - (len(slots) if moved_ids else boost_slots))
         if RANK_COLUMN in kept.columns:
             kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
         slot_rows = boost
@@ -244,7 +244,6 @@ class UpdaterMerge:
                 ITEM_COLUMN, key=lambda ids: ids.astype(str).map(slots.index), kind="mergesort"
             )
             kept = kept.loc[~kept[ITEM_COLUMN].astype(str).isin(moved_ids)]
-        kept = kept.head(preserve_cap)
         preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
         preserved = (
             pd.concat(preserved_parts, ignore_index=True)

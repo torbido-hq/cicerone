@@ -19,7 +19,7 @@ from cicerone.config.constants import (
     PRIMARY_METRIC_WEIGHTED,
 )
 from cicerone.config.settings import ExperimentSettings
-from cicerone.experiment.assignment import active_pair_traffic, assign_variant
+from cicerone.experiment.assignment import active_pair_traffic, assign_variant, live_active_pair
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
 from cicerone.experiment.stats import ComparisonResult, compare_variants, variant_metric
@@ -95,16 +95,9 @@ def evaluate_experiment(
 ) -> ExperimentReport:
     variants = [(recipe.name, recipe.traffic) for recipe in recipes]
     names = [recipe.name for recipe in recipes]
-    if (
-        active_pair is not None
-        and experiment.allocation == ALLOCATION_THOMPSON
-        and active_pair[0] in names
-        and active_pair[1] in names
-        and promoted_variant is None
-    ):
-        variants = active_pair_traffic(
-            active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
-        )
+    live_pair = live_active_pair(active_pair, names)
+    if live_pair is not None and experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
+        variants = active_pair_traffic(*live_pair, explore_traffic=experiment.explore_traffic)
         names = [name for name, _traffic in variants]
     assigned: dict[str, str] = {}
     attribution = experiment.attribution

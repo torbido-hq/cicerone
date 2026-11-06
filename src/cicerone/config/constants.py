@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from types import ModuleType
-from typing import Literal
+from typing import Literal, get_args
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 DEFAULT_FEATURE_CONFIG_PATH = "/app/config/features.toml"
@@ -53,6 +53,8 @@ StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
 DEFAULT_MODE: Mode = "batch"
+StorageBackend = Literal["local", "s3"]
+STORAGE_BACKENDS: frozenset[str] = frozenset(get_args(StorageBackend))
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60
