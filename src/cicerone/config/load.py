@@ -27,6 +27,7 @@ from cicerone.config.constants import (
     LOCK_BACKENDS,
     MAX_PORT,
     MODES,
+    MYSQL_KEY_CHARS,
     PRIMARY_METRIC_CONVERSION,
     PRIMARY_METRIC_CTR,
     STRATEGY_NAMES,
@@ -335,6 +336,7 @@ def _finalize_settings(settings: Settings) -> Settings:
     _require_lock_backend(settings)
     _require_online_artifact_hmac(settings)
     _require_exposure_log_backend(settings)
+    _require_experiment_id_fits_mysql(settings)
     _require_online_output_backend(settings)
     _require_online_collaborative_lightfm(settings)
     _require_track_backend(settings)
@@ -370,6 +372,17 @@ def _require_exposure_log_backend(settings: Settings) -> None:
     require_db_or_local_dataset(settings.output, EXPOSURE_LOG_BACKEND_ERROR)
     if settings.events.ha and settings.output.kind != "db":
         raise ConfigError(EXPOSURE_LOG_HA_ERROR)
+
+
+def _require_experiment_id_fits_mysql(settings: Settings) -> None:
+    experiment = settings.experiment
+    if not experiment.enabled or settings.output.kind != "db" or len(experiment.id) <= MYSQL_KEY_CHARS:
+        return
+    from cicerone.io.engines import database_backend_name
+
+    url = settings.output.options.get("database_url")
+    if url and database_backend_name(str(url)) == "mysql":
+        raise ConfigError(f"experiment.id is longer than {MYSQL_KEY_CHARS} characters, the limit on MySQL")
 
 
 ONLINE_OUTPUT_ERROR = (

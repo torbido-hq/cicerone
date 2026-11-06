@@ -40,6 +40,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.dialects.mysql import DATETIME, LONGBLOB
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
@@ -597,8 +598,14 @@ class DatabaseOutputSink:
         return Table(
             table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             MetaData(),
-            Column("payload", LargeBinary, nullable=False),
-            Column("written_at", DateTime(timezone=True), nullable=False),
+            # Plain LargeBinary is a 64 KB BLOB on MySQL and MariaDB.
+            Column("payload", LargeBinary().with_variant(LONGBLOB(), "mysql", "mariadb"), nullable=False),
+            # Plain DATETIME keeps whole seconds, too coarse for the compare-and-swap token.
+            Column(
+                "written_at",
+                DateTime(timezone=True).with_variant(DATETIME(fsp=6), "mysql", "mariadb"),
+                nullable=False,
+            ),
         )
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:

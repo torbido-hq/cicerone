@@ -62,8 +62,8 @@ write tables, each renamed by the `[output.options]` key in brackets:
 `recommendation_track` (`track_table`), `recommendation_eval`
 (`eval_table`) and `recommendation_history` (`history_table`).
 
-The db events source and the experiment-state tables support Postgres and
-SQLite, not MySQL. The track, eval and history tables also support MySQL: install
+The db events source supports Postgres and SQLite, not MySQL. The track, eval,
+history, experiment-state and exposures tables also support MySQL: install
 `pip install 'cicerone-recommender[mysql]'` (or `requirements-mysql.txt`) and
 use `database_url = "mysql+pymysql://user:password@host:3306/db?ssl_ca=/path/to/ca.pem"`.
 `ssl_ca` turns on TLS and verifies the server's certificate and host name;
@@ -77,12 +77,17 @@ value is truncated silently, so a truncated report replaces the good one and
 then reads as missing. On a strict server an eval report over 16 MiB (or over
 `max_allowed_packet`, if that is lower) or a history value over 65,535 UTF-8
 bytes fails that write: the job logs it, carries on and keeps the rows already
-stored. The eval and history tables have no primary key, so
+stored. Config load refuses an `experiment.id` over 255 characters on MySQL.
+The eval, history and exposures tables have no primary key, so
 `sql_require_primary_key` and Group Replication refuse them; the job logs the
-error on every run. The job skips the eval report and history on MariaDB with
-a logged warning. Requires MySQL 8.0 or later; CI tests 8.4. Track ingest and the
-eval report need the `CREATE` privilege on every write; history needs it only
-to create its table.
+error on every run, and serve on every exposure. Cicerone alters no existing
+table, except that experiment state adds a missing `payload` column to a
+hand-made table, as it does on Postgres and SQLite. The job skips the eval
+report and history on MariaDB with a logged warning; experiment state isn't
+supported there and its writes fail with a server error, including during
+Thompson jobs. Requires MySQL 8.0 or later; CI tests 8.4. Track ingest, the
+eval report and experiment state need the `CREATE` privilege on every write;
+history and exposures need it only to create their tables.
 New history tables on any backend store `rank` as `BIGINT`, so a fractional
 rank rounds on Postgres and MySQL.
 Known limit: the history table has no index and no retention, so each read
@@ -93,6 +98,12 @@ than Postgres, SQLite or MySQL.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables
 must use a transactional engine (InnoDB): a full write empties them with
 `DELETE` and rolls back on failure.
+New `model_artifacts` tables use `LONGBLOB` and `DATETIME(6)` there. A table
+created before 0.8.6 stays a 64 KB `BLOB`, and its one-second `written_at` lets
+a same-second write slip past the online update's check, until you run
+`ALTER TABLE model_artifacts MODIFY payload LONGBLOB NOT NULL, MODIFY written_at DATETIME(6) NOT NULL`
+(use your `model_artifact_table` name). The server's `max_allowed_packet` (64 MiB by
+default on MySQL) still caps an artifact; raise it for larger ones.
 
 `[output].artifact_hmac_key` (16+ bytes) is required when
 `[events.online]` is on. Serve never reads `[input]`; the loader still
