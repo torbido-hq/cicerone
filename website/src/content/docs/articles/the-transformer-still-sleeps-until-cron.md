@@ -214,7 +214,7 @@ Reload, merge, and re-score stay three steps. The re-score is `recommend` on the
 
 A re-score keeps an event only when both its `user_id` and its `item_id` are already in the loaded artifact's interactions. Anything else is counted as dropped. Kept events go through the same weighting as the job. A non-positive aggregate is not merged. The merge sums weights, keeps the later datetime, and stays one row per `(user, item)`.
 
-`recommend` then runs on the fitted sequential model with that dataset. The interaction sequence it reads can change. The sequential weights do not. `filter_viewed` drops items now in that user's history. When that call returns rows, the flush replaces the user's stored recommendations. The new sequential rows take the place of the prior rows whose source overlaps `sequential`. A later `SELECT` or GET reads that write. Other users stay on the last fit.
+`recommend` then runs on the fitted sequential model with that dataset. The interaction sequence it reads can change. The sequential weights do not. `filter_viewed` drops items now in that user's history. When that call returns rows, and no retrain holds the write, the flush replaces the user's stored recommendations. The new sequential rows take the place of the prior rows whose source overlaps `sequential`. A later `SELECT` or GET reads that write. Other users stay on the last fit.
 
 `fit_partial` is the third row. Cicerone calls it only on the collaborative LightFM object, after `fit_min_events` known events (default 100) and only when `fit_partial_epochs` is positive (default 1). This walkthrough's `models` list has no `collaborative`, so that call does not run. The sequential model is not passed to it.
 
@@ -236,9 +236,7 @@ When a candidate contains `sequential`, AutoML logs `Excluding sequential from A
 
 An unknown `user_id` is still a lookup. Serve does not score a new sequence. With blending off there is no `__cold_start__` row.
 
-Serve picks one user who still has a `popular_fallback` or `latest` row. `popular_fallback` beats `latest`. Among users who have that winning source, both readers take the lexicographically smallest `user_id`. The database pick is one row: source order, then `user_id ASC`, `LIMIT 1`. The read that follows loads that user's rows.
-
-The response is that user's stored rows, every source in the slice, ordered by `rank` and cut at the request limit. `fallback` is true. A `sequential` row in that slice is returned with the others.
+Serve picks one user who still has a `popular_fallback` or `latest` row. `popular_fallback` beats `latest`. Among users who have that winning source, both readers take the lexicographically smallest `user_id`. The database pick is one row: source order, then `user_id ASC`, `LIMIT 1`. The following read returns that user's rows, every source, ordered by `rank` and limited to the k that read was given. In the database that limit is in the same query as `ORDER BY rank`. The dataset reader returns the head of the rank-ordered user it already holds. Serve cuts the HTTP body to the request limit. `fallback` is true. A `sequential` row in that slice is returned with the others.
 
 A user is eligible when those stored rows include `popular_fallback` or `latest`. A warm user whose top-K is entirely `sequential` has neither, so that user is not eligible. If the table has neither fallback source, the status is 404 and the detail is `No recommendations for user_id='…'`.
 
