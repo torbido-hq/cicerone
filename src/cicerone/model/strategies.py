@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pandas as pd
 from rectools.dataset import Dataset
@@ -59,7 +59,7 @@ def as_recommender_model(model: object) -> RecommenderModel:
             f"{type(model).__name__}.recommend() is missing expected parameter(s) {sorted(missing_params)}; "
             "the RecommenderModel protocol may have drifted from the installed rectools/implicit version"
         )
-    return model  # type: ignore[return-value]
+    return cast(RecommenderModel, model)
 
 
 @dataclass(frozen=True)

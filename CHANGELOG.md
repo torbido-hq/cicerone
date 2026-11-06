@@ -48,10 +48,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Incremental updates no longer put `__cold_start__` rows with a missing
   variant under an experiment variant named `None`, `nan`, `<NA>` or
-  `NaT`; such rows are dropped, as real users' rows already were.
+  `NaT`; such rows are dropped when the list also has labelled rows, as
+  real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
+- An incremental flush no longer trims preserved rows to reserve boost slots
+  it won't use (`top_k` of 7 or more). `incremental` rows from earlier flushes
+  are still not preserved, so a later flush can shorten a list.
+- An event with `user_id` `__cold_start__` no longer writes the cold-start
+  list twice, with repeated ranks and items, or creates one, and it no longer
+  reaches online refresh; the event is acked and counted.
+- With experiments on, an incremental flush no longer wipes lists whose
+  `variant` is all NULL (as after the documented `ALTER TABLE`): those rows
+  go to the primary variant, like a table without the column. A user assigned
+  to another variant is served only the flush rows there until the next job.
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
