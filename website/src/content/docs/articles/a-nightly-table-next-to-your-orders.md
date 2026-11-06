@@ -535,7 +535,7 @@ The license is [Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICEN
 
 - You need the row to change within the same request as “add to cart.” That is a different product, and even Cicerone’s optional [serve API](https://cicerone.dev/openapi/) and [incremental events](https://cicerone.dev/incremental-events/) do not retrain LightFM on the request path.
 - You have almost no overlapping buyers, in which case you should ship bestsellers, collect events, and come back later.
-- You already enjoy operating a Python training stack and want SASRec, AutoML, and eligibility rules. All of that exists, but it is not what this article is about; see the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
+- You already enjoy operating a Python training stack and want SASRec, AutoML, and eligibility rules. SASRec still writes a nightly table — that walkthrough is [The transformer still sleeps until cron](/articles/the-transformer-still-sleeps-until-cron/). AutoML and eligibility are in the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
 
 ## In the morning
 
