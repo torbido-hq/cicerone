@@ -41,7 +41,7 @@ Four nouns, then stop mixing them.
 
 ## The default image does not fit this
 
-`pip install 'cicerone-recommender[sequential]'`, or `pip install -r requirements-sequential.txt` from a checkout. The requirements file pins `rectools[torch]==0.19.0`, the same RecTools version as the runtime image. The extra is present when `torch` and `pytorch_lightning` import. The default Docker runtime image does **not** install it. A GET on that image does not import torch: the handler never loads a model.
+`pip install 'cicerone-recommender[sequential]'`, or `pip install -r requirements-sequential.txt` from a checkout. The requirements file pins `rectools[torch]==0.19.0`, the same RecTools version as the runtime image. The extra counts as installed when `torch` and `pytorch_lightning` are importable. The default Docker runtime image does **not** install it. A GET on that image does not import torch: the handler never loads a model.
 
 TOML load does not check the extra. The job raises when it builds the strategy:
 
@@ -49,7 +49,7 @@ TOML load does not check the extra. The job raises when it builds the strategy:
 ConfigError: strategy 'sequential' requires torch; install with: pip install 'cicerone-recommender[sequential]'
 ```
 
-Build the default image the way the [nightly](/articles/a-nightly-table-next-to-your-orders/) post does (`docker build -t cicerone -f docker/Dockerfile .`). From the repo root, add the extra on top of that local tag. The runtime stage's last user is `cicerone`, so the snippet switches to root for `pip` and back.
+Build the default image the way the [nightly](/articles/a-nightly-table-next-to-your-orders/) post does (`docker build -t cicerone -f docker/Dockerfile .`). Save the next file as `Dockerfile.sequential` in the repo root, on top of that local tag. The runtime stage's last user is `cicerone`, so the snippet switches to root for `pip` and back.
 
 ```dockerfile
 FROM cicerone
@@ -115,13 +115,13 @@ Before the model sees the data, Cicerone weights events and aggregates to **one 
 
 Two purchases of the same SKU are one position, at the later timestamp. A string of distinct clicks stays a string of distinct items, ordered by each item's last time. Intermediate timestamps are not in the sequence.
 
-`session_max_len` (default 50) keeps the tail of that unique history. `train_min_user_interactions` (default 2) drops shorter users from **training**. A user with one known item can still be scored at recommend time.
+`session_max_len` (default 50) keeps the tail of that unique history. SASRec's training preparator keeps one extra item on top of that cap. Recommend still uses `session_max_len`. `train_min_user_interactions` (default 2) drops shorter users from **training**. A user left out of training can still be scored when they hold at least one item the fitted model already knows.
 
 HSTU is the architecture that reads the clock. With `relative_time_attention` on, RecTools adds `unix_ts` from that aggregated datetime. The bias is the gap between last touches of distinct items. It is not the gap between raw repeats, because the repeats are already gone. Do not quote a session-stream paper this fit did not train.
 
 SASRec and BERT4Rec, on these defaults, get the same order and the same weights. They do not get `unix_ts`.
 
-AutoML is a separate gate. It logs `Excluding sequential from AutoML candidate pool: …` when torch is missing, or when the median distinct items per user in the event frame is below `[job.sequential].min_median_interactions` (default 5). A hand-listed `models = ["sequential", …]` still fits when the extra is present.
+AutoML is a separate gate. When a candidate contains `sequential`, it logs `Excluding sequential from AutoML candidate pool: …` if torch is missing, or if the median distinct items per user in the event frame is below `[job.sequential].min_median_interactions` (default 5). That edits the search, not a job with AutoML off: `models` still fits. With AutoML on, the job fits the winning candidate. Sequential is gone from that candidate once it was excluded. A search that contained only sequential then raises `AutoML has no candidates left after excluding sequential`.
 
 ## Read it without torch
 
@@ -160,7 +160,7 @@ The serve container that answers `GET /recommendations` stays on the default ima
 
 Bearer only if `[serve].auth_token` is set. `limit` and `k` are the same cap; pass one. `category` filters after the list is chosen.
 
-An unknown `user_id` does not get someone else's sequential list. With no `__cold_start__` rows, serve returns the `popular_fallback` and `latest` rows of one user. A user who has `popular_fallback` wins over a user who only has `latest`. Ties break on the smallest `user_id`. `fallback` is true. If the table has neither source, the status is 404 and the detail is `No recommendations for user_id='…'`.
+An unknown `user_id` does not get someone else's sequential list. With no `__cold_start__` rows, serve returns one user's rows whose `source` is `popular_fallback` or `latest`. A user who has `popular_fallback` wins over a user who only has `latest`. Ties break on the smallest `user_id`. `fallback` is true. If the table has neither source, the status is 404 and the detail is `No recommendations for user_id='…'`.
 
 ## Fit, re-score, fit_partial
 
@@ -168,7 +168,7 @@ Three operations. Only the first one trains the transformer.
 
 **Fit.** `job.run()` aggregates, calls `model.fit`, and writes the table. Weights move here. This is the cron.
 
-**Re-score.** Optional `[events.online]` on the serve process, after the [checkout](/articles/this-afternoons-checkout-can-move-the-row/) flush has a known `user_id` and a known `item_id`. The worker loads the artifact, appends those interactions (weights sum, datetime stays the max), and calls `recommend` on the fitted sequential model. The sequence the model reads can change. The weights do not. `filter_viewed` then drops items now in that user's history. Both ids have to be in the last artifact. A new user or a new SKU is not in this refresh.
+**Re-score.** Optional `[events.online]` on the serve process, after the [checkout](/articles/this-afternoons-checkout-can-move-the-row/) flush has a known `user_id` and a known `item_id`. The worker loads the artifact, appends those interactions (weights sum, datetime stays the max), and calls `recommend` on the fitted sequential model. The sequence the model reads can change. The model weights do not. `filter_viewed` then drops items now in that user's history. Both ids have to be in the last artifact. A new user or a new SKU is not in this refresh.
 
 **`fit_partial`.** Cicerone calls it only on the collaborative LightFM object, and only after `fit_min_events` known events. This walkthrough's `models` list has no `collaborative`, so that call does not run. The sequential model is not passed to it.
 
@@ -184,11 +184,11 @@ Put the sequential extra on the job. Put it on serve only when that process must
 | `architecture = "bert4rec"` | Next fit is `BERT4RecModel` (masked items). LiGR and `sampled_softmax` stay unless you override them. `source` stays `sequential`. |
 | `architecture = "hstu"` | Next fit is `HSTUModel`. LiGR is dropped. Inherited `sampled_softmax` becomes `softmax` unless `loss` is set. `relative_time_attention` is on. `source` stays `sequential`. |
 | Turn blending on | Personalized frames are relabeled `personalized` before the mix. A multi-source row is `blended`. `sequential` is not a `source`. |
-| AutoML, median distinct items below the floor | INFO `Excluding sequential from AutoML candidate pool:` plus the median and `job.sequential.min_median_interactions`. A hand-listed `models` entry still fits. |
+| AutoML, median distinct items below the floor | INFO `Excluding sequential from AutoML candidate pool:` plus the median and `job.sequential.min_median_interactions`. AutoML off: `models` still fits. AutoML on: the winning candidate fits, without sequential. |
 | `[events.online]` on, torch-free serve, artifact contains `sequential` | Startup fails while unpickling the sequential model. Turn online off on that image. |
 | `[events.online]` on, sequential extra installed, both ids known | Frozen `recommend` for users in that flush. No `fit_partial` on the transformer. A new id is dropped from this refresh. |
 | `[experiment]` on while online is on | Online trainer is not started. Log: `Online collaborative refresh skipped while [experiment] is enabled`. |
-| GET for an unknown user, blending off, `popular` rows exist | `fallback` true. `popular_fallback` and `latest` rows of one user. A `popular_fallback` user wins. Not a sequential list. |
+| GET for an unknown user, blending off, `popular` rows exist | `fallback` true. One other user's `popular_fallback` or `latest` rows. A `popular_fallback` user wins. Not a sequential list. |
 | GET for an unknown user, no `popular_fallback` or `latest` rows | 404 `No recommendations for user_id='…'`. |
 
 ## When this is the wrong tool
@@ -213,13 +213,13 @@ The knobs and failure modes if you are wiring this up. The product page is [how 
 
 **Config.** Opt-in name in `[job].models`. `[model.sequential].architecture`: `sasrec` (default) / `bert4rec` / `hstu`. Conflicting `architecture` + `cls` is `ConfigError`. SASRec defaults that stay unless overridden: `n_factors = 64`, `n_blocks = 2`, `n_heads = 4`, `epochs = 3`, `loss = sampled_softmax`, `n_negatives = 256`, `transformer_layers_type = LiGRLayers`, `session_max_len = 50`, `train_min_user_interactions = 2`, `batch_size = 128`, `lr = 0.001`. `[job.sequential].min_median_interactions` default `5` (AutoML only). The snippets above are edits to the nightly files.
 
-**Sequence.** Aggregate: sum of decayed weights, datetime = `max(occurred_at)`, one row per `(user, item)`. RecTools sorts by that datetime. `session_max_len` keeps the tail. `train_min_user_interactions` filters training, not recommend. HSTU with `relative_time_attention` (Cicerone sets it) adds `unix_ts` from that datetime.
+**Sequence.** Aggregate: sum of decayed weights, datetime = `max(occurred_at)`, one row per `(user, item)`. RecTools sorts by that datetime. `session_max_len` keeps the tail. SASRec training keeps one extra item. `train_min_user_interactions` filters training, not recommend. HSTU with `relative_time_attention` (Cicerone sets it) adds `unix_ts` from that datetime.
 
 **Source.** Strategy label is `sequential`. Blending on: those frames are relabeled `personalized` before the blend. Priority or RRF, blending off, keeps `sequential`. `filter_viewed` is on for personalized recommend.
 
-**Serve fallback, blending off.** No `__cold_start__` rows. Unknown user: `popular_fallback` and `latest` rows of one user. A user with `popular_fallback` wins; else `latest`. Ties break on the smallest `user_id`. 404 detail `No recommendations for user_id='…'` when neither source exists.
+**Serve fallback, blending off.** No `__cold_start__` rows. Unknown user: one user's `popular_fallback` or `latest` rows. A user with `popular_fallback` wins; else `latest`. Ties break on the smallest `user_id`. 404 detail `No recommendations for user_id='…'` when neither source exists.
 
-**Online.** `fit_partial` is called on collaborative LightFM only. Sequential `recommend` uses the loaded weights and the updated interactions. Both ids must already be in the artifact. Missing extra while the artifact contains `sequential`: `ensure_loaded` unpickles that model and the process needs torch. `[experiment]` on: trainer not started; log `Online collaborative refresh skipped while [experiment] is enabled`.
+**Online.** `fit_partial` is called on collaborative LightFM only. Sequential `recommend` uses the loaded model weights and the updated interactions. Both ids must already be in the artifact. Missing extra while the artifact contains `sequential`: `ensure_loaded` unpickles that model and the process needs torch. `[experiment]` on: trainer not started; log `Online collaborative refresh skipped while [experiment] is enabled`. AutoML on: `job.run()` fits the winning candidate, not the `[job].models` list.
 
 **Failures.**
 
@@ -229,7 +229,7 @@ The knobs and failure modes if you are wiring this up. The product page is [how 
 | Online on, torch-free serve, sequential in the artifact | Startup fails while `ensure_loaded` unpickles the sequential model. |
 | Online on, extra installed, new user or new item | That event is not in the online refresh. Popular / latest inject can still move. |
 | Blending enabled | `source` is `personalized` or `blended`, not `sequential`. |
-| AutoML, median below the floor, or no torch | INFO `Excluding sequential from AutoML candidate pool:`. |
+| AutoML, median below the floor, or no torch | INFO `Excluding sequential from AutoML candidate pool:`. AutoML on replaces `models` with the winner. |
 | Feature-only user | Sequential skipped for that user. `popular_fallback` can still fill. |
 | Unknown GET, no popular or latest rows | 404 `No recommendations for user_id='…'`. |
 
