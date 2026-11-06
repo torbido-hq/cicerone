@@ -17,7 +17,7 @@ import pandas as pd
 
 from cicerone.config import EventsSettings, ServeSettings, make_settings
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.io.recommendation_reader_common import RECOMMENDATION_COLUMNS
 from cicerone.serve import create_app
 
 

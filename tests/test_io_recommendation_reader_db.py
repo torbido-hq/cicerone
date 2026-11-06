@@ -8,8 +8,8 @@ from support.fakes import patch_module_ref, raising
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
 from cicerone.io.db_store import DatabaseOutputSink
-from cicerone.io.recommendation_reader import DbRecommendationReader
 
 TEST_DATABASE_URL = resolve_test_database_url()
 
