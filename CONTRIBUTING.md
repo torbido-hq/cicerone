@@ -83,6 +83,11 @@ Host vs container hostname for the same Postgres:
 - **App containers on the compose network**: host `postgres`.
 - **CI** (`docker-compose.ci.yml`): `POSTGRES_TEST_HOST=db-test`.
 
+The track store tests also run on MySQL when `MYSQL_TEST_HOST` is set (CI:
+`mysql-test`); credentials are in
+[`docker/mysql/defaults.env`](docker/mysql/defaults.env), read by
+`tests/support/mysql_defaults.py`.
+
 `ALLOW_SCHEMA_RESET_FOR_TESTS=1` is set automatically in
 `docker-compose.ci.yml`. Schema reset only proceeds when the database name
 looks like a dedicated test DB (`test_*` / `*_test`), and only drops
@@ -122,10 +127,11 @@ docker run --rm cicerone-test mypy src
 ## Dependency vulnerability scanning
 
 [pip-audit](https://github.com/pypa/pip-audit) checks `requirements.txt`/
-`requirements-dev.txt` / `requirements-bandits.txt` pins against known CVEs:
+`requirements-dev.txt` / `requirements-bandits.txt` / `requirements-mysql.txt`
+pins against known CVEs:
 
 ```sh
-docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt
+docker run --rm cicerone-test pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-bandits.txt -r requirements-mysql.txt
 ```
 
 If a vulnerability is found with no available fix yet, don't suppress it
@@ -311,9 +317,10 @@ needs that approval and is pure process drag.
 The PyPI project is **`cicerone-recommender`** (`pip install
 cicerone-recommender`; `import cicerone`). The name `cicerone` is a
 different package. Optional extras `[redis]`, `[kafka]`, `[rabbitmq]`,
-`[sequential]`, and `[bandits]` match `requirements-redis.txt` /
+`[sequential]`, `[bandits]`, and `[mysql]` match `requirements-redis.txt` /
 `requirements-kafka.txt` / `requirements-rabbitmq.txt` /
-`requirements-sequential.txt` / `requirements-bandits.txt`.
+`requirements-sequential.txt` / `requirements-bandits.txt` /
+`requirements-mysql.txt`.
 
 `pyproject.toml` declares compatible ranges (`>=pin,<next breaking`) for
 the package metadata; `requirements*.txt` hold the exact pins the image
