@@ -416,11 +416,13 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             headers = {"Authorization": "Bearer secret"}
             track = asyncio.create_task(client.post("/track", headers=headers, json=_impression()))
-            assert await asyncio.to_thread(entered.wait, WAIT_SECONDS)
-            probe = await client.get("/__probe")
-            assert probe.status_code == 200
-            assert not track.done()
-            release.set()
+            try:
+                assert await asyncio.to_thread(entered.wait, WAIT_SECONDS)
+                probe = await client.get("/__probe")
+                assert probe.status_code == 200
+                assert not track.done()
+            finally:
+                release.set()
             track_response = await track
             assert track_response.status_code == 202
 

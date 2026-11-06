@@ -8,7 +8,7 @@ import pytest
 from support.events import event_payload
 from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
-from support.fakes import hide_module
+from support.fakes import FakePublisher, hide_module
 from support.settings import local_output
 
 from cicerone.config import ConfigError, PublishSettings, make_settings
@@ -350,29 +350,18 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
         output=local_output(out),
         top_k=5,
     )
-    captured: list[pd.DataFrame] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            captured.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher()
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert len(captured) == 1
-    assert "u1" in set(captured[0]["user_id"].astype(str))
+    assert len(publisher.published) == 1
+    assert "u1" in set(publisher.published[0]["user_id"].astype(str))
 
 
 def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config: FeatureConfig):
@@ -422,28 +411,17 @@ def test_updater_does_not_nack_after_sidecar_connect_type_error(tmp_path, featur
         output=local_output(out),
         top_k=5,
     )
-    calls: list[object] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            raise TypeError("connect bug")
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            calls.append(user_ids)
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher(connect_error=TypeError("connect bug"))
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert calls == []
+    assert publisher.published == []
     written = load_recommendations_frame(settings.output)
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -691,19 +669,15 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         top_k=5,
     )
 
-    class _Boom:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            raise PublishError("broker down")
-
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Boom(),
+        publisher=FakePublisher(
+            publish_error=PublishError("broker down"),
+            close_error=AssertionError("close should not run"),
+        ),
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1

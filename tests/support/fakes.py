@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -250,7 +250,7 @@ class FakePublisher:
         if self.connect_error is not None:
             raise self.connect_error
 
-    def publish(self, df: pd.DataFrame) -> None:
+    def publish(self, df: pd.DataFrame, *, user_ids: Sequence[str] | None = None) -> None:
         if self.publish_error is not None:
             raise self.publish_error
         self.published.append(df.copy())

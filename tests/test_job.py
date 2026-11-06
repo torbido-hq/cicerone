@@ -429,20 +429,14 @@ def test_job_raises_when_fence_lost_after_connect(tmp_path, monkeypatch):
     ).to_parquet(input_dir / "events.parquet", index=False)
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
-    published: list[pd.DataFrame] = []
     lost_after_connect = {"lost": False}
 
-    class _Pub:
+    class _Pub(FakePublisher):
         def connect(self) -> None:
             lost_after_connect["lost"] = True
 
-        def publish(self, df: pd.DataFrame) -> None:
-            published.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    publisher = _Pub()
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
 
     def fence() -> bool:
         return not lost_after_connect["lost"]
@@ -451,7 +445,7 @@ def test_job_raises_when_fence_lost_after_connect(tmp_path, monkeypatch):
 
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
         job.run(fence_check=fence)
-    assert published == []
+    assert publisher.published == []
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
@@ -468,24 +462,18 @@ def test_job_skips_publish_when_manifest_generation_changes(tmp_path, monkeypatc
     ).to_parquet(input_dir / "events.parquet", index=False)
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
-    published: list[pd.DataFrame] = []
 
-    class _Pub:
+    class _Pub(FakePublisher):
         def connect(self) -> None:
             path = output_dir / "manifest.json"
             payload = json.loads(path.read_text())
             payload["generated_at"] = "2099-01-01T00:00:00+00:00"
             path.write_text(json.dumps(payload))
 
-        def publish(self, df: pd.DataFrame) -> None:
-            published.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    publisher = _Pub()
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
     job.run()
-    assert published == []
+    assert publisher.published == []
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
@@ -560,7 +548,7 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
 
 
 def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypatch):
-    from cicerone.config import EvalSettings, TrackSettings, make_settings
+    from cicerone.config import EvalSettings, TrackSettings
     from cicerone.job import _score_previous_run
 
     out = tmp_path / "out"
@@ -602,7 +590,7 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
 
 
 def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monkeypatch):
-    from cicerone.config import EvalSettings, TrackSettings, make_settings
+    from cicerone.config import EvalSettings, TrackSettings
     from cicerone.job import _score_previous_run
 
     out = tmp_path / "out"
@@ -664,7 +652,6 @@ def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monk
 
 def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
-    from cicerone.config import make_settings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job_eval import replay_assignments
 
@@ -1659,7 +1646,10 @@ def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
     payloads: list[dict[str, object]] = []
 
-    publisher = FakePublisher()
+    publisher = FakePublisher(
+        connect_error=AssertionError("connect should not run"),
+        publish_error=AssertionError("publish should not run"),
+    )
 
     class _Sink:
         def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
@@ -1708,7 +1698,11 @@ def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_pat
                 track_fence=WriteFence(),
                 manifest=JobManifest(status="failed", error="boom"),
                 started_at="2026-01-01T00:00:00+00:00",
-                publisher=FakePublisher(close_error=KeyError("close failed")),
+                publisher=FakePublisher(
+                    connect_error=AssertionError("connect should not run"),
+                    publish_error=AssertionError("publish should not run"),
+                    close_error=KeyError("close failed"),
+                ),
             ),
             error,
         )
@@ -3184,7 +3178,6 @@ def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, mon
 
 
 def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -3563,7 +3556,6 @@ def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch
 
 
 def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
