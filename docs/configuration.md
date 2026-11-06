@@ -111,7 +111,7 @@ Optional retrain webhook **in addition to** cron. Runs inside
 | `enabled` | `false` | — |
 | `auth_token` | unset | **Required** when enabled |
 | `host` | `127.0.0.1` | Compose / `docker run -p` needs `0.0.0.0` |
-| `port` | `8080` | `POST /trigger/retrain` (`202` started, `429` busy or debounced); `GET /health` |
+| `port` | `8080` (1–65535; 0 deprecated) | `POST /trigger/retrain` (`202` started, `429` busy or debounced); `GET /health` |
 | `debounce_seconds` | `60` | From the last guarded run's start. In-flight or recent runs are skipped, not queued |
 | `poll_input_bucket` | `false` | Dataset input only: `events.parquet` mtime / S3 `LastModified` |
 | `poll_interval_seconds` | `300` | — |
@@ -136,7 +136,7 @@ Required `auth_token` when `job.mode = "serve"`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Published Docker ports need `0.0.0.0` |
-| `port` | `8000` | — |
+| `port` | `8000` (1–65535; 0 deprecated) | — |
 | `default_k` | `10` (max 100) | Used when the client omits `limit` / `k` |
 | `refresh_interval_seconds` | `60` | Dataset output: reload parquet cache. DB output: reload the items snapshot only |
 | `category_column` | `"category"` | `?category=` filter |
@@ -230,7 +230,7 @@ tables) / `eligibility`. Changing `traffic` remaps users.
 | --- | --- | --- |
 | `enabled` | `false` | Required to start `cicerone dashboard` (which also needs at least one user) and for `cicerone users` to read `users_path` from this file |
 | `host` | `127.0.0.1` | Compose needs `0.0.0.0` |
-| `port` | `8090` | — |
+| `port` | `8090` (1–65535; 0 deprecated) | — |
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |

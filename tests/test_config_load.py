@@ -264,6 +264,11 @@ def test_load_settings_rejects_invalid_item_based_k_neighbors(tmp_path):
         load_settings(config_path)
 
 
+def test_make_settings_rejects_invalid_item_based_k_neighbors():
+    with pytest.raises(ConfigError, match="job.item_based.k_neighbors must be >= 1, got 0"):
+        make_settings(item_based_k_neighbors=0)
+
+
 def test_load_settings_rejects_unknown_model(tmp_path):
     config_path = write_toml(
         tmp_path,
@@ -1533,3 +1538,56 @@ def test_load_settings_rejects_non_finite_numbers(tmp_path, toml, message):
 def test_make_settings_rejects_unknown_mode():
     with pytest.raises(ConfigError, match="job.mode must be one of"):
         make_settings(mode="not_a_mode")
+
+
+_PORT_KEYS = [("serve", "serve"), ("trigger", "job.trigger"), ("dashboard", "dashboard")]
+
+
+@pytest.mark.parametrize(("section", "name"), _PORT_KEYS)
+@pytest.mark.parametrize(
+    ("port", "message"), [(-1, "must be >= 0, got -1"), (65536, "must be <= 65535, got 65536")]
+)
+def test_make_settings_rejects_out_of_range_port(section, name, port, message):
+    with pytest.raises(ConfigError, match=f"^{re.escape(f'{name}.port {message}')}$"):
+        make_settings(**{section: {"port": port}})
+
+
+@pytest.mark.parametrize("section", ["serve", "trigger", "dashboard"])
+@pytest.mark.parametrize("port", [1, 65535])
+def test_make_settings_accepts_port_range_bounds(section, port):
+    assert getattr(make_settings(**{section: {"port": port}}), section).port == port
+
+
+@pytest.mark.parametrize(("section", "name"), _PORT_KEYS)
+def test_make_settings_port_zero_loads_with_deprecation_warning(caplog, section, name):
+    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+        settings = make_settings(**{section: {"port": 0}})
+    assert getattr(settings, section).port == 0
+    assert f"{name}.port = 0 (any free port) is deprecated and will be rejected in 0.9.0" in caplog.text
+
+
+def test_load_settings_rejects_out_of_range_serve_port(tmp_path):
+    config_path = write_toml(tmp_path, f"[serve]\nport = 70000\n{MINIMAL_IO_TOML}")
+    with pytest.raises(ConfigError, match=r"^serve\.port must be <= 65535, got 70000$"):
+        load_settings(config_path)
+
+
+@pytest.mark.parametrize(
+    ("default_k", "message"),
+    [(0, r"^serve\.default_k must be >= 1, got 0$"), (101, r"^serve\.default_k must be <= 100, got 101$")],
+)
+def test_make_settings_pins_serve_default_k_messages(default_k, message):
+    with pytest.raises(ConfigError, match=message):
+        make_settings(serve={"default_k": default_k})
+
+
+def test_make_settings_validates_item_based_k_neighbors_with_explicit_model_configs():
+    with pytest.raises(ConfigError, match=r"^job\.item_based\.k_neighbors must be >= 1, got 0$"):
+        make_settings(item_based_k_neighbors=0, model_configs={"collaborative": {"epochs": 2}})
+
+
+@pytest.mark.parametrize("weights", ["1", "[]"])
+def test_load_settings_rejects_non_table_model_weights(tmp_path, weights):
+    config_path = write_toml(tmp_path, f"[job]\nmodel_weights = {weights}\n{MINIMAL_IO_TOML}")
+    with pytest.raises(ConfigError, match=r"^job\.model_weights must be a table of model name -> weight"):
+        load_settings(config_path)

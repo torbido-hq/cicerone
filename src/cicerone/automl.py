@@ -25,6 +25,7 @@ from cicerone.config import (
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset, build_interactions
@@ -176,12 +177,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
             raise ValueError(
                 f"Unknown model(s) in automl candidate {unknown}; available: {sorted(STRATEGIES)}"
             )
-        weights_value = entry.get("weights")
-        if weights_value is not None and not isinstance(weights_value, dict):
-            raise ValueError(
-                f"automl candidate 'weights' must be a table of model name -> weight, got {weights_value!r}"
-            )
-        weights = {str(k): float(v) for k, v in weights_value.items()} if weights_value is not None else None
+        weights = weights_field(entry, "weights", context="automl candidate 'weights'")
         if weights is not None:
             unknown_weights = [name for name in weights if name not in models]
             if unknown_weights:
