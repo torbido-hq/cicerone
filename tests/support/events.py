@@ -8,11 +8,27 @@ from typing import Any
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.base import NormalizedEvent
+from cicerone.events.online_result import OnlineRefreshResult
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.io.factory import build_output_sink
+from support.settings import local_output
 from support.waits import WAIT_SECONDS
+
+
+class FakeOnline:
+    """Online refresher whose every refresh returns ``rows`` for one user."""
+
+    def __init__(self, rows: Any) -> None:
+        self._rows = rows
+
+    def refresh(self, events: Sequence[NormalizedEvent]) -> OnlineRefreshResult:
+        del events
+        return OnlineRefreshResult(rows=self._rows, users_refreshed=1, fit_partial_epochs=1)
+
+    def invalidate(self) -> None:
+        return None
 
 
 class BeatingSource(WebhookEventSource):
@@ -44,6 +60,10 @@ def apply_after_second_beat(worker: EventWorker, source: BeatingSource) -> None:
     worker._updater.apply = _held  # type: ignore[method-assign]
 
 
+# json.loads rejects these without a JSONDecodeError: int digit limit (ValueError), nesting (RecursionError).
+UNPARSABLE_JSON_BODIES = (b'{"user_id": ' + b"1" * 4301 + b"}", b"[" * 200_000)
+
+
 def event_payload(**overrides) -> dict:
     base = {
         "user_id": "u1",
@@ -61,7 +81,7 @@ def dataset_updater(tmp_path, feature_config, top_k=3, **kwargs):  # type: ignor
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=top_k,
     )
     sink = build_output_sink(settings.output)
@@ -69,3 +89,15 @@ def dataset_updater(tmp_path, feature_config, top_k=3, **kwargs):  # type: ignor
         sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=top_k, **kwargs
     )
     return settings, sink, updater
+
+
+def output_updater(output: IOSettings, feature_config, **kwargs) -> IncrementalUpdater:  # type: ignore[no-untyped-def]
+    """Writes no ``reasons``, so it fits a table without that column."""
+    return IncrementalUpdater(
+        sink=build_output_sink(output),
+        output_settings=output,
+        feature_config=feature_config,
+        top_k=5,
+        explain_enabled=False,
+        **kwargs,
+    )

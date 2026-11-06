@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
 
 from cicerone.capability import CapabilityMeta
+
+
+def manifest_newer(manifest: Mapping[str, Any], started_at: str) -> bool:
+    """Whether a stored run stamped ``manifest`` after ``started_at``; only string stamps count."""
+    return any(
+        isinstance(stamp, str) and stamp > started_at
+        for stamp in (manifest.get("generated_at"), manifest.get("last_incremental_at"))
+    )
 
 
 class InputSource(Protocol):

@@ -13,10 +13,23 @@ from cicerone.policy import (
     group_users_by_cohort,
     has_user_scoped_eligibility,
     index_users_by_id,
-    item_boost_factors,
     resolve_eligibility,
 )
 from cicerone.reasons import BOOST_HITS_COLUMN, PRIORITY_BLOCK_COLUMN
+
+
+def _boost_factors(items: pd.DataFrame, boosts: list[BoostRule]) -> dict[str, float]:
+    """Each item's boost factor, read from the score of a one-point recommendation."""
+    recs = pd.DataFrame(
+        {
+            Columns.User: "u1",
+            Columns.Item: items["item_id"],
+            Columns.Rank: range(1, len(items) + 1),
+            Columns.Score: 1.0,
+        }
+    )
+    out = apply_boosts(recs, items, boosts, record_hits=False)
+    return dict(zip(out[Columns.Item], out[Columns.Score], strict=True))
 
 
 def _items() -> pd.DataFrame:
@@ -291,7 +304,7 @@ def test_apply_boosts_tie_break_is_deterministic():
         ]
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    out = apply_boosts(recs, items, boosts, top_k=2)
+    out = apply_boosts(recs, items, boosts, top_k=2, record_hits=True)
     # Equal boosted scores → stable sort by item id ascending
     assert list(out[Columns.Item]) == ["i_a", "i_b"]
 
@@ -335,8 +348,8 @@ def test_missing_column_warnings_are_deduplicated(caplog):
 
     eligible_item_mask(None, items, rules)
     eligible_item_mask(None, items, rules)
-    item_boost_factors(items, boosts)
-    item_boost_factors(items, boosts)
+    _boost_factors(items, boosts)
+    _boost_factors(items, boosts)
 
     assert caplog.text.count("not_a_column") == 1
     assert caplog.text.count("also_missing") == 1
@@ -501,18 +514,19 @@ def test_apply_boosts_truncates_even_when_items_missing():
         ]
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    out = apply_boosts(recs, None, boosts, top_k=2)
+    out = apply_boosts(recs, None, boosts, top_k=2, record_hits=True)
     assert list(out[Columns.Item]) == ["i1", "i2"]
     assert len(out) == 2
 
 
-def test_item_boost_factors_warns_once_when_items_missing(caplog):
+def test_apply_boosts_warns_once_when_items_missing(caplog):
     import cicerone.policy.boosts as policy_boosts
 
     policy_boosts._warned_boost_without_items = False
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    assert item_boost_factors(None, boosts) == {}
-    assert item_boost_factors(pd.DataFrame(), boosts) == {}
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0}])
+    assert apply_boosts(recs, None, boosts, record_hits=False)[Columns.Score].tolist() == [3.0]
+    assert apply_boosts(recs, pd.DataFrame(), boosts, record_hits=False)[Columns.Score].tolist() == [3.0]
     assert caplog.text.count("item boosts will not be applied") == 1
 
 
@@ -528,7 +542,7 @@ def test_boolean_and_value_map_and_numeric_boosts():
         ),
         BoostRule(name="margin", kind="numeric", item_column="margin", weight=1.0),
     ]
-    factors = item_boost_factors(items, boosts)
+    factors = _boost_factors(items, boosts)
     # i1: 2.0 * 1.5 * (1 + 1*(10-1)/(20-1)) = 3.0 * (1 + 9/19)
     assert factors["i1"] == pytest.approx(3.0 * (1 + 9 / 19))
     # i2: 1.0 * 1.0 * (1 + (5-1)/(20-1))
@@ -543,7 +557,7 @@ def test_apply_boosts_reorders_and_truncates():
         ]
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    out = apply_boosts(recs, _items(), boosts, top_k=1)
+    out = apply_boosts(recs, _items(), boosts, top_k=1, record_hits=True)
     assert list(out[Columns.Item]) == ["i1"]
     assert list(out[Columns.Rank]) == [1]
     assert out.iloc[0][Columns.Score] == pytest.approx(18.0)
@@ -573,13 +587,13 @@ def test_apply_boosts_keeps_priority_source_blocks_in_order():
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
 
-    out = apply_boosts(recs, items, boosts, top_k=4)
+    out = apply_boosts(recs, items, boosts, top_k=4, record_hits=True)
 
     assert list(out[Columns.Item]) == ["als_2", "als_1", "pop_2", "pop_1"]
     assert list(out[Columns.Rank]) == [1, 2, 3, 4]
     assert list(out[Columns.Score]) == pytest.approx([1.6, 0.9, 2200.0, 1200.0])
     # Without strategy blocks the same frame sorts by raw scale across models.
-    mixed = apply_boosts(recs.drop(columns=[PRIORITY_BLOCK_COLUMN]), items, boosts, top_k=4)
+    mixed = apply_boosts(recs.drop(columns=[PRIORITY_BLOCK_COLUMN]), items, boosts, top_k=4, record_hits=True)
     assert list(mixed[Columns.Item]) == ["pop_2", "pop_1", "als_2", "als_1"]
 
 
@@ -598,7 +612,7 @@ def test_apply_boosts_omits_identity_factors():
             value_factors={"premium": 1.5, "standard": 1.1, "free": 1.0},
         ),
     ]
-    out = apply_boosts(recs, _items(), boosts, top_k=1)
+    out = apply_boosts(recs, _items(), boosts, top_k=1, record_hits=True)
     assert out.iloc[0][BOOST_HITS_COLUMN] == []
 
 
@@ -669,7 +683,7 @@ def test_numeric_factors_and_boost_without_top_k():
         ]
     )
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    out = apply_boosts(recs, _items(), boosts, top_k=None)
+    out = apply_boosts(recs, _items(), boosts, top_k=None, record_hits=True)
     assert list(out[Columns.Item]) == ["i1", "i2"]
     assert len(out) == 2
 
@@ -701,7 +715,7 @@ def test_boost_helpers_cover_missing_values_and_edge_numeric():
             {"item_id": "i3", "flag": True, "tier": "premium", "margin": float("nan")},
         ]
     )
-    factors = item_boost_factors(
+    factors = _boost_factors(
         items,
         [
             BoostRule(name="flag", kind="boolean", item_column="flag", factor=2.0),
@@ -720,15 +734,18 @@ def test_boost_helpers_cover_missing_values_and_edge_numeric():
     assert factors["i3"] == pytest.approx(2.0 * 1.5)
 
     empty_boost = [BoostRule(name="x", kind="boolean", item_column="flag", factor=2.0)]
-    assert item_boost_factors(items.iloc[0:0], empty_boost) == {}
+    recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0}])
+    assert apply_boosts(recs, items.iloc[0:0], empty_boost, record_hits=False)[Columns.Score].tolist() == [
+        3.0
+    ]
     with pytest.raises(ValueError, match="Unknown boost kind"):
-        item_boost_factors(items, [BoostRule(name="bad", kind="nope", item_column="flag")])
+        _boost_factors(items, [BoostRule(name="bad", kind="nope", item_column="flag")])
 
 
 def test_apply_boosts_empty_recs_and_no_boosts_paths():
     empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score])
     boosts = [BoostRule(name="paying", kind="boolean", item_column="is_paying_producer", factor=2.0)]
-    assert apply_boosts(empty, _items(), boosts, top_k=1).empty
+    assert apply_boosts(empty, _items(), boosts, top_k=1, record_hits=True).empty
 
     recs = pd.DataFrame(
         [
@@ -736,14 +753,31 @@ def test_apply_boosts_empty_recs_and_no_boosts_paths():
             {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 2.0},
         ]
     )
-    truncated = apply_boosts(recs, _items(), [], top_k=1)
+    truncated = apply_boosts(recs, _items(), [], top_k=1, record_hits=True)
     assert list(truncated[Columns.Item]) == ["i1"]
-    untruncated = apply_boosts(recs, _items(), [], top_k=None)
+    untruncated = apply_boosts(recs, _items(), [], top_k=None, record_hits=True)
     assert len(untruncated) == 2
     no_hits = apply_boosts(recs, _items(), boosts, top_k=2, record_hits=False)
     from cicerone.reasons import BOOST_HITS_COLUMN
 
     assert BOOST_HITS_COLUMN not in no_hits.columns
+
+
+def test_apply_boosts_records_hits_on_a_duplicate_items_index():
+    items = pd.DataFrame(
+        [{"item_id": "i1", "paying": True}, {"item_id": "i2", "paying": False}],
+        index=[0, 0],
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 2.0},
+        ]
+    )
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="paying", factor=2.0)]
+    out = apply_boosts(recs, items, boosts, record_hits=True)
+    assert out[Columns.Score].tolist() == [6.0, 2.0]
+    assert out[BOOST_HITS_COLUMN].tolist() == [[{"name": "paying", "factor": 2.0}], []]
 
 
 def test_boolean_boost_respects_string_false():
@@ -754,7 +788,7 @@ def test_boolean_boost_respects_string_false():
         ]
     )
     boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=2.0)]
-    factors = item_boost_factors(items, boosts)
+    factors = _boost_factors(items, boosts)
     assert factors["a"] == 2.0
     assert factors["b"] == 1.0
 
@@ -770,7 +804,7 @@ def test_boolean_boost_respects_numeric_zero_and_nonzero():
         ]
     )
     boosts = [BoostRule(name="f", kind="boolean", item_column="featured", factor=3.0)]
-    factors = item_boost_factors(items, boosts)
+    factors = _boost_factors(items, boosts)
     assert factors["z"] == 1.0
     assert factors["one"] == 3.0
     assert factors["two"] == 3.0

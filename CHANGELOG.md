@@ -48,10 +48,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Incremental updates no longer put `__cold_start__` rows with a missing
   variant under an experiment variant named `None`, `nan`, `<NA>` or
-  `NaT`; such rows are dropped, as real users' rows already were.
+  `NaT`; such rows are dropped when the list also has labelled rows, as
+  real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
+- An incremental flush no longer trims preserved rows to reserve boost slots
+  it won't use (`top_k` of 7 or more). `incremental` rows from earlier flushes
+  are still not preserved, so a later flush can shorten a list.
+- An event with `user_id` `__cold_start__` no longer writes the cold-start
+  list twice, with repeated ranks and items, or creates one, and it no longer
+  reaches online refresh; the event is acked and counted.
+- With experiments on, an incremental flush no longer wipes lists whose
+  `variant` is all NULL (as after the documented `ALTER TABLE`): those rows
+  go to the primary variant, like a table without the column. A user assigned
+  to another variant is served only the flush rows there until the next job.
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
@@ -210,10 +221,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- A Kafka or RabbitMQ message or an S3 object with an integer over 4300 digits
+  or very deep JSON nesting is logged and discarded like other invalid JSON,
+  instead of stopping the event worker or, for S3 in SQS mode, being retried.
+- An unreadable S3 object in an SQS notification is logged and skipped, and
+  events from the notification's other objects are delivered, instead of the
+  whole message being deleted and those events lost. A notification that
+  yields no events, including one with only empty objects, is deleted.
+- The `POST /events` OpenAPI description of `event_type` says that without a
+  `features.toml` every type counts as a signal and the size of `quantity`
+  affects only the popular ranking (online refresh uses the artifact's config),
+  instead of requiring a `[event_weights]` key.
 - An item the user just consumed that is already in their preserved rows
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
   win when there are more than slots.
+- Boosts no longer raise `TypeError` on an items table with a duplicate index.
 
 ### Removed
 

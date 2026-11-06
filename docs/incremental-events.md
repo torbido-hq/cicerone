@@ -35,7 +35,10 @@ emits an empty-list message for each cleared user. With `features.toml`
 present, an unknown or zero-weight flush keeps the prior list (including `incremental` rows)
 instead of deleting it. Incremental publish
 requires keyword `user_ids=`. Batch popular / latest
-rows stay; a flush does not rebuild `__cold_start__`. When `[experiment]` is
+rows stay; a flush does not rebuild `__cold_start__`. An event whose `user_id`
+is `__cold_start__` is acked and counted but gets no list of its own and never
+reaches `[events.online]`; its item can still backfill other users in the same
+flush. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
 variant; other variants keep their last batch lists. AutoML challenger arms
 use each configured variant's eligibility, including custom names. Online LightFM
@@ -47,7 +50,10 @@ Preserved personalized / `item_based` / `sequential` / `content_fallback`
 / `blended` rows keep their batch `reasons` unless `[events.online]` replaced
 them. New popular, latest, and
 `incremental` rows get a minimal `{sources:[{label}]}` payload — no
-history-overlap `similar_items` on this path.
+history-overlap `similar_items` on this path. A flush does not trim preserved
+rows to reserve boost slots it won't use, and popular / latest backfill only
+reaches a list with free slots. `incremental` rows from earlier flushes are not
+preserved, so a later flush can still shorten a list.
 
 Batch I/O and serve packages: [architecture.md](architecture.md).
 
@@ -67,7 +73,7 @@ Same columns as batch input:
 | --- | --- | --- |
 | `user_id` | yes | string |
 | `item_id` | yes | string |
-| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts, with `quantity` as its weight |
+| `event_type` | yes | types missing from `features.toml` `[event_weights]` are accepted but carry no weight; if serve has no `features.toml`, every type counts as a signal and the size of `quantity` affects only the popular ranking, except online refresh, which uses the artifact's config |
 | `quantity` | no | integer `>= 1`, default `1`. Webhook: a fractional, non-numeric or `< 1` value is a `400`. Other sources reject those too, but truncate a fractional number first (`1.5` applies as `1`, `0.5` is rejected) |
 | `occurred_at` | yes | timezone-aware: ISO-8601 with `Z` or offset, or Unix epoch seconds (UTC) |
 
@@ -243,7 +249,10 @@ per bucket/prefix.
 AWS-only `mode = "sqs"` (`queue_url`, optional `region_name`) is rejected
 when `endpoint_url` is set. `nack` requeues locally and extends SQS
 visibility so a lock-busy
-replica can retry without waiting out the visibility timeout.
+replica can retry without waiting out the visibility timeout. An unreadable
+object in a notification is logged and skipped: events from the notification's
+other objects are delivered, and the message is deleted once they are acked,
+or at once if the notification yields no events.
 
 ### `redis_streams`
 

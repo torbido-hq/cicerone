@@ -53,6 +53,7 @@ from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, m
 from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationItem, RecommendationsResponse
+from cicerone.track.normalize import NormalizedTrack
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
 from cicerone.track.store_db import require_track_ingest_database
@@ -315,19 +316,19 @@ def create_app(
                     user_id=user_id,
                 )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
-            occurred = datetime.now(UTC).isoformat()
+            occurred = datetime.now(UTC)
             rows = [
-                {
-                    "kind": TRACK_KIND_IMPRESSION,
-                    "user_id": user_id,
-                    "item_id": str(row.item_id),
-                    "rank": int(row.rank),
-                    "occurred_at": occurred,
-                    "event_id": str(uuid4()),
-                    "variant": variant,
-                    "experiment_id": experiment_id,
-                    "generated_at": generated_at,
-                }
+                NormalizedTrack(
+                    kind=TRACK_KIND_IMPRESSION,
+                    user_id=user_id,
+                    item_id=str(row.item_id),
+                    rank=int(row.rank),
+                    occurred_at=occurred,
+                    event_id=str(uuid4()),
+                    variant=variant,
+                    experiment_id=experiment_id,
+                    generated_at=generated_at,
+                ).as_row()
                 for row in filtered.itertuples(index=False)
             ]
             submit_append(

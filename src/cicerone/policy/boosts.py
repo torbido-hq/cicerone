@@ -64,7 +64,7 @@ def item_boost_details(
     items: pd.DataFrame | None,
     boosts: Sequence[BoostRule],
     *,
-    record_hits: bool = True,
+    record_hits: bool,
 ) -> tuple[dict[str, float], dict[str, list[dict[str, object]]]]:
     """item_id → (product of factors, hits where a rule factor was not 1.0)."""
     if not boosts:
@@ -88,21 +88,16 @@ def item_boost_details(
     if not record_hits:
         return factors, {}
     hits: dict[str, list[dict[str, object]]] = {}
-    for item_id, idx in zip(ids, items.index, strict=True):
+    rule_values = [(name, series.to_numpy(dtype=float)) for name, series in rule_series]
+    for position, item_id in enumerate(ids):
         item_hits = []
-        for name, series in rule_series:
-            factor = float(series.loc[idx])
+        for name, values in rule_values:
+            factor = float(values[position])
             if factor != 1.0:
                 item_hits.append({"name": name, "factor": factor})
         if item_hits:
             hits[str(item_id)] = item_hits
     return factors, hits
-
-
-def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
-    """item_id → product of configured boost factors."""
-    factors, _hits = item_boost_details(items, boosts)
-    return factors
 
 
 def apply_boosts(
@@ -111,7 +106,7 @@ def apply_boosts(
     boosts: Sequence[BoostRule],
     top_k: int | None = None,
     *,
-    record_hits: bool = True,
+    record_hits: bool,
 ) -> pd.DataFrame:
     """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set.
 

@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import event, select, text
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
+from support.settings import local_output
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.base import has_ephemeral_event_ids
@@ -31,7 +32,7 @@ def _outputs(tmp_path) -> dict[str, IOSettings]:  # type: ignore[no-untyped-def]
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     return {
-        "dataset": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        "dataset": local_output(out),
         "db": IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"}),
     }
 
