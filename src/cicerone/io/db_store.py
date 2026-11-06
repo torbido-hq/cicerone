@@ -40,6 +40,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.dialects.mysql import LONGBLOB
 from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
@@ -597,7 +598,8 @@ class DatabaseOutputSink:
         return Table(
             table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
             MetaData(),
-            Column("payload", LargeBinary, nullable=False),
+            # Plain LargeBinary is a 64 KB BLOB on MySQL and MariaDB.
+            Column("payload", LargeBinary().with_variant(LONGBLOB(), "mysql", "mariadb"), nullable=False),
             Column("written_at", DateTime(timezone=True), nullable=False),
         )
 

@@ -9,29 +9,22 @@ from functools import cached_property
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import (
-    BigInteger,
-    Column,
-    Engine,
-    Insert,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
-    bindparam,
-    select,
-    text,
-)
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy import BigInteger, Column, Engine, Insert, Integer, Table, Text, bindparam, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
-from cicerone.config.constants import ConfigError
-from cicerone.io.engines import LazyEngine, is_mysql_family, quote_identifier
+from cicerone.config.constants import MYSQL_KEY_CHARS, ConfigError
+from cicerone.io.engines import (
+    JSON_PAYLOAD_TYPE,
+    TEXT_KEY_TYPE,
+    LazyEngine,
+    is_mysql_family,
+    quote_identifier,
+    store_table,
+)
 from cicerone.io.options import require_option, table_option
 from cicerone.io.recommendation_schema import RANK_COLUMN
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
@@ -50,16 +43,7 @@ from cicerone.track.store_common import (
     unique_matching_rows,
 )
 
-_MYSQL_EVENT_ID_CHARS = 255
 _MYSQL_TEXT_BYTES = 65535
-# MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
-_EVENT_ID_TYPE = Text().with_variant(String(_MYSQL_EVENT_ID_CHARS, collation="utf8mb4_0900_bin"), "mysql")
-# A large top_k can push the by-rank report past MySQL TEXT's 64 KB.
-_EVAL_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
-
-
-def _store_table(name: str, *columns: Column[Any]) -> Table:
-    return Table(name, MetaData(), *columns, mysql_charset="utf8mb4", mysql_engine="InnoDB")
 
 
 class TrackDbBackend:
@@ -102,9 +86,9 @@ class TrackDbBackend:
 
     @cached_property
     def _track_table(self) -> Table:
-        return _store_table(
+        return store_table(
             table_option(self._options, "track_table", DEFAULT_TRACK_TABLE),
-            Column("event_id", _EVENT_ID_TYPE, primary_key=True),
+            Column("event_id", TEXT_KEY_TYPE, primary_key=True),
             Column("kind", Text, nullable=False),
             Column("user_id", Text, nullable=False),
             Column("item_id", Text, nullable=False),
@@ -117,15 +101,15 @@ class TrackDbBackend:
 
     @cached_property
     def _eval_table(self) -> Table:
-        return _store_table(
+        return store_table(
             table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE),
-            Column("payload", _EVAL_PAYLOAD_TYPE, nullable=False),
+            Column("payload", JSON_PAYLOAD_TYPE, nullable=False),
             Column("written_at", Text, nullable=False),
         )
 
     @cached_property
     def _history_table(self) -> Table:
-        return _store_table(
+        return store_table(
             table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE),
             *(Column(name, BigInteger if name == RANK_COLUMN else Text) for name in HISTORY_COLUMNS),
         )
@@ -201,12 +185,7 @@ class TrackDbBackend:
         return parsed if isinstance(parsed, dict) else None
 
     def _append_history_db(self, frame: pd.DataFrame) -> None:
-        table = self._history_table
-        engine = self.engine()
-        # Before the rows' transaction: DDL commits implicitly on MySQL.
-        with engine.begin() as conn:
-            conn.execute(CreateTable(table, if_not_exists=True))
-        append_frame_fenced(engine, table.name, frame, self._fence)
+        append_frame_fenced(self.engine(), self._history_table, frame, self._fence)
 
     def _read_history_db(
         self,
@@ -260,8 +239,8 @@ def _existing_event_ids(conn: Any, table: Table, event_ids: Sequence[str]) -> se
 
 def _reject_values_mysql_cannot_store(rows: list[dict[str, Any]]) -> None:
     for row in rows:
-        if len(row["event_id"]) > _MYSQL_EVENT_ID_CHARS:
-            raise TrackNormalizeError(f"event_id is longer than {_MYSQL_EVENT_ID_CHARS} characters")
+        if len(row["event_id"]) > MYSQL_KEY_CHARS:
+            raise TrackNormalizeError(f"event_id is longer than {MYSQL_KEY_CHARS} characters")
         for name, value in row.items():
             try:
                 if isinstance(value, str) and len(value.encode()) > _MYSQL_TEXT_BYTES:

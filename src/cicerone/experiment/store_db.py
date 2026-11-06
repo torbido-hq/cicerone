@@ -5,14 +5,16 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
+from functools import cached_property
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Column, Engine, Table, Text, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
+from sqlalchemy.schema import CreateTable
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
-from cicerone.io.engines import LazyEngine, create_table_sql, quote_identifier
+from cicerone.io.engines import JSON_PAYLOAD_TYPE, TEXT_KEY_TYPE, LazyEngine, quote_identifier, store_table
 from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, replace_rows_fenced
 from cicerone.locks import WriteFence
@@ -28,14 +30,6 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
     "variant",
     "generated_at",
     "exposed_at",
-)
-
-
-_STATE_TABLE = (
-    ("experiment_id", "TEXT PRIMARY KEY"),
-    ("promoted_variant", "TEXT"),
-    ("promoted_at", "TEXT"),
-    ("payload", "TEXT"),
 )
 
 
@@ -74,8 +68,25 @@ class ExperimentDbBackend:
     def engine(self) -> Engine:
         return self._engine.get()
 
+    @cached_property
+    def _state_table(self) -> Table:
+        return store_table(
+            table_option(self._options, "experiment_state_table", DEFAULT_STATE_TABLE),
+            Column("experiment_id", TEXT_KEY_TYPE, primary_key=True),
+            Column("promoted_variant", Text),
+            Column("promoted_at", Text),
+            Column("payload", JSON_PAYLOAD_TYPE),
+        )
+
+    @cached_property
+    def _exposures_table(self) -> Table:
+        return store_table(
+            table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE),
+            *(Column(name, Text) for name in EXPOSURE_COLUMNS),
+        )
+
     def read_state(self) -> dict[str, Any] | None:
-        table = table_option(self._options, "experiment_state_table", DEFAULT_STATE_TABLE)
+        table = self._state_table.name
         engine = self.engine()
         quoted_table, promoted_at = quote_identifier(engine, table), quote_identifier(engine, "promoted_at")
         try:
@@ -105,9 +116,9 @@ class ExperimentDbBackend:
 
     def state_writer(self, state: dict[str, Any]) -> Callable[[], None]:
         # Encode before the caller takes the fence; only the SQL runs under it.
-        table = table_option(self._options, "experiment_state_table", DEFAULT_STATE_TABLE)
+        table = self._state_table
         engine = self.engine()
-        quoted_table = quote_identifier(engine, table)
+        quoted_table = quote_identifier(engine, table.name)
         experiment_id = str(state.get("experiment_id") or "")
         promoted_variant = state.get("promoted_variant")
         promoted_at = state.get("promoted_at")
@@ -115,7 +126,6 @@ class ExperimentDbBackend:
             promoted_variant = str(promoted_variant)
         if promoted_at is not None:
             promoted_at = str(promoted_at)
-        create_sql = text(create_table_sql(engine, table, _STATE_TABLE))
         params = {
             "experiment_id": experiment_id,
             "promoted_variant": promoted_variant,
@@ -127,21 +137,22 @@ class ExperimentDbBackend:
             try:
                 with engine.begin() as conn:
                     self._fence.ensure()
-                    conn.execute(create_sql)
-                    replace_rows_fenced(conn, table, params, self._fence)
+                    conn.execute(CreateTable(table, if_not_exists=True))
+                    replace_rows_fenced(conn, table.name, params, self._fence)
             except SQLAlchemyError as exc:
                 if not is_missing_column_error(exc):
                     raise
                 with engine.begin() as conn:
                     self._fence.ensure()
                     payload = quote_identifier(engine, "payload")
-                    conn.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {payload} TEXT"))
-                    replace_rows_fenced(conn, table, params, self._fence)
+                    kind = table.c.payload.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f"ALTER TABLE {quoted_table} ADD COLUMN {payload} {kind}"))
+                    replace_rows_fenced(conn, table.name, params, self._fence)
 
         return _write
 
     def exposure_writer(self, rows: Sequence[Mapping[str, Any]]) -> Callable[[], None]:
-        table = table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE)
+        table = self._exposures_table
         engine = self.engine()
         frame = pd.DataFrame(list(rows))
         return lambda: append_frame_fenced(engine, table, frame, self._fence)
@@ -159,7 +170,7 @@ class ExperimentDbBackend:
         return [column for column in EXPOSURE_COLUMNS if column in existing]
 
     def read_exposures(self, *, experiment_id: str | None = None) -> list[dict[str, Any]]:
-        table = table_option(self._options, "exposures_table", DEFAULT_EXPOSURES_TABLE)
+        table = self._exposures_table.name
         engine = self.engine()
         quoted_table = quote_identifier(engine, table)
         selected = self.stored_exposure_columns(engine, table)

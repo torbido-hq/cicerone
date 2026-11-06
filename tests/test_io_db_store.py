@@ -634,3 +634,27 @@ def test_a_failed_full_write_keeps_the_rows_and_the_replay_keys(tmp_path, monkey
     assert sink.applied_event_keys(["k1"]) == {"k1"}
     with sink._engine.connect() as conn:
         assert conn.execute(text("SELECT user_id, item_id FROM recommendations")).all() == [("u1", "i1")]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "kind"),
+    [
+        (mysql.dialect(), "LONGBLOB"),
+        (mariadb.MariaDBDialect(), "LONGBLOB"),
+        (postgresql.dialect(), "BYTEA"),
+        (sqlite.dialect(), "BLOB"),
+    ],
+)
+def test_model_artifact_payload_type_by_dialect(dialect, kind) -> None:
+    table = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})._model_artifacts_table()
+    assert f"payload {kind} NOT NULL" in str(CreateTable(table).compile(dialect=dialect))
+
+
+def test_model_artifact_over_64_kb_roundtrips_on_every_backend(track_db_output) -> None:
+    sink = DatabaseOutputSink(track_db_output.options)
+    payload = bytes(range(256)) * 1024
+    sink.write_model_artifact(payload)
+    assert sink.read_model_artifact() == payload
+    token = sink.model_artifact_fingerprint()
+    assert sink.replace_model_artifact_if(payload * 2, token) is True
+    assert sink.read_model_artifact() == payload * 2

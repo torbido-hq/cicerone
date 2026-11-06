@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import sqlalchemy
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Column, Connection, Engine, MetaData, String, Table, Text
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+
+from cicerone.config.constants import MYSQL_KEY_CHARS
+
+# MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
+TEXT_KEY_TYPE = Text().with_variant(String(MYSQL_KEY_CHARS, collation="utf8mb4_0900_bin"), "mysql")
+# A large top_k can push a by-rank report past MySQL TEXT's 64 KB.
+JSON_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -33,10 +42,8 @@ def is_mysql_family(bind: Engine | Connection) -> bool:
     return bind.dialect.name in ("mysql", "mariadb")
 
 
-def create_table_sql(bind: Engine | Connection, table: str, columns: Sequence[tuple[str, str]]) -> str:
-    """``CREATE TABLE IF NOT EXISTS`` for ``(name, type)`` columns, every identifier quoted."""
-    spec = ", ".join(f"{quote_identifier(bind, name)} {kind}" for name, kind in columns)
-    return f"CREATE TABLE IF NOT EXISTS {quote_identifier(bind, table)} ({spec})"
+def store_table(name: str, *columns: Column[Any]) -> Table:
+    return Table(name, MetaData(), *columns, mysql_charset="utf8mb4", mysql_engine="InnoDB")
 
 
 def insert_sql(bind: Engine | Connection, table: str, names: Sequence[str]) -> str:

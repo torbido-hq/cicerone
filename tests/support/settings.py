@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from typing import Any
 
+from sqlalchemy import Engine, inspect
+
 from cicerone.config import (
     AutomlSettings,
     DashboardSettings,
@@ -23,6 +25,13 @@ _FLAT_SECTIONS: dict[str, type[Any]] = {
     "track": TrackSettings,
     "eval": EvalSettings,
 }
+
+
+def stored_column_types(engine: Engine, table: str) -> list[tuple[str, str, bool]]:
+    return [
+        (column["name"], type(column["type"]).__name__.upper(), column["nullable"])
+        for column in inspect(engine).get_columns(table)
+    ]
 
 
 def make_settings(**overrides: Any) -> Settings:
