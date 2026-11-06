@@ -24,7 +24,6 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
 | `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
-| `io/recommendation_reader.py` | Re-exports the serve-mode recommendation readers and shared helpers |
 | `io/dataset_recommendation_reader.py` / `io/db_recommendation_reader.py` | Read-only lookup of precomputed recs (parquet cache indexed by `user_id` at refresh / SQL per request) |
 | `io/recommendation_reader_common.py` | Shared cold-start selection rule and item-filter mixin (pulls `rectools` for `Columns` via `blending.py`, but no lightfm/implicit/torch) |
 | `io/engines.py` | Shared SQLAlchemy engines keyed by database URL; dialect-quoted SQL helpers (`quote_identifier`) |

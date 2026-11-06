@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from cicerone.events.store import empty_recommendations_frame
-from cicerone.io.recommendation_reader import (
+from cicerone.io.recommendation_reader_common import (
     ITEM_COLUMN,
     RANK_COLUMN,
     SCORE_COLUMN,

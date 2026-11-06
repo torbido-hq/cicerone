@@ -43,7 +43,7 @@ build_manifest_reader(settings)
 assert "sqlalchemy" not in sys.modules
 assert "cicerone.io.db_store" not in sys.modules
 assert "boto3" not in sys.modules
-assert "cicerone.io.recommendation_reader" not in sys.modules
+assert "cicerone.io.db_recommendation_reader" not in sys.modules
 """
     )
 
