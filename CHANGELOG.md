@@ -223,6 +223,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The dashboard lookup shows an infinite or overflowing rank, score or event
   `quantity` as missing, instead of answering 500 on `quantity` and printing
   `inf` as the score.
+- Database errors in logs and `manifest.error` no longer include bound values
+  (`hide_parameters` on every engine); the SQL text stays. Messages from the
+  database driver can still embed values, such as the key in a duplicate-key
+  error.
 
 ### Removed
 
