@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from cicerone.experiment.recipes import CONTROL_NAME
-
 _LOG_LOG_FLOOR = 3.0
 _VARIANCE_FLOOR = 1e-12
 
@@ -87,9 +85,3 @@ def compare_variants(
         winner=winner,
         alpha=alpha,
     )
-
-
-def pick_control_name(names: list[str]) -> str:
-    if CONTROL_NAME in names:
-        return CONTROL_NAME
-    return names[0]

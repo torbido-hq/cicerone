@@ -57,15 +57,15 @@ def event_payload(**overrides) -> dict:
     return base
 
 
-def dataset_updater(tmp_path, feature_config, **kwargs):  # type: ignore[no-untyped-def]
+def dataset_updater(tmp_path, feature_config, top_k=3, **kwargs):  # type: ignore[no-untyped-def]
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     settings = make_settings(
         output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-        top_k=3,
+        top_k=top_k,
     )
     sink = build_output_sink(settings.output)
     updater = IncrementalUpdater(
-        sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=3, **kwargs
+        sink=sink, output_settings=settings.output, feature_config=feature_config, top_k=top_k, **kwargs
     )
     return settings, sink, updater

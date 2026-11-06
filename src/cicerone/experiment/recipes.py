@@ -26,13 +26,13 @@ from cicerone.feature_config import (
     parse_eligibility_rules,
     parse_latest_date_columns,
 )
+from cicerone.io.recommendation_schema import CONTROL_NAME
 
 COMBINER_PRIORITY = "priority"
 COMBINER_RRF = "rrf"
 COMBINER_BLEND = "blend"
 COMBINERS: tuple[str, ...] = (COMBINER_PRIORITY, COMBINER_RRF, COMBINER_BLEND)
 
-CONTROL_NAME = "control"
 TREATMENT_NAME = "treatment"
 
 

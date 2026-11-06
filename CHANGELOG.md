@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The track table works on MySQL through the `mysql` extra and a
+  `mysql+pymysql://` `database_url`; `/track` answers 400 for an `event_id`
+  over 255 characters or another text value over 65,535 bytes there. The job
+  skips the eval report and recommendation history on MySQL with a warning.
+  Serve with `[track]` enabled refuses to start on any other database with
+  `ConfigError`.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
   impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings
@@ -35,9 +41,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `dashboard.lookup_k` has no effect and is not validated; it logs a
   warning when set with the dashboard enabled, and will be removed in 0.9.0.
+- `serve.port`, `job.trigger.port` or `dashboard.port` = 0 (any free
+  port) logs a deprecation warning; it will be rejected in 0.9.0.
 
 ### Fixed
 
+- Incremental updates no longer put `__cold_start__` rows with a missing
+  variant under an experiment variant named `None`, `nan`, `<NA>` or
+  `NaT`; such rows are dropped, as real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
@@ -169,6 +180,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- A negative `serve.port`, `job.trigger.port` or `dashboard.port`, or one
+  above 65535, is rejected at config load instead of failing at bind.
+- A `job.model_weights` or `[[experiment.variants]]` `weights` /
+  `model_weights` that is not a table fails with a config error instead of
+  an `AttributeError`.
+- Event worker: if returning events to the source fails while it handles
+  another error (lookup, repair, apply, heartbeat, writer lock,
+  already-applied ack, stop-drain flush), the failure is logged and the
+  original error wins. After a handled error the tick returns 0, so a nack
+  bug no longer ends the worker or makes `stop()` raise. Where the events
+  end up is unchanged.
 - When the experiment state read fails, the dashboard experiments page
   shows that dashboard's own last read or written state, instead of an
   unlocked process-wide copy.
@@ -192,6 +214,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `features.toml` every type counts as a signal and the size of `quantity`
   affects only the popular ranking (online refresh uses the artifact's config),
   instead of requiring a `[event_weights]` key.
+- An item the user just consumed that is already in their preserved rows
+  moves into the incremental boost slots, keeping its `source`, `reasons` and
+  `score`, instead of staying low or falling off the list; the newest items
+  win when there are more than slots.
 
 ### Removed
 
