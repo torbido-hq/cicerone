@@ -2100,6 +2100,35 @@ def test_incremental_updater_cold_start_user_event_creates_no_list(
     assert frame["item_id"].astype(str).tolist() == ["p1"]
 
 
+def test_incremental_updater_cold_start_user_event_skips_online_refresh(
+    tmp_path, feature_config: FeatureConfig
+) -> None:
+    refreshed: list[list[str]] = []
+
+    class _FakeOnline:
+        def refresh(self, events):  # type: ignore[no-untyped-def]
+            refreshed.append([event.user_id for event in events])
+            return OnlineRefreshResult(rows=empty_online_rows())
+
+        def invalidate(self) -> None:
+            return None
+
+    settings, _sink, updater = dataset_updater(tmp_path, feature_config, online=_FakeOnline())
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "p1", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
+    events = [
+        event_payload(user_id=COLD_START_USER_ID, item_id="x", event_id="s5"),
+        event_payload(user_id="u1", item_id="i9", event_id="s6"),
+    ]
+    assert updater.apply([normalize_event(event) for event in events]) == 2
+    assert refreshed == [["u1"]]
+    assert updater.events_applied == 2
+    frame = load_recommendations_frame(settings.output)
+    u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
+    assert u1["item_id"].astype(str).tolist() == ["i9", "p1", "x"]
+
+
 def test_incremental_updater_keeps_cold_start_top_k_by_rank(tmp_path, feature_config: FeatureConfig) -> None:
     out = tmp_path / "out"
     out.mkdir()

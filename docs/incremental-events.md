@@ -36,8 +36,9 @@ present, an unknown or zero-weight flush keeps the prior list (including `increm
 instead of deleting it. Incremental publish
 requires keyword `user_ids=`. Batch popular / latest
 rows stay; a flush does not rebuild `__cold_start__`. An event whose `user_id`
-is `__cold_start__` is acked and counted but gets no list of its own; its item
-can still backfill other users in the same flush. When `[experiment]` is
+is `__cold_start__` is acked and counted but gets no list of its own and never
+reaches `[events.online]`; its item can still backfill other users in the same
+flush. When `[experiment]` is
 on, that popular/latest refresh runs only on the **assigned** (or promoted)
 variant; other variants keep their last batch lists. AutoML challenger arms
 use each configured variant's eligibility, including custom names. Online LightFM

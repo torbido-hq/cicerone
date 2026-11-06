@@ -196,7 +196,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         affected_set = set(affected_users) | {COLD_START_USER_ID}
         popular_ranking = self._popular_ranking(batch, weights)
         latest_ranking = self._latest_ranking(batch, weights)
-        online_result = self._refresh_online(events)
+        online_result = self._refresh_online([e for e in events if e.user_id != COLD_START_USER_ID])
         online_by_user = {} if online_result.sequential_skipped else self._online_rows_by_user(online_result)
 
         pending_publish: tuple[pd.DataFrame, str, list[str]] | None = None
