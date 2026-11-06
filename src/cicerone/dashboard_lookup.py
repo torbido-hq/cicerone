@@ -295,7 +295,7 @@ def _format_score(value: object) -> str:
 
 
 def _format_quantity(value: object) -> str:
-    number = _coerce_float(pd.to_numeric(value, errors="coerce"))
+    number = _coerce_float(value)
     if number is None:
         return MISSING
     if number == int(number):

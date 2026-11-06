@@ -166,11 +166,19 @@ def test_format_recommendation_rows_formats_score():
 
 @pytest.mark.parametrize("value", [float("inf"), float("-inf"), "1e400", 10**400])
 def test_format_recommendation_rows_treats_overflowing_numbers_as_missing(value):
-    recs = pd.DataFrame([{"item_id": "i1", "rank": value, "score": value}], dtype=object)
+    recs = pd.DataFrame(
+        [
+            {"item_id": "i1", "rank": value, "score": value},
+            {"item_id": "i2", "rank": 1e308, "score": 1e308},
+        ],
+        dtype=object,
+    )
     rows = format_recommendation_rows(recs, category_column=None)
 
     assert rows[0]["rank"] == MISSING
     assert rows[0]["score"] == MISSING
+    assert rows[1]["rank"] == str(int(1e308))
+    assert rows[1]["score"] == f"{1e308:.4f}"
 
 
 def test_format_event_rows_uses_placeholders():
@@ -200,14 +208,18 @@ def test_format_event_rows_formats_quantity_and_timestamp():
     assert rows[0]["occurred_at"].startswith("2026-08-21")
 
 
-@pytest.mark.parametrize("value", [float("inf"), float("-inf"), "inf", 10**400])
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), "inf", "1e400", 10**400, -(10**400)])
 def test_format_event_rows_treats_overflowing_quantity_as_missing(value):
-    rows = format_event_rows(pd.DataFrame([{"item_id": "i1", "quantity": value}], dtype=object))
+    events = pd.DataFrame(
+        [{"item_id": "i1", "quantity": value}, {"item_id": "i2", "quantity": 1e308}], dtype=object
+    )
+    rows = format_event_rows(events)
 
     assert rows[0]["quantity"] == MISSING
+    assert rows[1]["quantity"] == str(int(1e308))
 
 
-def test_lookup_inspector_keeps_page_when_event_quantity_is_infinite():
+def test_lookup_inspector_keeps_page_when_stored_numbers_are_infinite():
     events = pd.DataFrame(
         [
             {
@@ -221,13 +233,15 @@ def test_lookup_inspector_keeps_page_when_event_quantity_is_infinite():
     )
     result = lookup_inspector(
         make_settings(dashboard_enabled=True),
-        _service(FakeReader(_k_recs())),
+        _service(FakeReader(_k_recs().assign(rank=float("inf"), score=float("inf")))),
         _History(events),
         "u1",
     )
 
     assert result["events"][0]["quantity"] == MISSING
     assert result["show_quantity"] is False
+    assert result["items"][0]["rank"] == "1"
+    assert result["items"][0]["score"] == MISSING
 
 
 def test_format_event_rows_treats_naive_datetime_as_utc():

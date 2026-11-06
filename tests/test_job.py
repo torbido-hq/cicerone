@@ -12,7 +12,7 @@ from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
 from cicerone.job import _recommendation_user_count, _target_user_ids
-from cicerone.locks import WriteFence
+from cicerone.locks import LockLostError, WriteFence
 from cicerone.model import RRF_K
 from cicerone.publish import PublishError
 from cicerone.track.store import TrackStore
@@ -1860,22 +1860,33 @@ def test_job_run_finalizes_with_error_raised_while_recording_failure(tmp_path, m
     assert manifests == []
 
 
-def test_job_marks_success_manifest_failed_when_error_formatting_raises(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("format_error", "status", "error"),
+    [
+        (ValueError("unprintable"), "failed", "_Unprintable"),
+        (LockLostError("lost while formatting"), "success", None),
+    ],
+)
+def test_job_manifest_when_error_formatting_raises_after_success(
+    tmp_path, monkeypatch, format_error, status, error
+):
     output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     class _Unprintable(RuntimeError):
         def __str__(self) -> str:
-            raise ValueError("unprintable")
+            raise format_error
 
     def _raise_after_success_manifest(_run):
         raise _Unprintable()
 
     monkeypatch.setattr(job, "_publish_job_sidecar", _raise_after_success_manifest)
 
-    with pytest.raises(ValueError, match="unprintable"):
+    with pytest.raises(type(format_error), match=str(format_error)):
         job.run()
 
-    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "failed"
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    assert manifest["status"] == status
+    assert manifest["error"] == error
 
 
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):

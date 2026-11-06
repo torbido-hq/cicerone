@@ -218,15 +218,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
   win when there are more than slots.
-- A job whose error can't be formatted after the success manifest now rewrites
-  the manifest as `failed` instead of leaving it `success` while the job raises.
+- When the job body raises after the success manifest and the error's text
+  can't be formatted, the manifest is rewritten as `failed` with the error's
+  type name, instead of staying `success` while the job raises.
 - The dashboard lookup shows an infinite or overflowing rank, score or event
-  `quantity` as missing, instead of answering 500 on `quantity` and printing
-  `inf` as the score.
-- Database errors in logs and `manifest.error` no longer include bound values
-  (`hide_parameters` on every engine); the SQL text stays. Messages from the
-  database driver can still embed values, such as the key in a duplicate-key
-  error.
+  `quantity` as missing, instead of raising `OverflowError` (a 500) or, for an
+  infinite score, printing `inf`.
+- The text of database errors in logs and `manifest.error` no longer includes
+  bound values (`hide_parameters` on every engine); the SQL text stays. Logs can
+  still carry user data: database driver messages can embed values, such as the
+  key in a duplicate-key error, and some log lines name the `user_id` on purpose.
 
 ### Removed
 
