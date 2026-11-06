@@ -263,25 +263,29 @@ def apply_legacy_item_based_k_neighbors(
     configs: dict[str, dict[str, Any]],
     *,
     k_neighbors: int | None,
-    k_neighbors_explicit: bool,
 ) -> dict[str, dict[str, Any]]:
-    """Map legacy ``job.item_based.k_neighbors`` → RecTools ``model.K``."""
+    """Map legacy ``job.item_based.k_neighbors`` (``None`` = unset) → RecTools ``model.K``."""
     from cicerone.config import ConfigError
+    from cicerone.config.validation import require_positive_int
 
     result = {name: deepcopy(cfg) for name, cfg in configs.items()}
     item_cfg = result.setdefault("item_based", deepcopy(DEFAULT_ITEM_BASED_CONFIG))
     native_k = item_based_k_from_config(item_cfg)
     native_was_explicit = bool(item_cfg.pop("_native_k_explicit", False))
 
-    if k_neighbors_explicit and native_was_explicit and native_k is not None:
-        if k_neighbors is not None and int(k_neighbors) != int(native_k):
+    if k_neighbors is not None:
+        require_positive_int(int(k_neighbors), name="job.item_based.k_neighbors")
+    if k_neighbors is not None and native_was_explicit and native_k is not None:
+        if int(k_neighbors) != int(native_k):
             raise ConfigError(
                 f"Conflicting item_based neighbor settings: job.item_based.k_neighbors="
                 f"{k_neighbors} vs model.item_based.model.K={native_k}. "
                 "Use only one (prefer [model.item_based] RecTools keys)."
             )
-    elif k_neighbors is not None and (k_neighbors_explicit or native_k is None):
-        _nested_set(item_cfg, ("model", "K"), int(k_neighbors))
+    elif k_neighbors is not None or native_k is None:
+        k = k_neighbors if k_neighbors is not None else DEFAULT_ITEM_BASED_K_NEIGHBORS
+        _nested_set(item_cfg, ("model", "K"), int(k))
+    require_positive_int(int(item_cfg["model"]["K"]), name="model.item_based.model.K")
 
     result["item_based"] = item_cfg
     return result
@@ -291,7 +295,6 @@ def resolve_model_configs(
     raw_model_section: dict[str, Any] | None = None,
     *,
     legacy_k_neighbors: int | None = None,
-    legacy_k_neighbors_explicit: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Merge defaults, ``[model.*]`` TOML, and legacy key translations."""
     from cicerone.config import ConfigError
@@ -317,11 +320,7 @@ def resolve_model_configs(
             override_copy["_native_k_explicit"] = True
         configs[name] = deep_merge(configs[name], override_copy)
 
-    configs = apply_legacy_item_based_k_neighbors(
-        configs,
-        k_neighbors=legacy_k_neighbors if legacy_k_neighbors is not None else DEFAULT_ITEM_BASED_K_NEIGHBORS,
-        k_neighbors_explicit=legacy_k_neighbors_explicit,
-    )
+    configs = apply_legacy_item_based_k_neighbors(configs, k_neighbors=legacy_k_neighbors)
     if SEQUENTIAL_STRATEGY in configs:
         configs[SEQUENTIAL_STRATEGY] = apply_sequential_architecture(
             configs[SEQUENTIAL_STRATEGY],

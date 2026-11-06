@@ -297,6 +297,9 @@ def test_build_publisher_kafka(monkeypatch):
     )
     publisher = build_publisher(settings)
     assert publisher is not None
+    assert publisher._producer is None
+    publisher.connect()
+    assert publisher._producer is not None
     publisher.close()
 
 
@@ -309,9 +312,7 @@ _PUBLISH_OPTIONS = {
 @pytest.mark.parametrize("kind", registered_publish_kinds())
 def test_every_built_publisher_accepts_user_ids(kind):
     assert set(_PUBLISH_OPTIONS) == set(registered_publish_kinds())
-    publisher = build_publisher(
-        PublishSettings(enabled=True, kind=kind, options=_PUBLISH_OPTIONS[kind]), connect=False
-    )
+    publisher = build_publisher(PublishSettings(enabled=True, kind=kind, options=_PUBLISH_OPTIONS[kind]))
     assert publisher is not None
     param = inspect.signature(publisher.publish).parameters["user_ids"]
     assert param.kind is inspect.Parameter.KEYWORD_ONLY
@@ -320,20 +321,22 @@ def test_every_built_publisher_accepts_user_ids(kind):
 
 def test_missing_kafka_extra(monkeypatch):
     hide_module(monkeypatch, "confluent_kafka")
+    publisher = build_publisher(
+        PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
+    )
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
-        build_publisher(
-            PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
-        )
+        publisher.connect()
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
     hide_module(monkeypatch, "pika")
-    with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
-        build_publisher(
-            PublishSettings(
-                enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
-            )
+    publisher = build_publisher(
+        PublishSettings(
+            enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
         )
+    )
+    with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
+        publisher.connect()
 
 
 def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig):

@@ -33,6 +33,7 @@ from cicerone.config.validation import (
     unique_policy_names,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 from cicerone.feature_config import parse_boost_rules, parse_eligibility_rules
 
@@ -141,9 +142,8 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         from cicerone.experiment.recipes import validate_variant_models
 
         validate_variant_models(models, variant_name=name)
-    weights = {str(key): float(value) for key, value in raw["weights"].items()} if "weights" in raw else None
-    if weights is None and "model_weights" in raw:
-        weights = {str(key): float(value) for key, value in raw["model_weights"].items()}
+    weights_key = "weights" if raw.get("weights") is not None else "model_weights"
+    weights = weights_field(raw, weights_key, context=f"experiment.variants[{name}].weights")
     validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
     rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None
     validate_rrf_k(rrf_k, context=f"experiment.variants[{name}].rrf_k")

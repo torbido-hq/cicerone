@@ -567,8 +567,8 @@ def _write_job_outputs(
                     # Set before each write: a store can commit and still raise (e.g. a response timeout).
                     outputs_written = True
                     sink.write_model_artifact(artifact_bytes)
-                    manifest["artifact_written"] = True
-                    manifest["artifact_schema_version"] = ARTIFACT_SCHEMA_VERSION
+                    manifest.artifact_written = True
+                    manifest.artifact_schema_version = ARTIFACT_SCHEMA_VERSION
 
                 if items is not None and not items.empty:
                     ensure_publication_fence(sink, retrain)
@@ -583,46 +583,50 @@ def _write_job_outputs(
                     store = ExperimentStore(settings.output, fence=run.fence)
                     store.write_state(_refresh_pending_thompson(store, run.pending_thompson))
                 ensure_publication_fence(sink, retrain)
-                manifest.update(
-                    {
-                        "status": "success",
-                        "n_events": int(len(events)),
-                        "n_target_users": len(target_users),
-                        "n_users_with_recommendations": _recommendation_user_count(recommendations),
-                        "n_items": int(built.dataset.item_id_map.external_ids.shape[0]),
-                        "models": ",".join(run_models),
-                        "model_weights": model_weights_str,
-                        "rrf_k": rrf_k if rrf_k is not None else RRF_K,
-                        "automl_metrics": (
-                            ",".join(
-                                f"{name}={automl_result.metrics[name]:.4f}"
-                                for name in sorted(automl_result.metrics)
-                            )
-                            if automl_result is not None
-                            else ""
-                        ),
-                        "track_eval": json.dumps(run.track_eval_payload) if run.track_eval_payload else "",
-                        "served_eval": json.dumps(run.served_eval_payload) if run.served_eval_payload else "",
-                    }
+                # Compute first: a raise here must leave the manifest untouched, status included.
+                n_events = int(len(events))
+                n_target_users = len(target_users)
+                n_users_with_recommendations = _recommendation_user_count(recommendations)
+                n_items = int(built.dataset.item_id_map.external_ids.shape[0])
+                models = ",".join(run_models)
+                automl_metrics = (
+                    ",".join(
+                        f"{name}={automl_result.metrics[name]:.4f}" for name in sorted(automl_result.metrics)
+                    )
+                    if automl_result is not None
+                    else ""
                 )
-                manifest["generated_at"] = datetime.now(UTC).isoformat()
+                track_eval = json.dumps(run.track_eval_payload) if run.track_eval_payload else ""
+                served_eval = json.dumps(run.served_eval_payload) if run.served_eval_payload else ""
+                manifest.status = "success"
+                manifest.n_events = n_events
+                manifest.n_target_users = n_target_users
+                manifest.n_users_with_recommendations = n_users_with_recommendations
+                manifest.n_items = n_items
+                manifest.models = models
+                manifest.model_weights = model_weights_str
+                manifest.rrf_k = rrf_k if rrf_k is not None else RRF_K
+                manifest.automl_metrics = automl_metrics
+                manifest.track_eval = track_eval
+                manifest.served_eval = served_eval
+                manifest.generated_at = datetime.now(UTC).isoformat()
                 ensure_publication_fence(sink, retrain)
                 # Set before writing, so a failure rewrite can replace a manifest that committed then raised.
-                result.success_generated_at = str(manifest.get("generated_at") or "")
+                result.success_generated_at = manifest.generated_at
                 if write_job_manifest(sink, manifest):
                     result.manifest_written = True
                 else:
                     result.success_generated_at = None
             except _SINK_WRITE_ERRORS as exc:
-                if outputs_written or manifest.get("artifact_written"):
-                    manifest["partial_outputs"] = True
+                if outputs_written or manifest.artifact_written:
+                    manifest.partial_outputs = True
                 if (
                     not result.manifest_written
-                    and manifest.get("status") != "success"
+                    and manifest.status != "success"
                     and not skip_stale_job_manifest(run.fence, exc=exc)
                 ):
-                    manifest["error"] = truncate_job_error(exc)
-                    manifest["generated_at"] = datetime.now(UTC).isoformat()
+                    manifest.error = truncate_job_error(exc)
+                    manifest.generated_at = datetime.now(UTC).isoformat()
                     try:
                         if write_job_manifest(sink, manifest, skip_if_newer_than=run.started_at):
                             result.manifest_written = True
@@ -634,22 +638,22 @@ def _write_job_outputs(
                         )
                 raise
     except BaseException:
-        if outputs_written or manifest.get("artifact_written"):
-            manifest["partial_outputs"] = True
+        if outputs_written or manifest.artifact_written:
+            manifest.partial_outputs = True
         raise
     return result
 
 
 def _publish_job_sidecar(run: JobRun) -> None:
     publisher, manifest = run.publisher, run.manifest
-    if publisher is None or manifest.get("status") != "success":
+    if publisher is None or manifest.status != "success":
         return
     retrain = retrain_fence(None, run.fence.check)
     try:
         retrain.ensure()
         publisher.connect()
         retrain.ensure()
-        current = sidecar_generation_current(run.settings.output, str(manifest.get("generated_at") or ""))
+        current = sidecar_generation_current(run.settings.output, str(manifest.generated_at))
         if current:
             publisher.publish(run.recommendations)
         else:
@@ -672,7 +676,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
         except Exception as exc:
             _log_caught("Failed to close recommendation publisher", exc, log=logger)
             close_exc = exc
-    if manifest.get("status") == "success" and (settings.track.enabled or settings.eval.enabled):
+    if manifest.status == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
             _persist_track_outputs(
                 TrackStore(settings.output, fence=run.track_fence),
@@ -683,21 +687,17 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
                     "served_eval": run.served_eval_payload,
                 },
                 recommendations=run.recommendations,
-                generated_at=str(manifest["generated_at"]),
+                generated_at=str(manifest.generated_at),
             )
         except Exception as exc:
-            manifest["status"] = "failed"
-            manifest["error"] = truncate_job_error(exc)
+            manifest.status = "failed"
+            manifest.error = truncate_job_error(exc)
             manifest_written = False
             persist_exc = exc
             replace_success_manifest = True
-    if (
-        close_exc is not None
-        and manifest.get("status") == "success"
-        and not isinstance(close_exc, LockLostError)
-    ):
-        manifest["status"] = "failed"
-        manifest["error"] = truncate_job_error(close_exc)
+    if close_exc is not None and manifest.status == "success" and not isinstance(close_exc, LockLostError):
+        manifest.status = "failed"
+        manifest.error = truncate_job_error(close_exc)
         manifest_written = False
         replace_success_manifest = True
     leftover_exc = persist_exc or error
@@ -707,7 +707,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
         (run.written.success_generated_at or run.started_at) if replace_success_manifest else run.started_at
     )
     if not manifest_written and not skip_stale_job_manifest(run.fence, exc=leftover_exc):
-        manifest["generated_at"] = datetime.now(UTC).isoformat()
+        manifest.generated_at = datetime.now(UTC).isoformat()
         try:
             with recommendations_write_guard(run.sink):
                 write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
@@ -717,7 +717,7 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
                 exc,
                 log=logger,
             )
-            if manifest.get("status") == "success":
+            if manifest.status == "success":
                 raise
     logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
     if isinstance(close_exc, LockLostError):
@@ -741,9 +741,9 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
 
 def _record_run_failure(run: JobRun, exc: BaseException) -> None:
-    run.manifest["error"] = truncate_job_error(exc) or type(exc).__name__
-    if run.manifest.get("status") == "success":
-        run.manifest["status"] = "failed"
+    run.manifest.error = truncate_job_error(exc) or type(exc).__name__
+    if run.manifest.status == "success":
+        run.manifest.status = "failed"
         run.written.manifest_written = False
         run.replace_success_manifest = True
 
@@ -769,7 +769,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     error: BaseException | None = None
 
     try:
-        run.publisher = build_publisher(settings, connect=False)
+        run.publisher = build_publisher(settings)
         source = build_input_source(settings.input)
         events, users, items, last_manifest = _read_input(source, settings.output)
 
@@ -820,8 +820,8 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         )
         run.recommendations = scored.recommendations
         if recipes:
-            run.manifest["experiment_id"] = settings.experiment.id
-            run.manifest["experiment_variants"] = recipes_manifest_json(recipes)
+            run.manifest.experiment_id = settings.experiment.id
+            run.manifest.experiment_variants = recipes_manifest_json(recipes)
 
         _write_job_outputs(
             run,

@@ -25,7 +25,7 @@ RECOMMENDATION_COLUMNS: tuple[str, ...] = (
 _OPTIONAL_OUTPUT_COLUMNS: tuple[str, ...] = (REASONS_COLUMN, VARIANT_COLUMN)
 
 
-FALLBACK_VARIANT = "control"
+CONTROL_NAME = "control"
 
 
 def recommendations_sql_names(
@@ -53,14 +53,18 @@ def recommendation_output_columns(frame: Any) -> list[str]:
     return columns
 
 
+def pick_control_name(names: Sequence[str]) -> str:
+    if CONTROL_NAME in names:
+        return CONTROL_NAME
+    return names[0]
+
+
 def pick_fallback_variant(names: Sequence[object]) -> str | None:
     """Prefer control when mixed leftover variant rows must collapse to one list."""
     values = [str(name) for name in names if not is_missing(name) and str(name)]
     if not values:
         return None
-    if FALLBACK_VARIANT in values:
-        return FALLBACK_VARIANT
-    return sorted(values)[0]
+    return pick_control_name(sorted(values))
 
 
 def collapse_mixed_variants(frame: Any) -> Any:
