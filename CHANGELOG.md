@@ -20,7 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   silently. New history tables on any backend store `rank` as `BIGINT`. The job
   still skips both on MariaDB with a warning.
 - Experiment state and exposures work on MySQL. Config load raises
-  `ConfigError` for an `experiment.id` over 255 characters there.
+  `ConfigError` for an `experiment.id` over 255 characters there. New SQLite
+  state tables mark `experiment_id` `NOT NULL`.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
   impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings
@@ -53,9 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- `model_artifacts.payload` is `LONGBLOB` on new MySQL and MariaDB tables; it
-  was a 64 KB `BLOB`. Existing tables need
-  `ALTER TABLE model_artifacts MODIFY payload LONGBLOB NOT NULL`.
+- `model_artifacts` on new MySQL and MariaDB tables: `payload` is `LONGBLOB`,
+  it was a 64 KB `BLOB`, and `written_at` is `DATETIME(6)`, so two writes in one
+  second no longer look the same to the online update's check. Existing tables
+  need `ALTER TABLE model_artifacts MODIFY payload LONGBLOB NOT NULL,
+  MODIFY written_at DATETIME(6) NOT NULL`.
 - Incremental updates no longer put `__cold_start__` rows with a missing
   variant under an experiment variant named `None`, `nan`, `<NA>` or
   `NaT`; such rows are dropped, as real users' rows already were.

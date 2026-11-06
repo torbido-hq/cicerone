@@ -378,10 +378,10 @@ def _require_experiment_id_fits_mysql(settings: Settings) -> None:
     experiment = settings.experiment
     if not experiment.enabled or settings.output.kind != "db" or len(experiment.id) <= MYSQL_KEY_CHARS:
         return
-    from sqlalchemy.engine import make_url
+    from cicerone.io.engines import database_backend_name
 
     url = settings.output.options.get("database_url")
-    if url and make_url(str(url)).get_backend_name() == "mysql":
+    if url and database_backend_name(str(url)) == "mysql":
         raise ConfigError(f"experiment.id is longer than {MYSQL_KEY_CHARS} characters, the limit on MySQL")
 
 

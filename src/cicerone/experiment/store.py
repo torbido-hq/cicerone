@@ -218,7 +218,7 @@ class ExperimentStore:
         rows = self.backend.read_exposures(experiment_id=experiment_id)
         if not experiment_id:
             return rows
-        # Backends filter too; this keeps the string match the db filter may not (a legacy numeric column).
+        # Backends filter too, but not exactly on a legacy numeric column or MySQL's case-blind TEXT.
         return [row for row in rows if str(row.get("experiment_id") or "") == experiment_id]
 
 

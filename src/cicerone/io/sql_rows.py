@@ -48,12 +48,9 @@ def read_sql_or_missing(
 
 
 def append_frame_fenced(engine: Engine, table: Table, frame: pd.DataFrame, fence: WriteFence) -> None:
-    # Before the rows' transaction: DDL commits implicitly on MySQL.
     with engine.begin() as conn:
         fence.ensure()
         table.create(conn, checkfirst=True)
-    with engine.begin() as conn:
-        fence.ensure()
         frame.to_sql(table.name, conn, if_exists="append", index=False)
         fence.ensure()
 

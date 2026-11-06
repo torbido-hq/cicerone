@@ -14,7 +14,6 @@ from sqlalchemy import BigInteger, Column, Engine, Insert, Integer, Table, Text,
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
 from cicerone.config.constants import MYSQL_KEY_CHARS, ConfigError
@@ -22,6 +21,7 @@ from cicerone.io.engines import (
     JSON_PAYLOAD_TYPE,
     TEXT_KEY_TYPE,
     LazyEngine,
+    database_backend_name,
     is_mysql_family,
     quote_identifier,
     store_table,
@@ -234,7 +234,7 @@ def _require_track_dialect(name: str) -> None:
 
 
 def require_track_ingest_database(options: dict[str, Any]) -> None:
-    _require_track_dialect(make_url(require_option(options, "database_url", "db")).get_backend_name())
+    _require_track_dialect(database_backend_name(require_option(options, "database_url", "db")))
 
 
 def _insert_ignoring_duplicates(engine: Engine, table: Table) -> Insert:

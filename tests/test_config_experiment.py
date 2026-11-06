@@ -654,7 +654,23 @@ def test_experiment_id_of_255_characters_is_accepted_on_mysql() -> None:
     assert _db_experiment_settings(_MYSQL_OUTPUT, "é" * 255).experiment.id == "é" * 255
 
 
-@pytest.mark.parametrize("url", ["sqlite+pysqlite:///x.db", "postgresql+psycopg://u:p@host/db"])
+@pytest.mark.parametrize(
+    "url",
+    ["sqlite+pysqlite:///x.db", "postgresql+psycopg://u:p@host/db", "mariadb+pymysql://u:p@host/db"],
+)
 def test_long_experiment_id_is_accepted_on_other_backends(url) -> None:
     long_id = "x" * 256
     assert _db_experiment_settings({"database_url": url}, long_id).experiment.id == long_id
+
+
+def test_long_experiment_id_is_accepted_on_mysql_when_the_experiment_is_disabled() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(enabled=False, id="x" * 256),
+        output=IOSettings(kind="db", options=_MYSQL_OUTPUT),
+    )
+    assert settings.experiment.id == "x" * 256
+
+
+def test_long_experiment_id_with_an_unparsable_url_raises_config_error() -> None:
+    with pytest.raises(ConfigError, match="not a valid database URL"):
+        _db_experiment_settings({"database_url": "not a url"}, "x" * 256)

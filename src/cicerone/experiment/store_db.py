@@ -13,7 +13,12 @@ from sqlalchemy import Column, Engine, Table, Text, inspect, text
 from sqlalchemy.exc import NoSuchTableError, SQLAlchemyError
 from sqlalchemy.schema import CreateTable
 
-from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_column_error, is_missing_table_error
+from cicerone.io.db_errors import (
+    SQL_READ_ERRORS,
+    db_error_message,
+    is_missing_column_error,
+    is_missing_table_error,
+)
 from cicerone.io.engines import JSON_PAYLOAD_TYPE, TEXT_KEY_TYPE, LazyEngine, quote_identifier, store_table
 from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, replace_rows_fenced
@@ -31,6 +36,11 @@ EXPOSURE_COLUMNS: tuple[str, ...] = (
     "generated_at",
     "exposed_at",
 )
+
+
+def _is_missing_column(exc: BaseException) -> bool:
+    # MySQL's wording, matched only here: other callers of the shared check keep raising on MySQL.
+    return is_missing_column_error(exc) or "unknown column" in db_error_message(exc)
 
 
 def _state_payload_json(state: Mapping[str, Any]) -> str:
@@ -98,11 +108,11 @@ class ExperimentDbBackend:
                 engine,
             )
         except SQL_READ_ERRORS as exc:
-            if is_missing_column_error(exc):
+            if _is_missing_column(exc):
                 try:
                     frame = pd.read_sql(text(f"SELECT * FROM {quoted_table} LIMIT 1"), engine)
                 except SQL_READ_ERRORS as retry_exc:
-                    if is_missing_table_error(retry_exc) or is_missing_column_error(retry_exc):
+                    if is_missing_table_error(retry_exc) or _is_missing_column(retry_exc):
                         return None
                     logger.exception("Failed to read experiment state table %r", table)
                     raise
@@ -140,7 +150,7 @@ class ExperimentDbBackend:
                     conn.execute(CreateTable(table, if_not_exists=True))
                     replace_rows_fenced(conn, table.name, params, self._fence)
             except SQLAlchemyError as exc:
-                if not is_missing_column_error(exc):
+                if not (_is_missing_column(exc) and "payload" in db_error_message(exc)):
                     raise
                 with engine.begin() as conn:
                     self._fence.ensure()
@@ -204,7 +214,7 @@ class ExperimentDbBackend:
             if is_missing_table_error(exc):
                 return []
             # The table may appear after inspection without an experiment_id column.
-            if experiment_id and selected is None and is_missing_column_error(exc):
+            if experiment_id and selected is None and _is_missing_column(exc):
                 logger.warning("Exposures table %r has no experiment_id column; ignoring rows", table)
                 return []
             logger.exception("Failed to read exposures table %r", table)

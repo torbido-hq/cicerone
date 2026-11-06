@@ -10,8 +10,9 @@ import pandas as pd
 import pytest
 from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import DataError, SQLAlchemyError
+from support.db_tables import assert_mysql_engine_and_charset, stored_column_types
 from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
-from support.settings import local_output, sqlite_output, stored_column_types
+from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.io.engines import quote_identifier
@@ -1190,8 +1191,9 @@ _TRACK_COLUMNS = [
 def _stored_columns(store, output) -> list[tuple[str, str, bool]]:
     store.append_rows([_row()])
     table = output.options["track_table"]
-    assert inspect(store.backend.engine()).get_pk_constraint(table)["constrained_columns"] == ["event_id"]
-    return stored_column_types(store.backend.engine(), table)
+    engine = store.backend.engine()
+    assert inspect(engine).get_pk_constraint(table)["constrained_columns"] == ["event_id"]
+    return stored_column_types(engine, table)
 
 
 def test_track_db_table_keeps_column_types_and_order(non_mysql_track_output) -> None:
@@ -1499,37 +1501,27 @@ def test_persist_track_outputs_writes_eval_and_history_on_every_backend(track_db
 
 def test_eval_and_history_tables_keep_column_types_and_order(non_mysql_track_output) -> None:
     store = TrackStore(non_mysql_track_output)
+    engine = store.backend.engine()
     store.write_eval({"ok": True})
     store.append_history(_RECS, generated_at=_GENERATED_AT)
-    assert (
-        stored_column_types(store.backend.engine(), non_mysql_track_output.options["eval_table"])
-        == _EVAL_COLUMNS
-    )
-    assert (
-        stored_column_types(store.backend.engine(), non_mysql_track_output.options["history_table"])
-        == _HISTORY_COLUMNS
-    )
+    assert stored_column_types(engine, non_mysql_track_output.options["eval_table"]) == _EVAL_COLUMNS
+    assert stored_column_types(engine, non_mysql_track_output.options["history_table"]) == _HISTORY_COLUMNS
 
 
 def test_eval_and_history_tables_on_mysql_widen_only_the_payload(mysql_track_output) -> None:
     store = TrackStore(mysql_track_output)
+    engine = store.backend.engine()
     store.write_eval({"ok": True})
     store.append_history(_RECS, generated_at=_GENERATED_AT)
     options = mysql_track_output.options
     payload_widened = [("payload", "MEDIUMTEXT", False), *_EVAL_COLUMNS[1:]]
-    assert stored_column_types(store.backend.engine(), options["eval_table"]) == payload_widened
-    assert stored_column_types(store.backend.engine(), options["history_table"]) == _HISTORY_COLUMNS
+    assert stored_column_types(engine, options["eval_table"]) == payload_widened
+    assert stored_column_types(engine, options["history_table"]) == _HISTORY_COLUMNS
 
 
 def test_eval_and_history_tables_set_engine_and_charset_for_mysql(tmp_path) -> None:
-    from sqlalchemy.dialects import mysql
-    from sqlalchemy.schema import CreateTable
-
     backend = TrackStore(sqlite_output(tmp_path / "track.db")).backend
-    for table in (backend._eval_table, backend._history_table):
-        created = str(CreateTable(table).compile(dialect=mysql.dialect()))
-        assert "ENGINE=InnoDB" in created
-        assert "CHARSET=utf8mb4" in created
+    assert_mysql_engine_and_charset(backend._eval_table, backend._history_table)
 
 
 @pytest.mark.parametrize("previous_rank", [float("nan"), None], ids=["float-rank", "text-rank"])
@@ -1542,14 +1534,14 @@ def test_eval_and_history_append_to_previously_created_tables(non_mysql_track_ou
         eval_table = quote_identifier(conn, options["eval_table"])
         conn.execute(text(f'CREATE TABLE {eval_table} ("payload" TEXT NOT NULL, "written_at" TEXT NOT NULL)'))
         previous.to_sql(options["history_table"], conn, index=False)
-    history_types = stored_column_types(store.backend.engine(), options["history_table"])
+    history_types = stored_column_types(engine, options["history_table"])
     store.write_eval({"ok": True})
     store.append_history(_RECS, generated_at=_GENERATED_AT)
     store.append_history(_RECS.drop(columns="rank"), generated_at="2026-08-29T03:00:00+00:00")
     assert store.read_eval() == {"ok": True}
     assert len(store.read_history()) == 3
-    assert stored_column_types(store.backend.engine(), options["eval_table"]) == _EVAL_COLUMNS
-    assert stored_column_types(store.backend.engine(), options["history_table"]) == history_types
+    assert stored_column_types(engine, options["eval_table"]) == _EVAL_COLUMNS
+    assert stored_column_types(engine, options["history_table"]) == history_types
 
 
 def test_write_eval_replaces_the_report_on_every_backend(track_db_output) -> None:
@@ -1703,11 +1695,9 @@ def test_by_source_uses_the_older_run_for_an_older_impression_on_every_backend(t
 
 def test_history_new_table_stores_rank_as_bigint_when_the_first_frame_has_no_ranks(track_db_output) -> None:
     store = TrackStore(track_db_output)
+    engine = store.backend.engine()
     store.append_history(_RECS.assign(rank=[float("nan")]), generated_at=_GENERATED_AT)
-    assert (
-        stored_column_types(store.backend.engine(), track_db_output.options["history_table"])
-        == _HISTORY_COLUMNS
-    )
+    assert stored_column_types(engine, track_db_output.options["history_table"]) == _HISTORY_COLUMNS
 
 
 def test_history_on_an_existing_table_issues_no_ddl(tmp_path) -> None:

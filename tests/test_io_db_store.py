@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pandas as pd
@@ -658,3 +659,29 @@ def test_model_artifact_over_64_kb_roundtrips_on_every_backend(track_db_output) 
     token = sink.model_artifact_fingerprint()
     assert sink.replace_model_artifact_if(payload * 2, token) is True
     assert sink.read_model_artifact() == payload * 2
+
+
+def test_model_artifact_written_at_keeps_microseconds_on_mysql_and_mariadb() -> None:
+    table = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})._model_artifacts_table()
+    for dialect in (mysql.dialect(), mariadb.MariaDBDialect()):
+        assert "written_at DATETIME(6) NOT NULL" in str(CreateTable(table).compile(dialect=dialect))
+
+
+def test_model_artifact_writes_in_the_same_second_are_distinguished_on_every_backend(
+    track_db_output, monkeypatch
+) -> None:
+    stamps = iter(datetime(2026, 8, 28, 3, 0, 0, microsecond, UTC) for microsecond in (100_000, 200_000))
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(stamps)
+
+    monkeypatch.setattr("cicerone.io.db_store.datetime", _Clock)
+    sink = DatabaseOutputSink(track_db_output.options)
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    sink.write_model_artifact(b"second")
+    assert sink.model_artifact_fingerprint() != token
+    assert sink.replace_model_artifact_if(b"stale", token) is False
+    assert sink.read_model_artifact() == b"second"

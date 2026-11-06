@@ -18,7 +18,6 @@ def is_missing_column_error(exc: BaseException) -> bool:
     return (
         "no such column" in message
         or "no column named" in message
-        or "unknown column" in message
         or ("column" in message and "does not exist" in message)
     )
 

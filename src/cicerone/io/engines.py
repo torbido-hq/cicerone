@@ -9,12 +9,14 @@ from typing import Any
 import sqlalchemy
 from sqlalchemy import Column, Connection, Engine, MetaData, String, Table, Text
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
-from cicerone.config.constants import MYSQL_KEY_CHARS
+from cicerone.config.constants import MYSQL_KEY_CHARS, ConfigError
 
 # MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
 TEXT_KEY_TYPE = Text().with_variant(String(MYSQL_KEY_CHARS, collation="utf8mb4_0900_bin"), "mysql")
-# A large top_k can push a by-rank report past MySQL TEXT's 64 KB.
+# JSON stored as text; MySQL TEXT's 64 KB is too small for a by-rank report with a large top_k.
 JSON_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 _engines: dict[str, Engine] = {}
@@ -36,6 +38,14 @@ def engine_for(database_url: str) -> Engine:
 def quote_identifier(bind: Engine | Connection, name: str) -> str:
     """``name`` quoted the way the dialect (and pandas/SQLAlchemy table creation) quotes it."""
     return bind.dialect.identifier_preparer.quote(name)
+
+
+def database_backend_name(database_url: str) -> str:
+    try:
+        return make_url(database_url).get_backend_name()
+    except ArgumentError as exc:
+        # The URL can hold a password, so it stays out of the message.
+        raise ConfigError("database_url is not a valid database URL") from exc
 
 
 def is_mysql_family(bind: Engine | Connection) -> bool:
