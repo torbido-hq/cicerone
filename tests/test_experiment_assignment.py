@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import make_settings
+from support.settings import make_settings
 
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings

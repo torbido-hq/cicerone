@@ -4,11 +4,11 @@ import threading
 
 import boto3
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from support.fakes import FakeGuard, fake_monotonic, patch_module_ref
 from support.prometheus_metrics import metric_value
+from support.settings import local_output, make_settings
 from support.waits import WAIT_SECONDS, wait_until
 
 from cicerone.config import IOSettings, Settings
@@ -225,7 +225,7 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
 
 
 def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    input_settings = local_output(tmp_path)
     guard = FakeGuard()
 
     markers = iter(["v1", "v2"])
@@ -249,7 +249,7 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
 def test_current_marker_local_backend_reflects_mtime(tmp_path):
     from cicerone.trigger import _current_marker
 
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    input_settings = local_output(tmp_path)
     assert _current_marker(input_settings) is None
 
     (tmp_path / "events.parquet").write_bytes(b"data")
@@ -261,7 +261,7 @@ def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, cap
 
     from cicerone.trigger import _current_marker
 
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    input_settings = local_output(tmp_path)
     (tmp_path / "events.parquet").write_bytes(b"data")
 
     def boom(self):

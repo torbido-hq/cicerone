@@ -9,6 +9,7 @@ from pyarrow.lib import ArrowNotImplementedError, ArrowTypeError
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects import postgresql
 from support.fakes import patch_module_ref, patch_parquet_reads, raising
+from support.settings import local_output
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
@@ -37,9 +38,7 @@ def _raise(error: type[Exception]):
 
 
 def test_load_recommendations_missing_file(tmp_path):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     frame = load_recommendations_frame(settings.output)
     assert list(frame.columns) == list(empty_recommendations_frame().columns)
     assert frame.empty
@@ -48,9 +47,7 @@ def test_load_recommendations_missing_file(tmp_path):
 def test_load_recommendations_schema_mismatch_treated_as_empty(tmp_path):
     path = tmp_path / "recommendations.parquet"
     pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     frame = load_recommendations_frame(settings.output)
     assert frame.empty
 
@@ -69,9 +66,7 @@ def test_load_recommendations_keeps_optional_reasons(tmp_path):
             }
         ]
     ).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     frame = load_recommendations_frame(settings.output)
     assert list(frame.columns) == [*list(empty_recommendations_frame().columns), "reasons"]
     assert "personalized" in str(frame.iloc[0]["reasons"])
@@ -129,9 +124,7 @@ def test_load_recommendations_for_users_dataset_filters(tmp_path, monkeypatch):
             {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     calls = patch_parquet_reads(monkeypatch)
     frame = load_recommendations_for_users(settings.output, ["u2"])
     assert list(frame["user_id"]) == ["u2"]
@@ -157,9 +150,7 @@ def test_load_recommendations_for_users_dataset_filter_fallback(tmp_path, monkey
             {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     patch_parquet_reads(monkeypatch, pushdown_error=exc)
     frame = load_recommendations_for_users(settings.output, ["u2"])
     assert list(frame["user_id"]) == ["u2"]
@@ -173,9 +164,7 @@ def test_load_recommendations_for_users_matches_a_numeric_user_id_column(tmp_pat
             {"user_id": 7, "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     frame = load_recommendations_for_users(settings.output, user_ids)
     assert list(frame["item_id"]) == ["i1"]
 
@@ -264,9 +253,7 @@ def test_load_recommendations_for_users_dataset_schema_mismatch(tmp_path, caplog
             {"item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     with caplog.at_level(logging.WARNING):
         frame = load_recommendations_for_users(settings.output, ["u1"])
     assert frame.empty
@@ -304,9 +291,7 @@ def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypat
             {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     calls = patch_parquet_reads(monkeypatch)
     assert count_recommendation_users(settings.output) == 2
     assert [call["columns"] for call in calls] == [["user_id"]]
@@ -315,9 +300,7 @@ def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypat
 def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
     path = tmp_path / "recommendations.parquet"
     pd.DataFrame([{"item_id": "i1", "rank": 1}]).to_parquet(path, index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     with caplog.at_level(logging.WARNING):
         assert count_recommendation_users(settings.output) == 0
     assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
@@ -330,9 +313,7 @@ def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
 def test_count_recommendation_users_dataset_type_error_is_not_a_schema_mismatch(
     tmp_path, monkeypatch, exc, expected
 ):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
 
     def boom(*_args, **_kwargs):
         raise exc
@@ -353,9 +334,7 @@ def test_load_recommendations_for_users_unsupported_kind():
 
 
 def test_load_items_catalog_size_dataset(tmp_path):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     assert load_items_catalog_size(settings.output) is None
     pd.DataFrame({"item_id": ["a", "b", "a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
     assert load_items_catalog_size(settings.output) == 2
@@ -380,9 +359,7 @@ def test_load_items_catalog_size_sqlite_missing_table(tmp_path):
 
 
 def test_load_recommendation_guardrail_rows_dataset(tmp_path):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     empty = load_recommendation_guardrail_rows(settings.output)
     assert empty is not None
     assert empty.empty
@@ -570,9 +547,7 @@ def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
 
 
 def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame({"item_id": pd.Series(dtype=str)}).to_parquet(
         tmp_path / "items_snapshot.parquet", index=False
     )
@@ -607,17 +582,13 @@ def test_count_recommendation_users_arrow_not_implemented_fallback(tmp_path, mon
             {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
         ]
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     patch_parquet_reads(monkeypatch, pushdown_error=ArrowNotImplementedError("column projection"))
     assert count_recommendation_users(settings.output) == 2
 
 
 def test_load_recommendations_empty_existing_file(tmp_path):
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source"]).to_parquet(
         tmp_path / "recommendations.parquet", index=False
     )
@@ -652,9 +623,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
     from pyarrow.lib import ArrowInvalid
     from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
     monkeypatch.setattr(
         "cicerone.events.store.read_parquet_pushdown",
@@ -691,9 +660,7 @@ def test_load_items_catalog_size_backend_io_errors(tmp_path, monkeypatch):
 def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
     from botocore.exceptions import BotoCoreError, ClientError
 
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
+    settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame({"item_id": ["a"]}).to_parquet(tmp_path / "items_snapshot.parquet", index=False)
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]

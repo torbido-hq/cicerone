@@ -9,8 +9,8 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader
+from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 from support.waits import wait_until
-from test_serve import _feature_config, _items_df, _recs_df, _settings
 
 from cicerone.export_serve_openapi import build_openapi
 from cicerone.export_serve_openapi import main as export_main
@@ -36,10 +36,10 @@ OPENAPI_PATH = REPO_ROOT / "docs" / "openapi" / "serve.openapi.json"
 
 def _app(**kwargs):
     return create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
         **kwargs,
     )
 

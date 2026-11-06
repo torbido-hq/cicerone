@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
 from support.fakes import FakeReader
 from support.prometheus_metrics import metric_samples, metric_value, registry_metric_value
+from support.settings import make_settings
 
 from cicerone.config import Settings
 from cicerone.io.recommendation_reader import DatasetRecommendationReader
