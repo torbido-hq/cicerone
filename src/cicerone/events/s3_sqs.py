@@ -177,18 +177,11 @@ class S3SqsPoll:
                     continue
                 batch_events: list[NormalizedEvent] = []
                 failed = False
-                poison = False
                 for bucket, key in matched:
                     try:
                         batch_events.extend(self._load_object_events(s3, bucket, key))
                     except ValueError:
-                        logger.exception(
-                            "Unreadable s3://%s/%s from SQS notification; deleting poison message",
-                            bucket,
-                            key,
-                        )
-                        poison = True
-                        break
+                        logger.exception("Skipping unreadable s3://%s/%s from SQS notification", bucket, key)
                     except Exception:
                         logger.exception(
                             "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
@@ -197,11 +190,11 @@ class S3SqsPoll:
                         )
                         failed = True
                         break
-                if poison:
+                if failed:
+                    continue
+                if not batch_events:
                     if _delete_poison_message(sqs, queue_url, receipt):
                         made_progress = True
-                    continue
-                if failed:
                     continue
                 novel = [event for event in batch_events if event.event_id not in held_ids]
                 if not novel:
