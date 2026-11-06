@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import make_settings
 from support.fakes import FakeReader
+from support.settings import make_settings
 
 from cicerone.config import Settings
 from cicerone.dashboard_lookup import (

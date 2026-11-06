@@ -4,14 +4,11 @@ import threading
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader, patch_module_ref
+from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
-from cicerone.blending import COLD_START_USER_ID
-from cicerone.config import Settings
 from cicerone.experiment.assignment import snapshot_variant_names
-from cicerone.feature_config import FeatureConfig
 from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
@@ -22,54 +19,8 @@ from cicerone.serve.app import (
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
 from cicerone.serve.recommendations import read_assignment_overlay
 
-
-def _settings(**overrides) -> Settings:
-    return make_settings(**{"mode": "serve", "serve_auth_token": "secret", **overrides})
-
-
-def _recs_df() -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
-            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 0.5, "source": "personalized"},
-            {"user_id": "u1", "item_id": "i3", "rank": 3, "score": 0.1, "source": "personalized"},
-            {
-                "user_id": COLD_START_USER_ID,
-                "item_id": "i2",
-                "rank": 1,
-                "score": 0.4,
-                "source": "popular_fallback",
-            },
-            {
-                "user_id": COLD_START_USER_ID,
-                "item_id": "i1",
-                "rank": 2,
-                "score": 0.3,
-                "source": "popular_fallback",
-            },
-        ]
-    )
-
-
-def _items_df() -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {"item_id": "i1", "category": "beer", "published": True, "in_stock": True},
-            {"item_id": "i2", "category": "wine", "published": True, "in_stock": True},
-            {"item_id": "i3", "category": "beer", "published": False, "in_stock": True},
-        ]
-    )
-
-
-def _feature_config() -> FeatureConfig:
-    return FeatureConfig(
-        event_weights={},
-        quantity_scaled_events=set(),
-        event_caps={},
-        user_features=[],
-        item_features=[],
-        item_availability_filters=["published", "in_stock"],
-    )
+# test_track_routes still imports this name; delete with that import.
+_recs_df = recs_df
 
 
 def test_available_item_ids_missing_item_id_returns_none():
@@ -78,7 +29,7 @@ def test_available_item_ids_missing_item_id_returns_none():
 
 
 def test_items_filter_cache_tolerates_snapshot_without_item_id():
-    reader = FakeReader(_recs_df(), pd.DataFrame([{"sku": "x", "published": True}]))
+    reader = FakeReader(recs_df(), pd.DataFrame([{"sku": "x", "published": True}]))
     cache = ItemsFilterCache(
         reader,
         category_column="category",
@@ -91,7 +42,7 @@ def test_items_filter_cache_tolerates_snapshot_without_item_id():
 
 
 def test_items_filter_cache_normalizes_once_per_refresh():
-    reader = FakeReader(_recs_df(), _items_df())
+    reader = FakeReader(recs_df(), items_df())
     cache = ItemsFilterCache(
         reader,
         category_column="category",
@@ -129,7 +80,7 @@ def test_items_filter_cache_retries_when_version_moves_during_rebuild():
                 self._items_version += 1
             return self._items
 
-    reader = _BumpOnce(_recs_df(), _items_df())
+    reader = _BumpOnce(recs_df(), items_df())
     cache = ItemsFilterCache(
         reader,
         category_column="category",
@@ -145,7 +96,7 @@ def test_items_filter_cache_retries_when_version_moves_during_rebuild():
 
 
 def test_health_requires_no_auth():
-    app = create_app(_settings(), FakeReader(_recs_df()))
+    app = create_app(serve_settings(), FakeReader(recs_df()))
     response = TestClient(app).get("/health")
 
     assert response.status_code == 200
@@ -154,7 +105,7 @@ def test_health_requires_no_auth():
 
 
 def test_recommendations_requires_auth():
-    app = create_app(_settings(), FakeReader(_recs_df()))
+    app = create_app(serve_settings(), FakeReader(recs_df()))
     client = TestClient(app)
 
     response = client.get("/recommendations/u1")
@@ -163,7 +114,7 @@ def test_recommendations_requires_auth():
 
 
 def test_recommendations_rejects_wrong_token():
-    app = create_app(_settings(), FakeReader(_recs_df()))
+    app = create_app(serve_settings(), FakeReader(recs_df()))
     client = TestClient(app)
 
     response = client.get("/recommendations/u1", headers={"Authorization": "Bearer wrong"})
@@ -173,10 +124,10 @@ def test_recommendations_rejects_wrong_token():
 
 def test_recommendations_returns_records_with_valid_token():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
         manifest_reader=FakeManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -192,7 +143,7 @@ def test_recommendations_returns_records_with_valid_token():
 
 
 def test_recommendations_returns_parsed_reasons():
-    recs = _recs_df().copy()
+    recs = recs_df()
     recs["reasons"] = [
         (
             '{"sources":[{"label":"personalized","rank":1,"weight":1.0,"contribution":null}],'
@@ -205,9 +156,9 @@ def test_recommendations_returns_parsed_reasons():
         None,
     ]
     app = create_app(
-        _settings(),
-        FakeReader(recs, _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs, items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -222,9 +173,9 @@ def test_recommendations_returns_parsed_reasons():
 
 def test_recommendations_respects_limit_query_param():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -235,9 +186,9 @@ def test_recommendations_respects_limit_query_param():
 
 def test_recommendations_accepts_k_alias():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     response = TestClient(app).get("/recommendations/u1?k=1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
@@ -246,9 +197,9 @@ def test_recommendations_accepts_k_alias():
 
 def test_recommendations_rejects_conflicting_limit_and_k():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -261,9 +212,9 @@ def test_recommendations_rejects_conflicting_limit_and_k():
 
 def test_recommendations_accepts_matching_limit_and_k():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -277,9 +228,9 @@ def test_recommendations_accepts_matching_limit_and_k():
 
 def test_recommendations_limit_larger_than_available():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -290,7 +241,7 @@ def test_recommendations_limit_larger_than_available():
 
 
 def test_recommendations_limit_over_cap_is_unprocessable():
-    app = create_app(_settings(), FakeReader(_recs_df()))
+    app = create_app(serve_settings(), FakeReader(recs_df()))
     response = TestClient(app).get(
         "/recommendations/u1?limit=101", headers={"Authorization": "Bearer secret"}
     )
@@ -299,9 +250,9 @@ def test_recommendations_limit_over_cap_is_unprocessable():
 
 def test_recommendations_unknown_user_returns_cold_start_fallback():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -351,9 +302,9 @@ def test_items_filter_cache_stringifies_non_string_item_ids():
 
 def test_recommendations_category_filter_can_empty_results():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -368,9 +319,9 @@ def test_recommendations_category_filter_can_empty_results():
 
 def test_recommendations_category_filter_keeps_matching():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -385,9 +336,9 @@ def test_recommendations_category_filter_keeps_matching():
 def test_recommendations_missing_category_column_returns_empty(caplog):
     items = pd.DataFrame([{"item_id": "i1", "published": True, "in_stock": True}])
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), items),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
@@ -403,7 +354,7 @@ def test_recommendations_missing_category_column_returns_empty(caplog):
 
 
 def test_recommendations_without_items_skips_filters():
-    app = create_app(_settings(), FakeReader(_recs_df(), items=None))
+    app = create_app(serve_settings(), FakeReader(recs_df(), items=None))
     client = TestClient(app)
 
     response = client.get("/recommendations/u1?limit=2", headers={"Authorization": "Bearer secret"})
@@ -412,9 +363,9 @@ def test_recommendations_without_items_skips_filters():
 
 def test_recommendations_exclude_unavailable_false_keeps_unpublished():
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
 
@@ -441,9 +392,9 @@ def test_recommendations_exclude_unavailable_treats_false_strings_as_unavailable
         ]
     )
     app = create_app(
-        _settings(),
+        serve_settings(),
         FakeReader(recs, items),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
     response = client.get(
@@ -455,7 +406,7 @@ def test_recommendations_exclude_unavailable_treats_false_strings_as_unavailable
 
 def test_recommendations_empty_everywhere_returns_404():
     empty = pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source"])
-    app = create_app(_settings(), FakeReader(empty))
+    app = create_app(serve_settings(), FakeReader(empty))
     client = TestClient(app)
 
     response = client.get("/recommendations/nobody", headers={"Authorization": "Bearer secret"})
@@ -463,19 +414,11 @@ def test_recommendations_empty_everywhere_returns_404():
 
 
 def test_recommendations_manifest_without_generated_at():
-    class EmptyManifest:
-        def read_latest(self):
-            return {}
-
-        def read_recent(self, limit: int):
-            del limit
-            return []
-
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
-        manifest_reader=EmptyManifest(),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        manifest_reader=FakeManifest({}),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
     body = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
@@ -492,10 +435,10 @@ def test_recommendations_survive_manifest_reader_errors():
             raise RuntimeError("manifest store down")
 
     app = create_app(
-        _settings(),
-        FakeReader(_recs_df(), _items_df()),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
         manifest_reader=BrokenManifest(),
-        feature_config=_feature_config(),
+        feature_config=serve_feature_config(),
     )
     client = TestClient(app)
     response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
@@ -565,7 +508,7 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
 
 
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
-    reader = FakeReader(_recs_df())
+    reader = FakeReader(recs_df())
     calls = _run_refresh_ticks(monkeypatch, reader, ticks=2)
     assert reader.refresh_calls == 2
     assert calls["generated"] == 2
@@ -581,7 +524,7 @@ def test_start_refresh_loop_survives_a_failing_step(monkeypatch, caplog):
             raise TypeError("custom reader bug")
 
     with caplog.at_level("ERROR", logger="cicerone.serve.app"):
-        calls = _run_refresh_ticks(monkeypatch, FailingReader(_recs_df()), ticks=3)
+        calls = _run_refresh_ticks(monkeypatch, FailingReader(recs_df()), ticks=3)
     assert failures["reader"] == 3
     assert calls["overlay"] == 3
     # The reader kept its old rows, so the stamp must not move to a newer manifest.
@@ -596,7 +539,7 @@ def test_start_refresh_loop_holds_the_stamp_when_the_reader_keeps_old_rows(monke
         def refresh(self) -> bool | None:
             return next(outcomes)
 
-    calls = _run_refresh_ticks(monkeypatch, KeepingReader(_recs_df()), ticks=3)
+    calls = _run_refresh_ticks(monkeypatch, KeepingReader(recs_df()), ticks=3)
     assert calls["generated"] == 2
     assert calls["overlay"] == 3
 
@@ -604,11 +547,11 @@ def test_start_refresh_loop_holds_the_stamp_when_the_reader_keeps_old_rows(monke
 def test_assignment_overlay_cache_keeps_last_on_refresh_error():
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
-    settings = _settings()
+    settings = serve_settings()
     assert RefreshedValue(lambda: read_assignment_overlay(settings, None)).get() == (None, None)
     assert read_assignment_overlay(settings, None) == (None, None)
 
-    enabled = _settings(
+    enabled = serve_settings(
         experiment=ExperimentSettings(
             enabled=True,
             id="exp",
@@ -639,19 +582,19 @@ def test_assignment_overlay_cache_keeps_last_on_refresh_error():
 
 
 def test_snapshot_variant_names_from_reader():
-    assert snapshot_variant_names(FakeReader(_recs_df())) is None
+    assert snapshot_variant_names(FakeReader(recs_df())) is None
 
     class _Named(FakeReader):
         def present_variant_names(self):
             return None
 
-    assert snapshot_variant_names(_Named(_recs_df())) is None
+    assert snapshot_variant_names(_Named(recs_df())) is None
 
     class _Present(FakeReader):
         def present_variant_names(self):
             return ("control", "blend")
 
-    assert snapshot_variant_names(_Present(_recs_df())) == ("control", "blend")
+    assert snapshot_variant_names(_Present(recs_df())) == ("control", "blend")
 
 
 def test_main_requires_serve_mode(tmp_path, monkeypatch):
