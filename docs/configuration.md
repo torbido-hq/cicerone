@@ -8,9 +8,12 @@ Cicerone reads one TOML file (`cicerone --config PATH` or
 `/app/config/features.toml`). Annotated examples live in those shipped
 files. This page is the user-facing reference for the current 0.8 line.
 
-`${ENV_VAR}` in **parsed string values** is required at load; an unset
-variable fails the process. Comments are not resolved. Write a literal
-`${…}` as `$${NAME}`.
+`${ENV_VAR}` is resolved at load in `[input]` / `[output]` `options`,
+`output.artifact_hmac_key`, `serve.auth_token` / `metrics_token`,
+`job.trigger.auth_token` / `postgres_url` / `redis_url`, `events.options`
+and `publish.options`; an unset variable fails the process. Anywhere else
+`${…}` stays literal. Comments are not resolved. Write a literal `${…}` as
+`$${NAME}`.
 
 `[input]` and `[output]` are required and each needs `kind`. Every other
 table below is optional unless a later rule says otherwise.
@@ -27,8 +30,9 @@ table below is optional unless a later rule says otherwise.
 | `cicerone users` | `add` / `remove` / `list` dashboard users. `--users-path` or, with `--config`, `[dashboard].users_path`. Passwords are at most 72 bytes (UTF-8). |
 | `cicerone export-openapi` | Write the serve OpenAPI document (`-o PATH`). |
 
-Global flags: `-c` / `--config`, `--log-level` (default `INFO`),
-`--log-format`, `-V`. `--config` may sit before or after the subcommand.
+Global flags: `-c` / `--config`, `--log-level` (default `INFO`, or
+`CICERONE_LOG_LEVEL`), `--log-format` (or `CICERONE_LOG_FORMAT`), `-V`.
+`--config` may sit before or after the subcommand.
 
 ## Input and output
 
@@ -39,17 +43,24 @@ Required. `kind` is `"dataset"` or `"db"`. Input and output are independent
 
 | Option | Role |
 | --- | --- |
-| `storage_backend` | `"local"` or `"s3"` |
+| `storage_backend` | `"local"` (default) or `"s3"` |
 | `path` | Local directory (`storage_backend = "local"`) |
 | `endpoint_url`, `access_key_id`, `secret_access_key`, `bucket`, `prefix` | S3-compatible (`storage_backend = "s3"`) |
+| `region` | S3 region, default `"auto"` |
 
 **`kind = "db"`** — SQLAlchemy. Typical option: `database_url`. Optional
 `events_query` / `users_query` / `items_query` (trusted deploy-time
 `SELECT` only) read an existing schema instead of `events` / `users` /
-`items` tables. Default write tables: `recommendations`,
-`recommendation_runs`, `model_artifacts`, `recommendation_items`, and
-`incremental_applied_events` (incremental event keys, see
-[incremental events](incremental-events.md)).
+`items` tables (`events_table` / `users_table` / `items_table`). Default
+write tables, each renamed by the `[output.options]` key in brackets:
+`recommendations` (`recommendations_table`), `recommendation_runs`
+(`manifest_table`), `model_artifacts` (`model_artifact_table`),
+`recommendation_items` (`recommendation_items_table`),
+`incremental_applied_events` (`applied_events_table`, see
+[incremental events](incremental-events.md)), `recommendation_exposures`
+(`exposures_table`), `experiment_state` (`experiment_state_table`),
+`recommendation_track` (`track_table`), `recommendation_eval`
+(`eval_table`) and `recommendation_history` (`history_table`).
 
 The db events source and the eval and experiment-state tables support
 Postgres and SQLite, not MySQL. The track table also supports MySQL: install
@@ -92,9 +103,13 @@ requires the table (use a placeholder path).
 | `save_model_artifact` | `false` | Writes `model.artifact` (dataset) or `model_artifacts` (db) |
 | `max_workers` | `1` | Process pool for fit / AutoML |
 | `log_epoch_metrics` | `false` | Per-epoch Precision/Recall for collaborative / sequential |
+| `epoch_metrics_every` / `_max_users` / `_regression_drop` / `_plateau_eps` / `_plateau_window` | `5` / `500` / `0.25` / `0.01` / `3` | Only with `log_epoch_metrics` |
+| `item_based.k_neighbors` | `20` | Legacy; prefer `[model.item_based.model].K` |
 | `content_fallback.enabled` | `false` | Cold catalog items by feature cosine |
+| `content_fallback.max_neighbors` | `50` | — |
 | `sequential.min_median_interactions` | `5` | AutoML drops sequential below this |
 | `explain.enabled` | `true` | Persist `reasons` JSON on each output row |
+| `explain.max_similar_items` / `explain.max_attributes` | `3` / `5` | Caps inside `reasons` |
 
 `[job.automl]`: `enabled` default `false`; `n_splits = 2`,
 `test_days = 14`, `primary_metric = "MAP"`, `debias = false`. Override the
@@ -112,17 +127,23 @@ Optional retrain webhook **in addition to** cron. Runs inside
 | `enabled` | `false` | — |
 | `auth_token` | unset | **Required** when enabled |
 | `host` | `127.0.0.1` | Compose / `docker run -p` needs `0.0.0.0` |
-| `port` | `8080` | `POST /trigger/retrain` |
-| `debounce_seconds` | `60` | In-flight or recent runs are skipped, not queued |
-| `poll_input_bucket` | `false` | Dataset input mtime / S3 `LastModified` |
+| `port` | `8080` (1–65535; 0 deprecated) | `POST /trigger/retrain` (`202` started, `429` busy or debounced); `GET /health` |
+| `debounce_seconds` | `60` | From the last guarded run's start. In-flight or recent runs are skipped, not queued |
+| `poll_input_bucket` | `false` | Dataset input only: `events.parquet` mtime / S3 `LastModified` |
 | `poll_interval_seconds` | `300` | — |
 | `lock_backend` | `"in_process"` | `"postgres"` or `"redis"` for multi-replica |
+| `postgres_url` | unset | Postgres lock; falls back to `[output.options].database_url` when output is `db`, else load fails |
+| `redis_url` | unset | **Required** with `lock_backend = "redis"` |
+| `lock_key` | `"cicerone:scheduler:run_guard"` | Non-empty; namespaces the lock |
+| `lock_ttl_seconds` | `86400` | Redis TTL, must be positive |
 
 ## `[job.eval]`
 
 Optional production replay of **previously written** lists against later
 `[input]` events (HitRate / MAP / NDCG / …). This is not CTR.
-`enabled` default `false`.
+`enabled` default `false`. Optional `event_types` (default: the
+`track.conversion_event_types` rule below) and `ks` (default `5`, `10` and
+`top_k`, capped at `top_k`).
 
 ## `[serve]`
 
@@ -131,18 +152,21 @@ Required `auth_token` when `job.mode = "serve"`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Published Docker ports need `0.0.0.0` |
-| `port` | `8000` | — |
+| `port` | `8000` (1–65535; 0 deprecated) | — |
 | `default_k` | `10` (max 100) | Used when the client omits `limit` / `k` |
 | `refresh_interval_seconds` | `60` | Dataset output: reload parquet cache. DB output: reload the items snapshot only |
 | `category_column` | `"category"` | `?category=` filter |
 | `metrics_enabled` | `false` | `GET /metrics`; needs `metrics_token` |
+| `metrics_token` | unset | **Required** when `metrics_enabled`; scrapes send it as `X-Metrics-Token` |
 | `log_impressions` | `false` | Requires `[track]`. Records **returned** GET items, not browser renders. The HTTP response can return before the row is written; with 1000 appends pending the rows are dropped and counted in `cicerone_serve_appends_dropped_total` |
 
 `GET /recommendations/{user_id}` is a lookup of materialized rows. It does
-not fit a model. **200** returns the object; **401** missing/invalid
-bearer; **404** no rows and no fallback. User ids containing `/` are
+not fit a model. **200** returns the object; **400** `limit` and `k`
+disagree; **401** missing/invalid bearer; **404** no rows and no fallback;
+**422** `limit` / `k` outside 1–100. User ids containing `/` are
 not supported (an encoded `%2F` is decoded before routing and still
-404s). Dataset vs DB visibility:
+404s). `exclude_unavailable` (default `true`) re-applies
+`item_availability_filters`. Dataset vs DB visibility:
 [how-it-works.md](how-it-works.md#what-get-recommendations-does).
 
 ## `[events]`
@@ -152,7 +176,7 @@ Serve-process incremental ingest. Off until `enabled = true`.
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `kind` | `"webhook"` | `webhook`, `db`, `s3`, `redis_streams`, `kafka`, `rabbitmq` |
+| `kind` | `"webhook"` | `webhook`, `db`, `s3`, `redis_streams`, `kafka`, `rabbitmq` (checked only when enabled) |
 | `ha` | `false` | Requires `job.trigger.lock_backend` `postgres` or `redis` |
 | `incremental.batch_size` | `100` | Flush when the buffer hits this **or** the window |
 | `incremental.batch_window_seconds` | `60` | — |
@@ -187,7 +211,7 @@ Quality contract. Rows never enter `[event_weights]` or LightFM.
 | --- | --- | --- |
 | `enabled` | `false` | Mounts `POST /track`. Requires db output or a **local** dataset path (S3 JSONL append is refused) |
 | `attribution_window_hours` | `24` | Click ↔ impression match window |
-| `conversion_event_types` | empty → `"purchase"` when scoring CTR/conversion | `[input]` event types treated as conversions |
+| `conversion_event_types` | empty → `"purchase"`, or the experiment's event-type `primary_metric` | `[input]` event types treated as conversions |
 | `min_impressions` | `100` | Gates Promote / Thompson volume; the sequential test needs this many users per arm. Does **not** change the CTR formula |
 
 `kind` is `impression` or `click` only. Details:
@@ -202,25 +226,27 @@ Not a per-request coin flip and not a browser cookie.
 | --- | --- | --- |
 | `enabled` | `false` | Needs `id` and at least two `[[experiment.variants]]` (unless `automl_challenger`) |
 | `primary_metric` | `"weighted"` | Or `"ctr"`, `"conversion"`, or an `event_type` |
-| `attribution` | `"user"` | `user` (0.7.0 ITT) / `click` / `impression` / `recommended` |
-| `allocation` | `"fixed"` | `"thompson"` needs `[track]` and `cicerone-recommender[bandits]` |
+| `attribution` | `"user"` | `user` (0.7.0 ITT) / `click` / `impression` / `recommended`. `click` / `impression` go with `ctr` / `conversion`, both ways |
+| `allocation` | `"fixed"` | `"thompson"` needs `[track]`, `cicerone-recommender[bandits]`, `primary_metric = "conversion"` and `click` / `impression` attribution |
+| `automl_challenger` | `false` | Last successful manifest vs this run's AutoML pick; variants optional |
 | `alpha` | `0.05` | Sequential CI level |
 | `log_exposures` | `false` | Local JSONL or db table; S3 append refused |
-| `explore_traffic` | `0.5` | Thompson only |
-| `rotate_min_prob` | `0.9` | Thompson only |
+| `explore_traffic` | `0.5` | Thompson only, in `[0, 1]` |
+| `rotate_min_prob` | `0.9` | Thompson only, in `(0, 1)` |
 
 Variant keys: `name`, `traffic` (remainder of a sum `< 1` goes to the last
-variant), optional `models` / `weights` / `rrf_k` / `combiner` /
-`blending` / `boosts` / `eligibility`. Changing `traffic` remaps users.
+variant), optional `models` / `weights` (alias `model_weights`) / `rrf_k` /
+`combiner` / `blending` / `boosts` (or `[[experiment.variants.boost]]`
+tables) / `eligibility`. Changing `traffic` remaps users.
 [experiments.md](experiments.md).
 
 ## `[dashboard]`
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `enabled` | `false` | Required for `cicerone users` to read `users_path` from this file |
+| `enabled` | `false` | Required to start `cicerone dashboard` (which also needs at least one user) and for `cicerone users` to read `users_path` from this file |
 | `host` | `127.0.0.1` | Compose needs `0.0.0.0` |
-| `port` | `8090` | — |
+| `port` | `8090` (1–65535; 0 deprecated) | — |
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
@@ -256,7 +282,7 @@ Separate file. Root keys must precede table headers.
 | `[event_caps]` | Keep the most recent N events per `(user, item, event_type)` |
 | `[[user_features]]` / `[[item_features]]` | `"categorical"` or `"list"` columns |
 | `item_availability_filters` | Boolean item columns that must all be true (shipped: `published`, `in_stock`) |
-| `[[eligibility]]` / `[[boost]]` | Hard allowlists and soft re-rank. `boost_overfetch_factor` default `3` |
+| `[[eligibility]]` / `[[boost]]` | Hard allowlists (`on_missing_user` `"exclude"` default or `"allow"`) and soft re-rank (`[[boosts]]` alias). `boost_overfetch_factor` default `3` |
 | `[blending]` | Per-user mix of personalized / popular / date-based latest. Wins over RRF if both are set |
 
 ## Where state lives

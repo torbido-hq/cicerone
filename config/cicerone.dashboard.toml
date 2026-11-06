@@ -3,7 +3,7 @@
 # config/cicerone.toml). Always its own process (`cicerone dashboard` or
 # the compose "dashboard" service), pointed at this file via `--config` /
 # CICERONE_CONFIG_PATH. Independent of [job].mode -- it never imports
-# cicerone.model/dataset/automl (no rectools/lightfm/implicit needed here),
+# cicerone.model/dataset/automl (no lightfm/implicit; it does import rectools),
 # same as serve mode.
 #
 # [output] here MUST point at the exact same store the batch job writes to
@@ -45,10 +45,9 @@ lookup_events = 20 # inspector event rows (from [input], newest first)
 # default_k = 10
 # category_column = "category"
 
-# [job] is required by config.load_settings() even though the dashboard
-# never trains anything -- kept generic/simple rather than special-casing
-# it away. cron_schedule IS read (to compute whether the latest run looks
-# overdue), so set it to the same schedule as the batch job's cicerone.toml.
+# [job] is optional (only [input] and [output] are required), but
+# cron_schedule IS read (to compute whether the latest run looks overdue),
+# so set it to the same schedule as the batch job's cicerone.toml.
 [job]
 cron_schedule = "0 3 * * *"
 

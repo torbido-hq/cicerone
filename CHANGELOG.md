@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ExperimentStore` delegates to a db or dataset backend
   (`cicerone.experiment.store_db` / `store_dataset`) picked once by
   `build_experiment_backend`, instead of branching on the output kind.
+- Dashboard startup turns recommendation lookup or the history pane off only
+  for store-open errors; any other error now aborts startup.
 - Redis Streams treats an empty `consumer_name` or `group_start_id` as
   unset (host name / `0-0`), like Kafka, instead of rejecting it.
 - A missing Redis Streams `redis_url`, `stream` or `consumer_group` fails
@@ -39,9 +41,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `dashboard.lookup_k` has no effect and is not validated; it logs a
   warning when set with the dashboard enabled, and will be removed in 0.9.0.
+- `serve.port`, `job.trigger.port` or `dashboard.port` = 0 (any free
+  port) logs a deprecation warning; it will be rejected in 0.9.0.
 
 ### Fixed
 
+- The incremental-events docs state that a db events table without
+  `event_id` stops advancing when more than about 100 rows share one
+  `occurred_at`.
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
@@ -170,6 +177,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dashboard Inspect user shows what `GET /recommendations/{user_id}`
   returns with default parameters: `serve.default_k` rows, variant
   fallback, unavailable items dropped (`features.toml`), ranks renumbered.
+- A negative `serve.port`, `job.trigger.port` or `dashboard.port`, or one
+  above 65535, is rejected at config load instead of failing at bind.
+- A `job.model_weights` or `[[experiment.variants]]` `weights` /
+  `model_weights` that is not a table fails with a config error instead of
+  an `AttributeError`.
+- Event worker: if returning events to the source fails while it handles
+  another error (lookup, repair, apply, heartbeat, writer lock,
+  already-applied ack, stop-drain flush), the failure is logged and the
+  original error wins. After a handled error the tick returns 0, so a nack
+  bug no longer ends the worker or makes `stop()` raise. Where the events
+  end up is unchanged.
 - When the experiment state read fails, the dashboard experiments page
   shows that dashboard's own last read or written state, instead of an
   unlocked process-wide copy.
@@ -185,6 +203,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the same trimmed id as Python. With an `event_id` column, a row
   with neither `event_id` nor `idempotency_key` is now rejected (logged,
   acked, not applied) instead of keyed by `id` or its payload.
+- Docs match the code for `/metrics` auth, `limit` / `k` bounds, trigger
+  responses and debounce, dashboard routes, `triggered_by` values, `source`
+  labels, output tables and options, `${ENV}` scope, and `[experiment]` /
+  `[events]` rules.
 
 ### Removed
 
@@ -213,6 +235,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PublishError`, like Kafka, instead of logging and reporting success.
   The incremental sidecar retry then republishes every affected user with
   the same `message_id`, which consumers dedupe on.
+- The deprecated `_`-prefixed aliases in `cicerone.evaluation`,
+  `cicerone.io.recommendation_reader`, `cicerone.track.store` and
+  `cicerone.locks`, and the `cicerone.deprecation` module, in 0.8.6 rather
+  than the announced 0.9.0.
+- The `writer_lock` / `fence_*` keyword arguments (use `fence=`) and the
+  `cicerone.serve.metrics` alias (use `cicerone.metrics`).
 
 ## [0.8.5] - 2026-10-14
 

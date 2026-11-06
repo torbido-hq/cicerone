@@ -221,7 +221,8 @@ by default) — trending, not an embedding of recency.
 **Two different “latest” ideas:** the `latest` **strategy** is windowed
 popularity on interactions. Per-user **blending** can also rank by item
 datetime columns (`published_at`, …). While blending is on, the `latest`
-strategy is skipped so those two rankings do not fight. Incremental events
+strategy is skipped so those two rankings do not fight, and `popular` is
+added when missing. Incremental events
 always refresh popular/latest **slices** of the written table. With
 `[events.online]` (and experiments off), the serve events worker also
 continues LightFM on IDs already in the last artifact and rewrites
@@ -297,13 +298,14 @@ that changed the score, and similar history items plus shared catalog
 attributes (Jaccard over the same item-feature tokens as content fallback).
 `source` is unchanged. Disable with `[job.explain].enabled = false` (batch
 job, online LightFM rewrite, and incremental popular/latest/incremental
-reason dumps). Existing DB recommendation tables need
-`ALTER TABLE … ADD COLUMN reasons TEXT`.
+reason dumps). Writing to an existing DB recommendation table without the
+column fails until you run `ALTER TABLE … ADD COLUMN reasons TEXT`.
 
 ## AutoML
 
 `[job.automl]` backtests candidate `models` / `weights` / `rrf_k` over
-time folds of your events (`MAP` / `NDCG` / `Recall` via RecTools metrics)
+time folds of your events (`MAP` / `NDCG` / `Recall` / `HitRate` / `MRR` /
+`Precision` via RecTools metrics)
 and picks the winner for that run. Each fold drops train `(user, item)`
 pairs from test truth **and** from the candidate lists so popular cannot
 score or occupy slots with already-seen items. Set `[job.automl].debias = true` to pass
