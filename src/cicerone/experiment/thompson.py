@@ -235,11 +235,10 @@ def allocate_thompson(
     stored = parse_arm_counts(prev.get("arms"))
     window = dict(window_trials or {})
     live_pair = live_active_pair(active_pair_from_state(prev), labels)
-    pair_ok = live_pair is not None
-    prev_champion, prev_challenger = live_pair or ("", "")
-    champion = pick_champion_name(labels, promoted_variant or (prev_champion if pair_ok else None))
+    champion = pick_champion_name(labels, promoted_variant or (live_pair[0] if live_pair else None))
     arms = {name: stored.get(name, ArmCounts(0, 0)) for name in labels}
-    if pair_ok:
+    if live_pair is not None:
+        prev_champion, prev_challenger = live_pair
         window_impressions = 0
         for name in (prev_champion, prev_challenger):
             extra = window.get(name, ArmCounts(0, 0))
@@ -260,7 +259,7 @@ def allocate_thompson(
         challenger = sample_arm([name for name in labels if name != champion], arms, seed=seed)
     rotated = False
     can_rotate = (
-        pair_ok
+        live_pair is not None
         and promoted_variant is None
         and pair_impressions >= max(0, int(min_impressions))
         and guardrails_ok

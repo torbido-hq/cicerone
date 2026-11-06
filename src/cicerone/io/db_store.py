@@ -344,6 +344,7 @@ class DatabaseOutputSink:
         self._fence.ensure()
 
     def _append_frame(self, conn: Connection, table: str, df: pd.DataFrame) -> None:
+        # Checks the fence before the write only; the caller checks again before committing.
         self._fence.ensure()
         df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 

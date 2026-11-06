@@ -223,15 +223,14 @@ def _select_thompson_recipes(
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
     stored_pair = active_pair_from_state(previous)
-    has_pair = stored_pair is not None
-    if not track_rows and not has_pair:
+    if not track_rows and stored_pair is None:
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
     now = datetime.now(UTC)
     window_started = ""
-    if previous is not None and has_pair:
+    if previous is not None and stored_pair is not None:
         window_started = str(previous.get("window_started_at") or "").strip()
-    if has_pair and not window_started:
+    if stored_pair is not None and not window_started:
         window_rows = []
     else:
         window_rows = track_rows_since(track_rows, window_started or None, until=now)
@@ -265,7 +264,7 @@ def _select_thompson_recipes(
         window_trials = window_trials_from_slices(
             report.by_variant, attribution=experiment.attribution, names=names
         )
-        if not has_pair and not any(item.impressions for item in window_trials.values()):
+        if stored_pair is None and not any(item.impressions for item in window_trials.values()):
             logger.warning("Thompson allocation fail closed: no variant signal")
             return ThompsonSelection(recipes)
         guardrails_ok = False

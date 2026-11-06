@@ -445,6 +445,22 @@ def test_write_manifest_skips_newer_under_lock(tmp_path) -> None:
     assert json.loads((tmp_path / "manifest.json").read_text()) == newer
 
 
+@pytest.mark.parametrize(
+    ("stored", "written"),
+    [
+        ({"generated_at": "2020-01-01T00:00:00+00:00", "last_incremental_at": "2099-01-01"}, False),
+        ({"generated_at": "2020-01-01T00:00:00+00:00", "last_incremental_at": "2021-01-01"}, True),
+        ({"generated_at": 2099, "last_incremental_at": None}, True),
+    ],
+)
+def test_write_manifest_skips_only_on_a_newer_string_stamp(tmp_path, stored, written) -> None:
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "manifest.json").write_text(json.dumps(stored))
+    assert (
+        sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is written
+    )
+
+
 def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
     from cicerone.locks import LockLostError
 

@@ -106,7 +106,7 @@ def _eval_recipes(
     return select_active_recipes(
         recipes,
         champion=champion,
-        challenger=challenger or champion,
+        challenger=challenger,
         explore_traffic=experiment.explore_traffic,
     )
 
@@ -312,6 +312,7 @@ def experiment_context(settings: Settings, store: ExperimentStore | None) -> dic
             )
             if track_outcomes:
                 track_variants = _track_variant_by_user(track_rows, {recipe.name for recipe in recipes})
+    active_pair = active_pair_from_state(state)
     report = evaluate_experiment(
         experiment=experiment,
         recipes=_eval_recipes(recipes, experiment, state),
@@ -326,13 +327,13 @@ def experiment_context(settings: Settings, store: ExperimentStore | None) -> dic
         track_variants=track_variants,
         n_impressions=n_impressions,
         min_impressions=settings.track.min_impressions if settings.track.enabled else 0,
-        active_pair=active_pair_from_state(state),
+        active_pair=active_pair,
     )
     blocked = _ship_blocked(report, experiment)
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            pair = live_active_pair(active_pair_from_state(state), {recipe.name for recipe in recipes})
+            pair = live_active_pair(active_pair, {recipe.name for recipe in recipes})
             ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner

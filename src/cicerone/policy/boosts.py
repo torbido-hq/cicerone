@@ -99,19 +99,13 @@ def item_boost_details(
     return factors, hits
 
 
-def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
-    """item_id → product of configured boost factors."""
-    factors, _hits = item_boost_details(items, boosts, record_hits=False)
-    return factors
-
-
 def apply_boosts(
     recs: pd.DataFrame,
     items: pd.DataFrame | None,
     boosts: Sequence[BoostRule],
     top_k: int | None = None,
     *,
-    record_hits: bool = True,
+    record_hits: bool,
 ) -> pd.DataFrame:
     """Apply boost multipliers, re-rank; always truncates to ``top_k`` when set.
 

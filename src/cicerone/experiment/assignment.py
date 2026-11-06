@@ -38,9 +38,10 @@ def assign_variant(
         return promoted_variant
     bucket = assignment_bucket(experiment_id, user_id)
     cumulative = 0.0
-    for name, traffic in variants[:-1]:
+    last_index = len(variants) - 1
+    for index, (name, traffic) in enumerate(variants):
         cumulative += float(traffic)
-        if bucket < cumulative:
+        if index == last_index or bucket < cumulative:
             return name
     return names[-1]
 
