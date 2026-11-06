@@ -10,9 +10,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 from support.fakes import FakeReader, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
+from support.serve import recs_df
 from support.settings import make_settings
 from support.waits import WAIT_SECONDS
-from test_serve import _recs_df
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
@@ -49,7 +49,7 @@ def _impression(**overrides):
 
 
 def test_post_track_single_and_batch(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     single = client.post("/track", headers=headers, json=_impression())
@@ -85,7 +85,7 @@ def test_post_track_increments_prometheus(tmp_path):
         "cicerone_track_ingest_total",
         {"kind": "impression", "status": "accepted"},
     )
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     assert client.post("/track", headers=headers, json=_impression()).status_code == 202
@@ -107,7 +107,7 @@ def test_post_track_increments_prometheus(tmp_path):
 
 
 def test_post_track_auth_and_validation(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     assert client.post("/track", json=_impression()).status_code == 401
     bad = client.post(
@@ -126,14 +126,14 @@ def test_post_track_counts_malformed_body_as_error_once(tmp_path):
 
     labels = {"kind": "other", "status": "error"}
     before = registry_metric_value("cicerone_track_ingest_total", labels)
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     response = TestClient(app).post("/track", headers={"Authorization": "Bearer secret"}, json="nope")
     assert response.status_code == 400
     assert registry_metric_value("cicerone_track_ingest_total", labels) == before + 1
 
 
 def test_post_track_normalization_error_returns_400(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     response = TestClient(app).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
@@ -153,7 +153,7 @@ _TOO_LONG_VALUES = [pytest.param(param.values[0], id=param.id) for param in _TOO
 
 
 def _post_track(tmp_path, output, *events):
-    app = create_app(_settings(tmp_path, output=output), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, output=output), FakeReader(recs_df()))
     # Stdlib JSON, because httpx's encoder can't send a lone surrogate.
     response = TestClient(app).post(
         "/track",
@@ -232,7 +232,7 @@ def _db_output(database_url):
 )
 def test_serve_refuses_to_start_on_an_unsupported_track_database(tmp_path, database_url, backend):
     with pytest.raises(ConfigError, match=f"mysql, postgresql, sqlite, not {backend}"):
-        create_app(_settings(tmp_path, output=_db_output(database_url)), FakeReader(_recs_df()))
+        create_app(_settings(tmp_path, output=_db_output(database_url)), FakeReader(recs_df()))
 
 
 def test_track_store_for_reads_and_eval_is_still_built_on_an_unsupported_database():
@@ -240,7 +240,7 @@ def test_track_store_for_reads_and_eval_is_still_built_on_an_unsupported_databas
 
 
 def test_post_track_idempotent(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     from prometheus_client import generate_latest
@@ -267,7 +267,7 @@ def test_post_track_idempotent(tmp_path):
 
 
 def test_post_track_trims_supplied_event_ids(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     rows = [
         _impression(item_id="i1", rank=1, event_id=" abc "),
@@ -288,7 +288,7 @@ def test_post_track_counts_accepted_kinds_in_mixed_partial_batch(tmp_path):
     from prometheus_client import generate_latest
     from support.prometheus_metrics import metric_value
 
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     client.post("/track", headers=headers, json=_impression())
@@ -351,7 +351,7 @@ def test_post_track_records_error_when_append_fails(tmp_path, monkeypatch):
         "cicerone_track_ingest_total",
         {"kind": "other", "status": "error"},
     )
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     response = TestClient(app, raise_server_exceptions=False).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
@@ -382,7 +382,7 @@ def test_post_track_returns_503_when_store_unavailable(tmp_path, monkeypatch, er
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", raising(error))
     labels = {"kind": "other", "status": "error"}
     before = metric_value(generate_latest().decode(), "cicerone_track_ingest_total", labels)
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     response = TestClient(app, raise_server_exceptions=False).post(
         "/track",
         headers={"Authorization": "Bearer secret"},
@@ -407,7 +407,7 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
         return [dict(row) for row in rows]
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _blocking_append)
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
 
     @app.get("/__probe")
     async def _probe() -> dict[str, bool]:
@@ -436,7 +436,7 @@ def test_track_route_absent_when_disabled(tmp_path):
             serve_auth_token="secret",
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
         ),
-        FakeReader(_recs_df()),
+        FakeReader(recs_df()),
     )
     client = TestClient(app)
     denied = client.post("/track", headers={"Authorization": "Bearer secret"}, json=_impression())
@@ -447,7 +447,7 @@ def test_track_rows_never_enter_event_source(tmp_path):
     source = WebhookEventSource({})
     app = create_app(
         _settings(tmp_path, events=EventsSettings(enabled=True, kind="webhook")),
-        FakeReader(_recs_df()),
+        FakeReader(recs_df()),
         event_source=source,
     )
     response = TestClient(app).post(
@@ -461,7 +461,7 @@ def test_track_rows_never_enter_event_source(tmp_path):
 
 
 def test_track_openapi_documents_structured_validation_400(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     schema = TestClient(app).get("/openapi.json").json()
     assert "TrackEvent" in schema["components"]["schemas"]
     assert "TrackIngestRequest" in schema["components"]["schemas"]
@@ -480,7 +480,7 @@ def test_track_openapi_documents_structured_validation_400(tmp_path):
 
 
 def test_post_track_non_json_payload(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     resp = TestClient(app).post(
         "/track",
         headers={"Authorization": "Bearer secret", "Content-Type": "text/plain"},
@@ -493,7 +493,7 @@ def test_post_track_non_json_payload(tmp_path):
 def test_post_track_rejects_oversized_body(tmp_path):
     app = create_app(
         _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
-        FakeReader(_recs_df()),
+        FakeReader(recs_df()),
     )
     response = TestClient(app).post(
         "/track",
@@ -505,7 +505,7 @@ def test_post_track_rejects_oversized_body(tmp_path):
 
 
 def test_post_track_rejects_deeply_nested_json(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     nested = b"[" * 3000 + b"0" + b"]" * 3000
     response = TestClient(app).post(
         "/track",
@@ -519,7 +519,7 @@ def test_post_track_rejects_deeply_nested_json(tmp_path):
 def test_post_track_rejects_oversized_content_length(tmp_path):
     app = create_app(
         _settings(tmp_path, events=EventsSettings(options={"max_body_bytes": 64})),
-        FakeReader(_recs_df()),
+        FakeReader(recs_df()),
     )
     response = TestClient(app).post(
         "/track",
@@ -534,13 +534,13 @@ def test_post_track_rejects_oversized_content_length(tmp_path):
 
 
 def test_get_does_not_log_impressions_by_default(tmp_path):
-    app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path), FakeReader(recs_df()))
     TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert TrackStore(_settings(tmp_path).output).read_rows() == []
 
 
 def test_get_log_impressions_when_enabled(tmp_path):
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     with TestClient(app) as client:
         body = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
     rows = TrackStore(_settings(tmp_path).output).read_rows()
@@ -562,7 +562,7 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
     patch_module_ref(monkeypatch, "cicerone.serve.app.time", sleep=lambda _s: None)
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     with TestClient(app) as client:
         response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
@@ -574,7 +574,7 @@ def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):
         "cicerone.track.store.TrackStore.append_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("store")),
     )
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     response = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 200
     assert response.json()["items"]
@@ -591,7 +591,7 @@ def test_get_log_impressions_append_runs_on_dedicated_thread_and_drains(tmp_path
         return 1
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     with TestClient(app) as client:
         response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
         assert response.status_code == 200
@@ -625,7 +625,7 @@ def test_get_log_impressions_drops_the_append_when_the_queue_is_full(tmp_path, m
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
     dropped_metric = ("cicerone_serve_appends_dropped_total", {"kind": "impression"})
     dropped = registry_metric_value(*dropped_metric)
-    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(_recs_df()))
+    app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     headers = {"Authorization": "Bearer secret"}
     with TestClient(app) as client:
         assert client.get("/recommendations/u1", headers=headers).status_code == 200

@@ -19,9 +19,6 @@ from cicerone.serve.app import (
 from cicerone.serve.item_filters import ItemsFilterCache, available_item_ids
 from cicerone.serve.recommendations import read_assignment_overlay
 
-# test_track_routes still imports this name; delete with that import.
-_recs_df = recs_df
-
 
 def test_available_item_ids_missing_item_id_returns_none():
     items = pd.DataFrame([{"sku": "x", "published": True}])
