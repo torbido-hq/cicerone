@@ -695,7 +695,7 @@ pip install 'cicerone-recommender[kafka]'        # events.kind / publish.kind = 
 pip install 'cicerone-recommender[rabbitmq]'     # events.kind / publish.kind = rabbitmq
 pip install 'cicerone-recommender[sequential]'   # SASRec / BERT4Rec / HSTU
 pip install 'cicerone-recommender[bandits]'      # experiment.allocation = thompson
-pip install 'cicerone-recommender[mysql]'        # track table on MySQL (see docs/configuration.md)
+pip install 'cicerone-recommender[mysql]'        # track, eval and history tables on MySQL (see docs/configuration.md)
 ```
 
 Then, with your own TOML. Example files default to image paths

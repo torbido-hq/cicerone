@@ -62,8 +62,8 @@ write tables, each renamed by the `[output.options]` key in brackets:
 `recommendation_track` (`track_table`), `recommendation_eval`
 (`eval_table`) and `recommendation_history` (`history_table`).
 
-The db events source and the eval and experiment-state tables support
-Postgres and SQLite, not MySQL. The track table also supports MySQL: install
+The db events source and the experiment-state tables support Postgres and
+SQLite, not MySQL. The track, eval and history tables also support MySQL: install
 `pip install 'cicerone-recommender[mysql]'` (or `requirements-mysql.txt`) and
 use `database_url = "mysql+pymysql://user:password@host:3306/db?ssl_ca=/path/to/ca.pem"`.
 `ssl_ca` turns on TLS and verifies the server's certificate and host name;
@@ -71,11 +71,11 @@ PyMySQL uses plaintext without it, which is only suitable on a trusted local
 network. The Docker image doesn't ship the driver, so extend it to
 use MySQL. On MySQL, `POST /track` answers 400 for an `event_id` over 255
 characters or another text value over 65,535 UTF-8 bytes, and nothing from
-that batch is written. The job skips the eval report and recommendation
-history on MySQL with a logged warning; track ingest keeps working. By-source
-figures (Quality page, manifest) can be wrong on MySQL for impressions from
-older runs, because run history isn't written there yet. Requires MySQL 8.0 or
-later; CI tests 8.4. The store needs the `CREATE` privilege on first append.
+that batch is written. An eval report over 16 MiB or a history value over
+65,535 UTF-8 bytes fails that write: the job logs it, carries on and keeps the
+rows already stored. The eval and history tables have no primary key, so a server
+with `sql_require_primary_key` on refuses them. Requires MySQL 8.0 or
+later; CI tests 8.4. Track ingest and the job need the `CREATE` privilege.
 Run MySQL in strict mode: on a non-strict server an out-of-range `rank` can be
 clamped. A track table dropped while the store runs isn't recreated until
 restart. With `[track]` enabled, serve refuses to start on a database other

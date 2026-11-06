@@ -90,7 +90,7 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
 
 
 def _track_output(backend: str, tmp_path: Path) -> Iterator[IOSettings]:
-    """A db output with its own track table; skips a server that isn't configured."""
+    """A db output with its own track, eval and history tables; skips a server that isn't configured."""
     url = {
         "sqlite": lambda: sqlite_output(tmp_path / "track.db").options["database_url"],
         "postgres": resolve_test_database_url,
@@ -98,11 +98,13 @@ def _track_output(backend: str, tmp_path: Path) -> Iterator[IOSettings]:
     }[backend]()
     if not url:
         pytest.skip(f"{backend} test server not configured (POSTGRES_TEST_HOST / MYSQL_TEST_HOST)")
-    table = f"track_{uuid4().hex}"
-    yield IOSettings(kind="db", options={"database_url": url, "track_table": table})
+    suffix = uuid4().hex
+    tables = {f"{name}_table": f"{name}_{suffix}" for name in ("track", "eval", "history")}
+    yield IOSettings(kind="db", options={"database_url": url, **tables})
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(conn, table)}"))
+        for table in tables.values():
+            conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(conn, table)}"))
     engine.dispose()
 
 

@@ -10,10 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - The track table works on MySQL through the `mysql` extra and a
   `mysql+pymysql://` `database_url`; `/track` answers 400 for an `event_id`
-  over 255 characters or another text value over 65,535 bytes there. The job
-  skips the eval report and recommendation history on MySQL with a warning.
+  over 255 characters or another text value over 65,535 bytes there.
   Serve with `[track]` enabled refuses to start on any other database with
   `ConfigError`.
+- The track eval report and recommendation history work on MySQL, so by-source
+  figures are right there for impressions from older runs. A report over 16 MiB
+  or a history value over 65,535 bytes fails that write with a logged error.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and
   impression appends dropped because the append queue was full.
 - `cicerone.model.FitOptions` bundles the strategy-fit settings

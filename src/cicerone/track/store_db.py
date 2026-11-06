@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 from collections.abc import Callable, Sequence
 from functools import cached_property
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Column, Engine, Insert, Integer, MetaData, String, Table, Text, bindparam, select, text
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Engine,
+    Insert,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    bindparam,
+    select,
+    text,
+)
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -18,8 +31,9 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.schema import CreateTable
 
 from cicerone.config.constants import ConfigError
-from cicerone.io.engines import LazyEngine, create_table_sql, is_mysql_family, quote_identifier
+from cicerone.io.engines import LazyEngine, is_mysql_family, quote_identifier
 from cicerone.io.options import require_option, table_option
+from cicerone.io.recommendation_schema import RANK_COLUMN
 from cicerone.io.sql_rows import append_frame_fenced, frame_records, read_sql_or_missing, replace_rows_fenced
 from cicerone.locks import WriteFence
 from cicerone.track.normalize import TrackNormalizeError
@@ -27,6 +41,7 @@ from cicerone.track.store_common import (
     DEFAULT_EVAL_TABLE,
     DEFAULT_HISTORY_TABLE,
     DEFAULT_TRACK_TABLE,
+    HISTORY_COLUMNS,
     empty_history_frame,
     filter_history,
     history_sql_filter,
@@ -35,13 +50,16 @@ from cicerone.track.store_common import (
     unique_matching_rows,
 )
 
-logger = logging.getLogger(__name__)
-
 _MYSQL_EVENT_ID_CHARS = 255
 _MYSQL_TEXT_BYTES = 65535
 # MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
 _EVENT_ID_TYPE = Text().with_variant(String(_MYSQL_EVENT_ID_CHARS, collation="utf8mb4_0900_bin"), "mysql")
-_EVAL_TABLE = (("payload", "TEXT NOT NULL"), ("written_at", "TEXT NOT NULL"))
+# A large top_k can push the by-rank report past MySQL TEXT's 64 KB.
+_EVAL_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
+
+
+def _store_table(name: str, *columns: Column[Any]) -> Table:
+    return Table(name, MetaData(), *columns, mysql_charset="utf8mb4", mysql_engine="InnoDB")
 
 
 class TrackDbBackend:
@@ -65,12 +83,6 @@ class TrackDbBackend:
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=since)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
-        if is_mysql_family(self.engine()):
-            # Only here: a job always writes eval before history, so this warns once for both.
-            logger.warning(
-                "Track eval and recommendation history aren't supported on MySQL yet; skipping them"
-            )
-            return lambda: None
         encoded = json.dumps(payload)
         return lambda: self._write_eval_db(encoded)
 
@@ -79,8 +91,6 @@ class TrackDbBackend:
 
     def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
         del generated_at
-        if is_mysql_family(self.engine()):
-            return lambda: None
         return lambda: self._append_history_db(frame)
 
     def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
@@ -92,9 +102,8 @@ class TrackDbBackend:
 
     @cached_property
     def _track_table(self) -> Table:
-        return Table(
+        return _store_table(
             table_option(self._options, "track_table", DEFAULT_TRACK_TABLE),
-            MetaData(),
             Column("event_id", _EVENT_ID_TYPE, primary_key=True),
             Column("kind", Text, nullable=False),
             Column("user_id", Text, nullable=False),
@@ -104,8 +113,21 @@ class TrackDbBackend:
             Column("variant", Text),
             Column("experiment_id", Text),
             Column("generated_at", Text),
-            mysql_charset="utf8mb4",
-            mysql_engine="InnoDB",
+        )
+
+    @cached_property
+    def _eval_table(self) -> Table:
+        return _store_table(
+            table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE),
+            Column("payload", _EVAL_PAYLOAD_TYPE, nullable=False),
+            Column("written_at", Text, nullable=False),
+        )
+
+    @cached_property
+    def _history_table(self) -> Table:
+        return _store_table(
+            table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE),
+            *(Column(name, BigInteger if name == RANK_COLUMN else Text) for name in HISTORY_COLUMNS),
         )
 
     def _ensure_track_table(self, conn: Any) -> None:
@@ -156,15 +178,14 @@ class TrackDbBackend:
         return frame_records(frame)
 
     def _write_eval_db(self, encoded: str) -> None:
-        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
-        engine = self.engine()
-        with engine.begin() as conn:
-            conn.execute(text(create_table_sql(conn, table, _EVAL_TABLE)))
+        table = self._eval_table
+        with self.engine().begin() as conn:
+            conn.execute(CreateTable(table, if_not_exists=True))
             written_at = pd.Timestamp.now(tz="UTC").isoformat()
-            replace_rows_fenced(conn, table, {"payload": encoded, "written_at": written_at}, self._fence)
+            replace_rows_fenced(conn, table.name, {"payload": encoded, "written_at": written_at}, self._fence)
 
     def _read_eval_db(self) -> dict[str, Any] | None:
-        table = table_option(self._options, "eval_table", DEFAULT_EVAL_TABLE)
+        table = self._eval_table.name
         engine = self.engine()
         quoted = quote_identifier(engine, table)
         frame = read_sql_or_missing(
@@ -180,15 +201,19 @@ class TrackDbBackend:
         return parsed if isinstance(parsed, dict) else None
 
     def _append_history_db(self, frame: pd.DataFrame) -> None:
-        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
-        append_frame_fenced(self.engine(), table, frame, self._fence)
+        table = self._history_table
+        engine = self.engine()
+        # Before the rows' transaction: DDL commits implicitly on MySQL.
+        with engine.begin() as conn:
+            conn.execute(CreateTable(table, if_not_exists=True))
+        append_frame_fenced(engine, table.name, frame, self._fence)
 
     def _read_history_db(
         self,
         *,
         generated_ats: set[str] | None,
     ) -> pd.DataFrame:
-        table = table_option(self._options, "history_table", DEFAULT_HISTORY_TABLE)
+        table = self._history_table.name
         engine = self.engine()
         quoted = quote_identifier(engine, table)
         clause, params = history_sql_filter(generated_ats=generated_ats)
