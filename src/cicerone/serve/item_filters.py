@@ -12,7 +12,8 @@ import pandas as pd
 from cicerone.config import Settings
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import RecommendationReader
-from cicerone.io.recommendation_reader_common import ITEM_COLUMN, normalize_items_snapshot
+from cicerone.io.recommendation_reader_common import normalize_items_snapshot
+from cicerone.io.recommendation_schema import ITEM_COLUMN
 from cicerone.values import item_true_mask
 
 logger = logging.getLogger(__name__)

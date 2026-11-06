@@ -30,7 +30,7 @@ from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import ManifestReader, RecommendationReader
-from cicerone.io.recommendation_reader_common import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.locks import (
     WriteFence,
     WriterLockBusyError,

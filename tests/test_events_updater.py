@@ -18,7 +18,7 @@ from cicerone.events.updater_merge import INCREMENTAL_SOURCE
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.io.recommendation_reader_common import RECOMMENDATION_COLUMNS
+from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import PublishError
 from cicerone.reasons import dump_source_reasons, parse_reasons

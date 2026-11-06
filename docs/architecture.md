@@ -304,9 +304,9 @@ imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
 needs no lightfm/implicit/torch there. With `[events.online]`, the events
 worker lazy-imports the artifact stack (LightFM) for write-through only.
 It does import
-`rectools` at startup: `serve/app.py` → `io/recommendation_reader_common.py` →
-`blending.py` → `from rectools import Columns`, so `rectools` cannot be dropped
-from a serve-only image.
+`rectools` at startup: `serve/app.py` → `serve/bootstrap_events.py` →
+`events/updater.py` → `blending.py` → `from rectools import Columns`, so
+`rectools` cannot be dropped from a serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
   `RecommendationReader` (`io/base.py`) matching the

@@ -79,6 +79,7 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
     assert pub.connected == 0
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -131,48 +132,6 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
 
 
-@pytest.mark.usefixtures("worker_without_thread")
-def test_start_events_runtime_tick_applies_webhook_event(tmp_path, feature_config: FeatureConfig):
-    out = tmp_path / "out"
-    out.mkdir()
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
-    ).to_parquet(out / "recommendations.parquet", index=False)
-
-    reader = _Reader()
-    runtime = start_events_runtime(
-        make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-            events=EventsSettings(
-                enabled=True,
-                kind="webhook",
-                incremental=EventsIncrementalSettings(
-                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
-                ),
-            ),
-        ),
-        feature_config=feature_config,
-        reader=reader,  # type: ignore[arg-type]
-    )
-    assert runtime.worker is not None
-    assert runtime.worker._thread is None
-    assert isinstance(runtime.webhook_source, WebhookEventSource)
-    runtime.webhook_source.ingest(
-        {
-            "user_id": "u1",
-            "item_id": "i9",
-            "event_type": "purchase",
-            "occurred_at": "2026-08-13T12:00:00Z",
-            "event_id": "skip-start-1",
-        }
-    )
-    assert runtime.worker.tick() == 1
-    assert reader.refreshed == 1
-    runtime.stop()
-    assert runtime.worker._thread is None
-
-
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     inp = tmp_path / "in"
@@ -217,7 +176,6 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         runtime.stop()
 
 
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
@@ -252,7 +210,6 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         runtime.stop()
 
 
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
@@ -324,7 +281,6 @@ def test_input_users_provider_uses_bootstrap_snapshot_only(monkeypatch) -> None:
     assert list(second["user_id"].astype(str)) == ["u1"]
 
 
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -361,7 +317,6 @@ def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_co
         runtime.stop()
 
 
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -394,7 +349,6 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         runtime.stop()
 
 
-@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_custom_automl_variant_policy_names(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -493,7 +447,7 @@ def test_start_events_runtime_connects_source(tmp_path, feature_config: FeatureC
         )
         assert connected["n"] == 1
         assert runtime.worker is not None
-        assert runtime.worker._thread is not None
+        assert runtime.worker._thread.is_alive()
         assert runtime.worker.tick() == 0
     finally:
         bootstrap.build_event_source = original

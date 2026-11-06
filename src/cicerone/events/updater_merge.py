@@ -8,15 +8,13 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from cicerone.events.store import empty_recommendations_frame
-from cicerone.io.recommendation_reader_common import (
+from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
+    REASONS_COLUMN,
     SCORE_COLUMN,
     SOURCE_COLUMN,
     USER_COLUMN,
-)
-from cicerone.io.recommendation_schema import (
-    REASONS_COLUMN,
     VARIANT_COLUMN,
     collapse_mixed_variants,
     filter_variant_rows,

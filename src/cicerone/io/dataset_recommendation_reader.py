@@ -24,10 +24,6 @@ from cicerone.io.options import (
 )
 from cicerone.io.recommendation_reader_common import (
     ITEMS_SNAPSHOT_FILENAME,
-    RANK_COLUMN,
-    SOURCE_COLUMN,
-    USER_COLUMN,
-    VARIANT_COLUMN,
     ItemFilterMixin,
     index_recommendations_by_user,
     item_snapshot_columns,
@@ -36,6 +32,7 @@ from cicerone.io.recommendation_reader_common import (
     resolve_fallback_user_id,
     select_cold_start_fallback,
 )
+from cicerone.io.recommendation_schema import RANK_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
