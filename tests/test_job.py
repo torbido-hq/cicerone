@@ -132,9 +132,17 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    publisher = FakePublisher()
+    written_at_publish: list[bool] = []
+
+    class _Pub(FakePublisher):
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            written_at_publish.append((output_dir / "recommendations.parquet").exists())
+            super().publish(df, user_ids=user_ids)
+
+    publisher = _Pub()
     monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
     job.run()
+    assert written_at_publish == [True]
     assert len(publisher.published) == 1
     assert {"u1", "u2"}.issubset(set(publisher.published[0]["user_id"].astype(str)))
     assert publisher.closes == 1
@@ -296,11 +304,10 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    monkeypatch.setattr(
-        "cicerone.job.build_publisher",
-        lambda _settings: FakePublisher(publish_error=PublishError("broker down")),
-    )
+    publisher = FakePublisher(publish_error=PublishError("broker down"))
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
     job.run()
+    assert publisher.publish_attempts == 1
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
     assert (output_dir / "recommendations.parquet").exists()

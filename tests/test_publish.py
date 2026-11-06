@@ -668,20 +668,21 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         output=local_output(out),
         top_k=5,
     )
-
+    publisher = FakePublisher(
+        publish_error=PublishError("broker down"),
+        close_error=AssertionError("close should not run"),
+    )
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=FakePublisher(
-            publish_error=PublishError("broker down"),
-            close_error=AssertionError("close should not run"),
-        ),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert updater.events_applied == 1
+    assert publisher.publish_attempts == 1
 
 
 def test_kafka_publisher_fails_on_delivery_error(monkeypatch):

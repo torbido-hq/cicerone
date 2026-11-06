@@ -231,7 +231,7 @@ class FakeLock:
 
 
 class FakePublisher:
-    """Records published frames and ``close`` calls; a ``*_error`` makes that step raise."""
+    """Records publish attempts, published frames and ``close`` calls; a ``*_error`` makes that step raise."""
 
     def __init__(
         self,
@@ -243,6 +243,7 @@ class FakePublisher:
         self.connect_error = connect_error
         self.publish_error = publish_error
         self.close_error = close_error
+        self.publish_attempts = 0
         self.published: list[pd.DataFrame] = []
         self.closes = 0
 
@@ -251,6 +252,7 @@ class FakePublisher:
             raise self.connect_error
 
     def publish(self, df: pd.DataFrame, *, user_ids: Sequence[str] | None = None) -> None:
+        self.publish_attempts += 1
         if self.publish_error is not None:
             raise self.publish_error
         self.published.append(df.copy())
