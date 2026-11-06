@@ -60,6 +60,10 @@ def apply_after_second_beat(worker: EventWorker, source: BeatingSource) -> None:
     worker._updater.apply = _held  # type: ignore[method-assign]
 
 
+# json.loads rejects these without a JSONDecodeError: int digit limit (ValueError), nesting (RecursionError).
+UNPARSABLE_JSON_BODIES = (b'{"user_id": ' + b"1" * 4301 + b"}", b"[" * 200_000)
+
+
 def event_payload(**overrides) -> dict:
     base = {
         "user_id": "u1",
