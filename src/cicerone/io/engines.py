@@ -43,9 +43,9 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
 def database_backend_name(database_url: str) -> str:
     try:
         return make_url(database_url).get_backend_name()
-    except ArgumentError as exc:
-        # The URL can hold a password, so it stays out of the message.
-        raise ConfigError("database_url is not a valid database URL") from exc
+    except ArgumentError:
+        # The URL can hold a password, so it stays out of the message and the traceback.
+        raise ConfigError("database_url is not a valid database URL") from None
 
 
 def is_mysql_family(bind: Engine | Connection) -> bool:

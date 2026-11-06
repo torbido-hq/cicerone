@@ -672,5 +672,7 @@ def test_long_experiment_id_is_accepted_on_mysql_when_the_experiment_is_disabled
 
 
 def test_long_experiment_id_with_an_unparsable_url_raises_config_error() -> None:
-    with pytest.raises(ConfigError, match="not a valid database URL"):
+    with pytest.raises(ConfigError, match="not a valid database URL") as caught:
         _db_experiment_settings({"database_url": "not a url"}, "x" * 256)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
