@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import Settings
@@ -38,12 +38,18 @@ def assign_variant(
         return promoted_variant
     bucket = assignment_bucket(experiment_id, user_id)
     cumulative = 0.0
-    last_index = len(variants) - 1
-    for index, (name, traffic) in enumerate(variants):
+    for name, traffic in variants[:-1]:
         cumulative += float(traffic)
-        if index == last_index or bucket < cumulative:
+        if bucket < cumulative:
             return name
     return names[-1]
+
+
+def live_active_pair(pair: tuple[str, str] | None, names: Collection[str]) -> tuple[str, str] | None:
+    """``pair`` while both arms are still among ``names``."""
+    if pair is None or pair[0] not in names or pair[1] not in names:
+        return None
+    return pair
 
 
 def active_pair_traffic(
@@ -78,10 +84,9 @@ def assign_user(
     promoted_variant, active_pair = overlay
     names = {name for name, _traffic in variants}
     if experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
-        if active_pair is not None and active_pair[0] in names and active_pair[1] in names:
-            variants = active_pair_traffic(
-                active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
-            )
+        live_pair = live_active_pair(active_pair, names)
+        if live_pair is not None:
+            variants = active_pair_traffic(*live_pair, explore_traffic=experiment.explore_traffic)
         else:
             snapshot = snapshot_names()
             if snapshot is None:

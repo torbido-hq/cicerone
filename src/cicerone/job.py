@@ -34,7 +34,7 @@ from cicerone.experiment import (
     union_models,
 )
 from cicerone.experiment.guardrails import evaluate_guardrails
-from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
 from cicerone.experiment.thompson import (
     allocate_thompson,
     select_active_recipes,
@@ -222,7 +222,8 @@ def _select_thompson_recipes(
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
-    has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
+    stored_pair = active_pair_from_state(previous)
+    has_pair = stored_pair is not None
     if not track_rows and not has_pair:
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
@@ -269,9 +270,7 @@ def _select_thompson_recipes(
             return ThompsonSelection(recipes)
         guardrails_ok = False
         if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
-            pair_names: tuple[str, ...] = tuple(names)
-            if previous is not None and has_pair:
-                pair_names = (str(previous.get("champion")), str(previous.get("challenger")))
+            pair_names: tuple[str, ...] = stored_pair or tuple(names)
             guardrails_ok = all(
                 evaluate_guardrails(
                     filter_variant_rows(recs, name),

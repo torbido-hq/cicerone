@@ -30,6 +30,7 @@ from cicerone.evaluation import (
 )
 from cicerone.evaluation.context import load_metric_events as _load_metric_events
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
+from cicerone.experiment.assignment import live_active_pair
 from cicerone.experiment.evaluate import evaluate_experiment
 from cicerone.experiment.recipes import (
     ResolvedRecipe,
@@ -83,16 +84,6 @@ def _reject_unread_state(_settings: Settings, _store: ExperimentStore) -> NoRetu
 def _promote_base_state(settings: Settings, store: ExperimentStore) -> dict[str, Any] | None:
     # Writes need a fresh read: the cached state misses other replicas' and the job's newer writes.
     return _matched_state(settings, store, _reject_unread_state)
-
-
-def _live_thompson_pair(
-    state: Mapping[str, Any] | None,
-    names: set[str],
-) -> tuple[str, str] | None:
-    pair = active_pair_from_state(state)
-    if pair is None or pair[0] not in names or pair[1] not in names:
-        return None
-    return pair
 
 
 def _thompson_pair_names(settings: Settings, recipes: Sequence[Any] = ()) -> set[str]:
@@ -341,7 +332,7 @@ def experiment_context(settings: Settings, store: ExperimentStore | None) -> dic
     ship_variant = None
     if not promoted and not blocked:
         if experiment.allocation == ALLOCATION_THOMPSON:
-            pair = _live_thompson_pair(state, {recipe.name for recipe in recipes})
+            pair = live_active_pair(active_pair_from_state(state), {recipe.name for recipe in recipes})
             ship_variant = pair[0] if pair else None
         else:
             ship_variant = report.winner
@@ -384,7 +375,7 @@ def _thompson_promote_error(
     state: Mapping[str, Any] | None,
     names: set[str],
 ) -> str | None:
-    pair = _live_thompson_pair(state, names)
+    pair = live_active_pair(active_pair_from_state(state), names)
     if pair and variant in pair:
         return None
     if not pair:
