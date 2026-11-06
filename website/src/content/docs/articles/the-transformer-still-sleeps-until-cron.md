@@ -65,7 +65,7 @@ TOML load still succeeds. The job raises `ConfigError` when it builds the strate
 strategy 'sequential' requires torch; install with: pip install 'cicerone-recommender[sequential]'
 ```
 
-`Dockerfile.sequential` starts `FROM cicerone`. That tag has to be the `runtime` image from the command above. That image keeps `ENTRYPOINT ["cicerone"]`, so the result can run the batch job. If `cicerone` is the last stage of `docker/Dockerfile`, this file extends `test-sequential` instead. That stage already has torch, and the test stage clears the entrypoint, so the result is neither the batch job image nor a torch-free serve image.
+`Dockerfile.sequential` starts `FROM cicerone`. That tag has to be the `runtime` image from the command above. The runtime stage ends as `USER cicerone` with `ENTRYPOINT ["cicerone"]` and `CMD ["start"]`. This file does not replace either, so a run with no arguments is `cicerone start`. With `job.mode = "batch"` that runs one job, then the scheduler. If `cicerone` is the last stage of `docker/Dockerfile`, this file extends `test-sequential`. That stage inherits `ENTRYPOINT []` from the test stage, replaces the command with pytest, and already has torch. The result is neither the batch job image nor a torch-free serve image.
 
 Save the file in the repo root so the build context can see `requirements-sequential.txt`. The runtime stage's last user is `cicerone`, so the snippet switches to root for `pip` and back. Tag the result `cicerone-sequential`.
 
@@ -206,7 +206,11 @@ Optional `[events.online]` runs in the serve process, after the [checkout](/arti
 | Online re-score | No | Yes |
 | LightFM `fit_partial` | Yes, for LightFM only | Not applicable to the transformer |
 
-Startup calls `ensure_loaded` before the process listens. That unpickles the artifact and installs it in memory before the process accepts a request. A later refresh unpickles again only when no refresh is still pending and the stored bytes differ. A matching fingerprint skips that read, and the model already in memory stays. The installed model is the one `recommend` uses on that refresh. The re-score is that `recommend`. It does not replace the sequential weights. A GET does neither.
+Startup calls `ensure_loaded` before the process listens. That unpickles the artifact and installs it before the process accepts a request. A GET does not.
+
+A later `refresh` with no events returns before it reads the store. Otherwise `_reload` runs first. A refresh that is still pending does not read. A matching fingerprint skips the read, and the model already in memory stays. A different byte digest is unpickled and installed then, before this call can recommend.
+
+Reload, merge, and re-score stay three steps. The re-score is `recommend` on the fitted sequential model, and only after a kept event has been merged. It does not replace the sequential weights.
 
 A re-score keeps an event only when both its `user_id` and its `item_id` are already in the loaded artifact's interactions. Anything else is counted as dropped. Kept events go through the same weighting as the job. A non-positive aggregate is not merged. The merge sums weights, keeps the later datetime, and stays one row per `(user, item)`.
 
@@ -214,7 +218,9 @@ A re-score keeps an event only when both its `user_id` and its `item_id` are alr
 
 `fit_partial` is the third row. Cicerone calls it only on the collaborative LightFM object, after `fit_min_events` known events (default 100) and only when `fit_partial_epochs` is positive (default 1). This walkthrough's `models` list has no `collaborative`, so that call does not run. The sequential model is not passed to it.
 
-Online also needs `[events]` on, `[output].artifact_hmac_key` of at least 16 UTF-8 bytes, and output kind `db` or a local dataset. Config load checks those. It does not check `[job].save_model_artifact`. The artifact still has to be in the store. If it is missing, `ensure_loaded` fails with `events.online.enabled requires a model artifact in [output]; the batch job must set save_model_artifact = true`. `[events.online]` still requires `[model.collaborative].cls` to be `LightFMWrapperModel`. That is the default class. It does not mean collaborative is in `models`.
+With `[events.online]` on, config load requires `[events]` on, `[output].artifact_hmac_key` set, and output kind `db` or a local dataset. A key that is present is measured with `len(key.encode("utf-8"))` and rejected below 16. The `ConfigError` says `output.artifact_hmac_key must be at least 16 bytes`. Config load does not read `[job].save_model_artifact`.
+
+The batch job writes the artifact only when that flag is true. Online serve reads the store. A missing artifact is not a config error. `ensure_loaded` raises `OnlineArtifactError` before the process listens. The message is `events.online.enabled requires a model artifact in [output]; the batch job must set save_model_artifact = true`. `[events.online]` still requires `[model.collaborative].cls` to be `LightFMWrapperModel`. That is the default class. It does not mean collaborative is in `models`.
 
 Leave `[experiment]` off. With it on, the online trainer is not constructed. The log is `Online collaborative refresh skipped while [experiment] is enabled`. Popular / latest inject can still run.
 
@@ -226,11 +232,11 @@ The INFO line `Online refresh skipped (sequential in artifact, torch extra missi
 
 AutoML is off in this walkthrough, so `[job].models` is what the job fits. Turn it on and the winning candidate replaces that list for the run.
 
-When a candidate contains `sequential`, AutoML logs `Excluding sequential from AutoML candidate pool: …` if torch is missing, or if the median count of distinct `item_id` values per user in the event frame is below `[job.sequential].min_median_interactions` (default 5). The median is computed on events, before aggregation. Sequential is removed from every candidate, and a candidate that becomes empty is dropped. A search that contained only sequential then raises `AutoML has no candidates left after excluding sequential`, followed by the skip reason. With AutoML off, the median does not stop a hand-listed `models` entry from fitting.
+When a candidate contains `sequential`, AutoML logs `Excluding sequential from AutoML candidate pool: …` if torch is missing, or if the median count of distinct `item_id` values per user in the event frame is below `[job.sequential].min_median_interactions` (default 5). The median is computed on events, before aggregation. Sequential is removed from every candidate, and a candidate that becomes empty is dropped. The log line and the exception are different strings. A search that contained only sequential raises `AutoML has no candidates left after excluding sequential; ` plus that same skip reason. With AutoML off, the median does not stop a hand-listed `models` entry from fitting.
 
 An unknown `user_id` is still a lookup. Serve does not score a new sequence. With blending off there is no `__cold_start__` row.
 
-Serve picks one user who still has a `popular_fallback` or `latest` row. `popular_fallback` beats `latest`. Both readers then take the lexicographically smallest `user_id`. In the database that is `ORDER BY user_id ASC` after the source order.
+Serve picks one user who still has a `popular_fallback` or `latest` row. `popular_fallback` beats `latest`. Among users who have that winning source, both readers take the lexicographically smallest `user_id`. The database pick is one row: source order, then `user_id ASC`, `LIMIT 1`. The read that follows loads that user's rows.
 
 The response is that user's stored rows, every source in the slice, ordered by `rank` and cut at the request limit. `fallback` is true. A `sequential` row in that slice is returned with the others.
 
@@ -244,7 +250,7 @@ A user is eligible when those stored rows include `popular_fallback` or `latest`
 | `architecture = "hstu"` and `relative_time_attention = false` | Recommend runs. No `unix_ts`. LiGR stays dropped. Inherited `sampled_softmax` still becomes `softmax` unless `loss` is set. |
 | Turn blending on | Personalized frames are relabeled `personalized` before the mix. A multi-source row is `blended`. `__cold_start__` is written. |
 | Set `model_weights` | RRF. A shared item's `source` joins the contributors with `+`. |
-| AutoML on, median distinct items below the floor | INFO `Excluding sequential from AutoML candidate pool:` plus the median and `job.sequential.min_median_interactions`. The winner is what fits, and sequential is not in it. |
+| AutoML on, median distinct items below the floor | INFO `Excluding sequential from AutoML candidate pool:` plus `median distinct items per user is N.N, below job.sequential.min_median_interactions=5`. A candidate that still has another model can win. A pool that is empty afterward raises. |
 | `[events.online]` on, torch-free serve, artifact contains `sequential` | Startup fails while loading the artifact. Turn online off on that image. |
 | `[events.online]` on, sequential extra installed, both ids known | `recommend` on the frozen model with the merged interactions. No `fit_partial` on the transformer. A new id is dropped. |
 | `[experiment]` on while online is on | Online trainer is not started. Log: `Online collaborative refresh skipped while [experiment] is enabled`. |
