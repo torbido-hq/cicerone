@@ -65,7 +65,7 @@ TOML load still succeeds. The job raises `ConfigError` when it builds the strate
 strategy 'sequential' requires torch; install with: pip install 'cicerone-recommender[sequential]'
 ```
 
-`Dockerfile.sequential` starts `FROM cicerone`. That tag has to be the `runtime` image from the command above. The runtime stage ends as `USER cicerone` with `ENTRYPOINT ["cicerone"]` and `CMD ["start"]`. This file does not replace either, so a run with no arguments is `cicerone start`. With `job.mode = "batch"` that runs one job, then the scheduler. If `cicerone` is the last stage of `docker/Dockerfile`, this file extends `test-sequential`. That stage inherits `ENTRYPOINT []` from the test stage, replaces the command with pytest, and already has torch. The result is neither the batch job image nor a torch-free serve image.
+`Dockerfile.sequential` starts `FROM cicerone`. That tag has to be the `runtime` image from the command above. The runtime stage ends as `USER cicerone` with `ENTRYPOINT ["cicerone"]` and `CMD ["start"]`. This file does not replace either, so a run with no arguments is `cicerone start`. With `job.mode = "batch"` that runs one job and then stays in the scheduler, which waits for `cron_schedule`. `cicerone job` is one fit and then exits. If `cicerone` is the last stage of `docker/Dockerfile`, this file extends `test-sequential`. That stage inherits `ENTRYPOINT []` from the test stage, replaces the command with pytest, and already has torch. The result is neither the batch job image nor a torch-free serve image.
 
 Save the file in the repo root so the build context can see `requirements-sequential.txt`. The runtime stage's last user is `cicerone`, so the snippet switches to root for `pip` and back. Tag the result `cicerone-sequential`.
 
@@ -149,7 +149,7 @@ Where `[event_caps]` names an event type, it keeps that many most recent events 
 
 Two purchases of the same SKU are one position, at the later timestamp. Buy A, then B, then A again, and the sequence is B then A when that last A is later than B and both aggregated weights stay positive. A non-positive sum drops that item. Intermediate timestamps are not in the sequence.
 
-`session_max_len` (default 50) is the recommend window for SASRec and HSTU: the tail of that unique history. Training keeps one more item (`session_max_len + 1`) because the shifted target needs it. BERT4Rec training keeps `session_max_len` items. At recommend time BERT4Rec appends a MASK token inside that same window, so the model sees `session_max_len - 1` real items.
+`session_max_len` (default 50) is the recommend window for SASRec and HSTU: the tail of that unique history. Training keeps one more item (`session_max_len + 1`) because the shifted target needs it. BERT4Rec training keeps `session_max_len` items. At recommend time BERT4Rec appends a MASK token inside that same window, so a full window holds `session_max_len - 1` real items.
 
 `train_min_user_interactions` (default 2) drops shorter users from training only. A user left out of training can still be scored when they hold at least one item the fitted model already knows. RecTools leaves out a target user who has none of those items.
 
@@ -214,7 +214,7 @@ Reload, merge, and re-score stay three steps. The re-score is `recommend` on the
 
 A re-score keeps an event only when both its `user_id` and its `item_id` are already in the loaded artifact's interactions. Anything else is counted as dropped. Kept events go through the same weighting as the job. A non-positive aggregate is not merged. The merge sums weights, keeps the later datetime, and stays one row per `(user, item)`.
 
-`recommend` then runs on the fitted sequential model with that dataset. The sequence can change. The sequential weights do not. `filter_viewed` drops items now in that user's history.
+`recommend` then runs on the fitted sequential model with that dataset. The interaction sequence it reads can change. The sequential weights do not. `filter_viewed` drops items now in that user's history. When that call returns rows, the flush replaces the user's stored recommendations. The new sequential rows take the place of the prior rows whose source overlaps `sequential`. A later `SELECT` or GET reads that write. Other users stay on the last fit.
 
 `fit_partial` is the third row. Cicerone calls it only on the collaborative LightFM object, after `fit_min_events` known events (default 100) and only when `fit_partial_epochs` is positive (default 1). This walkthrough's `models` list has no `collaborative`, so that call does not run. The sequential model is not passed to it.
 
