@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import event
 
 from cicerone.io.db_store import DatabaseOutputSink
+from cicerone.locks import LockLostError, WriteFence
 
 
 def test_database_read_model_artifact_rejects_oversize(tmp_path, monkeypatch):
@@ -52,6 +54,47 @@ def test_database_read_model_artifact_uses_one_select(tmp_path, monkeypatch):
     sql, params = payload_selects[0]
     assert "substr" in sql.lower()
     assert params == (5,)
+
+
+@pytest.mark.parametrize("lost_after", ["DELETE", "INSERT"])
+@pytest.mark.parametrize(
+    "replace",
+    [
+        lambda sink, _token: sink.write_model_artifact(b"second"),
+        lambda sink, token: sink.replace_model_artifact_if(b"second", token),
+    ],
+    ids=["write", "replace_if"],
+)
+def test_database_artifact_replace_rolls_back_when_the_fence_is_lost(tmp_path, lost_after, replace):
+    held = {"ok": True}
+    sink = DatabaseOutputSink(
+        {"database_url": f"sqlite:///{tmp_path}/artifacts.sqlite"},
+        fence=WriteFence(check=lambda: held["ok"]),
+    )
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    statements: list[str] = []
+
+    def _lose_fence(
+        _conn: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+        if statement.startswith(lost_after):
+            held["ok"] = False
+
+    event.listen(sink._engine, "after_cursor_execute", _lose_fence)
+    try:
+        with pytest.raises(LockLostError):
+            replace(sink, token)
+    finally:
+        event.remove(sink._engine, "after_cursor_execute", _lose_fence)
+    assert statements[-1].startswith(lost_after)
+    assert sink.read_model_artifact() == b"first"
 
 
 def test_database_replace_model_artifact_if_matches_the_sqlite_fingerprint(tmp_path):

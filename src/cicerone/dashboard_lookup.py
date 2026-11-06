@@ -7,7 +7,7 @@ import math
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict
 
 import pandas as pd
 
@@ -37,7 +37,17 @@ _EVENT_TYPE_COLUMN = "event_type"
 _QUANTITY_COLUMN = "quantity"
 
 
-def empty_history_fields() -> dict[str, Any]:
+class HistoryFields(TypedDict):
+    events: list[dict[str, str]]
+    events_error: str | None
+    user_attrs: list[dict[str, str]]
+    source_mix: list[dict[str, Any]]
+    overlap_item_ids: list[str]
+    warm: bool
+    show_quantity: bool
+
+
+def empty_history_fields() -> HistoryFields:
     return {
         "events": [],
         "events_error": None,
@@ -137,7 +147,7 @@ def lookup_history(
     settings: Settings,
     history_reader: UserHistoryReader | None,
     user_id: str,
-) -> dict[str, Any]:
+) -> HistoryFields:
     empty = empty_history_fields()
     if history_reader is None:
         empty["events_error"] = HISTORY_UNAVAILABLE

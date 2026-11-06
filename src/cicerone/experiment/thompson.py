@@ -20,7 +20,9 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.evaluation.metrics import SliceMetrics
+from cicerone.experiment.assignment import active_pair_traffic, live_active_pair
 from cicerone.experiment.recipes import ResolvedRecipe
+from cicerone.experiment.store import active_pair_from_state
 from cicerone.io.recommendation_schema import pick_control_name
 from cicerone.values import utc_stamp
 
@@ -205,18 +207,10 @@ def select_active_recipes(
     by_name = {recipe.name: recipe for recipe in recipes}
     if champion not in by_name:
         return recipes
-    share = float(explore_traffic)
-    if challenger not in by_name or challenger == champion:
-        return (replace_traffic(by_name[champion], 1.0),)
-    champ_share = max(0.0, 1.0 - share)
-    return (
-        replace_traffic(by_name[champion], champ_share),
-        replace_traffic(by_name[challenger], share),
+    pair = active_pair_traffic(
+        champion, challenger if challenger in by_name else champion, explore_traffic=explore_traffic
     )
-
-
-def replace_traffic(recipe: ResolvedRecipe, traffic: float) -> ResolvedRecipe:
-    return replace(recipe, traffic=float(traffic))
+    return tuple(replace(by_name[name], traffic=traffic) for name, traffic in pair)
 
 
 def allocate_thompson(
@@ -240,19 +234,18 @@ def allocate_thompson(
     prev = dict(previous or {})
     stored = parse_arm_counts(prev.get("arms"))
     window = dict(window_trials or {})
-    prev_champion = str(prev.get("champion") or "")
-    prev_challenger = str(prev.get("challenger") or "")
-    pair_ok = prev_champion in labels and prev_challenger in labels
-    champion = pick_champion_name(labels, promoted_variant or (prev_champion if pair_ok else None))
+    live_pair = live_active_pair(active_pair_from_state(prev), labels)
+    champion = pick_champion_name(labels, promoted_variant or (live_pair[0] if live_pair else None))
     arms = {name: stored.get(name, ArmCounts(0, 0)) for name in labels}
-    if pair_ok:
+    if live_pair is not None:
+        prev_champion, prev_challenger = live_pair
         window_impressions = 0
         for name in (prev_champion, prev_challenger):
             extra = window.get(name, ArmCounts(0, 0))
             arms[name] = add_counts(arms[name], extra)
             window_impressions += extra.impressions
         pair_impressions = int(prev.get("pair_impressions") or 0) + window_impressions
-        if promoted_variant and prev_champion in labels and prev_champion != champion:
+        if promoted_variant and prev_champion != champion:
             challenger = prev_champion
         else:
             challenger = prev_challenger if prev_challenger != champion else _other_name(labels, champion)
@@ -266,7 +259,7 @@ def allocate_thompson(
         challenger = sample_arm([name for name in labels if name != champion], arms, seed=seed)
     rotated = False
     can_rotate = (
-        pair_ok
+        live_pair is not None
         and promoted_variant is None
         and pair_impressions >= max(0, int(min_impressions))
         and guardrails_ok
