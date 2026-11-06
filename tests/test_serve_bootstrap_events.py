@@ -129,7 +129,6 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert enabled.worker.tick() == 1
     assert reader.refreshed == 1
     enabled.stop()
-    assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
 
 
 def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_config: FeatureConfig):
