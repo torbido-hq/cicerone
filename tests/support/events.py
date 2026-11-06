@@ -6,7 +6,7 @@ import threading
 from collections.abc import Sequence
 from typing import Any
 
-from cicerone.config import make_settings
+from cicerone.config import IOSettings, make_settings
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.online_result import OnlineRefreshResult
 from cicerone.events.updater import IncrementalUpdater
