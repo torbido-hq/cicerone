@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 import pytest
-from support.events import event_payload
+from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
 from support.fakes import hide_module
 
@@ -384,6 +384,32 @@ def test_invalid_json_is_committed(monkeypatch):
     source.connect()
     events = list(source.poll(10))
     assert [event.event_id for event in events] == ["ok"]
+    assert (0, 1) in broker.committed
+
+
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+def test_unparsable_body_is_discarded_like_invalid_json(monkeypatch, caplog, body):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", body)
+    broker.add("cicerone.events", event_payload(event_id="ok"))
+    source = KafkaEventSource(kafka_source_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.kafka"):
+        events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok"]
+    assert (0, 1) in broker.committed
+    assert "Skipping invalid Kafka message 0-0" in caplog.text
+
+
+def test_invalid_message_is_logged(monkeypatch, caplog):
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", b"not-json")
+    source = KafkaEventSource(kafka_source_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.kafka"):
+        assert list(source.poll(10)) == []
+    assert "Skipping invalid Kafka message 0-0" in caplog.text
 
 
 def test_reconnect_closes_previous(monkeypatch):

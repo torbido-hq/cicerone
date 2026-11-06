@@ -10,7 +10,8 @@ from typing import Any
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import RedisError
-from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+from cicerone.events.json_payload import delivery_event
+from cicerone.events.normalize import EventNormalizeError
 from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
@@ -267,11 +268,8 @@ class RedisStreamsEventSource(QueuedEventSource):
             with self._lock:
                 if entry_id in self._held_entries:
                     continue
-            payload = {str(key): value for key, value in fields.items()}
-            if supplied_event_id(payload) is None:
-                payload["event_id"] = entry_id
             try:
-                event = normalize_event(payload)
+                event = delivery_event({str(key): value for key, value in fields.items()}, entry_id)
             except EventNormalizeError as exc:
                 logger.warning("Skipping invalid Redis Streams entry %s: %s", entry_id, exc)
                 drop_ids.append(entry_id)
