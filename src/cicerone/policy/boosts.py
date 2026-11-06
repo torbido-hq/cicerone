@@ -64,7 +64,7 @@ def item_boost_details(
     items: pd.DataFrame | None,
     boosts: Sequence[BoostRule],
     *,
-    record_hits: bool = True,
+    record_hits: bool,
 ) -> tuple[dict[str, float], dict[str, list[dict[str, object]]]]:
     """item_id → (product of factors, hits where a rule factor was not 1.0)."""
     if not boosts:
@@ -101,7 +101,7 @@ def item_boost_details(
 
 def item_boost_factors(items: pd.DataFrame | None, boosts: Sequence[BoostRule]) -> dict:
     """item_id → product of configured boost factors."""
-    factors, _hits = item_boost_details(items, boosts)
+    factors, _hits = item_boost_details(items, boosts, record_hits=False)
     return factors
 
 
