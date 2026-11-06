@@ -46,6 +46,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Incremental updates no longer put `__cold_start__` rows with a missing
+  variant under an experiment variant named `None`, `nan`, `<NA>` or
+  `NaT`; such rows are dropped, as real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
@@ -207,6 +210,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- An item the user just consumed that is already in their preserved rows
+  moves into the incremental boost slots, keeping its `source`, `reasons` and
+  `score`, instead of staying low or falling off the list; the newest items
+  win when there are more than slots.
 
 ### Removed
 
