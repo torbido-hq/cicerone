@@ -6,8 +6,9 @@ import pandas as pd
 import pytest
 from support.events import event_payload
 from support.prometheus_metrics import registry_metric_value
+from support.settings import local_output
 
-from cicerone.config import IOSettings, make_settings
+from cicerone.config import make_settings
 from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
@@ -26,7 +27,7 @@ def _settings(tmp_path):  # type: ignore[no-untyped-def]
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     return make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 

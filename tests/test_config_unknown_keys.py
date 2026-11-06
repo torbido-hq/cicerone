@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from conftest import make_settings
+from support.settings import make_settings
 from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import load_settings

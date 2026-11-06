@@ -210,6 +210,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- The `POST /events` OpenAPI description of `event_type` says that without a
+  `features.toml` every type counts as a signal and the size of `quantity`
+  affects only the popular ranking (online refresh uses the artifact's config),
+  instead of requiring a `[event_weights]` key.
 - An item the user just consumed that is already in their preserved rows
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
