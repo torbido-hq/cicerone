@@ -56,6 +56,7 @@ from cicerone.serve_schemas import ErrorDetail, HealthResponse, RecommendationIt
 from cicerone.track.normalize import NormalizedTrack
 from cicerone.track.routes import TRACK_INGEST, mount_track_routes
 from cicerone.track.store import TrackStore
+from cicerone.track.store_db import require_track_ingest_database
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,8 @@ def create_app(
     event_source: WebhookEventSource | None = None,
     events_worker: EventWorker | None = None,
 ) -> FastAPI:
+    if settings.track.enabled and settings.output.kind == "db":
+        require_track_ingest_database(settings.output.options)
     # One writer thread keeps appends ordered and off the request threadpool.
     append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
     append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
@@ -357,7 +360,7 @@ def create_app(
         return body
 
     mount_events_routes(app, settings, event_source=event_source)
-    mount_track_routes(app, settings, store=track_store)
+    mount_track_routes(app, settings, track_store)
 
     def custom_openapi() -> dict:
         if app.openapi_schema is not None:

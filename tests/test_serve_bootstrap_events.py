@@ -31,7 +31,11 @@ class _Reader:
 class _Pub:
     def __init__(self, close_error: Exception | None = None) -> None:
         self.closed = 0
+        self.connected = 0
         self._close_error = close_error
+
+    def connect(self) -> None:
+        self.connected += 1
 
     def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
         return None
@@ -48,17 +52,12 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    seen: dict[str, bool] = {}
+    pub = _Pub()
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-
-    def tracking(_settings, *, connect=True):
-        seen["connect"] = connect
-        return _Pub()
-
-    bootstrap.build_publisher = tracking  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -77,7 +76,7 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
         runtime.stop()
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
-    assert seen["connect"] is False
+    assert pub.connected == 0
 
 
 def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: FeatureConfig):
@@ -516,7 +515,7 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -551,7 +550,7 @@ def test_stop_swallows_publisher_publish_error(tmp_path, feature_config: Feature
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -585,7 +584,7 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -632,7 +631,7 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     def _boom(self) -> None:
         raise RuntimeError("start fail")
 
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     EventWorker.start = _boom  # type: ignore[method-assign]
     try:
         with pytest.raises(RuntimeError, match="start fail"):
@@ -673,7 +672,7 @@ def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config
     def _boom(self) -> None:
         raise RuntimeError("start fail")
 
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     EventWorker.start = _boom  # type: ignore[method-assign]
     try:
         with pytest.raises(RuntimeError, match="start fail"):
@@ -753,7 +752,7 @@ def test_publisher_close_does_not_replace_worker_stop_error(tmp_path, feature_co
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: pub  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
