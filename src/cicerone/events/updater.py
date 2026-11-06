@@ -29,9 +29,8 @@ from cicerone.events.updater_ranking import UpdaterRanking
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
-from cicerone.io.recommendation_reader import SOURCE_COLUMN, USER_COLUMN
 from cicerone.io.recommendation_reader_common import group_by_user
-from cicerone.io.recommendation_schema import recommendation_output_columns
+from cicerone.io.recommendation_schema import SOURCE_COLUMN, USER_COLUMN, recommendation_output_columns
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 from cicerone.publish.base import (
     RecommendationPublisher,

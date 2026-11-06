@@ -24,7 +24,6 @@ clicks, CTR, and conversion, see [evaluation.md](evaluation.md).
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
 | `io/dataset_store.py` | Backend: parquet files (S3-compatible or local disk) |
 | `io/db_store.py` | Backend: SQLAlchemy-backed database tables/queries |
-| `io/recommendation_reader.py` | Re-exports the serve-mode recommendation readers and shared helpers |
 | `io/dataset_recommendation_reader.py` / `io/db_recommendation_reader.py` | Read-only lookup of precomputed recs (parquet cache indexed by `user_id` at refresh / SQL per request) |
 | `io/recommendation_reader_common.py` | Shared cold-start selection rule and item-filter mixin (pulls `rectools` for `Columns` via `blending.py`, but no lightfm/implicit/torch) |
 | `io/engines.py` | Shared SQLAlchemy engines keyed by database URL; dialect-quoted SQL helpers (`quote_identifier`) |
@@ -305,12 +304,12 @@ imports `cicerone.model`/`dataset`/`automl` on the **request path**, and
 needs no lightfm/implicit/torch there. With `[events.online]`, the events
 worker lazy-imports the artifact stack (LightFM) for write-through only.
 It does import
-`rectools` at startup: `serve/app.py` → `io/recommendation_reader.py` →
-`recommendation_reader_common.py` → `blending.py` → `from rectools import
-Columns`, so `rectools` cannot be dropped from a serve-only image.
+`rectools` at startup: `serve/app.py` → `serve/bootstrap_events.py` →
+`events/updater.py` → `blending.py` → `from rectools import Columns`, so
+`rectools` cannot be dropped from a serve-only image.
 
 - `io.factory.build_recommendation_reader(settings.output)` builds a
-  `RecommendationReader` (`io/recommendation_reader.py`) matching the
+  `RecommendationReader` (`io/base.py`) matching the
   configured output `kind` — `DatasetRecommendationReader` caches the
   recommendations parquet, and the item id plus configured filter columns from
   `items_snapshot.parquet`, in memory and refreshes it on a successful

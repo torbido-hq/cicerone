@@ -40,13 +40,13 @@ def _db_input(options: dict[str, Any]) -> InputSource:
 
 
 def _dataset_recommendations(options: dict[str, Any]) -> RecommendationReader:
-    from cicerone.io.recommendation_reader import DatasetRecommendationReader
+    from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
 
     return DatasetRecommendationReader(options)
 
 
 def _db_recommendations(options: dict[str, Any]) -> RecommendationReader:
-    from cicerone.io.recommendation_reader import DbRecommendationReader
+    from cicerone.io.db_recommendation_reader import DbRecommendationReader
 
     return DbRecommendationReader(options)
 
