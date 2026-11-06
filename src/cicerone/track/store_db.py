@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from collections.abc import Callable, Sequence
 from functools import cached_property
@@ -43,6 +44,8 @@ from cicerone.track.store_common import (
     unique_matching_rows,
 )
 
+logger = logging.getLogger(__name__)
+
 _MYSQL_TEXT_BYTES = 65535
 
 
@@ -67,6 +70,10 @@ class TrackDbBackend:
         return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=since)
 
     def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
+        if self.engine().dialect.name == "mariadb":
+            # Only here: a job always writes eval before history, so this warns once for both.
+            logger.warning("Track eval and recommendation history aren't supported on MariaDB; skipping them")
+            return lambda: None
         encoded = json.dumps(payload)
         return lambda: self._write_eval_db(encoded)
 
@@ -75,7 +82,11 @@ class TrackDbBackend:
 
     def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
         del generated_at
-        return lambda: self._append_history_db(frame)
+        if self.engine().dialect.name == "mariadb":
+            return lambda: None
+        # pandas binds an all-NA object column as text, which Postgres won't assign to BIGINT.
+        numeric = frame.assign(**{RANK_COLUMN: pd.to_numeric(frame[RANK_COLUMN], errors="coerce")})
+        return lambda: self._append_history_db(numeric)
 
     def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
         frame = self._read_history_db(generated_ats=generated_ats)
@@ -164,6 +175,7 @@ class TrackDbBackend:
     def _write_eval_db(self, encoded: str) -> None:
         table = self._eval_table
         with self.engine().begin() as conn:
+            self._fence.ensure()
             conn.execute(CreateTable(table, if_not_exists=True))
             written_at = pd.Timestamp.now(tz="UTC").isoformat()
             replace_rows_fenced(conn, table.name, {"payload": encoded, "written_at": written_at}, self._fence)

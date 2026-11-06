@@ -14,8 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Serve with `[track]` enabled refuses to start on any other database with
   `ConfigError`.
 - The track eval report and recommendation history work on MySQL, so by-source
-  figures are right there for impressions from older runs. A report over 16 MiB
-  or a history value over 65,535 bytes fails that write with a logged error.
+  figures are right there for impressions from older runs. On a strict server
+  a report over 16 MiB or `max_allowed_packet`, or a history value over 65,535
+  bytes, fails that write with a logged error; a non-strict server truncates
+  silently. New history tables on any backend store `rank` as `BIGINT`. The job
+  still skips both on MariaDB with a warning.
 - Experiment state and exposures work on MySQL. Config load raises
   `ConfigError` for an `experiment.id` over 255 characters there.
 - `cicerone_serve_appends_dropped_total{kind}` counts serve exposure and

@@ -1149,11 +1149,17 @@ def test_experiment_tables_on_mysql_bound_the_key_and_widen_the_payload(mysql_tr
     key = inspect(engine).get_columns(options["experiment_state_table"])[0]
     assert key["type"].length == 255
     assert key["type"].collation == "utf8mb4_0900_bin"
-    with engine.connect() as conn:
-        for name in (options["experiment_state_table"], options["exposures_table"]):
-            created = conn.execute(text(f"SHOW CREATE TABLE {quote_identifier(conn, name)}")).one()[1]
-            assert "ENGINE=InnoDB" in created
-            assert "CHARSET=utf8mb4" in created
+
+
+def test_experiment_tables_set_engine_and_charset_for_mysql(tmp_path) -> None:
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.schema import CreateTable
+
+    backend = ExperimentStore(sqlite_output(tmp_path / "exp.db")).backend
+    for table in (backend._state_table, backend._exposures_table):
+        created = str(CreateTable(table).compile(dialect=mysql.dialect()))
+        assert "ENGINE=InnoDB" in created
+        assert "CHARSET=utf8mb4" in created
 
 
 def test_state_roundtrip_replaces_the_row_on_every_backend(track_db_output) -> None:
@@ -1262,3 +1268,11 @@ def test_exposures_append_to_a_previously_created_table(non_mysql_track_output) 
     store.append_exposures([_exposure("u2")])
     assert stored_column_types(engine, name) == before
     assert len(store.read_exposures()) == 2
+
+
+def test_exposure_writer_that_lost_the_fence_creates_no_table_on_every_backend(track_db_output) -> None:
+    # The first check is the lease; the second is the one before the DDL.
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, FenceCheck(2)))
+    with pytest.raises(LockLostError):
+        store.append_exposures([_exposure("u1")])
+    assert not inspect(store.backend.engine()).has_table(track_db_output.options["exposures_table"])
