@@ -535,7 +535,7 @@ The license is [Beerware](https://github.com/torbido-hq/cicerone/blob/main/LICEN
 
 - You need the row to change within the same request as “add to cart.” That is a different product, and even Cicerone’s optional [serve API](https://cicerone.dev/openapi/) and [incremental events](https://cicerone.dev/incremental-events/) do not retrain LightFM on the request path.
 - You have almost no overlapping buyers, in which case you should ship bestsellers, collect events, and come back later.
-- You already enjoy operating a Python training stack and want SASRec, AutoML, and eligibility rules. All of that exists, but it is not what this article is about; see the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
+- You already enjoy operating a Python training stack and want SASRec, AutoML, and eligibility rules. SASRec still writes a nightly table — that walkthrough is [The transformer still sleeps until cron](/articles/the-transformer-still-sleeps-until-cron/). AutoML and eligibility are in the [tutorial](https://cicerone.dev/tutorial/), [how it works](https://cicerone.dev/how-it-works/), and [architecture](https://cicerone.dev/architecture/).
 
 ## In the morning
 
@@ -545,6 +545,6 @@ If it is mostly `popular_fallback`, the job is still serving bestsellers, so kee
 
 If `personalized` and `blended` are showing up for people who actually buy, put the `SELECT` on the homepage and leave the cron running in Compose. That is the whole product this walkthrough set up: a table your shop already knows how to read.
 
-Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. Bucket that split on a hash of `user_id`, not a per-request coin flip and not a cookie, or the same visitor lands in both arms across sessions and devices and you end up comparing noise. If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
+Even then, `source` only tells you which list won, not whether anyone clicked. You still have the bestsellers query, so serve both — personalized to half your signed-in traffic, the old query to the other half — and compare click-through per impression over a couple of weeks. Bucket that split on a hash of `user_id`, not a per-request coin flip and not a cookie, or the same visitor lands in both arms across sessions and devices and you end up comparing noise. Keeping that hash across sessions is [The same customer keeps the same list](/articles/the-same-customer-keeps-the-same-list/). If personalized does not win, keep serving bestsellers and let the table keep filling. You will have measured it instead of guessing.
 
 The drink columns in the repo’s default config were never part of the contract. It only ever asked who bought what, and when. Everything after that is a cron job writing ranks and going back to sleep.

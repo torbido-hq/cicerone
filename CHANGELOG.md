@@ -61,10 +61,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   MODIFY written_at DATETIME(6) NOT NULL`.
 - Incremental updates no longer put `__cold_start__` rows with a missing
   variant under an experiment variant named `None`, `nan`, `<NA>` or
-  `NaT`; such rows are dropped, as real users' rows already were.
+  `NaT`; such rows are dropped when the list also has labelled rows, as
+  real users' rows already were.
 - The incremental-events docs state that a db events table without
   `event_id` stops advancing when more than about 100 rows share one
   `occurred_at`.
+- An incremental flush no longer trims preserved rows to reserve boost slots
+  it won't use (`top_k` of 7 or more). `incremental` rows from earlier flushes
+  are still not preserved, so a later flush can shorten a list.
+- An event with `user_id` `__cold_start__` no longer writes the cold-start
+  list twice, with repeated ranks and items, or creates one, and it no longer
+  reaches online refresh; the event is acked and counted.
+- With experiments on, an incremental flush no longer wipes lists whose
+  `variant` is all NULL (as after the documented `ALTER TABLE`): those rows
+  go to the primary variant, like a table without the column. A user assigned
+  to another variant is served only the flush rows there until the next job.
 - A Kafka message whose `event_id` is `0` gets the stable
   partition-offset id like a missing one, instead of a random id that
   broke duplicate detection on redelivery.
@@ -238,6 +249,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
   win when there are more than slots.
+- When the job body raises after the success manifest and the error's text
+  can't be formatted, the manifest is rewritten as `failed` with the error's
+  type name, instead of staying `success` while the job raises.
+- The dashboard lookup shows an infinite or overflowing score or event `quantity` as missing, instead of raising `OverflowError` (a 500) or, for an
+  infinite score, printing `inf`.
+- The text of database errors in logs and `manifest.error` no longer includes
+  bound values (`hide_parameters` on every engine); the SQL text stays. Logs can
+  still carry user data: database driver messages can embed values, such as the
+  key in a duplicate-key error, and some log lines name the `user_id` on purpose.
+- Boosts no longer raise `TypeError` on an items table with a duplicate index.
 
 ### Removed
 

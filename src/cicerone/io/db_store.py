@@ -45,6 +45,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
+from cicerone.io.base import manifest_newer
 from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error
 from cicerone.io.engines import engine_for, is_mysql_family, quote_identifier, sql_source
 from cicerone.io.options import (
@@ -101,6 +102,10 @@ DEFAULT_DB_TABLES = frozenset(
 )
 
 
+def _sql_stamp(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
     if not inspect(conn).has_table(table):
         return False
@@ -113,14 +118,8 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
     row = conn.execute(select(*columns).order_by(runs.c.generated_at.desc()).limit(1)).mappings().first()
     if not row:
         return False
-    for key in ("generated_at", "last_incremental_at"):
-        value = row.get(key)
-        if value is None:
-            continue
-        stamp = value.isoformat() if hasattr(value, "isoformat") else str(value)
-        if stamp > started_at:
-            return True
-    return False
+    stamps = {key: _sql_stamp(value) for key, value in row.items() if value is not None}
+    return manifest_newer(stamps, started_at)
 
 
 def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> None:
@@ -338,10 +337,17 @@ class DatabaseOutputSink:
             with self._engine.begin() as conn:
                 self._fence.ensure()
                 self._clear_applied_keys(conn, table)
-                _clear_table_for_replace(conn, table)
-                self._fence.ensure()
-                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-                self._fence.ensure()
+                self._replace_frame(conn, table, df)
+
+    def _replace_frame(self, conn: Connection, table: str, df: pd.DataFrame) -> None:
+        _clear_table_for_replace(conn, table)
+        self._append_frame(conn, table, df)
+        self._fence.ensure()
+
+    def _append_frame(self, conn: Connection, table: str, df: pd.DataFrame) -> None:
+        # Checks the fence before the write only; the caller checks again before committing.
+        self._fence.ensure()
+        df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
 
     def replace_recommendations_for_users(
         self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
@@ -456,9 +462,7 @@ class DatabaseOutputSink:
         except MISSING_TABLE_ERRORS:
             # No manifest table (or no such columns) yet: no full write to supersede the keys.
             return None
-        if value is None:
-            return None
-        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+        return None if value is None else _sql_stamp(value)
 
     def _applied_events_table_exists(self, conn: Connection) -> bool:
         # Only "exists" is cached: another output sharing the database may create the table later.
@@ -535,8 +539,7 @@ class DatabaseOutputSink:
                         f"Recommendations schema mismatch for table {table!r}; refusing replace"
                     ) from exc
             if not df.empty:
-                self._fence.ensure()
-                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+                self._append_frame(conn, table, df)
             if applied_keys:
                 # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
                 self._fence.ensure()
@@ -590,9 +593,13 @@ class DatabaseOutputSink:
             artifacts.create(conn, checkfirst=True)
             self._fence.ensure()
             conn.execute(artifacts.delete())
-            self._fence.ensure()
-            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._fence.ensure()
+            self._insert_artifact(conn, artifacts, payload)
+
+    def _insert_artifact(self, conn: Connection, artifacts: Table, payload: bytes) -> None:
+        self._fence.ensure()
+        # Typed bind, unlike replace_rows_fenced: replace_model_artifact_if matches written_at as stored here.
+        conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+        self._fence.ensure()
 
     def _model_artifacts_table(self) -> Table:
         return Table(
@@ -621,9 +628,7 @@ class DatabaseOutputSink:
             deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
             if deleted.rowcount < 1:
                 return False
-            self._fence.ensure()
-            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._fence.ensure()
+            self._insert_artifact(conn, artifacts, payload)
         return True
 
     def read_model_artifact(self) -> bytes | None:
@@ -663,7 +668,4 @@ class DatabaseOutputSink:
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self.recommendations_write(), self._engine.begin() as conn:
             self._fence.ensure()
-            _clear_table_for_replace(conn, table)
-            self._fence.ensure()
-            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-            self._fence.ensure()
+            self._replace_frame(conn, table, df)

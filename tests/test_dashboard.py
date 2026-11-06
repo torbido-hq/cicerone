@@ -980,6 +980,20 @@ def test_recommendations_partial_renders_events_and_overlap():
     assert "Highlighted rows appear in both events and recommendations." in response.text
 
 
+def test_recommendations_partial_answers_200_with_infinite_quantity():
+    response = _recs_client(
+        FakeReader(_recs_df()),
+        _FakeHistory(_events_df().assign(quantity=float("inf"))),
+    ).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert response.status_code == 200
+    assert ">i9<" in response.text
+
+
 def test_recommendations_partial_no_events_badge():
     empty = pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
     response = _recs_client(FakeReader(_recs_df()), _FakeHistory(empty)).get(

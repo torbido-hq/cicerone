@@ -7,7 +7,7 @@ import math
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict
 
 import pandas as pd
 
@@ -22,6 +22,7 @@ from cicerone.io.recommendation_schema import (
     SOURCE_COLUMN,
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
+from cicerone.option_parse import NUMBER_PARSE_ERRORS
 from cicerone.reasons import parse_reasons
 from cicerone.serve.recommendations import RecommendationService
 from cicerone.values import as_list, is_missing, is_sequence_attr
@@ -37,7 +38,17 @@ _EVENT_TYPE_COLUMN = "event_type"
 _QUANTITY_COLUMN = "quantity"
 
 
-def empty_history_fields() -> dict[str, Any]:
+class HistoryFields(TypedDict):
+    events: list[dict[str, str]]
+    events_error: str | None
+    user_attrs: list[dict[str, str]]
+    source_mix: list[dict[str, Any]]
+    overlap_item_ids: list[str]
+    warm: bool
+    show_quantity: bool
+
+
+def empty_history_fields() -> HistoryFields:
     return {
         "events": [],
         "events_error": None,
@@ -137,7 +148,7 @@ def lookup_history(
     settings: Settings,
     history_reader: UserHistoryReader | None,
     user_id: str,
-) -> dict[str, Any]:
+) -> HistoryFields:
     empty = empty_history_fields()
     if history_reader is None:
         empty["events_error"] = HISTORY_UNAVAILABLE
@@ -244,9 +255,9 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
 def _coerce_float(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except NUMBER_PARSE_ERRORS:
         return None
-    if math.isnan(number):
+    if not math.isfinite(number):
         return None
     return number
 
@@ -294,13 +305,12 @@ def _format_score(value: object) -> str:
 
 
 def _format_quantity(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
-    as_float = float(number)
-    if as_float == int(as_float):
-        return str(int(as_float))
-    return str(as_float)
+    if number == int(number):
+        return str(int(number))
+    return str(number)
 
 
 def _format_occurred_at(value: object) -> str:
