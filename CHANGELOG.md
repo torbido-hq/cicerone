@@ -218,6 +218,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
   win when there are more than slots.
+- A job whose error can't be formatted after the success manifest now rewrites
+  the manifest as `failed` instead of leaving it `success` while the job raises.
 
 ### Removed
 

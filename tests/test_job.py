@@ -56,6 +56,19 @@ def _write_config(
     return str(config_path)
 
 
+def _write_one_event_job(tmp_path, monkeypatch) -> Path:
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    now = pd.Timestamp.now(tz="UTC")
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
+    ).to_parquet(input_dir / "events.parquet", index=False)
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    return output_dir
+
+
 def test_job_run_end_to_end_with_local_dataset_backend(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -1847,6 +1860,24 @@ def test_job_run_finalizes_with_error_raised_while_recording_failure(tmp_path, m
     assert manifests == []
 
 
+def test_job_marks_success_manifest_failed_when_error_formatting_raises(tmp_path, monkeypatch):
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
+
+    class _Unprintable(RuntimeError):
+        def __str__(self) -> str:
+            raise ValueError("unprintable")
+
+    def _raise_after_success_manifest(_run):
+        raise _Unprintable()
+
+    monkeypatch.setattr(job, "_publish_job_sidecar", _raise_after_success_manifest)
+
+    with pytest.raises(ValueError, match="unprintable"):
+        job.run()
+
+    assert json.loads((output_dir / "manifest.json").read_text())["status"] == "failed"
+
+
 def test_job_run_with_automl_enabled_selects_and_records_best_candidate(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -2311,15 +2342,7 @@ def test_job_marks_partial_outputs_when_write_commits_then_raises(tmp_path, monk
 
 
 def test_job_marks_partial_outputs_when_interrupted_after_write(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     from cicerone.io.dataset_store import DatasetOutputSink
 
@@ -2341,15 +2364,7 @@ def test_job_marks_partial_outputs_when_interrupted_after_write(tmp_path, monkey
 
 
 def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     real_write = job.write_job_manifest
 
@@ -2370,15 +2385,7 @@ def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monke
 
 
 def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     real_write = job.write_job_manifest
 
@@ -2399,15 +2406,7 @@ def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tm
 
 
 def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skipped(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     real_write = job.write_job_manifest
 
@@ -2446,15 +2445,7 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
 
 
 def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     class _Pub:
         def connect(self) -> None:
@@ -2477,15 +2468,7 @@ def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatc
 def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_path, monkeypatch, caplog):
     from contextlib import contextmanager
 
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     real_guard = job.recommendations_write_guard
     exits: list[object] = []
@@ -2524,15 +2507,7 @@ def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_pat
 def test_job_leaves_success_fields_unset_when_error_follows_recommendation_write(
     tmp_path, monkeypatch, error_type
 ):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    output_dir = _write_one_event_job(tmp_path, monkeypatch)
 
     def boom(recommendations):
         raise error_type("bug after write")
@@ -2555,15 +2530,7 @@ def test_job_leaves_success_fields_unset_when_error_follows_recommendation_write
 
 
 def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
+    _write_one_event_job(tmp_path, monkeypatch)
 
     from cicerone.io.dataset_store import DatasetOutputSink
 

@@ -741,11 +741,12 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
 
 def _record_run_failure(run: JobRun, exc: BaseException) -> None:
-    run.manifest.error = truncate_job_error(exc) or type(exc).__name__
+    # Status first: formatting ``exc`` can itself raise.
     if run.manifest.status == "success":
         run.manifest.status = "failed"
         run.written.manifest_written = False
         run.replace_success_manifest = True
+    run.manifest.error = truncate_job_error(exc) or type(exc).__name__
 
 
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:
