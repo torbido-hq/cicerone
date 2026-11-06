@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from support.fakes import FakeLock
+from support.settings import make_settings
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
@@ -3069,8 +3070,6 @@ def test_job_thompson_keeps_previous_pair_when_recs_write_fails(tmp_path, monkey
 
 
 def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3140,8 +3139,6 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
 def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3189,8 +3186,6 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
 
 
 def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3270,8 +3265,6 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
 
 
 def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3321,8 +3314,6 @@ def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, mon
 
 
 def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3384,8 +3375,6 @@ def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeyp
 def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3444,8 +3433,6 @@ def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
 
 
 def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3487,8 +3474,6 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
 
 
 def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3556,8 +3541,6 @@ def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_pa
 
 
 def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
@@ -3601,8 +3584,6 @@ def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3633,8 +3614,6 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3664,8 +3643,6 @@ def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatc
 
 
 def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3692,8 +3669,6 @@ def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3726,8 +3701,6 @@ def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch
 
 
 def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3757,8 +3730,6 @@ def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -3811,8 +3782,6 @@ def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
 def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monkeypatch):
     from dataclasses import replace
 
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
@@ -3849,8 +3818,6 @@ def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monke
 
 
 def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore
@@ -3880,8 +3847,6 @@ def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatc
 
 
 def test_job_track_since_reaches_back_to_an_old_thompson_window(tmp_path, monkeypatch):
-    from conftest import make_settings
-
     from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore
