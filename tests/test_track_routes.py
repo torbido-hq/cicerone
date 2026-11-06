@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from support.fakes import FakeReader, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
 from support.serve import recs_df, serve_settings
+from support.settings import local_output
 from support.waits import WAIT_SECONDS
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings
@@ -26,7 +27,7 @@ def _settings(tmp_path, **overrides):
     return serve_settings(
         **{
             "track": {"enabled": True},
-            "output": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+            "output": local_output(tmp_path),
             **overrides,
         }
     )
@@ -428,9 +429,7 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
 
 def test_track_route_absent_when_disabled(tmp_path):
     app = create_app(
-        serve_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-        ),
+        serve_settings(output=local_output(tmp_path)),
         FakeReader(recs_df()),
     )
     client = TestClient(app)

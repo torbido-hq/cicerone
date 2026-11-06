@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from support.fakes import FakeLock, FakePublisher
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
@@ -528,12 +528,11 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
     job.run()
     previous_generated_at = json.loads((output_dir / "manifest.json").read_text())["generated_at"]
-    from cicerone.config import IOSettings
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
     recs = pd.read_parquet(output_dir / "recommendations.parquet")
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    output = local_output(output_dir)
     store = TrackStore(output)
     row = recs.iloc[0]
     store.append_rows(
@@ -561,13 +560,13 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
 
 
 def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypatch):
-    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.config import EvalSettings, TrackSettings, make_settings
     from cicerone.job import _score_previous_run
 
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         track=TrackSettings(enabled=False),
         eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
     )
@@ -603,13 +602,13 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
 
 
 def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monkeypatch):
-    from cicerone.config import EvalSettings, IOSettings, TrackSettings, make_settings
+    from cicerone.config import EvalSettings, TrackSettings, make_settings
     from cicerone.job import _score_previous_run
 
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         track=TrackSettings(enabled=False),
         eval=EvalSettings(enabled=True, event_types=("purchase",), ks=(1,)),
     )
@@ -665,7 +664,7 @@ def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monk
 
 def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
     from cicerone.blending import COLD_START_USER_ID
-    from cicerone.config import IOSettings, make_settings
+    from cicerone.config import make_settings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job_eval import replay_assignments
 
@@ -692,7 +691,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
                 VariantSettings(name="treatment", traffic=0.5),
             ),
         ),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     assigned = replay_assignments(
         settings,
@@ -742,7 +741,7 @@ def test_replay_assignments_prefers_first_impression_then_hash(tmp_path):
                 VariantSettings(name="blend", traffic=0.34),
             ),
         ),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         track=TrackSettings(enabled=True),
     )
     hashed = replay_assignments(thompson, recs[recs["user_id"] != COLD_START_USER_ID], [])
@@ -967,7 +966,7 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         job._persist_track_outputs(
             TrackStore(
-                IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+                local_output("/tmp/out"),
                 fence=WriteFence(object()),
             ),
             kind="dataset",
@@ -1007,7 +1006,7 @@ def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):
     monkeypatch.setattr(TrackStore, "write_eval", _lost)
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
         job._persist_track_outputs(
-            TrackStore(IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"})),
+            TrackStore(local_output("/tmp/out")),
             kind="dataset",
             eval_report={"generated_at": "t"},
             recommendations=None,
@@ -1018,7 +1017,7 @@ def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):
 def test_refresh_pending_thompson_keeps_live_promotion(tmp_path):
     from cicerone.experiment.store import ExperimentStore, experiment_state
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment", champion="control"))
     pending = experiment_state("exp", promoted_variant=None, champion="treatment")
@@ -2831,7 +2830,6 @@ def test_job_thompson_fail_closed_empty_track_writes_all_variants(tmp_path, monk
 
 
 def test_job_thompson_writes_active_pair_and_keeps_it(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.experiment.store import ExperimentStore, experiment_state
     from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
 
@@ -2854,7 +2852,7 @@ def test_job_thompson_writes_active_pair_and_keeps_it(tmp_path, monkeypatch):
     )
     events.to_parquet(input_dir / "events.parquet", index=False)
     items.to_parquet(input_dir / "items.parquet", index=False)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    output = local_output(output_dir)
     ExperimentStore(output).write_state(
         experiment_state("ranking-cvr", promoted_variant=None, champion="control", challenger="blend")
     )
@@ -2888,7 +2886,6 @@ def test_job_thompson_writes_active_pair_and_keeps_it(tmp_path, monkeypatch):
 
 
 def test_job_thompson_keeps_previous_pair_when_recs_write_fails(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.experiment.store import ExperimentStore, experiment_state
     from cicerone.experiment.thompson import ArmCounts, ThompsonAllocation
     from cicerone.io.dataset_store import DatasetOutputSink
@@ -2912,7 +2909,7 @@ def test_job_thompson_keeps_previous_pair_when_recs_write_fails(tmp_path, monkey
     )
     events.to_parquet(input_dir / "events.parquet", index=False)
     items.to_parquet(input_dir / "items.parquet", index=False)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(output_dir)})
+    output = local_output(output_dir)
     ExperimentStore(output).write_state(
         experiment_state("ranking-cvr", promoted_variant=None, champion="control", challenger="blend")
     )
@@ -2947,7 +2944,6 @@ def test_job_thompson_keeps_previous_pair_when_recs_write_fails(tmp_path, monkey
 
 
 def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.feature_config import BlendingConfig
@@ -2969,7 +2965,7 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     assert _select_thompson_recipes(settings, recipes[:1], pd.DataFrame()).recipes == recipes[:1]
 
@@ -3016,7 +3012,6 @@ def test_select_thompson_recipes_fail_closed_paths(tmp_path, monkeypatch):
 def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promote(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.feature_config import BlendingConfig
@@ -3038,7 +3033,7 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
@@ -3063,7 +3058,6 @@ def test_select_thompson_recipes_fail_closed_on_state_read_does_not_clear_promot
 
 
 def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -3088,7 +3082,7 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     ExperimentStore(settings.output).write_state(
         experiment_state(
@@ -3142,7 +3136,6 @@ def test_select_thompson_recipes_survives_recs_and_catalog_errors(tmp_path, monk
 
 
 def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -3165,7 +3158,7 @@ def test_select_thompson_recipes_reraises_unexpected_catalog_error(tmp_path, mon
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     ExperimentStore(settings.output).write_state(
         experiment_state(
@@ -3252,7 +3245,6 @@ def test_select_thompson_recipes_reads_in_memory_sqlite_on_caller_thread(monkeyp
 def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.experiment.store import ExperimentStore, experiment_state
@@ -3276,7 +3268,7 @@ def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     ExperimentStore(settings.output).write_state(
         experiment_state(
@@ -3310,7 +3302,6 @@ def test_select_thompson_recipes_does_not_write_state(tmp_path, monkeypatch):
 
 
 def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.feature_config import BlendingConfig
@@ -3332,7 +3323,7 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     monkeypatch.setattr(
         "cicerone.job.TrackStore.read_rows",
@@ -3351,7 +3342,6 @@ def test_select_thompson_recipes_fail_closed_without_variant(tmp_path, monkeypat
 
 
 def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.experiment.thompson import ArmCounts
@@ -3374,7 +3364,7 @@ def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_pa
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     monkeypatch.setattr(
         "cicerone.job.ExperimentStore.read_state",
@@ -3418,7 +3408,6 @@ def test_select_thompson_recipes_skips_trials_when_window_started_missing(tmp_pa
 
 
 def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.recipes import ResolvedRecipe
     from cicerone.feature_config import BlendingConfig
@@ -3440,7 +3429,7 @@ def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     calls = {"n": 0}
 
@@ -3461,7 +3450,6 @@ def test_select_thompson_recipes_uses_preloaded_track(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
@@ -3476,7 +3464,7 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
 
@@ -3491,7 +3479,6 @@ def test_load_shared_eval_inputs_drops_partial_preload(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
@@ -3506,7 +3493,7 @@ def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatc
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     def _boom(*_args, **_kwargs):
@@ -3520,7 +3507,6 @@ def test_load_shared_eval_inputs_keeps_track_when_recs_fail(tmp_path, monkeypatc
 
 
 def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
@@ -3535,7 +3521,7 @@ def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     empty = pd.DataFrame()
     monkeypatch.setattr("cicerone.job.TrackStore.read_rows", lambda *_args, **_kwargs: [{"event_id": "a"}])
@@ -3546,7 +3532,6 @@ def test_load_shared_eval_inputs_keeps_empty_recs(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
@@ -3561,7 +3546,7 @@ def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     seen: dict[str, object] = {}
     empty = pd.DataFrame()
@@ -3607,7 +3592,6 @@ def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
 
 
 def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore, experiment_state
     from cicerone.job import _load_shared_eval_inputs
@@ -3623,7 +3607,7 @@ def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     ExperimentStore(settings.output).write_state(
         experiment_state(
@@ -3659,7 +3643,6 @@ def test_load_shared_eval_inputs_bounds_track_lookback(tmp_path, monkeypatch):
 def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monkeypatch):
     from dataclasses import replace
 
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.job import _load_shared_eval_inputs
 
@@ -3675,7 +3658,7 @@ def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monke
                 ),
             ),
             track=TrackSettings(enabled=True),
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+            output=local_output(tmp_path),
         ),
         track=TrackSettings(enabled=False),
     )
@@ -3695,7 +3678,6 @@ def test_load_shared_eval_inputs_scopes_track_when_eval_disabled(tmp_path, monke
 
 
 def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore
     from cicerone.job_eval import job_track_since
@@ -3711,7 +3693,7 @@ def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatc
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     monkeypatch.setattr(ExperimentStore, "read_state", lambda self: {})
     assert job_track_since(settings) is None
@@ -3724,7 +3706,6 @@ def test_job_track_since_stays_open_without_thompson_window(tmp_path, monkeypatc
 
 
 def test_job_track_since_reaches_back_to_an_old_thompson_window(tmp_path, monkeypatch):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantSettings
     from cicerone.experiment.store import ExperimentStore
     from cicerone.job_eval import job_track_since
@@ -3740,7 +3721,7 @@ def test_job_track_since_reaches_back_to_an_old_thompson_window(tmp_path, monkey
             ),
         ),
         track=TrackSettings(enabled=True),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     monkeypatch.setattr(
         ExperimentStore,
