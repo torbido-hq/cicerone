@@ -223,6 +223,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- A Kafka or RabbitMQ message or an S3 object with an integer over 4300 digits
+  or very deep JSON nesting is logged and discarded like other invalid JSON,
+  instead of stopping the event worker or, for S3 in SQS mode, being retried.
+- An unreadable S3 object in an SQS notification is logged and skipped, and
+  events from the notification's other objects are delivered, instead of the
+  whole message being deleted and those events lost. A notification that
+  yields no events, including one with only empty objects, is deleted.
 - The `POST /events` OpenAPI description of `event_type` says that without a
   `features.toml` every type counts as a signal and the size of `quantity`
   affects only the popular ranking (online refresh uses the artifact's config),

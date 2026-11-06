@@ -343,13 +343,7 @@ class RabbitMQEventSource(QueuedEventSource):
             if self._io is not io or tag in self._held_tags:
                 return None
         try:
-            payload = decode_json_object(body)
-        except EventNormalizeError as exc:
-            logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
-            self._ack_discard(io, tag)
-            return None
-        try:
-            event = normalize_event(payload)
+            event = normalize_event(decode_json_object(body))
         except EventNormalizeError as exc:
             logger.warning("Skipping invalid RabbitMQ message %s: %s", tag, exc)
             self._ack_discard(io, tag)

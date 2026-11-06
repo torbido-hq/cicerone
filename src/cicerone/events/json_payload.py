@@ -1,4 +1,4 @@
-"""Decode broker payloads into JSON objects for event ingest."""
+"""Decode broker payloads and turn deliveries into normalized events."""
 
 from __future__ import annotations
 
@@ -6,7 +6,15 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from cicerone.events.normalize import EventNormalizeError
+from cicerone.events.base import NormalizedEvent
+from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+
+
+def delivery_event(raw: Any, fallback_id: str) -> NormalizedEvent:
+    payload = decode_json_object(raw)
+    if supplied_event_id(payload) is None:
+        payload["event_id"] = fallback_id
+    return normalize_event(payload)
 
 
 def decode_json_object(raw: Any) -> dict[str, Any]:
@@ -25,7 +33,8 @@ def decode_json_object(raw: Any) -> dict[str, Any]:
         raise EventNormalizeError("event must be a JSON object")
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
+    # ValueError covers JSONDecodeError and the int digit limit.
+    except (ValueError, RecursionError) as exc:
         raise EventNormalizeError("event must be a JSON object") from exc
     if not isinstance(parsed, Mapping):
         raise EventNormalizeError("event must be a JSON object")

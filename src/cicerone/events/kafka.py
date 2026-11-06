@@ -11,8 +11,8 @@ from typing import Any
 from cicerone.config.constants import import_extra
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent, QueuedEventSource
 from cicerone.events.errors import KafkaException
-from cicerone.events.json_payload import decode_json_object
-from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+from cicerone.events.json_payload import delivery_event
+from cicerone.events.normalize import EventNormalizeError
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
 from cicerone.option_parse import optional_nonempty_str, require_nonempty_str
 
@@ -198,15 +198,7 @@ class KafkaEventSource(QueuedEventSource):
                 return None
             self._max_offset[partition] = max(self._max_offset.get(partition, -1), offset)
         try:
-            payload = decode_json_object(message.value())
-        except EventNormalizeError as exc:
-            logger.warning("Skipping invalid Kafka message %s-%s: %s", partition, offset, exc)
-            self._commit_discard(consumer, message)
-            return None
-        if supplied_event_id(payload) is None:
-            payload["event_id"] = f"{partition}-{offset}"
-        try:
-            event = normalize_event(payload)
+            event = delivery_event(message.value(), f"{partition}-{offset}")
         except EventNormalizeError as exc:
             logger.warning("Skipping invalid Kafka message %s-%s: %s", partition, offset, exc)
             self._commit_discard(consumer, message)
