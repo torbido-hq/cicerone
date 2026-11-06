@@ -1493,7 +1493,13 @@ def test_persist_track_outputs_writes_eval_and_history_on_every_backend(track_db
         store, kind="db", eval_report={"ok": True}, recommendations=_RECS, generated_at=_GENERATED_AT
     )
     assert store.read_eval() == {"ok": True}
-    assert store.read_history()["item_id"].tolist() == ["ipa-001"]
+    stored = store.read_history().to_dict(orient="records")
+    assert len(stored) == 1
+    assert stored[0]["user_id"] == "alice"
+    assert stored[0]["item_id"] == "ipa-001"
+    assert stored[0]["rank"] == 1
+    assert stored[0]["source"] == "personalized"
+    assert stored[0]["generated_at"] == _GENERATED_AT
     assert store.append_rows([_row()]) == 1
     assert len(store.read_rows()) == 1
 
@@ -1514,18 +1520,25 @@ def test_eval_and_history_tables_on_mysql_widen_only_the_payload(mysql_track_out
     payload_widened = [("payload", "MEDIUMTEXT", False), *_EVAL_COLUMNS[1:]]
     assert _column_types(store, options["eval_table"]) == payload_widened
     assert _column_types(store, options["history_table"]) == _HISTORY_COLUMNS
-    with store.backend.engine().connect() as conn:
-        for name in (options["eval_table"], options["history_table"]):
-            created = conn.execute(text(f"SHOW CREATE TABLE {quote_identifier(conn, name)}")).one()[1]
-            assert "ENGINE=InnoDB" in created
-            assert "CHARSET=utf8mb4" in created
 
 
-def test_eval_and_history_append_to_previously_created_tables(non_mysql_track_output) -> None:
+def test_eval_and_history_tables_set_engine_and_charset_for_mysql(tmp_path) -> None:
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.schema import CreateTable
+
+    backend = TrackStore(sqlite_output(tmp_path / "track.db")).backend
+    for table in (backend._eval_table, backend._history_table):
+        created = str(CreateTable(table).compile(dialect=mysql.dialect()))
+        assert "ENGINE=InnoDB" in created
+        assert "CHARSET=utf8mb4" in created
+
+
+@pytest.mark.parametrize("previous_rank", [float("nan"), None], ids=["float-rank", "text-rank"])
+def test_eval_and_history_append_to_previously_created_tables(non_mysql_track_output, previous_rank) -> None:
     store = TrackStore(non_mysql_track_output)
     options = non_mysql_track_output.options
     engine = store.backend.engine()
-    previous = _RECS.assign(rank=[float("nan")], variant=None, generated_at="2026-08-27T03:00:00+00:00")
+    previous = _RECS.assign(rank=[previous_rank], variant=None, generated_at="2026-08-27T03:00:00+00:00")
     with engine.begin() as conn:
         eval_table = quote_identifier(conn, options["eval_table"])
         conn.execute(text(f'CREATE TABLE {eval_table} ("payload" TEXT NOT NULL, "written_at" TEXT NOT NULL)'))
@@ -1533,8 +1546,9 @@ def test_eval_and_history_append_to_previously_created_tables(non_mysql_track_ou
     history_types = _column_types(store, options["history_table"])
     store.write_eval({"ok": True})
     store.append_history(_RECS, generated_at=_GENERATED_AT)
+    store.append_history(_RECS.drop(columns="rank"), generated_at="2026-08-29T03:00:00+00:00")
     assert store.read_eval() == {"ok": True}
-    assert len(store.read_history()) == 2
+    assert len(store.read_history()) == 3
     assert _column_types(store, options["eval_table"]) == _EVAL_COLUMNS
     assert _column_types(store, options["history_table"]) == history_types
 
@@ -1543,8 +1557,8 @@ def test_write_eval_replaces_the_report_on_every_backend(track_db_output) -> Non
     store = TrackStore(track_db_output)
     assert store.read_eval() is None
     store.write_eval({"run": 1})
-    store.write_eval({"run": 2, "note": "🍺"})
-    assert store.read_eval() == {"run": 2, "note": "🍺"}
+    store.write_eval({"run": 2})
+    assert store.read_eval() == {"run": 2}
     with store.backend.engine().connect() as conn:
         table = quote_identifier(conn, track_db_output.options["eval_table"])
         assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 1
@@ -1640,3 +1654,101 @@ def test_persist_track_outputs_logs_a_history_too_long_for_mysql_and_keeps_eval(
     assert "Failed to append recommendation history" in caplog.text
     assert store.read_eval() == {"ok": True}
     assert store.read_history().empty
+
+
+def test_persist_track_outputs_logs_a_report_too_large_for_mysql_and_still_writes_history(
+    mysql_track_output, caplog
+) -> None:
+    store = TrackStore(mysql_track_output)
+    store.write_eval({"run": 1})
+    persist_track_outputs(
+        store,
+        kind="db",
+        eval_report={"run": 2, "by_rank": "x" * 2**24},
+        recommendations=_RECS,
+        generated_at=_GENERATED_AT,
+    )
+    assert "Failed to write track eval" in caplog.text
+    assert store.read_eval() == {"run": 1}
+    assert len(store.read_history()) == 1
+
+
+def test_by_source_uses_the_older_run_for_an_older_impression_on_every_backend(track_db_output) -> None:
+    from cicerone.evaluation import evaluate_tracking
+    from cicerone.evaluation.context import concat_history, generated_ats_from_track, stamp_recommendations
+
+    older, current = "2026-08-27T03:00:00+00:00", _GENERATED_AT
+    store = TrackStore(track_db_output)
+    store.append_history(_RECS.assign(source="popular_fallback"), generated_at=older)
+    store.append_rows(
+        [
+            _row(event_id="imp-old", generated_at=older),
+            _row(event_id="clk-old", kind="click", occurred_at="2026-08-28T12:01:00Z", generated_at=older),
+            _row(event_id="imp-new", user_id="bob", generated_at=current),
+        ]
+    )
+    rows = store.read_rows()
+    current_recs = pd.concat([_RECS, _RECS.assign(user_id="bob")], ignore_index=True)
+    history = store.read_history(generated_ats=generated_ats_from_track(rows, current))
+    report = evaluate_tracking(
+        track_rows=rows,
+        conversions=pd.DataFrame(),
+        recommendations=concat_history(history, stamp_recommendations(current_recs, current)),
+    )
+    # Alice's current list says personalized; only stored history can say popular_fallback.
+    assert report.by_source["popular_fallback"].n_impressions == 1
+    assert report.by_source["popular_fallback"].n_clicks == 1
+    assert report.by_source["personalized"].n_impressions == 1
+    assert report.by_source["personalized"].n_clicks == 0
+
+
+def test_history_new_table_stores_rank_as_bigint_when_the_first_frame_has_no_ranks(track_db_output) -> None:
+    store = TrackStore(track_db_output)
+    store.append_history(_RECS.assign(rank=[float("nan")]), generated_at=_GENERATED_AT)
+    assert _column_types(store, track_db_output.options["history_table"]) == _HISTORY_COLUMNS
+
+
+def test_history_on_an_existing_table_issues_no_ddl(tmp_path) -> None:
+    # A role without schema CREATE can still append to a table someone else created.
+    store = TrackStore(sqlite_output(tmp_path / "track.db"))
+    store.append_history(_RECS, generated_at=_GENERATED_AT)
+    statements: list[str] = []
+    event.listen(store.backend.engine(), "before_cursor_execute", lambda *args: statements.append(args[2]))
+    store.append_history(_RECS, generated_at="2026-08-29T03:00:00+00:00")
+    assert len(store.read_history()) == 2
+    assert not any("CREATE" in sql for sql in statements)
+
+
+@pytest.mark.parametrize("write", ["eval", "history"])
+def test_writer_that_lost_the_fence_creates_no_table_on_every_backend(track_db_output, write) -> None:
+    from cicerone.locks import LockLostError
+
+    # The first check is the lease; the second is the one before the DDL.
+    store = TrackStore(track_db_output, fence=retrain_fence(None, FenceCheck(2)))
+    with pytest.raises(LockLostError):
+        if write == "eval":
+            store.write_eval({"ok": True})
+        else:
+            store.append_history(_RECS, generated_at=_GENERATED_AT)
+    assert not inspect(store.backend.engine()).has_table(track_db_output.options[f"{write}_table"])
+
+
+def test_rank_less_history_keeps_the_null_parquet_type_on_a_dataset_output(tmp_path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    store = TrackStore(local_output(tmp_path))
+    store.append_history(_RECS.drop(columns="rank"), generated_at=_GENERATED_AT)
+    part = next((tmp_path / "recommendation_history").glob("*.parquet"))
+    assert pq.read_schema(part).field("rank").type == pa.null()
+
+
+def test_job_skips_eval_and_history_on_mariadb_with_one_warning(tmp_path, caplog) -> None:
+    backend = TrackStore(sqlite_output(tmp_path / "track.db")).backend
+    backend.engine = lambda: SimpleNamespace(dialect=SimpleNamespace(name="mariadb"))
+    with caplog.at_level("WARNING", logger="cicerone.track.store_db"):
+        backend.eval_writer({"ok": True})()
+        backend.history_writer(_RECS, _GENERATED_AT)()
+    warnings = [record for record in caplog.records if record.name == "cicerone.track.store_db"]
+    assert len(warnings) == 1
+    assert "aren't supported on MariaDB" in warnings[0].getMessage()

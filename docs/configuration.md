@@ -71,13 +71,23 @@ PyMySQL uses plaintext without it, which is only suitable on a trusted local
 network. The Docker image doesn't ship the driver, so extend it to
 use MySQL. On MySQL, `POST /track` answers 400 for an `event_id` over 255
 characters or another text value over 65,535 UTF-8 bytes, and nothing from
-that batch is written. An eval report over 16 MiB or a history value over
-65,535 UTF-8 bytes fails that write: the job logs it, carries on and keeps the
-rows already stored. The eval and history tables have no primary key, so a server
-with `sql_require_primary_key` on refuses them. Requires MySQL 8.0 or
-later; CI tests 8.4. Track ingest and the job need the `CREATE` privilege.
-Run MySQL in strict mode: on a non-strict server an out-of-range `rank` can be
-clamped. A track table dropped while the store runs isn't recreated until
+that batch is written. Strict mode is required: on a non-strict server an
+out-of-range `rank` can be clamped, and an oversized eval report or history
+value is truncated silently, so a truncated report replaces the good one and
+then reads as missing. On a strict server an eval report over 16 MiB (or over
+`max_allowed_packet`, if that is lower) or a history value over 65,535 UTF-8
+bytes fails that write: the job logs it, carries on and keeps the rows already
+stored. The eval and history tables have no primary key, so
+`sql_require_primary_key` and Group Replication refuse them; the job logs the
+error on every run. The job skips the eval report and history on MariaDB with
+a logged warning. Requires MySQL 8.0 or later; CI tests 8.4. Track ingest and the
+eval report need the `CREATE` privilege on every write; history needs it only
+to create its table.
+New history tables on any backend store `rank` as `BIGINT`, so a fractional
+rank rounds on Postgres and MySQL.
+Known limit: the history table has no index and no retention, so each read
+scans it and it grows every run.
+A track table dropped while the store runs isn't recreated until
 restart. With `[track]` enabled, serve refuses to start on a database other
 than Postgres, SQLite or MySQL.
 On MySQL/MariaDB the `recommendations` and `recommendation_items` tables

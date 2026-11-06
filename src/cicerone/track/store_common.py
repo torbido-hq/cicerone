@@ -57,8 +57,7 @@ def history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFr
     if RANK_COLUMN in frame.columns:
         frame[RANK_COLUMN] = pd.to_numeric(frame[RANK_COLUMN], errors="coerce")
     else:
-        # NaN, not pd.NA: pandas binds an all-NA column as text, which Postgres won't assign to BIGINT.
-        frame[RANK_COLUMN] = float("nan")
+        frame[RANK_COLUMN] = pd.NA
     if SOURCE_COLUMN not in frame.columns:
         frame[SOURCE_COLUMN] = None
     if VARIANT_COLUMN not in frame.columns:
