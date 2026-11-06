@@ -763,6 +763,23 @@ def test_apply_boosts_empty_recs_and_no_boosts_paths():
     assert BOOST_HITS_COLUMN not in no_hits.columns
 
 
+def test_apply_boosts_records_hits_on_a_duplicate_items_index():
+    items = pd.DataFrame(
+        [{"item_id": "i1", "paying": True}, {"item_id": "i2", "paying": False}],
+        index=[0, 0],
+    )
+    recs = pd.DataFrame(
+        [
+            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 3.0},
+            {"user_id": "u1", "item_id": "i2", "rank": 2, "score": 2.0},
+        ]
+    )
+    boosts = [BoostRule(name="paying", kind="boolean", item_column="paying", factor=2.0)]
+    out = apply_boosts(recs, items, boosts, record_hits=True)
+    assert out[Columns.Score].tolist() == [6.0, 2.0]
+    assert out[BOOST_HITS_COLUMN].tolist() == [[{"name": "paying", "factor": 2.0}], []]
+
+
 def test_boolean_boost_respects_string_false():
     items = pd.DataFrame(
         [

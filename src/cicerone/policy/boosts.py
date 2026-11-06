@@ -88,10 +88,11 @@ def item_boost_details(
     if not record_hits:
         return factors, {}
     hits: dict[str, list[dict[str, object]]] = {}
-    for item_id, idx in zip(ids, items.index, strict=True):
+    rule_values = [(name, series.to_numpy(dtype=float)) for name, series in rule_series]
+    for position, item_id in enumerate(ids):
         item_hits = []
-        for name, series in rule_series:
-            factor = float(series.loc[idx])
+        for name, values in rule_values:
+            factor = float(values[position])
             if factor != 1.0:
                 item_hits.append({"name": name, "factor": factor})
         if item_hits:
