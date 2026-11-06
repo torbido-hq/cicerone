@@ -7,7 +7,7 @@ import boto3
 import pytest
 from botocore.exceptions import BotoCoreError
 from moto import mock_aws
-from support.events import event_payload
+from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fakes import raising
 
 from cicerone.config import ConfigError
@@ -39,7 +39,7 @@ def _put_event(client, key: str, payload: dict | list) -> None:
     client.put_object(Bucket="events-bucket", Key=key, Body=json.dumps(payload).encode())
 
 
-def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
+def _s3_notification(*keys: str, bucket: str = "events-bucket") -> str:
     return json.dumps(
         {
             "Records": [
@@ -47,6 +47,7 @@ def _s3_notification(key: str, bucket: str = "events-bucket") -> str:
                     "eventName": "ObjectCreated:Put",
                     "s3": {"bucket": {"name": bucket}, "object": {"key": key, "eTag": "abc"}},
                 }
+                for key in keys
             ]
         }
     )
@@ -528,6 +529,22 @@ def test_s3_rejects_sqs_with_endpoint_url():
         )
 
 
+def test_events_from_body_event_ids():
+    no_id = event_payload()
+    no_id.pop("event_id")
+    body = json.dumps([no_id, {**no_id, "idempotency_key": "ik"}, {**no_id, "event_id": " e1 "}]).encode()
+    events = events_from_body(body, bucket="b", key="k", etag="e")
+    assert [event.event_id for event in events] == ["b/k|e|0", "ik", "e1"]
+    assert all(event.generated_event_id is False for event in events)
+
+
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+def test_events_from_body_rejects_bodies_the_parser_cannot_read(body):
+    with pytest.raises(ValueError, match="invalid JSON"):
+        events_from_body(body, bucket="b", key="k", etag="e")
+
+
 def test_events_from_body_validation():
     assert events_from_body(b"  ", bucket="b", key="k", etag="e") == []
     with pytest.raises(ValueError, match="invalid JSON"):
@@ -628,6 +645,21 @@ def test_s3_list_skips_bad_object_and_empty_payload():
     assert [event.event_id for event in events] == ["ok"]
     source.close()
     assert source.health().connected is False
+
+
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+@mock_aws
+def test_s3_list_skips_unparsable_object(body):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    client.put_object(Bucket="events-bucket", Key="events/bad.json", Body=body)
+    _put_event(client, "events/ok.json", event_payload(event_id="ok"))
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["ok"]
+    assert list(source.poll(10)) == []
+    source.close()
 
 
 @mock_aws
@@ -733,6 +765,63 @@ def _sqs_held(sqs, queue_url: str) -> int:
         AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
     )["Attributes"]
     return int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
+
+
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+@mock_aws
+def test_s3_sqs_deletes_message_for_unparsable_object(body):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-unparsable")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="bad.json", Body=body)
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@pytest.mark.parametrize("keys", [("bad.json", "good.json"), ("good.json", "bad.json")])
+@mock_aws
+def test_s3_sqs_unreadable_object_keeps_readable_siblings(keys):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-siblings")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="bad.json", Body=b"not-json")
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification(*keys))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["good"]
+    assert _sqs_held(sqs, queue_url) == 1
+    source.ack(["good"])
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@mock_aws
+def test_s3_sqs_notification_with_only_unreadable_objects_settles():
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-all-bad")["QueueUrl"]
+    s3.put_object(Bucket="events-bucket", Key="bad-1.json", Body=b"not-json")
+    s3.put_object(Bucket="events-bucket", Key="bad-2.json", Body=b"[" * 200_000)
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad-1.json", "bad-2.json"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("good.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["good"]
+    assert _sqs_held(sqs, queue_url) == 1
+    source.ack(["good"])
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
 
 
 @mock_aws

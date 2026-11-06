@@ -11,7 +11,8 @@ from urllib.parse import unquote_plus
 
 from cicerone.config import ConfigError
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+from cicerone.events.json_payload import delivery_event
+from cicerone.events.normalize import EventNormalizeError
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -73,17 +74,13 @@ def normalize_prefix(raw: Any) -> str:
     return f"{prefix}/" if prefix else ""
 
 
-def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
-    return supplied_event_id(payload) or f"{bucket}/{key}|{etag}|{index}"
-
-
 def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:
     text = body.decode("utf-8").strip()
     if not text:
         return []
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError(f"invalid JSON in s3://{bucket}/{key}") from exc
     if isinstance(data, dict):
         payloads: list[Any] = [data]
@@ -102,8 +99,7 @@ def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[N
             )
             continue
         try:
-            event_id = _stable_event_id(payload, bucket=bucket, key=key, etag=etag, index=index)
-            events.append(normalize_event({**payload, "event_id": event_id}))
+            events.append(delivery_event(payload, f"{bucket}/{key}|{etag}|{index}"))
         except EventNormalizeError:
             logger.warning(
                 "Skipping invalid event %d in s3://%s/%s",
