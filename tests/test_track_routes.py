@@ -11,6 +11,7 @@ from sqlalchemy.exc import OperationalError
 from support.fakes import FakeReader, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
 from support.settings import make_settings
+from support.waits import WAIT_SECONDS
 from test_serve import _recs_df
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings
@@ -394,15 +395,18 @@ def test_post_track_returns_503_when_store_unavailable(tmp_path, monkeypatch, er
 
 def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
     import asyncio
-    import time
 
     import httpx
 
-    def _slow_append(self, rows):
-        time.sleep(0.2)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _blocking_append(self, rows):
+        entered.set()
+        assert release.wait(WAIT_SECONDS)
         return [dict(row) for row in rows]
 
-    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _slow_append)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _blocking_append)
     app = create_app(_settings(tmp_path), FakeReader(_recs_df()))
 
     @app.get("/__probe")
@@ -414,10 +418,11 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             headers = {"Authorization": "Bearer secret"}
             track = asyncio.create_task(client.post("/track", headers=headers, json=_impression()))
-            await asyncio.sleep(0.05)
+            assert await asyncio.to_thread(entered.wait, WAIT_SECONDS)
             probe = await client.get("/__probe")
             assert probe.status_code == 200
             assert not track.done()
+            release.set()
             track_response = await track
             assert track_response.status_code == 202
 
