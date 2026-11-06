@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 
 from cicerone.io.applied_events import APPLIED_EVENTS_ATTR, merge_applied_keys, unexpired_keys
+from cicerone.io.base import manifest_newer
 from cicerone.io.blob import (
     S3_READ_ERRORS,
     STORAGE_READ_ERRORS,
@@ -62,13 +63,7 @@ def _existing_manifest_newer(raw: bytes | None, started_at: str) -> bool:
         existing = json.loads(raw)
     except ValueError:
         return False
-    if not isinstance(existing, dict):
-        return False
-    for key in ("generated_at", "last_incremental_at"):
-        value = existing.get(key)
-        if isinstance(value, str) and value > started_at:
-            return True
-    return False
+    return isinstance(existing, dict) and manifest_newer(existing, started_at)
 
 
 class DatasetInputSource:
