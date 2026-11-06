@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call
 import pytest
 from sqlalchemy.exc import OperationalError
 from support.fakes import FakeLock, hide_module
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 from support.waits import wait_until
 
 from cicerone import locks as locks_mod
@@ -841,7 +841,7 @@ def test_dataset_append_lock_key_and_optional_builder(monkeypatch):
         trigger_lock_backend="redis",
         trigger_redis_url="redis://localhost:6379/0",
         trigger_lock_key="job-a",
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"}),
+        output=local_output("/tmp/out"),
     )
     assert has_distributed_lock(settings) is True
     client = _mock_redis_module(monkeypatch)

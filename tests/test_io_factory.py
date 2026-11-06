@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from support.settings import local_output
 
 from cicerone.config import IOSettings
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
@@ -18,12 +19,12 @@ from cicerone.locks import WriteFence
 
 
 def test_build_input_source_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_input_source(settings), DatasetInputSource)
 
 
 def test_build_output_sink_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     sink = build_output_sink(settings)
     assert isinstance(sink, DatasetOutputSink)
     assert sink._fence.lock is None
@@ -230,7 +231,7 @@ def test_build_output_sink_unknown_kind_raises():
 
 
 def test_build_recommendation_reader_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_recommendation_reader(settings), DatasetRecommendationReader)
 
 
@@ -246,7 +247,7 @@ def test_build_recommendation_reader_unknown_kind_raises():
 
 
 def test_build_manifest_reader_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_manifest_reader(settings), DatasetManifestReader)
 
 

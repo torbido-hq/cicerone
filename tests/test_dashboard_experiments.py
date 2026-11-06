@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from sqlalchemy import create_engine
-from support.fakes import FakeLock, raising
+from support.fakes import FakeLock, FakeManifest, raising
+from support.settings import local_output, make_settings
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
@@ -43,8 +43,8 @@ def _settings(tmp_path, **experiment_overrides):
     experiment = ExperimentSettings(**params)
     return make_settings(
         feature_config_path=str(REPO_FEATURES),
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(inp)}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        input=local_output(inp),
+        output=local_output(out),
         experiment=experiment,
     )
 
@@ -287,7 +287,7 @@ def test_experiment_context_db_events(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -324,7 +324,7 @@ def test_experiment_context_db_events_missing_table(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -493,18 +493,18 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] is None
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
@@ -519,32 +519,30 @@ def test_experiment_context_manifest_restores_eligibility_merge_flag(tmp_path, m
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {
-                            "name": "control",
-                            "traffic": 0.5,
-                            "models": ["popular"],
-                            "eligibility": [],
-                            "merge_item_availability": False,
-                        },
-                        {
-                            "name": "treatment",
-                            "traffic": 0.5,
-                            "models": ["collaborative"],
-                            "eligibility": [
-                                {"name": "published", "op": "item_true", "item_column": "published"}
-                            ],
-                            "merge_item_availability": False,
-                        },
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {
+                        "name": "control",
+                        "traffic": 0.5,
+                        "models": ["popular"],
+                        "eligibility": [],
+                        "merge_item_availability": False,
+                    },
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "models": ["collaborative"],
+                        "eligibility": [{"name": "published", "op": "item_true", "item_column": "published"}],
+                        "merge_item_availability": False,
+                    },
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     context = experiment_context(settings, ExperimentStore(settings.output))
     features = load_feature_config(REPO_FEATURES)
     control = apply_recipe(features, context["recipes"][0])
@@ -557,23 +555,23 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {
-                            "name": "treatment",
-                            "traffic": 0.5,
-                            "models": ["collaborative"],
-                            "eligibility": [1],
-                        },
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "models": ["collaborative"],
+                        "eligibility": [1],
+                    },
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     context = experiment_context(settings, ExperimentStore(settings.output))
     assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
@@ -582,11 +580,9 @@ def test_experiment_context_manifest_recipes_malformed_item(tmp_path, monkeypatc
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {"experiment_variants": json.dumps([{"traffic": 0.5}])}
+    reader = FakeManifest({"experiment_variants": json.dumps([{"traffic": 0.5}])})
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
@@ -598,19 +594,19 @@ def test_experiment_context_manifest_recipes_skips_malformed_keeps_good(tmp_path
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {"traffic": 0.5},
-                        {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {"traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     recipes = _recipes(settings, load_feature_config(REPO_FEATURES))
     assert [recipe.name for recipe in recipes] == ["control", "treatment"]
 
@@ -619,11 +615,9 @@ def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch)
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {"experiment_variants": "{not-json"}
+    reader = FakeManifest({"experiment_variants": "{not-json"})
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
