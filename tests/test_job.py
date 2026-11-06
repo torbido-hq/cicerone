@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from support.fakes import FakeLock
+from support.fakes import FakeLock, FakePublisher
 from support.settings import make_settings
 
 from cicerone import job
@@ -131,24 +131,13 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
     ).to_parquet(input_dir / "events.parquet", index=False)
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
-    captured: list[pd.DataFrame] = []
-    closed = {"n": 0}
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            captured.append(df.copy())
-
-        def close(self) -> None:
-            closed["n"] += 1
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    publisher = FakePublisher()
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
     job.run()
-    assert len(captured) == 1
-    assert {"u1", "u2"}.issubset(set(captured[0]["user_id"].astype(str)))
-    assert closed["n"] == 1
+    assert len(publisher.published) == 1
+    assert {"u1", "u2"}.issubset(set(publisher.published[0]["user_id"].astype(str)))
+    assert publisher.closes == 1
 
 
 def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
@@ -167,17 +156,12 @@ def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise LockLostError("retrain lock lost before write", kind="retrain")
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            close_error=LockLostError("retrain lock lost before write", kind="retrain")
+        ),
+    )
     with pytest.raises(LockLostError, match="retrain lock lost"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -187,18 +171,13 @@ def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
 def test_job_writes_failure_manifest_when_close_loses_lock_after_error(tmp_path, monkeypatch):
     from cicerone.locks import LockLostError
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise LockLostError("retrain lock lost before write", kind="retrain")
-
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            close_error=LockLostError("retrain lock lost before write", kind="retrain")
+        ),
+    )
     with pytest.raises(LockLostError, match="retrain lock lost"):
         job.run()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
@@ -207,18 +186,10 @@ def test_job_writes_failure_manifest_when_close_loses_lock_after_error(tmp_path,
 
 
 def test_job_keeps_original_error_when_close_raises_after_failure(tmp_path, monkeypatch, caplog):
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise RuntimeError("close bug")
-
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher", lambda _settings: FakePublisher(close_error=RuntimeError("close bug"))
+    )
     with (
         caplog.at_level("ERROR", logger="cicerone.job"),
         pytest.raises(Exception, match="events.parquet"),
@@ -247,17 +218,10 @@ def test_job_succeeds_when_publisher_close_raises_publish_error(tmp_path, monkey
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise PublishError("flush on close")
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(close_error=PublishError("flush on close")),
+    )
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -276,17 +240,9 @@ def test_job_rewrites_manifest_when_close_raises_unexpected_error(tmp_path, monk
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise RuntimeError("close bug")
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher", lambda _settings: FakePublisher(close_error=RuntimeError("close bug"))
+    )
     with pytest.raises(RuntimeError, match="close bug"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -313,18 +269,10 @@ def test_job_failed_rewrite_uses_fresh_generated_at(tmp_path, monkeypatch):
         written.append((manifest.as_dict(), skip_if_newer_than))
         return real(sink, manifest, skip_if_newer_than=skip_if_newer_than)
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise RuntimeError("close bug")
-
     monkeypatch.setattr("cicerone.job.write_job_manifest", _capture)
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher", lambda _settings: FakePublisher(close_error=RuntimeError("close bug"))
+    )
     with pytest.raises(RuntimeError, match="close bug"):
         job.run()
     success = next(item for item in written if item[0].get("status") == "success")
@@ -348,17 +296,10 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise PublishError("broker down")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(publish_error=PublishError("broker down")),
+    )
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -378,17 +319,10 @@ def test_job_rewrites_manifest_when_publish_raises_unexpected_error(tmp_path, mo
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise RuntimeError("broken sidecar")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(publish_error=RuntimeError("broken sidecar")),
+    )
     with pytest.raises(RuntimeError, match="broken sidecar"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -411,17 +345,12 @@ def test_job_rewrites_manifest_when_sidecar_generation_raises_unexpected_error(t
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("publish should not run after generation check failure")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            publish_error=AssertionError("publish should not run after generation check failure")
+        ),
+    )
     monkeypatch.setattr(
         "cicerone.job.sidecar_generation_current",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
@@ -447,24 +376,13 @@ def test_job_skips_publish_when_generation_unconfirmed(tmp_path, monkeypatch, ca
         ]
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
-    published = {"n": 0}
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-            published["n"] += 1
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    publisher = FakePublisher()
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
     monkeypatch.setattr("cicerone.job.sidecar_generation_current", lambda *_args, **_kwargs: None)
     with caplog.at_level("INFO"):
         job.run()
-    assert published["n"] == 0
+    assert publisher.published == []
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
     assert any("could not confirm sidecar generation" in record.getMessage() for record in caplog.records)
     assert not any("superseded" in record.getMessage() for record in caplog.records)
@@ -483,19 +401,9 @@ def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
     ).to_parquet(input_dir / "events.parquet", index=False)
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
-    published: list[pd.DataFrame] = []
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            published.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    publisher = FakePublisher()
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: publisher)
 
     def fence() -> bool:
         return not (output_dir / "manifest.json").exists()
@@ -504,7 +412,7 @@ def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
 
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
         job.run(fence_check=fence)
-    assert published == []
+    assert publisher.published == []
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
 
 
@@ -930,17 +838,12 @@ def test_job_prefers_close_lock_loss_over_persist_error(tmp_path, monkeypatch):
         _write_config(tmp_path, input_dir, output_dir, top_k=2, extra=extra),
     )
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            del df
-
-        def close(self) -> None:
-            raise LockLostError("retrain lock lost before write", kind="retrain")
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            close_error=LockLostError("retrain lock lost before write", kind="retrain")
+        ),
+    )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.write_eval",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval store bug")),
@@ -1755,12 +1658,9 @@ def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
     input_dir.mkdir()
     output_dir.mkdir()
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
-    closed: list[bool] = []
     payloads: list[dict[str, object]] = []
 
-    class _Pub:
-        def close(self) -> None:
-            closed.append(True)
+    publisher = FakePublisher()
 
     class _Sink:
         def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
@@ -1775,11 +1675,11 @@ def test_finalize_job_writes_failed_manifest_and_closes(tmp_path, monkeypatch):
             track_fence=WriteFence(),
             manifest=JobManifest(status="failed", error="boom"),
             started_at="2026-01-01T00:00:00+00:00",
-            publisher=_Pub(),
+            publisher=publisher,
         ),
         None,
     )
-    assert closed == [True]
+    assert publisher.closes == 1
     assert payloads[0]["status"] == "failed"
     assert payloads[0]["error"] == "boom"
 
@@ -1795,10 +1695,6 @@ def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_pat
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir))
     payloads: list[dict[str, object]] = []
 
-    class _Pub:
-        def close(self) -> None:
-            raise KeyError("close failed")
-
     class _Sink:
         def write_manifest(self, payload: dict[str, object], skip_if_newer_than: str | None = None) -> bool:
             payloads.append(payload)
@@ -1813,7 +1709,7 @@ def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_pat
                 track_fence=WriteFence(),
                 manifest=JobManifest(status="failed", error="boom"),
                 started_at="2026-01-01T00:00:00+00:00",
-                publisher=_Pub(),
+                publisher=FakePublisher(close_error=KeyError("close failed")),
             ),
             error,
         )
@@ -2098,17 +1994,13 @@ def test_job_succeeds_when_publisher_connect_fails_after_write(tmp_path, monkeyp
     config_path = _write_config(tmp_path, input_dir, output_dir, top_k=2)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", config_path)
 
-    class _Pub:
-        def connect(self) -> None:
-            raise PublishError("broker down")
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("publish should not run after connect failure")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            connect_error=PublishError("broker down"),
+            publish_error=AssertionError("publish should not run after connect failure"),
+        ),
+    )
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -2424,18 +2316,8 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
         real_write(sink, job.JobManifest(**foreign))
         return False
 
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
     monkeypatch.setattr(job, "write_job_manifest", skip_success_after_foreign_write)
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: FakePublisher())
     monkeypatch.setattr(
         "cicerone.job.sidecar_generation_current",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
@@ -2457,17 +2339,12 @@ def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatc
     ).to_parquet(input_dir / "events.parquet", index=False)
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
-    class _Pub:
-        def connect(self) -> None:
-            raise KeyboardInterrupt
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("publish should not run")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
+    monkeypatch.setattr(
+        "cicerone.job.build_publisher",
+        lambda _settings: FakePublisher(
+            connect_error=KeyboardInterrupt(), publish_error=AssertionError("publish should not run")
+        ),
+    )
     with pytest.raises(KeyboardInterrupt):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())

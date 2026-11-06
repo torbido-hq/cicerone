@@ -230,6 +230,37 @@ class FakeLock:
         return True
 
 
+class FakePublisher:
+    """Records published frames and ``close`` calls; a ``*_error`` makes that step raise."""
+
+    def __init__(
+        self,
+        *,
+        connect_error: BaseException | None = None,
+        publish_error: BaseException | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self.connect_error = connect_error
+        self.publish_error = publish_error
+        self.close_error = close_error
+        self.published: list[pd.DataFrame] = []
+        self.closes = 0
+
+    def connect(self) -> None:
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def publish(self, df: pd.DataFrame) -> None:
+        if self.publish_error is not None:
+            raise self.publish_error
+        self.published.append(df.copy())
+
+    def close(self) -> None:
+        self.closes += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
 class FenceCheck:
     """Fence check that passes for the first ``fail_at - 1`` calls, then fails."""
 
