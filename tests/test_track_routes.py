@@ -12,7 +12,7 @@ from support.fakes import FakeReader, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
 from support.serve import recs_df, serve_settings
 from support.settings import local_output
-from support.waits import WAIT_SECONDS
+from support.waits import UNREACHED_SECONDS, WAIT_SECONDS
 
 from cicerone.config import ConfigError, EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
@@ -401,7 +401,7 @@ def test_post_track_append_does_not_block_event_loop(tmp_path, monkeypatch):
 
     def _blocking_append(self, rows):
         entered.set()
-        assert release.wait(WAIT_SECONDS)
+        assert release.wait(UNREACHED_SECONDS)
         return [dict(row) for row in rows]
 
     monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", _blocking_append)
