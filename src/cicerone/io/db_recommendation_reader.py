@@ -179,7 +179,7 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                 f"ORDER BY CASE WHEN {self._sql[VARIANT_COLUMN]} = :fallback THEN 0 ELSE 1 END, "
                 f"{self._sql[VARIANT_COLUMN]} ASC, {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
-            params = {"user_id": user_id, "k": k, "fallback": _rec.FALLBACK_VARIANT}
+            params = {"user_id": user_id, "k": k, "fallback": _rec.CONTROL_NAME}
         else:
             sql = text(
                 f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
