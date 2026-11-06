@@ -295,6 +295,26 @@ def test_poison_entry_is_acked(monkeypatch):
     assert client.xpending("cicerone:events", "cicerone")["pending"] == 1
 
 
+def test_invalid_entry_is_logged(monkeypatch, caplog):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    entry_id = client.xadd("cicerone:events", {"user_id": "u1"})
+    with caplog.at_level("WARNING", logger="cicerone.events.redis_streams"):
+        assert list(source.poll(10)) == []
+    assert f"Skipping invalid Redis Streams entry {entry_id}" in caplog.text
+
+
+def test_idempotency_key_is_the_event_id(monkeypatch):
+    client = _install_fake_redis(monkeypatch, FakeRedis())
+    source = RedisStreamsEventSource(_options())
+    source.connect()
+    payload = event_payload(idempotency_key="ik")
+    payload.pop("event_id")
+    client.xadd("cicerone:events", payload)
+    assert [event.event_id for event in source.poll(10)] == ["ik"]
+
+
 def test_autoclaim_idle_from_other_consumer(monkeypatch):
     client = _install_fake_redis(monkeypatch, FakeRedis())
     source = RedisStreamsEventSource(_options(claim_idle_ms=50))
