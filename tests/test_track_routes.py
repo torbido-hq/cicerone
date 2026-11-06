@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from support.prometheus_metrics import registry_metric_value
 from support.settings import make_settings
 from test_serve import _recs_df
 
-from cicerone.config import EventsSettings, IOSettings
+from cicerone.config import ConfigError, EventsSettings, IOSettings
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.serve import app as serve_app
@@ -139,6 +140,102 @@ def test_post_track_normalization_error_returns_400(tmp_path):
     )
     assert response.status_code == 400
     assert "occurred_at" in str(response.json()["detail"])
+
+
+_TOO_LONG_FOR_MYSQL = [
+    pytest.param({"event_id": "x" * 256}, "event_id", id="event_id"),
+    pytest.param({"event_id": None, "idempotency_key": "x" * 256}, "event_id", id="idempotency_key"),
+    pytest.param({"user_id": "x" * 65536}, "user_id", id="user_id"),
+    pytest.param({"variant": "é" * 32768}, "variant", id="variant-multibyte"),
+]
+_TOO_LONG_VALUES = [pytest.param(param.values[0], id=param.id) for param in _TOO_LONG_FOR_MYSQL]
+
+
+def _post_track(tmp_path, output, *events):
+    app = create_app(_settings(tmp_path, output=output), FakeReader(_recs_df()))
+    # Stdlib JSON, because httpx's encoder can't send a lone surrogate.
+    response = TestClient(app).post(
+        "/track",
+        headers={"Authorization": "Bearer secret", "Content-Type": "application/json"},
+        content=json.dumps(list(events)),
+    )
+    return app.state.track_store, response
+
+
+@pytest.mark.parametrize(("overrides", "column"), _TOO_LONG_FOR_MYSQL)
+def test_post_track_too_long_value_returns_400_on_mysql(tmp_path, mysql_track_output, overrides, column):
+    store, response = _post_track(
+        tmp_path, mysql_track_output, _impression(), _impression(**{"event_id": "too-long", **overrides})
+    )
+    assert response.status_code == 400
+    assert column in response.json()["detail"]
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize("overrides", _TOO_LONG_VALUES)
+def test_post_track_too_long_value_is_accepted_on_other_backends(tmp_path, non_mysql_track_output, overrides):
+    store, response = _post_track(
+        tmp_path, non_mysql_track_output, _impression(), _impression(**{"event_id": "too-long", **overrides})
+    )
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 2
+    assert len(store.read_rows()) == 2
+
+
+def test_post_track_lone_surrogate_returns_400_on_mysql(tmp_path, mysql_track_output):
+    store, response = _post_track(
+        tmp_path, mysql_track_output, _impression(), _impression(event_id="bad", user_id="\ud800")
+    )
+    assert response.status_code == 400
+    assert store.read_rows() == []
+
+
+_BAD_DUPLICATES = [
+    pytest.param({"user_id": "x" * 65536}, id="too-long"),
+    pytest.param({"user_id": "\ud800"}, id="lone-surrogate"),
+]
+
+
+@pytest.mark.parametrize("overrides", _BAD_DUPLICATES)
+def test_post_track_bad_duplicate_row_returns_400_on_mysql(tmp_path, mysql_track_output, overrides):
+    store, response = _post_track(tmp_path, mysql_track_output, _impression(), _impression(**overrides))
+    assert response.status_code == 400
+    assert store.read_rows() == []
+
+
+@pytest.mark.parametrize("overrides", _BAD_DUPLICATES)
+def test_post_track_bad_duplicate_row_is_dropped_on_other_backends(
+    tmp_path, non_mysql_track_output, overrides
+):
+    store, response = _post_track(tmp_path, non_mysql_track_output, _impression(), _impression(**overrides))
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+    assert [row["user_id"] for row in store.read_rows()] == ["u1"]
+
+
+def test_post_track_longest_values_are_accepted_on_every_backend(tmp_path, track_db_output):
+    _store, response = _post_track(
+        tmp_path, track_db_output, _impression(event_id="x" * 255, user_id="é" * 32767 + "x")
+    )
+    assert response.status_code == 202
+    assert response.json()["accepted"] == 1
+
+
+def _db_output(database_url):
+    return IOSettings(kind="db", options={"database_url": database_url})
+
+
+@pytest.mark.parametrize(
+    ("database_url", "backend"),
+    [("oracle+oracledb://u:p@host/db", "oracle"), ("mariadb+pymysql://u:p@host/db", "mariadb")],
+)
+def test_serve_refuses_to_start_on_an_unsupported_track_database(tmp_path, database_url, backend):
+    with pytest.raises(ConfigError, match=f"mysql, postgresql, sqlite, not {backend}"):
+        create_app(_settings(tmp_path, output=_db_output(database_url)), FakeReader(_recs_df()))
+
+
+def test_track_store_for_reads_and_eval_is_still_built_on_an_unsupported_database():
+    assert TrackStore(_db_output("oracle+oracledb://u:p@host/db")).backend is not None
 
 
 def test_post_track_idempotent(tmp_path):

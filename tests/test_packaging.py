@@ -66,6 +66,7 @@ def _by_name(reqs: list[Requirement], source: str) -> dict[str, Requirement]:
         ("kafka", "requirements-kafka.txt"),
         ("rabbitmq", "requirements-rabbitmq.txt"),
         ("bandits", "requirements-bandits.txt"),
+        ("mysql", "requirements-mysql.txt"),
     ],
 )
 def test_metadata_ranges_admit_image_pins(extra, filename):
@@ -242,6 +243,7 @@ def test_sdist_includes_requirement_pins():
         "requirements-kafka.txt",
         "requirements-rabbitmq.txt",
         "requirements-bandits.txt",
+        "requirements-mysql.txt",
         "LICENSE",
         "python_detect.sh",
     ):

@@ -45,7 +45,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
 from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
 from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error
-from cicerone.io.engines import engine_for, quote_identifier, sql_source
+from cicerone.io.engines import engine_for, is_mysql_family, quote_identifier, sql_source
 from cicerone.io.options import (
     readonly_select,
     reject_oversize,
@@ -159,10 +159,6 @@ def _manifest_column_type(value: Any) -> Any:
     return Text()
 
 
-def _mysql_family(bind: Engine | Connection) -> bool:
-    return bind.dialect.name in ("mysql", "mariadb")
-
-
 def _clear_table_for_replace(conn: Connection, table: str) -> None:
     """Empty ``table`` before a full rewrite: TRUNCATE then DELETE, or DELETE only on MySQL/MariaDB.
 
@@ -174,7 +170,7 @@ def _clear_table_for_replace(conn: Connection, table: str) -> None:
     if not inspect(conn).has_table(table):
         return
     quoted = quote_identifier(conn, table)
-    if not _mysql_family(conn):
+    if not is_mysql_family(conn):
         savepoint = conn.begin_nested()
         try:
             conn.execute(text(f"TRUNCATE TABLE {quoted}"))
@@ -401,7 +397,7 @@ class DatabaseOutputSink:
 
     def _applied_scope(self, conn: Connection, recommendations_table: str) -> str:
         # Unquoted names ignore case on SQLite and Postgres; MySQL keeps it if lower_case_table_names=0.
-        keeps_case = _mysql_family(conn) and self._mysql_lower_case_table_names(conn) == 0
+        keeps_case = is_mysql_family(conn) and self._mysql_lower_case_table_names(conn) == 0
         name = recommendations_table if keeps_case else recommendations_table.lower()
         # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
         return hashlib.sha256(name.encode()).hexdigest()

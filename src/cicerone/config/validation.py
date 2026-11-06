@@ -115,6 +115,16 @@ def validate_model_weights(weights: dict[str, float] | None, *, context: str = "
         raise ConfigError(f"{context} value(s) must be non-negative, got {negative_weights}")
 
 
+def weights_field(raw: Mapping[str, Any], key: str, *, context: str) -> dict[str, float] | None:
+    """``raw[key]`` as per-model weights, or ``None`` when unset; values are checked by the caller."""
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError(f"{context} must be a table of model name -> weight, got {value!r}")
+    return {str(name): float(weight) for name, weight in value.items()}
+
+
 def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
     if rrf_k is not None:
         require_finite(rrf_k, name=context)
@@ -125,6 +135,14 @@ def validate_rrf_k(rrf_k: float | None, *, context: str = "rrf_k") -> None:
 def require_positive_int(value: int, *, name: str) -> int:
     if value < 1:
         raise ConfigError(f"{name} must be >= 1, got {value}")
+    return value
+
+
+def require_int_in_range(value: int, *, name: str, minimum: int, maximum: int) -> int:
+    if value < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}, got {value}")
+    if value > maximum:
+        raise ConfigError(f"{name} must be <= {maximum}, got {value}")
     return value
 
 

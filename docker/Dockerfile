@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir \
         wheel==0.48.0
 
 COPY pyproject.toml MANIFEST.in LICENSE README.md CHANGELOG.md ./
-COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt ./
+COPY requirements.txt requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt requirements-mysql.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 
@@ -100,7 +100,7 @@ USER root
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY pyproject.toml MANIFEST.in ./
-COPY requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt ./
+COPY requirements-redis.txt requirements-sequential.txt requirements-kafka.txt requirements-rabbitmq.txt requirements-bandits.txt requirements-mysql.txt ./
 COPY src/ ./src/
 COPY --from=frontend /build/tailwind.css ./src/cicerone/static/tailwind.css
 COPY tests/ ./tests/
@@ -110,8 +110,10 @@ COPY docs/openapi/ ./docs/openapi/
 COPY examples/serve/ ./examples/serve/
 # Canonical Postgres defaults and the shell helpers tests/test_postgres_defaults.py checks against them.
 COPY docker/postgres/defaults.env docker/postgres/test-database-url.sh docker/postgres/init-test-db.sh ./docker/postgres/
+# Canonical MySQL defaults, read by tests/support/mysql_defaults.py.
+COPY docker/mysql/defaults.env ./docker/mysql/
 ENV PYTHONPATH=/app/src
-RUN pip install --no-cache-dir -r requirements-bandits.txt
+RUN pip install --no-cache-dir -r requirements-bandits.txt -r requirements-mysql.txt
 RUN chown -R cicerone:cicerone /app
 USER cicerone
 ENTRYPOINT []

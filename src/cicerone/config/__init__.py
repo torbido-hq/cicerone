@@ -81,6 +81,7 @@ from cicerone.config.validation import (
     resolve_epoch_metrics,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 from cicerone.lazy import lazy_attribute
 
@@ -161,6 +162,7 @@ __all__ = [
     "resolve_postgres_lock_url_parts",
     "validate_model_weights",
     "validate_rrf_k",
+    "weights_field",
 ]
 
 _LAZY = {
