@@ -4,9 +4,20 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import sqlalchemy
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Column, Connection, Engine, MetaData, String, Table, Text
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
+from cicerone.config.constants import MYSQL_KEY_CHARS, ConfigError
+
+# MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
+TEXT_KEY_TYPE = Text().with_variant(String(MYSQL_KEY_CHARS, collation="utf8mb4_0900_bin"), "mysql")
+# JSON stored as text; MySQL TEXT's 64 KB is too small for a by-rank report with a large top_k.
+JSON_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -17,7 +28,7 @@ def engine_for(database_url: str) -> Engine:
     with _engines_lock:
         engine = _engines.get(database_url)
         if engine is None:
-            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True)
+            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True, hide_parameters=True)
             _engines[database_url] = engine
             _checkouts[database_url] = 0
         _checkouts[database_url] += 1
@@ -29,14 +40,20 @@ def quote_identifier(bind: Engine | Connection, name: str) -> str:
     return bind.dialect.identifier_preparer.quote(name)
 
 
+def database_backend_name(database_url: str) -> str:
+    try:
+        return make_url(database_url).get_backend_name()
+    except ArgumentError:
+        # The URL can hold a password, so it stays out of the message and the traceback.
+        raise ConfigError("database_url is not a valid database URL") from None
+
+
 def is_mysql_family(bind: Engine | Connection) -> bool:
     return bind.dialect.name in ("mysql", "mariadb")
 
 
-def create_table_sql(bind: Engine | Connection, table: str, columns: Sequence[tuple[str, str]]) -> str:
-    """``CREATE TABLE IF NOT EXISTS`` for ``(name, type)`` columns, every identifier quoted."""
-    spec = ", ".join(f"{quote_identifier(bind, name)} {kind}" for name, kind in columns)
-    return f"CREATE TABLE IF NOT EXISTS {quote_identifier(bind, table)} ({spec})"
+def store_table(name: str, *columns: Column[Any]) -> Table:
+    return Table(name, MetaData(), *columns, mysql_charset="utf8mb4", mysql_engine="InnoDB")
 
 
 def insert_sql(bind: Engine | Connection, table: str, names: Sequence[str]) -> str:

@@ -8,9 +8,10 @@ import pytest
 from support.events import event_payload
 from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
-from support.fakes import hide_module
+from support.fakes import FakePublisher, hide_module
+from support.settings import local_output
 
-from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
+from cicerone.config import ConfigError, PublishSettings, make_settings
 from cicerone.events.errors import AMQPError, KafkaException
 from cicerone.events.normalize import normalize_event
 from cicerone.events.store import load_recommendations_frame
@@ -346,32 +347,21 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-    captured: list[pd.DataFrame] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            captured.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher()
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert len(captured) == 1
-    assert "u1" in set(captured[0]["user_id"].astype(str))
+    assert len(publisher.published) == 1
+    assert "u1" in set(publisher.published[0]["user_id"].astype(str))
 
 
 def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config: FeatureConfig):
@@ -381,7 +371,7 @@ def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config:
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     calls: list[object] = []
@@ -418,31 +408,20 @@ def test_updater_does_not_nack_after_sidecar_connect_type_error(tmp_path, featur
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-    calls: list[object] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            raise TypeError("connect bug")
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            calls.append(user_ids)
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher(connect_error=TypeError("connect bug"))
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert calls == []
+    assert publisher.published == []
     written = load_recommendations_frame(settings.output)
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -686,27 +665,24 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-
-    class _Boom:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            raise PublishError("broker down")
-
+    publisher = FakePublisher(
+        publish_error=PublishError("broker down"),
+        close_error=AssertionError("close should not run"),
+    )
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Boom(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert updater.events_applied == 1
+    assert publisher.publish_attempts == 1
 
 
 def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
@@ -1021,26 +997,26 @@ def test_rabbitmq_publisher_close_propagates_unexpected_error(monkeypatch):
 def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
     generated_at = "2026-09-17T12:00:00+00:00"
     (tmp_path / "manifest.json").write_text(json.dumps({"generated_at": generated_at}))
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert sidecar_generation_current(settings, generated_at) is True
     assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
 
 
 def test_sidecar_generation_current_none_when_manifest_missing(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
 def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path, caplog):
     (tmp_path / "manifest.json").write_text("not-json")
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     with caplog.at_level("ERROR", logger="cicerone.publish.sidecar"):
         assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
     assert any(record.name == "cicerone.publish.sidecar" for record in caplog.records)
 
 
 def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
 
     class _Reader:
         def read_latest(self):

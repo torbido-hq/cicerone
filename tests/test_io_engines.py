@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
+from cicerone.errors import log_caught
 from cicerone.io import engines as io_engines
 from cicerone.io.db_store import DatabaseInputSource
 from cicerone.io.engines import dispose_engines, engine_for, quote_identifier, release_engine
+from cicerone.job_output import truncate_job_error
 from cicerone.locks.postgres import PostgresAdvisoryLock
 from cicerone.serve.bootstrap_events import EventsRuntime
 
@@ -17,6 +21,26 @@ def test_engine_for_reuses_url(tmp_path):
     assert engine_for(url) is first
     dispose_engines()
     assert engine_for(url) is not first
+    dispose_engines()
+
+
+def test_engine_for_hides_bound_values_in_errors(tmp_path, caplog):
+    engine = engine_for(f"sqlite+pysqlite:///{tmp_path / 'shared.db'}")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE t (user_id TEXT UNIQUE, item_id TEXT)"))
+    insert = text("INSERT INTO t (user_id, item_id) VALUES (:user_id, :item_id)")
+    row = {"user_id": "alice@example.com", "item_id": "secret-item"}
+    with engine.begin() as conn:
+        conn.execute(insert, row)
+
+    with pytest.raises(IntegrityError) as caught, engine.begin() as conn:
+        conn.execute(insert, row)
+
+    log_caught("Store unavailable", caught.value)
+    for surfaced in (str(caught.value), truncate_job_error(caught.value), caplog.text):
+        assert "alice@example.com" not in surfaced
+        assert "secret-item" not in surfaced
+    assert "INSERT INTO t (user_id, item_id)" in str(caught.value)
     dispose_engines()
 
 

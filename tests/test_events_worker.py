@@ -8,9 +8,10 @@ import pytest
 from support.events import dataset_updater, event_payload
 from support.fakes import FakeLock, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
+from support.settings import local_output
 from support.waits import WAIT_SECONDS, call_in_thread, wait_until
 
-from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
+from cicerone.config import ConfigError, EventsSettings, make_settings
 from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import EVENT_APPLY_ERRORS
@@ -33,7 +34,7 @@ def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
         events=EventsSettings(enabled=True, kind="webhook"),
     )
@@ -58,7 +59,7 @@ def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureCon
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -88,7 +89,7 @@ def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -112,7 +113,7 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -145,7 +146,7 @@ def test_event_worker_apply_unexpected_nacks_and_raises(tmp_path, feature_config
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -175,7 +176,7 @@ def test_event_worker_apply_runtime_error_nacks_and_raises(tmp_path, feature_con
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -205,7 +206,7 @@ def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_conf
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -233,7 +234,7 @@ def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_conf
 
 def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -257,7 +258,7 @@ def test_event_worker_health_unexpected_raises(tmp_path, feature_config: Feature
 
 def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -281,7 +282,7 @@ def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: Feat
 
 def test_event_worker_health_value_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -305,7 +306,7 @@ def test_event_worker_health_value_error_raises(tmp_path, feature_config: Featur
 
 def test_event_worker_health_type_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -329,7 +330,7 @@ def test_event_worker_health_type_error_raises(tmp_path, feature_config: Feature
 
 def test_event_worker_health_config_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -353,7 +354,7 @@ def test_event_worker_health_config_error_raises(tmp_path, feature_config: Featu
 
 def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     polls = {"n": 0}
@@ -391,7 +392,7 @@ def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: Featur
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -431,7 +432,7 @@ def test_event_worker_persist_config_error_aborts_and_raises(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -472,7 +473,7 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -497,7 +498,7 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
 
 def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     connects = {"n": 0}
@@ -537,7 +538,7 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -567,7 +568,7 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
 
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     worker = EventWorker(
         WebhookEventSource({}),
@@ -586,7 +587,7 @@ def test_event_worker_stop_closes_source_when_drain_raises_unexpected(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     closed = {"n": 0}
@@ -623,7 +624,7 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -663,7 +664,7 @@ def test_event_worker_stop_closes_on_join_timeout_when_idle(tmp_path, feature_co
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -698,7 +699,7 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -740,7 +741,7 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     poll_started = threading.Event()
     poll_release = threading.Event()
@@ -783,7 +784,7 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     poll_started = threading.Event()
     poll_release = threading.Event()
@@ -834,7 +835,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     ack_started = threading.Event()
@@ -879,7 +880,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
 
 def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     order: list[str] = []
     nacked: list[str] = []
@@ -920,7 +921,7 @@ def test_event_worker_reconnect_acks_redelivery_of_a_dropped_retry_ack(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     nacked: list[str] = []
 
@@ -959,7 +960,7 @@ def test_event_worker_reconnect_acks_redelivery_of_a_dropped_retry_ack(
 
 def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _NackBoom(WebhookEventSource):
@@ -989,7 +990,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _UnexpectedNack(WebhookEventSource):
@@ -1020,7 +1021,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
 
 def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _SilentNack(WebhookEventSource):
@@ -1055,7 +1056,7 @@ def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature
 
 def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
 
@@ -1087,7 +1088,7 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
 
 def test_event_worker_flush_restores_rejected_nack(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _RejectNack(WebhookEventSource):
@@ -1122,7 +1123,7 @@ def test_event_worker_reconnect_holds_tick_guard(tmp_path, feature_config: Featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1167,7 +1168,7 @@ def test_event_worker_start_health_holds_tick_guard(tmp_path, feature_config: Fe
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1208,7 +1209,7 @@ def test_event_worker_remembers_numeric_event_id_after_ack_timeout(tmp_path, fea
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -1267,7 +1268,7 @@ def test_event_worker_ack_timeout_persists_without_nack(tmp_path, feature_config
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     nacked: list[str] = []
@@ -1305,7 +1306,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -1362,7 +1363,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
 
 def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="already-1", item_id="idone"))
     acked: list[str] = []
@@ -1452,7 +1453,7 @@ def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="unexpected-ack"))
     worker = EventWorker(
@@ -1495,7 +1496,7 @@ def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -1530,7 +1531,7 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -1584,7 +1585,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     payload = event_payload(item_id="ifp")
@@ -1639,7 +1640,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
     polls_at_connect: list[int] = []
@@ -1676,7 +1677,7 @@ def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feat
 
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
 
@@ -1709,7 +1710,7 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     reconnect_started = threading.Event()
     release = threading.Event()
@@ -1760,7 +1761,7 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1811,7 +1812,7 @@ def test_event_worker_start_never_acquires_tick_while_holding_source(tmp_path, f
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     owned = threading.local()
     inversions: list[str] = []
@@ -1864,7 +1865,7 @@ def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     started = threading.Event()
@@ -1921,7 +1922,7 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     starter_thread: list[threading.Thread] = []
@@ -1984,7 +1985,7 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -2035,7 +2036,7 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     started = threading.Event()
@@ -2089,7 +2090,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     started = threading.Event()
@@ -2148,7 +2149,7 @@ def test_event_worker_unexpected_start_failure_drains_and_closes(tmp_path, featu
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     closes = {"n": 0}
@@ -2192,7 +2193,7 @@ def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, featur
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     closes = {"n": 0}
@@ -2234,7 +2235,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     reconnect_started = threading.Event()
     release = threading.Event()
@@ -2279,7 +2280,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
 
 def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     polls = {"n": 0}
     polls_at_reconnect: list[int] = []
@@ -2318,7 +2319,7 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
 
 def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -2347,7 +2348,7 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     health_started = threading.Event()
     health_release = threading.Event()
@@ -2392,7 +2393,7 @@ def test_event_worker_start_returns_before_first_poll(tmp_path, feature_config: 
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     healths = {"n": 0}
     poll_started = threading.Event()
@@ -2431,7 +2432,7 @@ def test_event_worker_start_returns_before_first_poll(tmp_path, feature_config: 
 
 def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     polled = {"n": 0}
 
@@ -2457,7 +2458,7 @@ def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureC
 
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     worker = EventWorker(
         WebhookEventSource({}),
@@ -2478,7 +2479,7 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _BoomClose(WebhookEventSource):
@@ -2506,7 +2507,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     payload = event_payload(item_id="ipend")
     payload.pop("event_id")
@@ -2558,7 +2559,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2624,7 +2625,7 @@ def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_con
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2684,7 +2685,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2746,7 +2747,7 @@ def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -2796,7 +2797,7 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -2825,7 +2826,7 @@ def test_event_worker_acks_deferred_fingerprint_duplicate_after_apply(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -2854,7 +2855,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     payload = event_payload(item_id="i1")
@@ -2916,7 +2917,7 @@ def test_event_worker_writer_lock_busy_restores_rejected_nacks(tmp_path, feature
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -2948,7 +2949,7 @@ def test_event_worker_writer_lock_busy_restores_rejected_nacks(tmp_path, feature
 
 def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _RejectOverflow(WebhookEventSource):
@@ -2979,7 +2980,7 @@ def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: Featu
 
 def test_event_worker_does_not_ack_buffered_redelivery(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="pending-1", item_id="ipend"))
     acked: list[str] = []
@@ -3024,7 +3025,7 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -3081,7 +3082,7 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     stop_thread: list[threading.Thread] = []
@@ -3140,7 +3141,7 @@ def test_event_worker_stop_dead_thread_does_not_drain_newer_start(tmp_path, feat
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     stop_thread: list[threading.Thread] = []
@@ -3203,7 +3204,7 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closes = {"n": 0}
 
@@ -3248,7 +3249,7 @@ def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -3276,7 +3277,7 @@ def test_event_worker_stop_drains_buffer(tmp_path, feature_config: FeatureConfig
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -3306,7 +3307,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -3339,7 +3340,7 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -3489,7 +3490,7 @@ def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -3552,7 +3553,7 @@ def _recording_worker(tmp_path, feature_config, source, applies: list[str], batc
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -3660,7 +3661,7 @@ def test_event_worker_rejects_ephemeral_source_without_fingerprint_dedupe(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 

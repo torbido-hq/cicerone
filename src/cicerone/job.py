@@ -34,7 +34,7 @@ from cicerone.experiment import (
     union_models,
 )
 from cicerone.experiment.guardrails import evaluate_guardrails
-from cicerone.experiment.store import ExperimentStore, merge_experiment_state
+from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
 from cicerone.experiment.thompson import (
     allocate_thompson,
     select_active_recipes,
@@ -222,15 +222,15 @@ def _select_thompson_recipes(
     if previous and str(previous.get("experiment_id") or "") != experiment.id:
         previous = None
     promoted = str(previous["promoted_variant"]) if previous and previous.get("promoted_variant") else None
-    has_pair = bool(previous and previous.get("champion") and previous.get("challenger"))
-    if not track_rows and not has_pair:
+    stored_pair = active_pair_from_state(previous)
+    if not track_rows and stored_pair is None:
         logger.warning("Thompson allocation fail closed: empty track")
         return ThompsonSelection(recipes)
     now = datetime.now(UTC)
     window_started = ""
-    if previous is not None and has_pair:
+    if previous is not None and stored_pair is not None:
         window_started = str(previous.get("window_started_at") or "").strip()
-    if has_pair and not window_started:
+    if stored_pair is not None and not window_started:
         window_rows = []
     else:
         window_rows = track_rows_since(track_rows, window_started or None, until=now)
@@ -264,14 +264,12 @@ def _select_thompson_recipes(
         window_trials = window_trials_from_slices(
             report.by_variant, attribution=experiment.attribution, names=names
         )
-        if not has_pair and not any(item.impressions for item in window_trials.values()):
+        if stored_pair is None and not any(item.impressions for item in window_trials.values()):
             logger.warning("Thompson allocation fail closed: no variant signal")
             return ThompsonSelection(recipes)
         guardrails_ok = False
         if recs is not None and not recs.empty and VARIANT_COLUMN in recs.columns:
-            pair_names: tuple[str, ...] = tuple(names)
-            if previous is not None and has_pair:
-                pair_names = (str(previous.get("champion")), str(previous.get("challenger")))
+            pair_names: tuple[str, ...] = stored_pair or tuple(names)
             guardrails_ok = all(
                 evaluate_guardrails(
                     filter_variant_rows(recs, name),
@@ -741,11 +739,13 @@ def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None 
 
 
 def _record_run_failure(run: JobRun, exc: BaseException) -> None:
-    run.manifest.error = truncate_job_error(exc) or type(exc).__name__
+    # Status and a reason first: formatting ``exc`` can itself raise.
     if run.manifest.status == "success":
         run.manifest.status = "failed"
         run.written.manifest_written = False
         run.replace_success_manifest = True
+    run.manifest.error = type(exc).__name__
+    run.manifest.error = truncate_job_error(exc) or run.manifest.error
 
 
 def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bool] | None) -> None:

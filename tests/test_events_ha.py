@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 from support.events import BeatingSource, apply_after_second_beat, event_payload
 from support.prometheus_metrics import registry_metric_value
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 from support.toml_config import write_toml
 from support.waits import WAIT_SECONDS, wait_until
 
-from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings
+from cicerone.config import ConfigError, EventsSettings, load_settings
 from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
@@ -77,7 +77,7 @@ def _seed_out(tmp_path, users: list[str] | None = None):
     ]
     pd.DataFrame(rows).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     return out, settings
@@ -398,7 +398,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
 
     runtime = start_events_runtime(
         make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            output=local_output(out),
             trigger_lock_backend="redis",
             trigger_redis_url="redis://localhost:6379/0",
             events=EventsSettings(enabled=True, kind="webhook", ha=True),
@@ -451,7 +451,7 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
     with caplog.at_level(logging.INFO, logger="cicerone.serve.bootstrap_events"):
         runtime = start_events_runtime(
             make_settings(
-                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                output=local_output(out),
                 trigger_lock_backend="redis",
                 trigger_redis_url="redis://localhost:6379/0",
                 events=EventsSettings(enabled=True, kind="webhook", ha=False),
@@ -489,7 +489,7 @@ def test_start_events_runtime_skips_apply_lock_in_process(
 
     runtime = start_events_runtime(
         make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            output=local_output(out),
             events=EventsSettings(enabled=True, kind="webhook", ha=False),
         ),
         feature_config=feature_config,

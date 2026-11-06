@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import Connection, Engine, TextClause, text
+from sqlalchemy import Connection, Engine, Table, TextClause, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import insert_sql, quote_identifier
@@ -47,10 +47,11 @@ def read_sql_or_missing(
         raise
 
 
-def append_frame_fenced(engine: Engine, table: str, frame: pd.DataFrame, fence: WriteFence) -> None:
+def append_frame_fenced(engine: Engine, table: Table, frame: pd.DataFrame, fence: WriteFence) -> None:
     with engine.begin() as conn:
         fence.ensure()
-        frame.to_sql(table, conn, if_exists="append", index=False)
+        table.create(conn, checkfirst=True)
+        frame.to_sql(table.name, conn, if_exists="append", index=False)
         fence.ensure()
 
 

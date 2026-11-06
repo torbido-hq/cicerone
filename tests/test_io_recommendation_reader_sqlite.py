@@ -665,6 +665,22 @@ def test_sqlite_write_manifest_skips_newer_row(tmp_path):
     assert list(stored["status"]) == ["success"]
 
 
+def test_sqlite_write_manifest_skips_on_newer_incremental_stamp_alone(tmp_path):
+    sink = DatabaseOutputSink({"database_url": _sqlite_url(tmp_path)})
+    stored = {"generated_at": "2020-01-01T00:00:00+00:00", "last_incremental_at": "2099-01-01T00:00:00+00:00"}
+    assert sink.write_manifest(stored) is True
+    assert sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is False
+
+
+def test_sqlite_write_manifest_skips_on_newer_datetime_column(tmp_path):
+    url = _sqlite_url(tmp_path)
+    with create_engine(url).begin() as conn:
+        conn.execute(text("CREATE TABLE recommendation_runs (generated_at DATETIME)"))
+        conn.execute(text("INSERT INTO recommendation_runs VALUES ('2099-01-01 00:00:00.000000')"))
+    sink = DatabaseOutputSink({"database_url": url})
+    assert sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is False
+
+
 def test_sqlite_db_sink_fence_rejects_writes(tmp_path):
     url = _sqlite_url(tmp_path)
     owned = {"v": True}

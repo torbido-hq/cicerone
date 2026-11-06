@@ -22,6 +22,7 @@ from cicerone.io.recommendation_schema import (
     SOURCE_COLUMN,
 )
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN
+from cicerone.option_parse import NUMBER_PARSE_ERRORS
 from cicerone.reasons import parse_reasons
 from cicerone.serve.recommendations import RecommendationService
 from cicerone.values import as_list, is_missing, is_sequence_attr
@@ -254,9 +255,9 @@ def _join_category(recs: pd.DataFrame, items: pd.DataFrame | None, category_colu
 def _coerce_float(value: object) -> float | None:
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except NUMBER_PARSE_ERRORS:
         return None
-    if math.isnan(number):
+    if not math.isfinite(number):
         return None
     return number
 
@@ -304,13 +305,12 @@ def _format_score(value: object) -> str:
 
 
 def _format_quantity(value: object) -> str:
-    number = pd.to_numeric(value, errors="coerce")
-    if _is_missing(number):
+    number = _coerce_float(value)
+    if number is None:
         return MISSING
-    as_float = float(number)
-    if as_float == int(as_float):
-        return str(int(as_float))
-    return str(as_float)
+    if number == int(number):
+        return str(int(number))
+    return str(number)
 
 
 def _format_occurred_at(value: object) -> str:

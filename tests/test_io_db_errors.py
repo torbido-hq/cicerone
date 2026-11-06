@@ -18,6 +18,9 @@ def test_is_missing_column_error():
     assert is_missing_column_error(exc)
     exc = OperationalError("stmt", {}, Exception("table experiment_state has no column named payload"))
     assert is_missing_column_error(exc)
+    # MySQL's wording stays unmatched: callers outside the experiment store raise on it.
+    exc = OperationalError("stmt", {}, Exception("(1054, \"Unknown column 'payload' in 'field list'\")"))
+    assert not is_missing_column_error(exc)
     assert not is_missing_column_error(OperationalError("stmt", {}, Exception("connection refused")))
 
 
