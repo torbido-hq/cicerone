@@ -97,3 +97,10 @@ def filter_variant_rows(frame: Any, variant: str | None) -> Any:
 def has_variant_column(frame: Any) -> bool:
     columns = getattr(frame, "columns", None)
     return columns is not None and VARIANT_COLUMN in columns
+
+
+def drop_unlabelled_variant_column(frame: Any) -> Any:
+    """A ``variant`` column with no labels (e.g. fresh from ``ALTER TABLE``) means no column."""
+    if has_variant_column(frame) and pick_fallback_variant(frame[VARIANT_COLUMN].tolist()) is None:
+        return frame.drop(columns=[VARIANT_COLUMN])
+    return frame

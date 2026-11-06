@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,15 @@ def worker_without_thread(monkeypatch: pytest.MonkeyPatch) -> None:
         "cicerone.events.worker.EventWorker.start",
         lambda self: self._source.connect(),
     )
+
+
+@pytest.fixture
+def default_int_digit_limit() -> Iterator[None]:
+    """Pin the limit UNPARSABLE_JSON_BODIES relies on; PYTHONINTMAXSTRDIGITS can change it."""
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(previous)
 
 
 @pytest.fixture
