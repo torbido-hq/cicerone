@@ -66,9 +66,6 @@ class _BoundedSeen:
             self._seen.discard(self._order.popleft())
 
 
-__all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
-
-
 def _return_after_error(return_events: Callable[[], object]) -> None:
     # Runs while another error propagates: a failed return is logged so that error wins.
     try:
