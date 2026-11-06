@@ -12,7 +12,6 @@ from cicerone.experiment.recipes import (
     COMBINER_BLEND,
     COMBINER_PRIORITY,
     COMBINER_RRF,
-    CONTROL_NAME,
     TREATMENT_NAME,
     apply_recipe,
     automl_challenger_pair,
@@ -25,6 +24,7 @@ from cicerone.experiment.recipes import (
     union_models,
 )
 from cicerone.feature_config import BlendingConfig, BoostRule, EligibilityRule, FeatureConfig
+from cicerone.io.recommendation_schema import CONTROL_NAME
 
 
 def _features(*, blending: bool = False) -> FeatureConfig:

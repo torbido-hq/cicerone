@@ -1,0 +1,4 @@
+# Optional MySQL extra (database_url = mysql+pymysql://...).
+# pip install 'cicerone-recommender[mysql]'
+PyMySQL[rsa]==1.2.3
+cryptography==50.0.2

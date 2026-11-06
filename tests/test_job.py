@@ -143,7 +143,7 @@ def test_job_publishes_recommendations_after_write(tmp_path, monkeypatch):
         def close(self) -> None:
             closed["n"] += 1
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     job.run()
     assert len(captured) == 1
     assert {"u1", "u2"}.issubset(set(captured[0]["user_id"].astype(str)))
@@ -176,7 +176,7 @@ def test_job_reraises_lock_lost_on_publisher_close(tmp_path, monkeypatch):
         def close(self) -> None:
             raise LockLostError("retrain lock lost before write", kind="retrain")
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(LockLostError, match="retrain lock lost"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -197,7 +197,7 @@ def test_job_writes_failure_manifest_when_close_loses_lock_after_error(tmp_path,
             raise LockLostError("retrain lock lost before write", kind="retrain")
 
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(LockLostError, match="retrain lock lost"):
         job.run()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
@@ -217,7 +217,7 @@ def test_job_keeps_original_error_when_close_raises_after_failure(tmp_path, monk
             raise RuntimeError("close bug")
 
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, tmp_path, tmp_path))
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with (
         caplog.at_level("ERROR", logger="cicerone.job"),
         pytest.raises(Exception, match="events.parquet"),
@@ -256,7 +256,7 @@ def test_job_succeeds_when_publisher_close_raises_publish_error(tmp_path, monkey
         def close(self) -> None:
             raise PublishError("flush on close")
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -285,7 +285,7 @@ def test_job_rewrites_manifest_when_close_raises_unexpected_error(tmp_path, monk
         def close(self) -> None:
             raise RuntimeError("close bug")
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(RuntimeError, match="close bug"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -309,7 +309,7 @@ def test_job_failed_rewrite_uses_fresh_generated_at(tmp_path, monkeypatch):
     real = job.write_job_manifest
 
     def _capture(sink, manifest, *, skip_if_newer_than=None):
-        written.append((dict(manifest), skip_if_newer_than))
+        written.append((manifest.as_dict(), skip_if_newer_than))
         return real(sink, manifest, skip_if_newer_than=skip_if_newer_than)
 
     class _Pub:
@@ -323,7 +323,7 @@ def test_job_failed_rewrite_uses_fresh_generated_at(tmp_path, monkeypatch):
             raise RuntimeError("close bug")
 
     monkeypatch.setattr("cicerone.job.write_job_manifest", _capture)
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(RuntimeError, match="close bug"):
         job.run()
     success = next(item for item in written if item[0].get("status") == "success")
@@ -357,7 +357,7 @@ def test_job_succeeds_when_publish_fails_after_write(tmp_path, monkeypatch):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -387,7 +387,7 @@ def test_job_rewrites_manifest_when_publish_raises_unexpected_error(tmp_path, mo
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(RuntimeError, match="broken sidecar"):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -420,7 +420,7 @@ def test_job_rewrites_manifest_when_sidecar_generation_raises_unexpected_error(t
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     monkeypatch.setattr(
         "cicerone.job.sidecar_generation_current",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
@@ -459,7 +459,7 @@ def test_job_skips_publish_when_generation_unconfirmed(tmp_path, monkeypatch, ca
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     monkeypatch.setattr("cicerone.job.sidecar_generation_current", lambda *_args, **_kwargs: None)
     with caplog.at_level("INFO"):
         job.run()
@@ -494,7 +494,7 @@ def test_job_raises_when_fence_lost_before_publish(tmp_path, monkeypatch):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
 
     def fence() -> bool:
         return not (output_dir / "manifest.json").exists()
@@ -533,7 +533,7 @@ def test_job_raises_when_fence_lost_after_connect(tmp_path, monkeypatch):
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
 
     def fence() -> bool:
         return not lost_after_connect["lost"]
@@ -574,7 +574,7 @@ def test_job_skips_publish_when_manifest_generation_changes(tmp_path, monkeypatc
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     job.run()
     assert published == []
     assert json.loads((output_dir / "manifest.json").read_text())["status"] == "success"
@@ -939,7 +939,7 @@ def test_job_prefers_close_lock_loss_over_persist_error(tmp_path, monkeypatch):
         def close(self) -> None:
             raise LockLostError("retrain lock lost before write", kind="retrain")
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.write_eval",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("eval store bug")),
@@ -1681,7 +1681,7 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
     )
     assert result.manifest_written is True
     assert result.success_generated_at
-    assert manifest["status"] == "success"
+    assert manifest.status == "success"
     assert written[0] is recs
     assert written[1]["models"] == "popular"
 
@@ -1837,7 +1837,7 @@ def test_job_run_finalizes_with_error_raised_while_recording_failure(tmp_path, m
         def __str__(self) -> str:
             raise LockLostError("lost while formatting")
 
-    def _build_publisher(_settings, **_kwargs):
+    def _build_publisher(_settings):
         raise _Unprintable()
 
     monkeypatch.setattr("cicerone.job.build_publisher", _build_publisher)
@@ -2107,7 +2107,7 @@ def test_job_succeeds_when_publisher_connect_fails_after_write(tmp_path, monkeyp
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "success"
@@ -2354,7 +2354,7 @@ def test_job_interrupted_during_success_manifest_write_is_failed(tmp_path, monke
     real_write = job.write_job_manifest
 
     def interrupt_success_write(sink, manifest, **kwargs):
-        if manifest.get("status") == "success":
+        if manifest.status == "success":
             raise KeyboardInterrupt
         return real_write(sink, manifest, **kwargs)
 
@@ -2384,7 +2384,7 @@ def test_job_replaces_own_success_manifest_when_its_write_commits_then_raises(tm
 
     def commit_then_timeout(sink, manifest, **kwargs):
         written = real_write(sink, manifest, **kwargs)
-        if manifest.get("status") == "success":
+        if manifest.status == "success":
             raise TimeoutError("manifest response lost")
         return written
 
@@ -2412,9 +2412,9 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
     real_write = job.write_job_manifest
 
     def skip_success_after_foreign_write(sink, manifest, **kwargs):
-        if manifest.get("status") != "success":
+        if manifest.status != "success":
             return real_write(sink, manifest, **kwargs)
-        ours = pd.Timestamp(manifest["generated_at"])
+        ours = pd.Timestamp(manifest.generated_at)
         foreign = {
             "status": "success",
             "triggered_by": "other",
@@ -2434,7 +2434,7 @@ def test_job_failure_rewrite_keeps_foreign_manifest_when_success_write_is_skippe
             return None
 
     monkeypatch.setattr(job, "write_job_manifest", skip_success_after_foreign_write)
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     monkeypatch.setattr(
         "cicerone.job.sidecar_generation_current",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("generation check bug")),
@@ -2466,7 +2466,7 @@ def test_job_interrupt_after_success_manifest_keeps_success(tmp_path, monkeypatc
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings, **_kwargs: _Pub())
+    monkeypatch.setattr("cicerone.job.build_publisher", lambda _settings: _Pub())
     with pytest.raises(KeyboardInterrupt):
         job.run()
     manifest = json.loads((output_dir / "manifest.json").read_text())
@@ -2502,7 +2502,7 @@ def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_pat
     writes: list[str] = []
 
     def record_write(sink, manifest, **kwargs):
-        writes.append(str(manifest.get("status")))
+        writes.append(manifest.status)
         return real_write(sink, manifest, **kwargs)
 
     monkeypatch.setattr(job, "recommendations_write_guard", interrupt_on_first_exit)
@@ -2519,7 +2519,11 @@ def test_job_interrupt_after_success_manifest_commit_does_not_rewrite_it(tmp_pat
     assert logged["generated_at"] == manifest["generated_at"]
 
 
-def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(tmp_path, monkeypatch):
+# TypeError fails the job; ValueError takes the sink-error branch, which rewrites the manifest itself.
+@pytest.mark.parametrize("error_type", [TypeError, ValueError])
+def test_job_leaves_success_fields_unset_when_error_follows_recommendation_write(
+    tmp_path, monkeypatch, error_type
+):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -2531,17 +2535,23 @@ def test_job_marks_partial_outputs_when_type_error_follows_recommendation_write(
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
     def boom(recommendations):
-        raise TypeError("bug after write")
+        raise error_type("bug after write")
 
     monkeypatch.setattr(job, "_recommendation_user_count", boom)
 
-    with pytest.raises(TypeError, match="bug after write"):
+    with pytest.raises(error_type, match="bug after write"):
         job.run()
 
     assert (output_dir / "recommendations.parquet").exists()
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
     assert manifest["partial_outputs"] is True
+    assert "bug after write" in manifest["error"]
+    assert manifest["n_events"] is None
+    assert manifest["n_target_users"] is None
+    assert manifest["n_users_with_recommendations"] is None
+    assert manifest["n_items"] is None
+    assert manifest["models"] == ""
 
 
 def test_job_does_not_rewrite_failure_manifest_after_sink_error(tmp_path, monkeypatch):
