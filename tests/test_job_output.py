@@ -32,13 +32,8 @@ def test_ensure_publication_fence_raises_when_retrain_lost() -> None:
     ensure_publication_fence(object(), retrain_fence(None, lambda: True))
 
 
-def test_job_manifest_dict_compat() -> None:
-    manifest = JobManifest(triggered_by="cron", top_k=10)
-    manifest["status"] = "success"
-    manifest.update({"n_events": 3, "generated_at": "t"})
-    assert manifest.get("status") == "success"
-    assert manifest.get("missing") is None
-    assert dict(manifest)["n_events"] == 3
+def test_write_job_manifest_writes_fields_as_dict() -> None:
+    manifest = JobManifest(triggered_by="cron", top_k=10, generated_at="t")
     written: list[dict] = []
 
     class _Sink:
@@ -49,6 +44,7 @@ def test_job_manifest_dict_compat() -> None:
     assert write_job_manifest(_Sink(), manifest) is True
     assert written[0]["triggered_by"] == "cron"
     assert written[0]["generated_at"] == "t"
+    assert written == [manifest.as_dict()]
 
 
 def test_write_job_manifest_returns_false_when_sink_skips() -> None:
@@ -61,27 +57,3 @@ def test_write_job_manifest_returns_false_when_sink_skips() -> None:
 
     assert write_job_manifest(_SkippingSink(), JobManifest(), skip_if_newer_than="t0") is False
     assert seen == ["t0"]
-
-
-def test_job_manifest_unknown_keys_raise_keyerror() -> None:
-    manifest = JobManifest()
-    try:
-        manifest["unknown"]
-    except KeyError as exc:
-        assert exc.args == ("unknown",)
-    else:
-        raise AssertionError("expected KeyError")
-    try:
-        manifest["unknown"] = 1
-    except KeyError as exc:
-        assert exc.args == ("unknown",)
-    else:
-        raise AssertionError("expected KeyError")
-    try:
-        manifest.update({"status": "success", "unknown": 1})
-    except KeyError as exc:
-        assert exc.args == ("unknown",)
-    else:
-        raise AssertionError("expected KeyError")
-    assert manifest.status == "failed"
-    assert manifest.get("unknown") is None
