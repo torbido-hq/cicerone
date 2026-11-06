@@ -209,15 +209,17 @@ class UpdaterMerge:
             .drop_duplicates()
             .tolist()
         )
-        boost_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         if allowed is not None:
             boost_items = [item_id for item_id in boost_items if item_id in allowed]
         boost_slots = max(1, int(self._top_k * _BOOST_SLOT_FRACTION)) if boost_items else 0
+        slots = boost_items[:boost_slots]
+        moved_ids = set(slots) & preserved_ids
+        new_items = [item_id for item_id in boost_items if item_id not in preserved_ids]
         boost = pd.DataFrame(
             [
                 {
                     ITEM_COLUMN: item_id,
-                    SCORE_COLUMN: float(len(boost_items) - index),
+                    SCORE_COLUMN: float(len(new_items) - index),
                     SOURCE_COLUMN: INCREMENTAL_SOURCE,
                     **(
                         {REASONS_COLUMN: dump_source_reasons(INCREMENTAL_SOURCE, rank=index + 1)}
@@ -225,14 +227,24 @@ class UpdaterMerge:
                         else {}
                     ),
                 }
-                for index, item_id in enumerate(boost_items[:boost_slots])
+                for index, item_id in enumerate(new_items)
+                if item_id in slots
             ]
         )
-        preserve_cap = max(0, self._top_k - boost_slots)
-        if not kept.empty:
-            if RANK_COLUMN in kept.columns:
-                kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
-            kept = kept.head(preserve_cap)
+        # New-only flushes leave unused slots to popular / latest backfill.
+        preserve_cap = max(0, self._top_k - (len(slots) if moved_ids else boost_slots))
+        if RANK_COLUMN in kept.columns:
+            kept = kept.sort_values(RANK_COLUMN, kind="mergesort")
+        slot_rows = boost
+        if moved_ids:
+            rows = pd.concat(
+                [frame for frame in (online_part, kept, boost) if not frame.empty], ignore_index=True
+            )
+            slot_rows = rows.loc[rows[ITEM_COLUMN].astype(str).isin(slots)].sort_values(
+                ITEM_COLUMN, key=lambda ids: ids.astype(str).map(slots.index), kind="mergesort"
+            )
+            kept = kept.loc[~kept[ITEM_COLUMN].astype(str).isin(moved_ids)]
+        kept = kept.head(preserve_cap)
         preserved_parts = [frame for frame in (online_part, kept) if not frame.empty]
         preserved = (
             pd.concat(preserved_parts, ignore_index=True)
@@ -244,7 +256,7 @@ class UpdaterMerge:
         # Unknown/zero-weight events must not rewrite popular-only users.
         popular = _restrict_items(popular, allowed)
         latest = _restrict_items(latest, allowed)
-        parts = [frame for frame in (boost, preserved, popular, latest) if not frame.empty]
+        parts = [frame for frame in (slot_rows, preserved, popular, latest) if not frame.empty]
         combined = pd.concat(parts, ignore_index=True) if parts else empty_recommendations_frame()
         if combined.empty:
             return empty_recommendations_frame()

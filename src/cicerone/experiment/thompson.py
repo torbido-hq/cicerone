@@ -15,6 +15,7 @@ from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     ATTRIBUTION_CLICK,
     BANDITS_EXTRA_HINT,
+    DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     THOMPSON_P_BEST_DRAWS,
     ConfigError,
 )
@@ -224,7 +225,7 @@ def allocate_thompson(
     previous: Mapping[str, Any] | None = None,
     window_trials: Mapping[str, ArmCounts] | None = None,
     min_impressions: int = 0,
-    rotate_min_prob: float = 0.9,
+    rotate_min_prob: float = DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     promoted_variant: str | None = None,
     guardrails_ok: bool = True,
     now: datetime | None = None,
