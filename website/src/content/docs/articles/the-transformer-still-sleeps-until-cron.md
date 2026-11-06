@@ -49,11 +49,11 @@ A serve process loads the artifact only when `[events.online]` is on, and it doe
 
 | Name | What it is |
 | --- | --- |
-| `runtime` | Production stage. Does not install `requirements-sequential.txt`. Torch is absent. |
-| `test-sequential` | Last stage of that Dockerfile. A test image. It installs the sequential extra so the sequential tests can import torch. |
+| `runtime` | Production serve stage. Does not install `requirements-sequential.txt`. Torch is absent. This is the torch-free serve deployment. |
+| `test-sequential` | Last stage of that Dockerfile. A test image, not the production serve image. It installs the sequential extra so the sequential tests can import torch. |
 | `cicerone-sequential` | Local tag you build yourself, for the batch fit. It is not a stage of `docker/Dockerfile`. |
 
-A bare `docker build -f docker/Dockerfile .` builds the last stage, `test-sequential`. Tag the torch-free stage yourself:
+A bare `docker build -f docker/Dockerfile .` builds the last stage, `test-sequential`. That image is for tests. For the torch-free serve deployment, build the `runtime` stage with `--target runtime`:
 
 ```sh
 docker build -t cicerone -f docker/Dockerfile --target runtime .
@@ -116,16 +116,16 @@ architecture = "sasrec"
 | Architecture | Class | What Cicerone actually passes |
 | --- | --- | --- |
 | `sasrec` (default) | `SASRecModel` | Shifted next-item. RecTools leaves causal attention on. Layers stay LiGR. Loss stays `sampled_softmax`. |
-| `bert4rec` | `BERT4RecModel` | Masked-item training. RecTools `mask_prob` stays `0.15`. Of the positions it picks, 80% become MASK, 10% become a random item, and 10% keep the input item while the target is set to `0`. Causal attention stays off. Cicerone still passes LiGR and `sampled_softmax`. RecTools' own BERT4Rec defaults are PreLN layers and `softmax`. |
-| `hstu` | `HSTUModel` | Same shifted preparator as SASRec, on HSTU layers. Cicerone drops LiGR. An inherited `sampled_softmax` becomes `softmax`, and `n_negatives` is dropped, unless you set `loss`. `relative_time_attention` is turned on, which sets `HSTUModel.require_recommend_context`. The job's `recommend` call does not pass `context`. The fit can finish. Recommend raises `ValueError`. `_write_job_outputs` does not run, so that run publishes no recommendation table. `relative_time_attention = false` lets recommend run and turns the timestamps off. |
+| `bert4rec` | `BERT4RecModel` | Masked-item training. RecTools `mask_prob` stays `0.15`. A drawn position keeps the original item id as the loss target. Of those inputs, 80% become MASK, 10% become a random catalog item, and 10% stay the original item. A position that is not drawn keeps its input and has its loss target set to `0`. The loss skips target `0`. Causal attention stays off. Cicerone still passes LiGR and `sampled_softmax`. RecTools' own BERT4Rec defaults are PreLN layers and `softmax`. |
+| `hstu` | `HSTUModel` | Same shifted preparator as SASRec, on HSTU layers. Cicerone drops LiGR. An inherited `sampled_softmax` becomes `softmax`, and `n_negatives` is dropped, unless you set `loss`. `relative_time_attention` is turned on, which sets `HSTUModel.require_recommend_context`. HSTU still generates recommendations when `context` is passed. Cicerone's recommend path does not pass it. That is a gap in this job's call, not a limit of HSTU. The fit can finish. Recommend raises `ValueError`. `_write_job_outputs` does not run, so that run publishes no recommendation table. `relative_time_attention = false` lets that call recommend, and turns the timestamps off. |
 
-`architecture = "hstu"` with the defaults is not a working end-to-end batch job. RecTools raises `ValueError` from `recommend` because `context` is missing. The message, including the missing space before `Check`, is:
+`architecture = "hstu"` with the defaults trains, then fails in Cicerone's recommendation call. RecTools raises `ValueError` from `recommend` only when `require_recommend_context` is set and `context` is missing. HSTU can recommend once that frame is supplied. This job never supplies it. The message, including the missing space before `Check`, is:
 
 ```text
 This model requires `context` to be provided for recommendations generation (model.require_recommend_context is True).Check docs and examples for details.
 ```
 
-The job never supplies that argument. The fit trains the HSTU weights. The exception is raised before `_write_job_outputs`, so the recommendation table from that run is not published. Set `relative_time_attention = false` under `[model.sequential]` and recommend runs. That setting also leaves `add_unix_ts` off.
+The job never supplies that argument. The fit trains the HSTU weights. The exception is raised before `_write_job_outputs`, so the recommendation table from that run is not published. Set `relative_time_attention = false` under `[model.sequential]` and this same recommend call runs. That setting also leaves `add_unix_ts` off, so the timestamps are gone.
 
 Users with no interactions skip sequential. `popular` still scores them, and those rows are `popular_fallback`. Personalized recommend passes `filter_viewed`, so a sequential row is an item that user has not already aggregated.
 
@@ -137,7 +137,7 @@ Blending is a different combiner. It relabels every personalized frame to `perso
 
 Before the model sees the data, the job weights events and aggregates to one row per `(user, item)`. Where `[event_caps]` names an event type, the job keeps that many most recent events per `(user, item, event_type)`. Half-life decay multiplies what remains. The aggregated weight is the sum. The datetime is `max(occurred_at)`. Pairs whose sum is not positive are dropped. RecTools sorts the remaining rows by that datetime, stably, and builds one sequence per user.
 
-Two purchases of the same SKU are one position, at the later timestamp. Buy A, then B, then A again, and the sequence is B then A. Intermediate timestamps are not in the sequence.
+Two purchases of the same SKU are one position, at the later timestamp. Buy A, then B, then A again, and the sequence is B then A when that last A is later than B and both aggregated weights stay positive. A non-positive sum drops that item. Intermediate timestamps are not in the sequence.
 
 `session_max_len` (default 50) is the recommend window for SASRec and HSTU: the tail of that unique history. Training keeps one more item (`session_max_len + 1`) because the shifted target needs it. BERT4Rec training keeps `session_max_len` items. At recommend time BERT4Rec appends a MASK token inside that same window, so the model sees `session_max_len - 1` real items.
 
@@ -214,7 +214,7 @@ An unknown `user_id` is still a lookup. Serve does not score a new sequence. Wit
 | --- | --- |
 | `models` includes `sequential`, job image has no torch | Config loads. The fit raises `ConfigError` with `strategy 'sequential' requires torch; install with: pip install 'cicerone-recommender[sequential]'`. |
 | `architecture = "bert4rec"` | Next fit is `BERT4RecModel`. LiGR and `sampled_softmax` stay. `mask_prob` stays `0.15`. Causal attention stays off. `source` stays `sequential`. |
-| `architecture = "hstu"` | The fit builds `HSTUModel` with `relative_time_attention` on. Recommend raises `ValueError` because `context` is missing. The job does not publish that run. |
+| `architecture = "hstu"` | The fit builds `HSTUModel` with `relative_time_attention` on. Cicerone's recommend call omits `context`, so RecTools raises `ValueError`. The same model recommends when `context` is supplied. The job does not publish that run. |
 | `architecture = "hstu"` and `relative_time_attention = false` | Recommend runs. No `unix_ts`. LiGR stays dropped. Inherited `sampled_softmax` still becomes `softmax` unless `loss` is set. |
 | Turn blending on | Personalized frames are relabeled `personalized` before the mix. A multi-source row is `blended`. `__cold_start__` is written. |
 | Set `model_weights` | RRF. A shared item's `source` joins the contributors with `+`. |
@@ -228,7 +228,7 @@ An unknown `user_id` is still a lookup. Serve does not score a new sequence. Wit
 
 - You need the next item from the click that just happened, inside this request. That is request-path inference. Cicerone's GET is a lookup.
 - Median history is a handful of distinct SKUs. Leave sequential off. AutoML drops it below `min_median_interactions`. `popular` still runs.
-- You wanted HSTU relative time on a raw repeat-rich stream. Aggregation already collapsed the repeats, and the default flag makes recommend demand a `context` frame the job does not pass.
+- You wanted HSTU relative time on a raw repeat-rich stream. Aggregation already collapsed the repeats. The default flag asks for a `context` frame, and Cicerone's recommend path does not pass one. HSTU can still recommend when that frame is present.
 - You only needed bestsellers. Do not pull torch for that.
 
 ## In the morning
@@ -242,7 +242,7 @@ The transformer still sleeps until cron. The list it wrote is already in the tab
 
 Exact strings. The product page is [how it works](/how-it-works/).
 
-**Extra.** `cicerone-recommender[sequential]` or `requirements-sequential.txt` (`rectools[torch]==0.19.0`). Importable means `torch` and `pytorch_lightning`. `docker build -t cicerone -f docker/Dockerfile --target runtime .`, then `Dockerfile.sequential` from the repo root, tagged `cicerone-sequential`. A bare build of `docker/Dockerfile` is `test-sequential`, not `runtime`.
+**Extra.** `cicerone-recommender[sequential]` or `requirements-sequential.txt` (`rectools[torch]==0.19.0`). Importable means `torch` and `pytorch_lightning`. For the torch-free serve deployment, `docker build -t cicerone -f docker/Dockerfile --target runtime .`, then `Dockerfile.sequential` from the repo root, tagged `cicerone-sequential`. A bare build of `docker/Dockerfile` is `test-sequential`, a test image, not the production serve image and not `runtime`.
 
 **Defaults that stay unless overridden.** `n_factors = 64`, `n_blocks = 2`, `n_heads = 4`, `epochs = 3`, `loss = sampled_softmax`, `n_negatives = 256`, `transformer_layers_type = LiGRLayers`, `session_max_len = 50`, `train_min_user_interactions = 2`, `batch_size = 128`, `lr = 0.001`. `[job.sequential].min_median_interactions = 5`, AutoML only.
 
