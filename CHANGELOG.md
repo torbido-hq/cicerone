@@ -207,6 +207,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   responses and debounce, dashboard routes, `triggered_by` values, `source`
   labels, output tables and options, `${ENV}` scope, and `[experiment]` /
   `[events]` rules.
+- An item the user just consumed that is already in their preserved rows
+  moves into the incremental boost slots, keeping its `source`, `reasons` and
+  `score`, instead of staying low or falling off the list; the newest items
+  win when there are more than slots.
 
 ### Removed
 
