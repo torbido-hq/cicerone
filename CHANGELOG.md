@@ -236,6 +236,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   moves into the incremental boost slots, keeping its `source`, `reasons` and
   `score`, instead of staying low or falling off the list; the newest items
   win when there are more than slots.
+- When the job body raises after the success manifest and the error's text
+  can't be formatted, the manifest is rewritten as `failed` with the error's
+  type name, instead of staying `success` while the job raises.
+- The dashboard lookup shows an infinite or overflowing score or event `quantity` as missing, instead of raising `OverflowError` (a 500) or, for an
+  infinite score, printing `inf`.
+- The text of database errors in logs and `manifest.error` no longer includes
+  bound values (`hide_parameters` on every engine); the SQL text stays. Logs can
+  still carry user data: database driver messages can embed values, such as the
+  key in a duplicate-key error, and some log lines name the `user_id` on purpose.
 - Boosts no longer raise `TypeError` on an items table with a duplicate index.
 
 ### Removed

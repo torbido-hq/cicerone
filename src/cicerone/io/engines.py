@@ -17,7 +17,7 @@ def engine_for(database_url: str) -> Engine:
     with _engines_lock:
         engine = _engines.get(database_url)
         if engine is None:
-            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True)
+            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True, hide_parameters=True)
             _engines[database_url] = engine
             _checkouts[database_url] = 0
         _checkouts[database_url] += 1
