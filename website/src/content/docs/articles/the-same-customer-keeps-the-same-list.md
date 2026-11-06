@@ -130,7 +130,7 @@ This walkthrough uses `primary_metric = "purchase"` and `attribution = "user"`: 
 | `click` | Needs `[track]` (impression/click ingest, not training events). Click, then purchase in the window (default 24h). |
 | `impression` | Needs `[track]`. Impression, then purchase. GET is not an impression unless `log_impressions = true`. |
 
-`ctr` / `conversion` need `[track]` and `click` / `impression`. `min_impressions` is 100 **impression rows**, not GET hits.
+`ctr` / `conversion` need `[track]` and `click` / `impression`. `min_impressions` is 100 **impression rows**, not GET hits. What a GET records is [A fetch is not an impression](/articles/a-fetch-is-not-an-impression/).
 
 **Do this before you trust a week of `user` numbers:** set `log_exposures = true`. Without it, the dashboard hashes historical purchasers against **today’s** `id`, traffic, and order. Change any of those and Alice can move arms **in the report**. Serve did not rematch her live traffic. The evaluator rematched the event log. With the flag on, the earliest `exposed_at` for this `experiment_id` pins her (a later-arriving row with an earlier stamp can replace the pin); events before that stamp are dropped. An empty exposure log assigns nobody.
 
