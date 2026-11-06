@@ -6,12 +6,14 @@ import threading
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
+from support.db_tables import assert_mysql_engine_and_charset, stored_column_types
 from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
 from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
+from cicerone.io.engines import quote_identifier
 from cicerone.job_eval import retrain_fence
 from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 
@@ -1107,3 +1109,223 @@ def test_dataset_backend_filters_exposures_by_experiment(tmp_path) -> None:
     )()
     assert [row["user_id"] for row in backend.read_exposures(experiment_id="exp-a")] == ["u1"]
     assert [row["user_id"] for row in backend.read_exposures()] == ["u1", "u2"]
+
+
+_STATE_COLUMNS = [
+    ("experiment_id", "TEXT", False),
+    ("promoted_variant", "TEXT", True),
+    ("promoted_at", "TEXT", True),
+    ("payload", "TEXT", True),
+]
+_EXPOSURE_COLUMNS = [
+    (name, "TEXT", True) for name in ("user_id", "experiment_id", "variant", "generated_at", "exposed_at")
+]
+
+
+def _state_primary_key(engine, options) -> list[str]:
+    return inspect(engine).get_pk_constraint(options["experiment_state_table"])["constrained_columns"]
+
+
+def _write_state_and_exposure(store: ExperimentStore) -> None:
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    store.append_exposures([_exposure("u1")])
+
+
+def test_experiment_tables_keep_column_types_and_order(non_mysql_track_output) -> None:
+    store = ExperimentStore(non_mysql_track_output)
+    _write_state_and_exposure(store)
+    engine = store.backend.engine()
+    options = non_mysql_track_output.options
+    assert stored_column_types(engine, options["experiment_state_table"]) == _STATE_COLUMNS
+    assert _state_primary_key(engine, options) == ["experiment_id"]
+    assert stored_column_types(engine, options["exposures_table"]) == _EXPOSURE_COLUMNS
+
+
+def test_experiment_tables_on_mysql_bound_the_key_and_widen_the_payload(mysql_track_output) -> None:
+    store = ExperimentStore(mysql_track_output)
+    _write_state_and_exposure(store)
+    engine = store.backend.engine()
+    options = mysql_track_output.options
+    assert stored_column_types(engine, options["experiment_state_table"]) == [
+        ("experiment_id", "VARCHAR", False),
+        *_STATE_COLUMNS[1:3],
+        ("payload", "MEDIUMTEXT", True),
+    ]
+    assert stored_column_types(engine, options["exposures_table"]) == _EXPOSURE_COLUMNS
+    assert _state_primary_key(engine, options) == ["experiment_id"]
+    key = inspect(engine).get_columns(options["experiment_state_table"])[0]
+    assert key["type"].length == 255
+    assert key["type"].collation == "utf8mb4_0900_bin"
+
+
+def test_experiment_tables_set_engine_and_charset_for_mysql(tmp_path) -> None:
+    backend = ExperimentStore(sqlite_output(tmp_path / "exp.db")).backend
+    assert_mysql_engine_and_charset(backend._state_table, backend._exposures_table)
+
+
+def test_state_roundtrip_replaces_the_row_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    assert store.read_state() is None
+    store.write_state(experiment_state("old", promoted_variant=None))
+    longest_id = "é" * 255
+    note = "🍺" + "x" * 70_000
+    store.write_state(experiment_state(longest_id, promoted_variant="treatment", note=note))
+    state = store.read_state()
+    assert state is not None
+    assert state["experiment_id"] == longest_id
+    assert state["promoted_variant"] == "treatment"
+    assert state["note"] == note
+    engine = store.backend.engine()
+    with engine.connect() as conn:
+        table = quote_identifier(conn, track_db_output.options["experiment_state_table"])
+        assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 1
+
+
+def test_state_keeps_the_previous_row_when_the_fence_is_lost(track_db_output, monkeypatch) -> None:
+    from cicerone.io.sql_rows import insert_sql
+
+    held = {"ok": True}
+
+    def _insert_sql(*args):
+        held["ok"] = False
+        return insert_sql(*args)
+
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, lambda: held["ok"]))
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    monkeypatch.setattr("cicerone.io.sql_rows.insert_sql", _insert_sql)
+    with pytest.raises(LockLostError):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    held["ok"] = True
+    state = ExperimentStore(track_db_output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_state_adds_the_payload_column_to_an_older_table_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+    note = "x" * 70_000
+    store.write_state(experiment_state("exp", promoted_variant="treatment", note=note))
+    state = store.read_state()
+    assert state is not None
+    assert state["note"] == note
+    assert "payload" in {column["name"] for column in inspect(engine).get_columns(name)}
+
+
+def test_state_on_mysql_adds_a_missing_payload_as_mediumtext(mysql_track_output) -> None:
+    store = ExperimentStore(mysql_track_output)
+    engine = store.backend.engine()
+    name = mysql_track_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert stored_column_types(engine, name)[-1] == ("payload", "MEDIUMTEXT", True)
+
+
+def test_state_write_on_a_table_missing_another_column_reports_that_column(track_db_output) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, payload TEXT)"
+            )
+        )
+    with pytest.raises(SQLAlchemyError, match="promoted_at"):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert [column["name"] for column in inspect(engine).get_columns(name)] == [
+        "experiment_id",
+        "promoted_variant",
+        "payload",
+    ]
+
+
+def test_read_state_without_promoted_at_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    with engine.begin() as conn:
+        table = quote_identifier(conn, track_db_output.options["experiment_state_table"])
+        conn.execute(text(f"CREATE TABLE {table} (experiment_id VARCHAR(64), promoted_variant TEXT)"))
+        conn.execute(text(f"INSERT INTO {table} (experiment_id, promoted_variant) VALUES ('exp', 'control')"))
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_exposures_roundtrip_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    assert store.read_exposures() == []
+    store.append_exposures([_exposure("🍺"), {**_exposure("u2"), "experiment_id": "other"}])
+    store.append_exposures([_exposure("u3")])
+    assert len(store.read_exposures()) == 3
+    rows = store.read_exposures(experiment_id="exp")
+    assert sorted(row["user_id"] for row in rows) == sorted(["🍺", "u3"])
+    assert all(row["generated_at"] is None for row in rows)
+
+
+def test_exposures_filter_matches_the_experiment_id_exactly_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    store.append_exposures(
+        [
+            _exposure("exact"),
+            {**_exposure("upper"), "experiment_id": "EXP"},
+            {**_exposure("accent"), "experiment_id": "éxp"},
+        ]
+    )
+    assert [row["user_id"] for row in store.read_exposures(experiment_id="exp")] == ["exact"]
+
+
+def test_exposures_roll_back_when_the_fence_is_lost(track_db_output, monkeypatch) -> None:
+    held = {"ok": True}
+    original = pd.DataFrame.to_sql
+
+    def _to_sql(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        held["ok"] = False
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, lambda: held["ok"]))
+    with pytest.raises(LockLostError):
+        store.append_exposures([_exposure("u1")])
+    assert store.read_exposures() == []
+
+
+def test_exposures_append_to_a_previously_created_table(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["exposures_table"]
+    frame = pd.DataFrame([_exposure("u1")])
+    with engine.begin() as conn:
+        frame.to_sql(name, conn, index=False)
+    before = stored_column_types(engine, name)
+    store.append_exposures([_exposure("u2")])
+    assert stored_column_types(engine, name) == before
+    assert len(store.read_exposures()) == 2
+
+
+def test_exposure_writer_that_lost_the_fence_creates_no_table_on_every_backend(track_db_output) -> None:
+    # The first check is the lease; the second is the one before the DDL.
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, FenceCheck(2)))
+    with pytest.raises(LockLostError):
+        store.append_exposures([_exposure("u1")])
+    assert not inspect(store.backend.engine()).has_table(track_db_output.options["exposures_table"])

@@ -122,8 +122,7 @@ least `min_impressions` **users** (any `primary_metric`). It does not
 change the CTR formula and does not hide the Quality page.
 
 The job writes a compact `track_eval` report (overall, by rank, by `source`,
-by variant). The dashboard **Quality** page reads it. On a MySQL output the
-job skips this report and the recommendation history, with a logged warning.
+by variant). The dashboard **Quality** page reads it.
 
 ## Auto-impressions
 
