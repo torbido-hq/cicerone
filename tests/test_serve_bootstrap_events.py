@@ -131,7 +131,8 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
 
 
-def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_config: FeatureConfig):
+@pytest.mark.usefixtures("worker_without_thread")
+def test_start_events_runtime_tick_applies_webhook_event(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -152,7 +153,6 @@ def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_confi
         ),
         feature_config=feature_config,
         reader=reader,  # type: ignore[arg-type]
-        start_worker=False,
     )
     assert runtime.worker is not None
     assert runtime.worker._thread is None
@@ -172,6 +172,7 @@ def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_confi
     assert runtime.worker._thread is None
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     inp = tmp_path / "in"
@@ -206,7 +207,6 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
             ],
         ),
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -217,6 +217,7 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         runtime.stop()
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
@@ -243,7 +244,6 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -252,6 +252,7 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         runtime.stop()
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
@@ -297,7 +298,6 @@ def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
         ),
         feature_config=scoped,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -324,6 +324,7 @@ def test_input_users_provider_uses_bootstrap_snapshot_only(monkeypatch) -> None:
     assert list(second["user_id"].astype(str)) == ["u1"]
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
@@ -352,7 +353,6 @@ def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_co
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -361,6 +361,7 @@ def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_co
         runtime.stop()
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -384,7 +385,6 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -394,6 +394,7 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         runtime.stop()
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_wires_custom_automl_variant_policy_names(
     tmp_path, feature_config: FeatureConfig
 ):
@@ -425,7 +426,6 @@ def test_start_events_runtime_wires_custom_automl_variant_policy_names(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -437,9 +437,7 @@ def test_start_events_runtime_wires_custom_automl_variant_policy_names(
         runtime.stop()
 
 
-def test_start_events_runtime_connects_source_when_worker_not_started(
-    tmp_path, feature_config: FeatureConfig
-):
+def test_start_events_runtime_connects_source(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -492,11 +490,10 @@ def test_start_events_runtime_connects_source_when_worker_not_started(
             ),
             feature_config=feature_config,
             reader=_Reader(),  # type: ignore[arg-type]
-            start_worker=False,
         )
         assert connected["n"] == 1
         assert runtime.worker is not None
-        assert runtime.worker._thread is None
+        assert runtime.worker._thread is not None
         assert runtime.worker.tick() == 0
     finally:
         bootstrap.build_event_source = original

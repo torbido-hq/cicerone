@@ -49,6 +49,15 @@ def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def worker_without_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # EventWorker.start connects the source but runs no loop, so the test drives tick().
+    monkeypatch.setattr(
+        "cicerone.events.worker.EventWorker.start",
+        lambda self: self._source.connect(),
+    )
+
+
+@pytest.fixture
 def s3_options() -> Iterator[dict[str, str]]:
     with mock_aws():
         boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="test-bucket")

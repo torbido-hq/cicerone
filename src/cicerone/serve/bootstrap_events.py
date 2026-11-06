@@ -130,7 +130,6 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
-    start_worker: bool = True,
 ) -> EventsRuntime:
     if not settings.events.enabled:
         return EventsRuntime(webhook_source=None, worker=None)
@@ -241,18 +240,15 @@ def start_events_runtime(
             apply_lock=apply_lock,
             poll_without_lock=poll_without_apply_lock(settings.events.kind, settings.events.options),
         )
-        if start_worker:
-            worker.start()
-            logger.info(
-                "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
-                settings.events.kind,
-                settings.events.incremental.batch_size,
-                settings.events.incremental.batch_window_seconds,
-                settings.events.incremental.poll_interval_seconds,
-                settings.events.ha,
-            )
-        else:
-            source.connect()
+        worker.start()
+        logger.info(
+            "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
+            settings.events.kind,
+            settings.events.incremental.batch_size,
+            settings.events.incremental.batch_window_seconds,
+            settings.events.incremental.poll_interval_seconds,
+            settings.events.ha,
+        )
         if apply_lock is None:
             logger.warning(
                 "Incremental events assume a single writer process "
