@@ -44,6 +44,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Importing `cicerone.serve.app`, `cicerone.dashboard` or `cicerone.scheduler`
   no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
   still configure logging).
+- The Kafka publisher wraps only Kafka client errors as `PublishError`; any
+  other error (e.g. a `TypeError` or `OSError` from flush) now propagates
+  unchanged, even after messages were produced.
+- The RabbitMQ publisher retries and wraps as `PublishError` only broker
+  errors; any other error now propagates without a retry, even after part of
+  a publish was sent. An unexpected error closing a RabbitMQ events
+  connection on shutdown now propagates instead of being logged.
+- The S3/SQS events source logs and absorbs only S3/SQS client errors (object
+  load, ack and poll deletes, visibility extension, lag lookup) and invalid
+  JSON in a notification; any other error now propagates from `poll`, `ack`,
+  `nack` or `health`. A failed delete still tries the other completed
+  messages first.
+- Serve startup fails on an unexpected manifest read error instead of
+  omitting `X-Generated-At`; storage, database and parse errors still omit it.
+- A `TypeError` raised inside a lock's `owned()` now propagates instead of
+  falling back to a check without the hold generation.
 
 ### Deprecated
 
@@ -259,23 +275,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still carry user data: database driver messages can embed values, such as the
   key in a duplicate-key error, and some log lines name the `user_id` on purpose.
 - Boosts no longer raise `TypeError` on an items table with a duplicate index.
-- The Kafka publisher wraps only Kafka client errors as `PublishError`; any
-  other error (e.g. a `TypeError` or `OSError` from flush) now propagates
-  unchanged, even after messages were produced.
-- The RabbitMQ publisher retries and wraps as `PublishError` only broker
-  errors; any other error now propagates without a retry, even after part of
-  a publish was sent.
-- The S3/SQS events source logs and absorbs only S3/SQS client errors (object
-  load, ack delete, visibility extension, lag lookup) and invalid JSON in a
-  notification; any other error now propagates. A failed ack delete still
-  deletes the other completed messages first.
-- Serve startup fails on an unexpected manifest read error instead of
-  omitting `X-Generated-At`; storage, database and parse errors still omit it.
 - When the event worker's start cleanup, its online persist after a failed
-  ack, or the online-fit abort after a failed refresh fails too, that failure
-  is logged and the original error propagates instead of being replaced.
-- A `TypeError` raised inside a lock's `owned()` now propagates instead of
-  falling back to a check without the hold generation.
+  ack, its source health refresh after a failed tick, or the online-fit abort
+  after a failed refresh fails too, that failure is logged and the original
+  error propagates instead of being replaced.
 
 ### Removed
 
