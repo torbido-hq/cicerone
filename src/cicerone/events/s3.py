@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Sequence
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -331,16 +332,15 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
     ) -> None:
         if sqs is None or not queue_url:
             return
-        url: str = queue_url
         receipts = [batch.receipt_handle for batch in completed if batch.receipt_handle]
         for index, receipt in enumerate(receipts):
             try:
-                _delete_sqs_message(sqs, url, receipt)
+                _delete_sqs_message(sqs, queue_url, receipt)
             except Exception:
                 # These batches are no longer tracked: try the rest before the error propagates.
                 for rest in receipts[index + 1 :]:
                     cleanup_after_failure(
-                        lambda rest=rest: _delete_sqs_message(sqs, url, rest),
+                        partial(_delete_sqs_message, sqs, queue_url, rest),
                         "Failed to delete SQS message after an earlier delete error",
                         logger,
                     )
