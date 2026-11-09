@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
-from support.fakes import hide_module
+from support.fakes import hide_module, raising
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -478,6 +478,18 @@ def test_connect_list_topics_unexpected_error_propagates(monkeypatch):
     with pytest.raises(RuntimeError, match="bug"):
         source.connect()
     assert created[0].closed is True
+
+
+def test_connect_error_wins_over_a_failing_consumer_close(monkeypatch, caplog):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = KafkaException("down")
+    close = raising(TypeError("close bug"))
+    monkeypatch.setattr(FakeConsumer, "close", close)
+    source = KafkaEventSource(kafka_source_options())
+    with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert close.calls == 1
+    assert "Kafka consumer close after connect failure" in caplog.text
 
 
 def test_commit_discard_tolerates_commit_failure(monkeypatch):

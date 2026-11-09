@@ -27,6 +27,7 @@ from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import build_experiment_store
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
@@ -426,5 +427,7 @@ def main() -> None:
     )
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
-    finally:
-        events_runtime.stop()
+    except BaseException:
+        cleanup_after_failure(events_runtime.stop, "Event runtime stop after a serve error failed", logger)
+        raise
+    events_runtime.stop()

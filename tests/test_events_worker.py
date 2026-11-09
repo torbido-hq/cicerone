@@ -3852,6 +3852,35 @@ def test_event_worker_loop_error_wins_over_a_failing_stop_cleanup(tmp_path, feat
     assert caplog.text.count(_CLEANUP_FAILED) == 1
 
 
+def test_event_worker_tick_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("tick bug")
+
+    def tick_locked() -> int:
+        worker._stop.set()
+        raise original
+
+    worker._tick_locked = tick_locked  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_drain_error_wins_over_a_failing_source_close(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("drain bug")
+    worker._drain_buffer_on_stop = raising(original)  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker._drain_and_close()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
 def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
     worker = _nack_failing_worker(tmp_path, feature_config)
     worker._updater.apply = lambda events, **_kwargs: len(events)

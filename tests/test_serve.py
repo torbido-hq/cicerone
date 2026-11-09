@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -703,6 +704,30 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     assert uvicorn_calls == {"host": "127.0.0.1", "port": 8000}
     assert served_app is not None
     assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
+
+
+def test_main_serve_error_wins_over_a_failing_events_stop(monkeypatch, caplog):
+    import cicerone.serve.app as serve_module
+
+    stop = raising(TypeError("stop bug"))
+    original = OSError("bind failed")
+    monkeypatch.setattr(serve_module, "load_settings", serve_settings)
+    monkeypatch.setattr(
+        "cicerone.io.factory.build_recommendation_reader", lambda _output: FakeReader(recs_df())
+    )
+    monkeypatch.setattr("cicerone.io.factory.build_manifest_reader", lambda _output: FakeManifest())
+    monkeypatch.setattr(
+        serve_module,
+        "start_events_runtime",
+        lambda *_args, **_kwargs: SimpleNamespace(webhook_source=None, worker=None, stop=stop),
+    )
+    monkeypatch.setattr(serve_module, "_start_refresh_loop", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(serve_module, "uvicorn", SimpleNamespace(run=raising(original)))
+    with pytest.raises(OSError) as caught:
+        main()
+    assert caught.value is original
+    assert stop.calls == 1
+    assert "Event runtime stop after a serve error failed" in caplog.text
 
 
 def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):
