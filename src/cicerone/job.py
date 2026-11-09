@@ -694,9 +694,11 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
                 "Failed to write the final manifest after a track output error",
                 logger,
             )
+            if isinstance(close_exc, LockLostError):
+                raise close_exc from exc
             raise
     _write_final_manifest(run, error, close_exc=close_exc, persist_exc=None)
-    if close_exc is not None and error is None:
+    if close_exc is not None and (error is None or isinstance(close_exc, LockLostError)):
         raise close_exc
 
 
@@ -735,8 +737,6 @@ def _write_final_manifest(
             if manifest.status == "success":
                 raise
     logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
-    if isinstance(close_exc, LockLostError):
-        raise close_exc
 
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
