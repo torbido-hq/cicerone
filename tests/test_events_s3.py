@@ -838,6 +838,33 @@ def test_s3_sqs_unreadable_object_keeps_readable_siblings(keys):
 
 
 @mock_aws
+def test_s3_sqs_object_whose_parse_fails_unexpectedly_is_skipped(monkeypatch):
+    from cicerone.events import s3 as s3_module
+
+    parse = s3_module.events_from_body
+
+    def _parse(body, *, bucket, key, etag):  # type: ignore[no-untyped-def]
+        if key == "bad.json":
+            raise TypeError("parser bug")
+        return parse(body, bucket=bucket, key=key, etag=etag)
+
+    monkeypatch.setattr(s3_module, "events_from_body", _parse)
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-parse-bug")["QueueUrl"]
+    _put_event(s3, "bad.json", event_payload(event_id="bad"))
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad.json", "good.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert [event.event_id for event in source.poll(10)] == ["good"]
+    source.ack(["good"])
+    assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@mock_aws
 def test_s3_sqs_notification_with_only_unreadable_objects_settles():
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")

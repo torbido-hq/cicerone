@@ -23,7 +23,7 @@ from cicerone.events.worker import EventWorker, HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.metrics import update_events_leader
+from cicerone.metrics import update_events_leader, update_events_source_health
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -3332,7 +3332,10 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert [event.event_id for event in again] == ["retry-drain"]
 
 
-def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feature_config: FeatureConfig):
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
+    tmp_path, feature_config: FeatureConfig, persist_fails: bool, caplog
+):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -3370,11 +3373,17 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
         publisher=publisher,
     )
     worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    persist = worker._persist_online_after_ack
+    if persist_fails:
+        worker._persist_online_after_ack = raising(OSError("persist down"))  # type: ignore[method-assign]
     before_tick = registry_metric_value("cicerone_events_tick_errors_total")
 
     # An unexpected publisher bug is re-raised, but only after the written batch is acked.
     with pytest.raises(RuntimeError, match="sidecar bug"):
         worker.tick()
+    # A failing online persist is then only logged; the publisher bug still wins.
+    assert caplog.text.count(_CLEANUP_FAILED) == int(persist_fails)
+    worker._persist_online_after_ack = persist  # type: ignore[method-assign]
     assert source.health().lag == 0
     assert updater.events_applied == 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
@@ -3830,6 +3839,7 @@ def test_event_worker_loop_reports_an_unexpected_error_before_the_thread_ends(
 ):
     worker = _nack_failing_worker(tmp_path, feature_config)
     worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    update_events_source_health(connected=True, lag=0)
     before = registry_metric_value("cicerone_events_tick_errors_total")
     with pytest.raises(TypeError, match="tick bug"):
         worker._loop()

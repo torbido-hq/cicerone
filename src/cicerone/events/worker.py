@@ -617,7 +617,7 @@ class EventWorker:
             return 0
         applied: int | None = None
         post_write_failed = False
-        # Re-raised after the ack; it is logged first, so an online-persist error may take precedence.
+        # Re-raised after the ack and the online persist; a persist error is then only logged.
         unexpected: Exception | None = None
         apply_started = False
         try:
@@ -682,9 +682,7 @@ class EventWorker:
         except TimeoutError:
             record_events_flush(status="error")
             logger.exception("Event source ack timed out after successful apply; persisting without nack")
-            self._persist_online_after_ack()
-            if unexpected is not None:
-                raise unexpected from None
+            self._persist_then_reraise(unexpected)
             return applied
         except Exception:
             record_events_flush(status="error")
@@ -702,9 +700,7 @@ class EventWorker:
             raise
         if post_write_failed:
             record_events_flush(status="error")
-            self._persist_online_after_ack()
-            if unexpected is not None:
-                raise unexpected
+            self._persist_then_reraise(unexpected)
             return applied
         self._persist_online_after_ack()
         record_events_flush(status="success", events=applied)
@@ -748,6 +744,13 @@ class EventWorker:
         if count:
             record_events_tick_error()
         logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
+
+    def _persist_then_reraise(self, unexpected: Exception | None) -> None:
+        if unexpected is None:
+            self._persist_online_after_ack()
+            return
+        cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
+        raise unexpected from None
 
     def _persist_online_after_ack(self) -> None:
         persisted = False

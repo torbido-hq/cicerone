@@ -58,7 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   load, ack and poll deletes, visibility extension, lag lookup) and invalid
   JSON in a notification; any other error now propagates from `poll`, `ack`,
   `nack` or `health`. A failed delete still tries the other completed
-  messages first.
+  messages first. An event object that fails to parse for any reason is
+  still skipped as unreadable.
 - Serve startup fails on an unexpected manifest read error instead of
   omitting `X-Generated-At`; storage, database and parse errors still omit
   it, and so does a failed refresh while serving.
