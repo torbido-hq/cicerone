@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Sequence
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ from cicerone.events.s3_parse import (
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
+from cicerone.failure_cleanup import cleanup_after_failure
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.options import build_s3_client, read_s3_body, require_option
 from cicerone.option_parse import as_int, optional_float, optional_int
 
@@ -229,7 +232,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
                     with self._lock:
                         self._sqs_visible_lag = visible
                         self._sqs_visible_lag_at = now
-                except Exception:
+                except S3_READ_ERRORS:
                     logger.exception("Failed to estimate SQS event lag")
                     # Another health() call may have refreshed the cache meanwhile.
                     with self._lock:
@@ -327,9 +330,17 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         sqs: Any,
         queue_url: str | None,
     ) -> None:
-        for batch in completed:
+        for index, batch in enumerate(completed):
             if batch.receipt_handle and sqs is not None and queue_url:
                 try:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
-                except Exception:
+                except S3_READ_ERRORS:
                     logger.exception("Failed to delete SQS message after ack")
+                except BaseException:
+                    # These batches are no longer tracked: delete the rest before the error propagates.
+                    cleanup_after_failure(
+                        partial(self._finish_completed, completed[index + 1 :], sqs=sqs, queue_url=queue_url),
+                        "Failed to delete SQS messages after an ack error",
+                        logger,
+                    )
+                    raise
