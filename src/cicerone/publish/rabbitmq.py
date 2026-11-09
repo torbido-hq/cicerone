@@ -10,8 +10,10 @@ from typing import Any
 import pandas as pd
 
 from cicerone.amqp_options import (
+    RABBITMQ_IO_ERRORS,
     amqp_timeout_seconds,
     apply_amqp_timeouts,
+    close_amqp_handles,
     optional_exchange,
     optional_routing_key,
     require_amqp_url,
@@ -25,31 +27,12 @@ from cicerone.publish.payload import user_recommendation_messages
 logger = logging.getLogger(__name__)
 
 _PREFIX = "publish.options"
+_RETRY_ERRORS: tuple[type[BaseException], ...] = (ConfigError, *RABBITMQ_IO_ERRORS)
 
 
 @dataclass
 class _Progress:
     sent: int = 0
-
-
-def _rabbitmq_publish_errors() -> tuple[type[BaseException], ...]:
-    # Imported lazily: events.errors loads this package while it is initializing.
-    from cicerone.events.errors import AMQPError
-
-    return (AMQPError, OSError, TimeoutError)
-
-
-def _close_handle(handle: Any, label: str) -> BaseException | None:
-    # A broker error is logged and returned so the other handle still closes.
-    closer = getattr(handle, "close", None)
-    if not callable(closer):
-        return None
-    try:
-        closer()
-    except _rabbitmq_publish_errors() as exc:
-        logger.exception("Failed to close RabbitMQ publisher %s", label)
-        return exc
-    return None
 
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
@@ -92,7 +75,7 @@ class RabbitMQPublisher:
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
             connected = True
-        except _rabbitmq_publish_errors() as exc:
+        except RABBITMQ_IO_ERRORS as exc:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         finally:
             if connection is not None and not connected:
@@ -118,7 +101,7 @@ class RabbitMQPublisher:
                 return
         try:
             self._publish_from(messages, progress)
-        except _rabbitmq_publish_errors():
+        except RABBITMQ_IO_ERRORS:
             logger.exception("RabbitMQ publish failed; recovering publisher")
             self._retry_unsent(messages, progress)
 
@@ -126,7 +109,7 @@ class RabbitMQPublisher:
         try:
             self._recover()
             self._publish_from(messages, progress)
-        except (ConfigError, *_rabbitmq_publish_errors()) as exc:
+        except _RETRY_ERRORS as exc:
             # Callers republish every user; consumers dedupe on the stable message_id.
             raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
@@ -161,17 +144,7 @@ class RabbitMQPublisher:
         connection = self._connection
         self._channel = None
         self._connection = None
-        try:
-            channel_exc = _close_handle(channel, "channel")
-        except BaseException:
-            cleanup_after_failure(
-                lambda: _close_handle(connection, "connection"),
-                "Failed to close RabbitMQ publisher connection after a channel close error",
-                logger,
-            )
-            raise
-        connection_exc = _close_handle(connection, "connection")
-        close_exc = channel_exc or connection_exc
+        close_exc = close_amqp_handles(channel, connection)
         if close_exc is not None:
             raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 

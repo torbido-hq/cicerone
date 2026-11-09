@@ -129,7 +129,7 @@ def test_abandoned_io_does_not_return_late_ok():
     def _caller() -> None:
         try:
             result["value"] = io.submit(_job)
-        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except Exception as exc:
             result["err"] = exc
 
     waiter = threading.Thread(target=_caller)
@@ -172,7 +172,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -224,7 +224,7 @@ def test_pika_io_timeout_does_not_run_job_held_at_a_step(step: str, hold_after: 
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -280,7 +280,7 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -340,7 +340,7 @@ def test_pika_io_timeout_does_not_run_dispatched_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -382,7 +382,7 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     def _caller() -> None:
         try:
             io.submit(_late_ack)
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -450,8 +450,8 @@ def test_bind_handles_does_not_reborn_abandoned_io():
     assert io._channel is None
 
 
-def test_close_handles_closes_connection_when_channel_close_fails():
-    from cicerone.events.rabbitmq_io import close_handles
+def test_close_amqp_handles_returns_the_first_broker_error_and_raises_others():
+    from cicerone.amqp_options import close_amqp_handles
 
     class _Handle:
         def __init__(self, error: BaseException | None = None) -> None:
@@ -463,17 +463,20 @@ def test_close_handles_closes_connection_when_channel_close_fails():
             if self.error is not None:
                 raise self.error
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle()
-    close_handles(channel, connection)
-    assert channel.closed is True
+    channel_error = AMQPError("channel")
+    channel, connection = _Handle(channel_error), _Handle(AMQPError("connection"))
+    assert close_amqp_handles(channel, connection) is channel_error
     assert connection.closed is True
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle(RuntimeError("connection"))
-    close_handles(channel, connection)
-    assert channel.closed is True
+    channel, connection = _Handle(AMQPError("channel")), _Handle(TypeError("connection bug"))
+    with pytest.raises(TypeError, match="connection bug"):
+        close_amqp_handles(channel, connection)
+
+    channel, connection = _Handle(RuntimeError("channel bug")), _Handle(RuntimeError("connection bug"))
+    with pytest.raises(RuntimeError, match="channel bug"):
+        close_amqp_handles(channel, connection)
     assert connection.closed is True
+    assert close_amqp_handles(None, None) is None
 
 
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
@@ -809,8 +812,10 @@ def test_amqp_callbacks_use_io_handles(monkeypatch):
     io_channel.basic_ack = _ack  # type: ignore[method-assign]
     io_channel.queue_declare = _declare  # type: ignore[method-assign]
     io_connection.process_data_events = _pump  # type: ignore[method-assign]
-    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
-    source._connection = SimpleNamespace(process_data_events=_fail)
+    source._channel = SimpleNamespace(
+        basic_get=_fail, basic_ack=_fail, queue_declare=_fail, close=lambda: None
+    )
+    source._connection = SimpleNamespace(process_data_events=_fail, close=lambda: None)
 
     assert source._basic_get(io) == (None, None, None)
     source._basic_ack(io, 9)
@@ -1821,7 +1826,7 @@ def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
     def _ack() -> None:
         try:
             source.ack(["e1"])
-        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except Exception as exc:
             errors.append(exc)
 
     waiter = threading.Thread(target=_ack)

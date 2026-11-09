@@ -275,7 +275,7 @@ def test_rabbitmq_publisher_close_channel_error_wins_over_connection_close_error
     with pytest.raises(TypeError, match="channel close bug"):
         publisher.close()
     assert broker.connection.close.calls == 1
-    assert "Failed to close RabbitMQ publisher connection after a channel close error" in caplog.text
+    assert "Failed to close RabbitMQ connection after a channel close error" in caplog.text
 
 
 def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.option_parse import (
     MAX_BROKER_TIMEOUT_SECONDS,
     optional_float,
@@ -12,6 +14,20 @@ from cicerone.option_parse import (
     require_nonempty_str,
 )
 
+if TYPE_CHECKING:
+    from pika.exceptions import AMQPError
+else:
+    try:
+        from pika.exceptions import AMQPError
+    except ImportError:
+
+        class AMQPError(Exception):
+            pass
+
+
+logger = logging.getLogger(__name__)
+
+RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 DEFAULT_PREFETCH = 100
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
@@ -51,3 +67,29 @@ def optional_exchange(options: dict[str, Any], *, prefix: str) -> str | None:
 
 def optional_routing_key(options: dict[str, Any], *, prefix: str) -> str | None:
     return optional_nonempty_str(options, "routing_key", prefix=prefix)
+
+
+def close_amqp_handles(channel: Any, connection: Any) -> BaseException | None:
+    # Channel, then connection; broker errors are logged and the first is returned.
+    try:
+        channel_error = _close_amqp_handle(channel, "channel")
+    except Exception:
+        cleanup_after_failure(
+            lambda: _close_amqp_handle(connection, "connection"),
+            "Failed to close RabbitMQ connection after a channel close error",
+            logger,
+        )
+        raise
+    connection_error = _close_amqp_handle(connection, "connection")
+    return channel_error or connection_error
+
+
+def _close_amqp_handle(handle: Any, label: str) -> BaseException | None:
+    if handle is None:
+        return None
+    try:
+        handle.close()
+    except RABBITMQ_IO_ERRORS as exc:
+        logger.exception("Failed to close RabbitMQ %s", label)
+        return exc
+    return None

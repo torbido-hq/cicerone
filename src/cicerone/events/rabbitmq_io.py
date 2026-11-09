@@ -9,13 +9,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
+from cicerone.amqp_options import RABBITMQ_IO_ERRORS, close_amqp_handles
 from cicerone.events.base import EventSourceError
-from cicerone.events.errors import AMQPError
 from cicerone.failure_cleanup import cleanup_after_failure
 
 logger = logging.getLogger(__name__)
-
-RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -198,8 +196,8 @@ class PikaIo:
         self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
-        close_handles(channel, connection)
-        close_handles(
+        close_handles_after_failure(channel, connection)
+        close_handles_after_failure(
             leftover_channel if leftover_channel is not channel else None,
             leftover_connection if leftover_connection is not connection else None,
         )
@@ -283,14 +281,14 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
     if io.failed or not io._try_begin_shutdown():
         io.abandon(channel, connection)
         if not io._thread.is_alive():
-            close_handles(channel, connection)
+            close_handles_after_failure(channel, connection)
         return
     closed = False
     try:
 
         def _shutdown() -> None:
             io._connection = None
-            close_handles(channel, connection)
+            close_amqp_handles(channel, connection)
 
         io.submit(_shutdown, allow_closing=True)
         closed = True
@@ -303,8 +301,9 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
         io.stop()
 
 
-def close_handles(channel: Any, connection: Any) -> None:
-    for handle, label in ((channel, "channel"), (connection, "connection")):
-        closer = getattr(handle, "close", None)
-        if callable(closer):
-            cleanup_after_failure(closer, f"Failed to close RabbitMQ {label}", logger)
+def close_handles_after_failure(channel: Any, connection: Any) -> None:
+    cleanup_after_failure(
+        lambda: close_amqp_handles(channel, connection),
+        "Failed to close RabbitMQ handles after a failure",
+        logger,
+    )
