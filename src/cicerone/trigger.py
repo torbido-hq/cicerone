@@ -14,8 +14,15 @@ from cicerone import job
 from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
+from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.filenames import EVENTS_FILENAME
-from cicerone.io.options import build_s3_client, local_path, s3_location, validate_storage_options
+from cicerone.io.options import (
+    build_s3_client,
+    is_s3_not_found,
+    local_path,
+    s3_location,
+    validate_storage_options,
+)
 from cicerone.locks import LockBackend
 from cicerone.metrics import record_retrain_trigger
 
@@ -107,7 +114,12 @@ def _current_marker(input_settings: IOSettings) -> str | None:
 
     client = build_s3_client(options)
     bucket, key = s3_location(options, EVENTS_FILENAME)
-    head = client.head_object(Bucket=bucket, Key=key)
+    try:
+        head = client.head_object(Bucket=bucket, Key=key)
+    except S3_READ_ERRORS as exc:
+        if is_s3_not_found(exc):
+            return None
+        raise
     return str(head["LastModified"])
 
 
