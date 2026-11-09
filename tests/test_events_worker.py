@@ -3839,6 +3839,19 @@ def test_event_worker_loop_reports_an_unexpected_error_before_the_thread_ends(
     assert "Event worker stopped on an unexpected error" in caplog.text
 
 
+def test_event_worker_loop_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    import threading
+
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._thread = threading.current_thread()
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    worker._close_source = raising(KeyError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
 def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
     worker = _nack_failing_worker(tmp_path, feature_config)
     worker._updater.apply = lambda events, **_kwargs: len(events)

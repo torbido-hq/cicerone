@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -41,6 +42,7 @@ from cicerone.experiment.thompson import (
     track_rows_since,
     window_trials_from_slices,
 )
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import OutputSink, recommendations_write_guard
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
@@ -687,7 +689,11 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
         except Exception as exc:
             manifest.status = "failed"
             manifest.error = truncate_job_error(exc)
-            _write_final_manifest(run, error, close_exc=close_exc, persist_exc=exc)
+            cleanup_after_failure(
+                partial(_write_final_manifest, run, error, close_exc=close_exc, persist_exc=exc),
+                "Failed to write the final manifest after a track output error",
+                logger,
+            )
             raise
     _write_final_manifest(run, error, close_exc=close_exc, persist_exc=None)
     if close_exc is not None and error is None:

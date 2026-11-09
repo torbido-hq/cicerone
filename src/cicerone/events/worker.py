@@ -439,11 +439,15 @@ class EventWorker:
             logger.exception("Event worker stopped on an unexpected error")
             self._source_unhealthy = True
             update_events_source_health(connected=False, lag=None)
+            cleanup_after_failure(lambda: self._close_loop(current), _CLEANUP_FAILED, logger)
             raise
         finally:
-            with self._tick_guard, self._source_guard:
-                if self._thread is current:
-                    self._drain_and_close()
+            self._close_loop(current)
+
+    def _close_loop(self, current: threading.Thread) -> None:
+        with self._tick_guard, self._source_guard:
+            if self._thread is current:
+                self._drain_and_close()
 
     def tick(self) -> int:
         """One poll/flush cycle; returns events successfully applied."""
