@@ -330,9 +330,9 @@ Payload: `{user_id, message_id, recommendations: [{user_id, item_id, rank, score
 source, …}]}`. `message_id` is a stable SHA-256 of `{user_id, recommendations}`
 (also set on RabbitMQ properties). Kafka key is `user_id`. A publish that
 fails partway raises, and a retry sends every affected user again with the
-same `message_id`, so consumers should dedupe on it. Publish failures
-after a successful write are logged and do not fail the job or incremental
-flush. A lost retrain fence after the write still fails the job. In an
+same `message_id`, so consumers should dedupe on it. Broker and client
+publish failures after a successful write are logged and do not fail the
+job or incremental flush; any other publisher error fails the job. A lost retrain fence after the write still fails the job. In an
 incremental flush, any failure after the recommendations write (a manifest
 error, a lost apply fence, a busy writer lock or unexpected error while
 publishing, a failed heartbeat) is logged with

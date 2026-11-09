@@ -18,6 +18,7 @@ from cicerone.amqp_options import (
     require_queue,
 )
 from cicerone.config.constants import ConfigError, import_extra
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
@@ -38,12 +39,17 @@ def _rabbitmq_publish_errors() -> tuple[type[BaseException], ...]:
     return (AMQPError, OSError, TimeoutError)
 
 
-def _close_quietly(connection: Any) -> None:
+def _close_handle(handle: Any, label: str) -> BaseException | None:
+    # A broker error is logged and returned so the other handle still closes.
+    closer = getattr(handle, "close", None)
+    if not callable(closer):
+        return None
     try:
-        connection.close()
-    except Exception:
-        # Connect's original error must still propagate.
-        logger.exception("Failed to close RabbitMQ publisher connection after connect error")
+        closer()
+    except _rabbitmq_publish_errors() as exc:
+        logger.exception("Failed to close RabbitMQ publisher %s", label)
+        return exc
+    return None
 
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
@@ -90,7 +96,11 @@ class RabbitMQPublisher:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         finally:
             if connection is not None and not connected:
-                _close_quietly(connection)
+                cleanup_after_failure(
+                    connection.close,
+                    "Failed to close RabbitMQ publisher connection after connect error",
+                    logger,
+                )
         self._connection = connection
         self._channel = channel
         self._connected_once = True
@@ -108,9 +118,7 @@ class RabbitMQPublisher:
                 return
         try:
             self._publish_from(messages, progress)
-        except Exception as exc:
-            if not isinstance(exc, _rabbitmq_publish_errors()) and not progress.sent:
-                raise
+        except _rabbitmq_publish_errors():
             logger.exception("RabbitMQ publish failed; recovering publisher")
             self._retry_unsent(messages, progress)
 
@@ -118,9 +126,7 @@ class RabbitMQPublisher:
         try:
             self._recover()
             self._publish_from(messages, progress)
-        except Exception as exc:
-            if not isinstance(exc, (ConfigError, *_rabbitmq_publish_errors())) and not progress.sent:
-                raise
+        except (ConfigError, *_rabbitmq_publish_errors()) as exc:
             # Callers republish every user; consumers dedupe on the stable message_id.
             raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
@@ -155,26 +161,17 @@ class RabbitMQPublisher:
         connection = self._connection
         self._channel = None
         self._connection = None
-        close_exc: BaseException | None = None
-        unexpected: BaseException | None = None
-        for handle, label in ((channel, "channel"), (connection, "connection")):
-            if handle is None:
-                continue
-            closer = getattr(handle, "close", None)
-            if not callable(closer):
-                continue
-            try:
-                closer()
-            except Exception as exc:
-                logger.exception("Failed to close RabbitMQ publisher %s", label)
-                if isinstance(exc, _rabbitmq_publish_errors()):
-                    if close_exc is None:
-                        close_exc = exc
-                    continue
-                if unexpected is None:
-                    unexpected = exc
-        if unexpected is not None:
-            raise unexpected
+        try:
+            channel_exc = _close_handle(channel, "channel")
+        except BaseException:
+            cleanup_after_failure(
+                lambda: _close_handle(connection, "connection"),
+                "Failed to close RabbitMQ publisher connection after a channel close error",
+                logger,
+            )
+            raise
+        connection_exc = _close_handle(connection, "connection")
+        close_exc = channel_exc or connection_exc
         if close_exc is not None:
             raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 
