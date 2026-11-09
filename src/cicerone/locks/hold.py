@@ -124,13 +124,9 @@ def bound_writer_generation(lock: LockBackend) -> int | None:
 
 def lock_owned(lock: LockBackend, generation: int | None) -> bool:
     expected = generation if generation is not None else bound_writer_generation(lock)
-    owned = lock.owned
     if expected is None:
-        return bool(owned())
-    try:
-        return bool(owned(generation=expected))
-    except TypeError:
-        return bool(owned()) and _hold_generation(lock) == expected
+        return bool(lock.owned())
+    return bool(lock.owned(generation=expected))
 
 
 @dataclass(frozen=True)
