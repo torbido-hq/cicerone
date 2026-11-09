@@ -83,6 +83,7 @@ class RunGuard:
             else:
                 self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
         except Exception as exc:
+            # Run thread's top level; the error is kept as last_error.
             logger.exception("Triggered run (%s) failed", triggered_by)
             with self._lock:
                 self._last_error = exc
@@ -110,6 +111,7 @@ def _current_marker(input_settings: IOSettings) -> str | None:
         head = client.head_object(Bucket=bucket, Key=key)
         return str(head["LastModified"])
     except Exception:
+        # Poller thread's loop body: an error must not stop polling.
         logger.exception("Failed to check input source for changes; treating as unchanged")
         return None
 

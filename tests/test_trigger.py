@@ -6,7 +6,7 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
-from support.fakes import FakeGuard, fake_monotonic, patch_module_ref
+from support.fakes import FakeGuard, fake_monotonic, patch_module_ref, raising
 from support.prometheus_metrics import metric_value
 from support.settings import local_output, make_settings
 from support.waits import WAIT_SECONDS, wait_until
@@ -244,6 +244,25 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
         poll_input_forever(input_settings, guard, interval_seconds=0.01)
 
     assert guard.calls == ["s3-poll"]
+
+
+def test_poll_input_forever_logs_an_unexpected_check_error_and_keeps_polling(tmp_path, monkeypatch, caplog):
+    validate = raising(TypeError("marker bug"))
+    monkeypatch.setattr("cicerone.trigger.validate_storage_options", validate)
+    sleeps = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] == 3:
+            raise SystemExit("stop")
+
+    patch_module_ref(monkeypatch, "cicerone.trigger.time", sleep=fake_sleep)
+    guard = FakeGuard()
+    with pytest.raises(SystemExit):
+        poll_input_forever(local_output(tmp_path), guard, interval_seconds=0.01)
+    assert validate.calls == 3
+    assert caplog.text.count("Failed to check input source for changes") == 3
+    assert guard.calls == []
 
 
 def test_current_marker_local_backend_reflects_mtime(tmp_path):

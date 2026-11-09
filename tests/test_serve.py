@@ -5,13 +5,14 @@ import threading
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
-from support.fakes import FakeManifest, FakeReader, patch_module_ref
+from support.fakes import FakeManifest, FakeReader, patch_module_ref, raising
 from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
 from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
+    _append_with_busy_retry,
     _read_generated_at,
     _refresh_step,
     _start_refresh_loop,
@@ -425,11 +426,11 @@ def test_recommendations_manifest_without_generated_at():
 def test_recommendations_survive_manifest_reader_errors():
     class BrokenManifest:
         def read_latest(self):
-            raise RuntimeError("manifest store down")
+            raise OSError("manifest store down")
 
         def read_recent(self, limit: int):
             del limit
-            raise RuntimeError("manifest store down")
+            raise OSError("manifest store down")
 
     app = create_app(
         serve_settings(),
@@ -442,6 +443,20 @@ def test_recommendations_survive_manifest_reader_errors():
     assert response.status_code == 200
     assert response.json()["generated_at"] is None
     assert "X-Generated-At" not in response.headers
+
+
+def test_serve_startup_fails_on_unexpected_manifest_read_error():
+    manifest = FakeManifest({})
+    manifest.read_latest = raising(TypeError("manifest reader bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="manifest reader bug"):
+        create_app(serve_settings(), FakeReader(recs_df(), items_df()), manifest_reader=manifest)
+
+
+def test_append_logs_an_unexpected_error_without_raising(caplog):
+    write = raising(TypeError("append bug"))
+    _append_with_busy_retry(write, label="record exposure", user_id="u1")
+    assert write.calls == 1
+    assert "Failed to record exposure for user_id='u1'" in caplog.text
 
 
 def test_generated_at_cache_reads_and_refreshes_manifest():

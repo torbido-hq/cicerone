@@ -99,6 +99,7 @@ def _run_job() -> int:
     try:
         run()
     except Exception:
+        # CLI entry point: any job failure becomes exit code 1.
         logger.exception("Recommendation job failed")
         return 1
     return 0
