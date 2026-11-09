@@ -4,6 +4,7 @@ import threading
 
 import pandas as pd
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from support.fakes import FakeManifest, FakeReader, patch_module_ref, raising
 from support.serve import items_df, recs_df, serve_feature_config, serve_settings
@@ -423,14 +424,17 @@ def test_recommendations_manifest_without_generated_at():
     assert body["generated_at"] is None
 
 
-def test_recommendations_survive_manifest_reader_errors():
+@pytest.mark.parametrize(
+    "error", [OSError("manifest store down"), ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")]
+)
+def test_recommendations_survive_manifest_reader_errors(error):
     class BrokenManifest:
         def read_latest(self):
-            raise OSError("manifest store down")
+            raise error
 
         def read_recent(self, limit: int):
             del limit
-            raise OSError("manifest store down")
+            raise error
 
     app = create_app(
         serve_settings(),

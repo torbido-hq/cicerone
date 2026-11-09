@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import TypeVar
 
-from botocore.exceptions import BotoCoreError
+from botocore.exceptions import BotoCoreError, ClientError
 from pyarrow.lib import ArrowInvalid, ArrowTypeError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -25,6 +25,8 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     ArrowTypeError,
     RecommendationSchemaError,
 )
+# Optional store reads, S3 client errors (e.g. AccessDenied) included.
+STORE_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, ClientError)
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)

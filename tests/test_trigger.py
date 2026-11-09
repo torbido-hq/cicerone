@@ -261,8 +261,16 @@ def test_poll_input_forever_logs_an_unexpected_check_error_and_keeps_polling(tmp
     with pytest.raises(SystemExit):
         poll_input_forever(local_output(tmp_path), guard, interval_seconds=0.01)
     assert validate.calls == 3
-    assert caplog.text.count("Failed to check input source for changes") == 3
+    assert caplog.text.count("Input poll failed; treating as unchanged") == 3
     assert guard.calls == []
+
+
+def test_current_marker_propagates_an_unexpected_error(tmp_path, monkeypatch):
+    from cicerone.trigger import _current_marker
+
+    monkeypatch.setattr("cicerone.trigger.validate_storage_options", raising(TypeError("marker bug")))
+    with pytest.raises(TypeError, match="marker bug"):
+        _current_marker(local_output(tmp_path))
 
 
 def test_current_marker_local_backend_reflects_mtime(tmp_path):

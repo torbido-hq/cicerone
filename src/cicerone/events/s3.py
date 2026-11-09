@@ -8,7 +8,6 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Sequence
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +30,6 @@ from cicerone.events.s3_parse import (
     validate_s3_event_options,
 )
 from cicerone.events.s3_sqs import S3SqsPoll
-from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.options import build_s3_client, read_s3_body, require_option
 from cicerone.option_parse import as_int, optional_float, optional_int
@@ -330,17 +328,18 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         sqs: Any,
         queue_url: str | None,
     ) -> None:
-        for index, batch in enumerate(completed):
+        # These batches are no longer tracked: every delete is tried before an unexpected error propagates.
+        first_error: Exception | None = None
+        for batch in completed:
             if batch.receipt_handle and sqs is not None and queue_url:
                 try:
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=batch.receipt_handle)
                 except S3_READ_ERRORS:
                     logger.exception("Failed to delete SQS message after ack")
-                except BaseException:
-                    # These batches are no longer tracked: delete the rest before the error propagates.
-                    cleanup_after_failure(
-                        partial(self._finish_completed, completed[index + 1 :], sqs=sqs, queue_url=queue_url),
-                        "Failed to delete SQS messages after an ack error",
-                        logger,
-                    )
-                    raise
+                except Exception as exc:
+                    if first_error is not None:
+                        logger.exception("Failed to delete SQS message after an earlier delete error")
+                        continue
+                    first_error = exc
+        if first_error is not None:
+            raise first_error

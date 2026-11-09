@@ -441,15 +441,21 @@ class EventWorker:
         """One poll/flush cycle; returns events successfully applied."""
         with self._tick_guard:
             try:
-                if self._stop.is_set():
-                    return 0
-                return self._tick_locked()
+                applied = 0 if self._stop.is_set() else self._tick_locked()
+            except BaseException:
+                if not self._stop.is_set():
+                    cleanup_after_failure(self._refresh_tick_health, _CLEANUP_FAILED, logger)
+                raise
             finally:
                 if self._stop.is_set() and self._holder_should_finalize():
                     with self._source_guard:
                         self._drain_and_close()
-                elif not self._stop.is_set():
-                    self._source_unhealthy = not self.refresh_source_health_metrics()
+            if not self._stop.is_set():
+                self._refresh_tick_health()
+            return applied
+
+    def _refresh_tick_health(self) -> None:
+        self._source_unhealthy = not self.refresh_source_health_metrics()
 
     def _tick_locked(self) -> int:
         self._flush_retry_acks()

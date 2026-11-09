@@ -25,7 +25,7 @@ from cicerone.dashboard_experiments import clear_promotion, experiment_context, 
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_users import load_users
-from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
+from cicerone.errors import OPTIONAL_IO_ERRORS, STORE_READ_ERRORS, log_caught
 from cicerone.experiment.store import build_experiment_store
 from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import require_basic_auth
@@ -42,7 +42,6 @@ from cicerone.http_security import (
     set_flash_cookie,
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
-from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
 from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
@@ -51,7 +50,7 @@ from cicerone.serve.recommendations import build_recommendation_service, read_as
 logger = logging.getLogger(__name__)
 
 # ImportError: a missing optional DB driver.
-_STORE_OPEN_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, *S3_READ_ERRORS, ImportError)
+_STORE_OPEN_ERRORS: tuple[type[BaseException], ...] = (*STORE_READ_ERRORS, ImportError)
 
 ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet, noimageindex"
 ROBOTS_TXT = "User-agent: *\nDisallow: /\n"

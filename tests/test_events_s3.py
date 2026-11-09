@@ -755,18 +755,19 @@ def test_s3_sqs_poison_and_missing_object_and_health():
 _ACCESS_DENIED = ClientError({"Error": {"Code": "AccessDenied"}}, "SqsCall")
 
 
-def _two_batch_sqs_source(queue_name: str):
+def _batched_sqs_source(queue_name: str, *keys: str):
+    """One SQS message, so one batch, per key."""
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
     queue_url = sqs.create_queue(QueueName=queue_name)["QueueUrl"]
-    for key in ("first", "second"):
+    for key in keys:
         _put_event(s3, f"{key}.json", event_payload(event_id=key))
         sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification(f"{key}.json"))
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
     events = list(source.poll(10))
-    assert len(events) == 2
+    assert len(events) == len(keys)
     return sqs, queue_url, source, events
 
 
@@ -1418,7 +1419,7 @@ def test_s3_sqs_unexpected_load_error_propagates_and_leaves_message(monkeypatch)
 @pytest.mark.parametrize("error", [_ACCESS_DENIED, BotoCoreError()])
 @mock_aws
 def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeypatch, caplog, error):
-    sqs, queue_url, source, events = _two_batch_sqs_source("events-delete-error")
+    sqs, queue_url, source, events = _batched_sqs_source("events-delete-error", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "delete_message", error)
     event_ids = [event.event_id for event in events]
     with caplog.at_level("ERROR"):
@@ -1429,18 +1430,28 @@ def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeyp
 
 
 @mock_aws
-def test_s3_sqs_ack_delete_unexpected_error_propagates_after_later_batches_are_deleted(monkeypatch):
-    sqs, queue_url, source, events = _two_batch_sqs_source("events-delete-unexpected")
-    calls = _fail_first_call(monkeypatch, source._sqs, "delete_message", TypeError("delete bug"))
-    with pytest.raises(TypeError, match="delete bug"):
+def test_s3_sqs_ack_delete_unexpected_errors_try_every_batch_then_raise_the_first(monkeypatch, caplog):
+    sqs, queue_url, source, events = _batched_sqs_source("events-delete-unexpected", "b0", "b1", "b2")
+    first = TypeError("delete bug")
+    errors = iter([first, TypeError("second bug"), TypeError("third bug")])
+    receipts: list[str] = []
+
+    def delete_message(**kwargs):
+        receipts.append(kwargs["ReceiptHandle"])
+        raise next(errors)
+
+    monkeypatch.setattr(source._sqs, "delete_message", delete_message)
+    with pytest.raises(TypeError) as caught:
         source.ack([event.event_id for event in events])
-    assert len(set(calls)) == 2
-    assert _sqs_held(sqs, queue_url) == 1
+    assert caught.value is first
+    assert len(set(receipts)) == 3
+    assert caplog.text.count("Failed to delete SQS message after an earlier delete error") == 2
+    assert _sqs_held(sqs, queue_url) == 3
 
 
 @mock_aws
 def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
-    _, _, source, events = _two_batch_sqs_source("events-vis-unexpected")
+    _, _, source, events = _batched_sqs_source("events-vis-unexpected", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", TypeError("vis bug"))
     with pytest.raises(TypeError, match="vis bug"):
         source.nack(events)
@@ -1450,7 +1461,7 @@ def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
 @pytest.mark.parametrize("error", [_ACCESS_DENIED, BotoCoreError()])
 @mock_aws
 def test_s3_sqs_visibility_error_is_logged_and_events_stay_pending_locally(monkeypatch, caplog, error):
-    _, _, source, events = _two_batch_sqs_source("events-vis-error")
+    _, _, source, events = _batched_sqs_source("events-vis-error", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", error)
     with caplog.at_level("ERROR"):
         assert source.nack(events) == ()
