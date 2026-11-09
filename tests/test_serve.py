@@ -491,7 +491,7 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
     assert cache.get() is None
 
 
-def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
+def _run_refresh_ticks(monkeypatch, reader, ticks: int, generated_at_cache=None) -> dict[str, int]:
     calls = {"sleep": 0, "generated": 0, "overlay": 0}
 
     class FakeCache:
@@ -517,10 +517,21 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
         _start_refresh_loop(
             reader,
             interval_seconds=0.01,
-            generated_at_cache=FakeCache("generated"),
+            generated_at_cache=generated_at_cache or FakeCache("generated"),
             overlay_cache=FakeCache("overlay"),
         )
     return calls
+
+
+def test_refresh_loop_omits_generated_at_after_an_unexpected_manifest_error(monkeypatch):
+    manifest = FakeManifest()
+    cache = RefreshedValue(lambda: _read_generated_at(manifest))
+    cache.refresh()
+    assert cache.get() is not None
+    manifest.read_latest = raising(TypeError("manifest bug"))  # type: ignore[method-assign]
+    _run_refresh_ticks(monkeypatch, FakeReader(recs_df()), ticks=1, generated_at_cache=cache)
+    assert manifest.read_latest.calls == 1
+    assert cache.get() is None
 
 
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):

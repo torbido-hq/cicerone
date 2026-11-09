@@ -133,9 +133,10 @@ class EventWorker:
                 except EVENT_SOURCE_ERRORS as exc:
                     connect_error = exc
             if self._start_aborted(epoch):
-                self._drain_stopped_start()
                 if connect_error is not None:
+                    cleanup_after_failure(self._drain_stopped_start, _CLEANUP_FAILED, logger)
                     raise connect_error
+                self._drain_stopped_start()
                 return
             if connect_error is not None:
                 raise connect_error
@@ -432,6 +433,13 @@ class EventWorker:
                     logger.exception("Event worker tick failed")
                 disconnected = self._source_unhealthy
                 self._stop.wait(self._poll_interval_seconds)
+        except Exception:
+            # Thread top level: the worker stops, so report it before the error ends the thread.
+            record_events_tick_error()
+            logger.exception("Event worker stopped on an unexpected error")
+            self._source_unhealthy = True
+            update_events_source_health(connected=False, lag=None)
+            raise
         finally:
             with self._tick_guard, self._source_guard:
                 if self._thread is current:

@@ -3806,6 +3806,39 @@ def test_event_worker_failed_health_refresh_does_not_replace_the_tick_error(
     assert caplog.text.count(_CLEANUP_FAILED) == 1
 
 
+def test_event_worker_aborted_start_close_failure_does_not_replace_the_connect_error(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+
+    def connect() -> None:
+        worker._stop.set()
+        raise original
+
+    worker._source.connect = connect  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_loop_reports_an_unexpected_error_before_the_thread_ends(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
+    assert registry_metric_value("cicerone_events_source_connected") == 0
+    assert worker._source_unhealthy is True
+    assert "Event worker stopped on an unexpected error" in caplog.text
+
+
 def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
     worker = _nack_failing_worker(tmp_path, feature_config)
     worker._updater.apply = lambda events, **_kwargs: len(events)

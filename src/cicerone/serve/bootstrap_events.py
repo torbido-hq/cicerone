@@ -57,7 +57,8 @@ class EventsRuntime:
         try:
             stopped = self.worker is None or self.worker.stop()
         except BaseException:
-            cleanup_after_failure(lambda: _close_publisher(publisher), _PUBLISHER_CLOSE_FAILED, logger)
+            if publisher is not None:
+                cleanup_after_failure(publisher.close, _PUBLISHER_CLOSE_FAILED, logger)
             raise
         _close_publisher(publisher)
         if not stopped:
@@ -254,4 +255,5 @@ def start_events_runtime(
         if not ready:
             if worker is not None:
                 cleanup_after_failure(worker.stop, "Event worker stop after startup failure", logger)
-            cleanup_after_failure(lambda: _close_publisher(publisher), _PUBLISHER_CLOSE_FAILED, logger)
+            if publisher is not None:
+                cleanup_after_failure(publisher.close, _PUBLISHER_CLOSE_FAILED, logger)

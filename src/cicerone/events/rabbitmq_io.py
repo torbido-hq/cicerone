@@ -283,22 +283,23 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
         if not io._thread.is_alive():
             close_handles_after_failure(channel, connection)
         return
-    closed = False
+
+    def _shutdown() -> None:
+        io._channel = None
+        io._connection = None
+        close_amqp_handles(channel, connection)
+
     try:
-
-        def _shutdown() -> None:
-            io._connection = None
-            close_amqp_handles(channel, connection)
-
         io.submit(_shutdown, allow_closing=True)
-        closed = True
     except RABBITMQ_IO_ERRORS:
         logger.exception("Failed to close RabbitMQ connection on I/O thread")
-    finally:
-        if not closed:
-            io.abandon(channel, connection)
-    if closed:
-        io.stop()
+        io.abandon(channel, connection)
+        return
+    except Exception:
+        # The handles were already closed (or are still bound to io); stop the thread, don't close twice.
+        io.abandon(None, None)
+        raise
+    io.stop()
 
 
 def close_handles_after_failure(channel: Any, connection: Any) -> None:

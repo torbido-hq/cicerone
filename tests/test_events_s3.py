@@ -1450,6 +1450,17 @@ def test_s3_sqs_ack_delete_unexpected_errors_try_every_batch_then_raise_the_firs
 
 
 @mock_aws
+def test_s3_sqs_unexpected_delete_error_at_batch_registration_propagates(monkeypatch):
+    _, _, source, _events = _batched_sqs_source("events-register-delete")
+    delete = raising(TypeError("delete bug"))
+    monkeypatch.setattr(source._sqs, "delete_message", delete)
+    # A batch with nothing left completes as soon as poll registers it.
+    with pytest.raises(TypeError, match="delete bug"):
+        source._register_batch([], receipt_handle="receipt-0")
+    assert delete.calls == 1
+
+
+@mock_aws
 def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
     _, _, source, events = _batched_sqs_source("events-vis-unexpected", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", TypeError("vis bug"))

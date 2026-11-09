@@ -53,6 +53,8 @@ _ONLINE_REFRESH_ERRORS: tuple[type[BaseException], ...] = (
     *PUBLISH_ERRORS,
 )
 
+_ABORT_FAILED = "Online fit abort after a refresh error failed"
+
 # Bound in-process per-user frames for long-lived serve workers.
 DEFAULT_USER_CACHE_MAX_SIZE = 2048
 
@@ -493,14 +495,20 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return OnlineRefreshResult(rows=empty_online_rows())
         try:
             return self._online.refresh(events)
-        except BaseException as exc:
-            if isinstance(exc, LockLostError):
-                logger.error("%s; aborting pending online fit", exc)
-            elif isinstance(exc, WriterLockBusyError):
-                logger.info("%s; aborting pending online fit", exc)
-            elif isinstance(exc, _ONLINE_REFRESH_ERRORS):
-                logger.exception("Online collaborative refresh failed; aborting pending fit")
-            cleanup_after_failure(self.abort_online, "Online fit abort after a refresh error failed", logger)
+        except LockLostError as exc:
+            logger.error("%s; aborting pending online fit", exc)
+            cleanup_after_failure(self.abort_online, _ABORT_FAILED, logger)
+            raise
+        except WriterLockBusyError as exc:
+            logger.info("%s; aborting pending online fit", exc)
+            cleanup_after_failure(self.abort_online, _ABORT_FAILED, logger)
+            raise
+        except _ONLINE_REFRESH_ERRORS:
+            logger.exception("Online collaborative refresh failed; aborting pending fit")
+            cleanup_after_failure(self.abort_online, _ABORT_FAILED, logger)
+            raise
+        except Exception:
+            cleanup_after_failure(self.abort_online, _ABORT_FAILED, logger)
             raise
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:

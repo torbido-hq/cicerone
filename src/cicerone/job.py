@@ -663,7 +663,6 @@ def _publish_job_sidecar(run: JobRun) -> None:
 def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     settings, manifest = run.settings, run.manifest
     close_exc: BaseException | None = None
-    persist_exc: BaseException | None = None
     if run.publisher is not None:
         try:
             run.publisher.close()
@@ -672,27 +671,25 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
             logger.exception("Failed to close recommendation publisher (%s: %s)", type(exc).__name__, exc)
             if not isinstance(exc, _PUBLISH_ERRORS):
                 close_exc = exc
-    try:
-        if manifest.status == "success" and (settings.track.enabled or settings.eval.enabled):
-            try:
-                _persist_track_outputs(
-                    TrackStore(settings.output, fence=run.track_fence),
-                    kind=settings.output.kind,
-                    eval_report={
-                        "generated_at": run.eval_generated_at,
-                        "track_eval": run.track_eval_payload,
-                        "served_eval": run.served_eval_payload,
-                    },
-                    recommendations=run.recommendations,
-                    generated_at=str(manifest.generated_at),
-                )
-            except Exception as exc:
-                manifest.status = "failed"
-                manifest.error = truncate_job_error(exc)
-                persist_exc = exc
-                raise
-    finally:
-        _write_final_manifest(run, error, close_exc=close_exc, persist_exc=persist_exc)
+    if manifest.status == "success" and (settings.track.enabled or settings.eval.enabled):
+        try:
+            _persist_track_outputs(
+                TrackStore(settings.output, fence=run.track_fence),
+                kind=settings.output.kind,
+                eval_report={
+                    "generated_at": run.eval_generated_at,
+                    "track_eval": run.track_eval_payload,
+                    "served_eval": run.served_eval_payload,
+                },
+                recommendations=run.recommendations,
+                generated_at=str(manifest.generated_at),
+            )
+        except Exception as exc:
+            manifest.status = "failed"
+            manifest.error = truncate_job_error(exc)
+            _write_final_manifest(run, error, close_exc=close_exc, persist_exc=exc)
+            raise
+    _write_final_manifest(run, error, close_exc=close_exc, persist_exc=None)
     if close_exc is not None and error is None:
         raise close_exc
 

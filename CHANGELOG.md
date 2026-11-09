@@ -49,15 +49,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unchanged, even after messages were produced.
 - The RabbitMQ publisher retries and wraps as `PublishError` only broker
   errors; any other error now propagates without a retry, even after part of
-  a publish was sent. An unexpected error closing a RabbitMQ events
-  connection on shutdown now propagates instead of being logged.
+  a publish was sent.
+- Closing a RabbitMQ events connection, on `close()` or when `connect()`
+  replaces it, logs broker errors and propagates any other error instead of
+  logging it. Only a close on an I/O thread that has failed, or is abandoned
+  because it was busy, still logs every error.
 - The S3/SQS events source logs and absorbs only S3/SQS client errors (object
   load, ack and poll deletes, visibility extension, lag lookup) and invalid
   JSON in a notification; any other error now propagates from `poll`, `ack`,
   `nack` or `health`. A failed delete still tries the other completed
   messages first.
 - Serve startup fails on an unexpected manifest read error instead of
-  omitting `X-Generated-At`; storage, database and parse errors still omit it.
+  omitting `X-Generated-At`; storage, database and parse errors still omit
+  it, and so does a failed refresh while serving.
+- The events worker thread logs an unexpected error, counts it in
+  `cicerone_events_tick_errors_total` and sets
+  `cicerone_events_source_connected` to 0 before it stops.
 - A `TypeError` raised inside a lock's `owned()` now propagates instead of
   falling back to a check without the hold generation.
 

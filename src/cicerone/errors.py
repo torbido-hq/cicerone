@@ -26,7 +26,7 @@ OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
     RecommendationSchemaError,
 )
 # Optional store reads, S3 client errors (e.g. AccessDenied) included.
-STORE_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, ClientError)
+OPTIONAL_STORE_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, ClientError)
 OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
 PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
 SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)

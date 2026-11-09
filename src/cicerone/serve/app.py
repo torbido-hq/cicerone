@@ -21,7 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
-from cicerone.errors import STORE_READ_ERRORS, try_load
+from cicerone.errors import OPTIONAL_STORE_READ_ERRORS, try_load
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
@@ -133,8 +133,9 @@ def _start_refresh_loop(
             time.sleep(interval_seconds)
             reader_ok = _refresh_step(reader)
             # A stamp from a newer manifest must not label recommendations the reader kept.
-            if generated_at_cache is not None and reader_ok:
-                _refresh_step(generated_at_cache)
+            if generated_at_cache is not None and reader_ok and not _refresh_step(generated_at_cache):
+                # Without a fresh stamp the header is omitted rather than left stale.
+                generated_at_cache.set(None)
             if overlay_cache is not None:
                 _refresh_step(overlay_cache)
 
@@ -149,7 +150,7 @@ def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
         manifest_reader.read_latest,
         None,
         log=logger,
-        errors=STORE_READ_ERRORS,
+        errors=OPTIONAL_STORE_READ_ERRORS,
     )
     if not latest:
         return None
