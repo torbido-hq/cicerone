@@ -129,7 +129,7 @@ def test_abandoned_io_does_not_return_late_ok():
     def _caller() -> None:
         try:
             result["value"] = io.submit(_job)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             result["err"] = exc
 
     waiter = threading.Thread(target=_caller)
@@ -172,7 +172,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -224,7 +224,7 @@ def test_pika_io_timeout_does_not_run_job_held_at_a_step(step: str, hold_after: 
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -280,7 +280,7 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -340,7 +340,7 @@ def test_pika_io_timeout_does_not_run_dispatched_job():
     def _caller() -> None:
         try:
             io.submit(executed.set)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -382,7 +382,7 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
     def _caller() -> None:
         try:
             io.submit(_late_ack)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             err.append(exc)
 
     waiter = threading.Thread(target=_caller)
@@ -1821,7 +1821,7 @@ def test_ack_does_not_clear_reborn_delivery_tag(monkeypatch):
     def _ack() -> None:
         try:
             source.ack(["e1"])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             errors.append(exc)
 
     waiter = threading.Thread(target=_ack)

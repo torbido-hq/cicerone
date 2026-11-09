@@ -2124,7 +2124,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     def _start() -> None:
         try:
             worker.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
             errors.append(exc)
 
     starter = threading.Thread(target=_start)
@@ -3777,6 +3777,34 @@ def test_event_worker_failed_abort_still_returns_the_batch(tmp_path, feature_con
     assert worker._source.nack.calls == 1
     assert caplog.text.count(_CLEANUP_FAILED) == 1
     assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_failed_start_drain_does_not_replace_the_connect_error(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+    worker._source.connect = raising(original)  # type: ignore[method-assign]
+    worker._drain_stopped_start = raising(TypeError("drain bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._drain_stopped_start.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+@pytest.mark.parametrize("failing_ack", ["_ack_tracked", "_settle_live"])
+def test_event_worker_failed_persist_after_an_ack_error_does_not_replace_it(
+    tmp_path, feature_config, caplog, failing_ack
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    original = KeyError("ack bug")
+    setattr(worker, failing_ack, raising(original))
+    worker._persist_online_after_ack = raising(RuntimeError("persist bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._persist_online_after_ack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
 
 
 def test_event_worker_nack_bug_outside_an_error_still_propagates(tmp_path, feature_config, caplog):

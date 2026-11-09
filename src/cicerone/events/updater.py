@@ -26,6 +26,7 @@ from cicerone.events.updater_merge import (
 )
 from cicerone.events.updater_policy import incremental_allowlists, incremental_needs_users_frame
 from cicerone.events.updater_ranking import UpdaterRanking
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.applied_events import replay_key
 from cicerone.io.base import AppliedEventLog, OutputSink, ensure_sink_writer_held, recommendations_write_guard
@@ -492,20 +493,14 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return OnlineRefreshResult(rows=empty_online_rows())
         try:
             return self._online.refresh(events)
-        except LockLostError as exc:
-            self.abort_online()
-            logger.error("%s; aborting pending online fit", exc)
-            raise
-        except WriterLockBusyError as exc:
-            self.abort_online()
-            logger.info("%s; aborting pending online fit", exc)
-            raise
-        except _ONLINE_REFRESH_ERRORS:
-            self.abort_online()
-            logger.exception("Online collaborative refresh failed; aborting pending fit")
-            raise
-        except Exception:
-            self.abort_online()
+        except BaseException as exc:
+            if isinstance(exc, LockLostError):
+                logger.error("%s; aborting pending online fit", exc)
+            elif isinstance(exc, WriterLockBusyError):
+                logger.info("%s; aborting pending online fit", exc)
+            elif isinstance(exc, _ONLINE_REFRESH_ERRORS):
+                logger.exception("Online collaborative refresh failed; aborting pending fit")
+            cleanup_after_failure(self.abort_online, "Online fit abort after a refresh error failed", logger)
             raise
 
     def _online_rows_by_user(self, result: OnlineRefreshResult) -> dict[str, pd.DataFrame]:

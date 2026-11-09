@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 from cicerone.config.constants import (
     DEFAULT_EVENTS_HEARTBEAT_SECONDS,
@@ -21,6 +21,7 @@ from cicerone.events.errors import (
 from cicerone.events.normalize import event_fingerprint
 from cicerone.events.updater import IncrementalUpdater, event_replay_key
 from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.locks import LockBackend, LockLostError, WriterLockBusyError
 from cicerone.metrics import (
     record_events_apply_busy,
@@ -44,6 +45,7 @@ _POST_WRITE_ERRORS: tuple[type[BaseException], ...] = (
 )
 _REPAIR_ERRORS: tuple[type[BaseException], ...] = (*EVENT_APPLY_ERRORS, WriterLockBusyError)
 _APPLIED_EVENT_ID_CAP = 10_000
+_CLEANUP_FAILED = "Event worker cleanup after an error failed"
 
 
 class _BoundedSeen:
@@ -67,14 +69,6 @@ class _BoundedSeen:
 
 
 __all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
-
-
-def _return_after_error(return_events: Callable[[], object]) -> None:
-    # Runs while another error propagates: a failed return is logged so that error wins.
-    try:
-        return_events()
-    except Exception:
-        logger.exception("Event worker cleanup after an error failed")
 
 
 class EventWorker:
@@ -161,7 +155,7 @@ class EventWorker:
             self._drain_stopped_start()
         except Exception:
             if starting and not self._finalized:
-                self._drain_stopped_start()
+                cleanup_after_failure(self._drain_stopped_start, _CLEANUP_FAILED, logger)
             raise
         finally:
             if starting:
@@ -492,7 +486,7 @@ class EventWorker:
             repaired = True
         finally:
             if not repaired and ready:
-                _return_after_error(lambda: self._return_events(ready))
+                cleanup_after_failure(lambda: self._return_events(ready), _CLEANUP_FAILED, logger)
         return self._flush_ready(ready) if ready else 0
 
     def _repair_post_write(self) -> None:
@@ -575,7 +569,7 @@ class EventWorker:
                     finally:
                         self._release_apply_lock()
         except BaseException:
-            _return_after_error(self._return_pending_acks)
+            cleanup_after_failure(self._return_pending_acks, _CLEANUP_FAILED, logger)
             raise
         self._return_pending_acks()
 
@@ -592,7 +586,7 @@ class EventWorker:
         except Exception as exc:
             record_events_flush(status="error")
             logger.exception("Applied-event lookup failed; returning %d event(s) to source", len(ready))
-            _return_after_error(lambda: self._return_events(ready))
+            cleanup_after_failure(lambda: self._return_events(ready), _CLEANUP_FAILED, logger)
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -630,22 +624,22 @@ class EventWorker:
                 post_write_failed = True
         except HeartbeatError:
             logger.error("In-flight heartbeat failed; returning %d event(s) to source", len(ready))
-            _return_after_error(lambda: self._reject(ready, "error"))
+            cleanup_after_failure(lambda: self._reject(ready, "error"), _CLEANUP_FAILED, logger)
             return 0
         except LockLostError as exc:
             if exc.kind == "apply":
                 update_events_leader(False)
             logger.error("%s; nacking %d event(s)", exc, len(ready))
-            _return_after_error(lambda: self._reject(ready, "error"))
+            cleanup_after_failure(lambda: self._reject(ready, "error"), _CLEANUP_FAILED, logger)
             return 0
         except WriterLockBusyError as exc:
             record_events_apply_busy(reason="lock")
             logger.info("%s; nacking %d event(s)", exc, len(ready))
-            _return_after_error(lambda: self._reject(ready, "busy"))
+            cleanup_after_failure(lambda: self._reject(ready, "busy"), _CLEANUP_FAILED, logger)
             return 0
         except Exception as exc:
             logger.exception("Incremental apply failed; returning %d event(s) to source", len(ready))
-            _return_after_error(lambda: self._reject(ready, "error"))
+            cleanup_after_failure(lambda: self._reject(ready, "error"), _CLEANUP_FAILED, logger)
             if isinstance(exc, EVENT_APPLY_ERRORS):
                 return 0
             raise
@@ -677,7 +671,7 @@ class EventWorker:
         except Exception:
             record_events_flush(status="error")
             logger.exception("Event source ack failed after successful apply; persisting without nack")
-            self._persist_online_after_ack()
+            cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
             raise
         try:
             self._settle_live(live)
@@ -686,7 +680,7 @@ class EventWorker:
             logger.exception(
                 "Event source deferred ack failed after successful apply; persisting without nack"
             )
-            self._persist_online_after_ack()
+            cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
             raise
         if post_write_failed:
             record_events_flush(status="error")
@@ -721,7 +715,7 @@ class EventWorker:
             logger.exception("Event source ack failed for already-applied event(s); retrying later")
         except Exception:
             record_events_flush(status="error")
-            _return_after_error(lambda: self._return_events(fresh))
+            cleanup_after_failure(lambda: self._return_events(fresh), _CLEANUP_FAILED, logger)
             raise
         return fresh
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -26,6 +25,7 @@ from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import assign_user, experiment_variant_names
 from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.factory import build_input_source, build_output_sink
@@ -42,6 +42,8 @@ from cicerone.refreshed_value import RefreshedValue
 
 logger = logging.getLogger(__name__)
 
+_PUBLISHER_CLOSE_FAILED = "Recommendation publisher close failed"
+
 
 @dataclass
 class EventsRuntime:
@@ -51,20 +53,16 @@ class EventsRuntime:
     publisher: RecommendationPublisher | None = None
 
     def stop(self) -> bool:
-        stopped = True
+        publisher, self.publisher = self.publisher, None
         try:
-            if self.worker is not None:
-                stopped = self.worker.stop()
-                if not stopped:
-                    logger.warning("Event worker did not stop in time")
-                    return False
-            return True
-        finally:
-            try:
-                # A pending worker-stop error must still propagate.
-                _close_publisher(self.publisher, quiet=sys.exception() is not None)
-            finally:
-                self.publisher = None
+            stopped = self.worker is None or self.worker.stop()
+        except BaseException:
+            cleanup_after_failure(lambda: _close_publisher(publisher), _PUBLISHER_CLOSE_FAILED, logger)
+            raise
+        _close_publisher(publisher)
+        if not stopped:
+            logger.warning("Event worker did not stop in time")
+        return stopped
 
 
 def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
@@ -102,27 +100,13 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
     return read_users
 
 
-def _stop_worker_quietly(worker: EventWorker | None) -> None:
-    if worker is None:
-        return
-    try:
-        worker.stop()
-    except Exception:
-        # The startup error must still propagate.
-        logger.exception("Event worker stop after startup failure")
-
-
-def _close_publisher(publisher: RecommendationPublisher | None, *, quiet: bool = False) -> None:
+def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
     try:
         publisher.close()
     except PUBLISH_ERRORS:
-        logger.exception("Recommendation publisher close failed")
-    except Exception:
-        if not quiet:
-            raise
-        logger.exception("Recommendation publisher close failed")
+        logger.exception(_PUBLISHER_CLOSE_FAILED)
 
 
 def start_events_runtime(
@@ -268,5 +252,6 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            _stop_worker_quietly(worker)
-            _close_publisher(publisher, quiet=True)
+            if worker is not None:
+                cleanup_after_failure(worker.stop, "Event worker stop after startup failure", logger)
+            cleanup_after_failure(lambda: _close_publisher(publisher), _PUBLISHER_CLOSE_FAILED, logger)
