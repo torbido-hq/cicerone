@@ -259,6 +259,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still carry user data: database driver messages can embed values, such as the
   key in a duplicate-key error, and some log lines name the `user_id` on purpose.
 - Boosts no longer raise `TypeError` on an items table with a duplicate index.
+- The Kafka publisher wraps only Kafka client errors as `PublishError`; any
+  other error (e.g. a `TypeError` or `OSError` from flush) now propagates
+  unchanged, even after messages were produced.
+- The RabbitMQ publisher retries and wraps as `PublishError` only broker
+  errors; any other error now propagates without a retry, even after part of
+  a publish was sent.
+- The S3/SQS events source logs and absorbs only S3/SQS client errors (object
+  load, ack delete, visibility extension, lag lookup) and invalid JSON in a
+  notification; any other error now propagates. A failed ack delete still
+  deletes the other completed messages first.
+- Serve startup fails on an unexpected manifest read error instead of
+  omitting `X-Generated-At`; storage, database and parse errors still omit it.
+- When the event worker's start cleanup, its online persist after a failed
+  ack, or the online-fit abort after a failed refresh fails too, that failure
+  is logged and the original error propagates instead of being replaced.
+- A `TypeError` raised inside a lock's `owned()` now propagates instead of
+  falling back to a check without the hold generation.
 
 ### Removed
 
