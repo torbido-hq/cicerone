@@ -2124,7 +2124,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     def _start() -> None:
         try:
             worker.start()
-        except Exception as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except Exception as exc:
             errors.append(exc)
 
     starter = threading.Thread(target=_start)
@@ -3789,6 +3789,29 @@ def test_event_worker_failed_start_drain_does_not_replace_the_connect_error(tmp_
     assert caught.value is original
     assert worker._drain_stopped_start.calls == 1
     assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_failed_health_refresh_does_not_replace_the_tick_error(
+    tmp_path, feature_config, monkeypatch, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    del worker._source.nack
+    original = KeyError("apply bug")
+    _fail_apply(worker, monkeypatch, original)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.health.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="health bug"):
+        worker.tick()
 
 
 @pytest.mark.parametrize("failing_ack", ["_ack_tracked", "_settle_live"])

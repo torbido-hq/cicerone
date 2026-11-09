@@ -59,29 +59,13 @@ def optional_float(
     try:
         value = float(raw)
     except NUMBER_PARSE_ERRORS as exc:
-        raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
+        raise ConfigError(f"{prefix}.{key} must be a number, got {raw!r}") from exc
     if not math.isfinite(value):
-        raise ConfigError(f"{prefix}.{key} must be finite{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be finite, got {raw!r}")
     if value <= minimum_exclusive:
-        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}, got {raw!r}")
     if minimum is not None and value < minimum:
-        raise ConfigError(f"{prefix}.{key} must be >= {minimum}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {raw!r}")
     if maximum is not None and value > maximum:
-        raise ConfigError(f"{prefix}.{key} must be <= {maximum}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be <= {maximum}, got {raw!r}")
     return value
-
-
-def _type_name(value: object) -> str:
-    # Read the type slot directly so a metaclass cannot turn this into a new error.
-    name = type.__dict__["__name__"].__get__(type(value), type)
-    if isinstance(name, str):
-        return name
-    return "unrepresentable"
-
-
-def _option_detail(raw: Any) -> str:
-    try:
-        rendered = repr(raw)
-    except Exception as exc:  # noqa: BLE001 - repr of an arbitrary value; the config error must still be raised
-        rendered = f"<{_type_name(raw)} {_type_name(exc)}>"
-    return f", got {rendered}"

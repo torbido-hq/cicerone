@@ -82,6 +82,8 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM", "BLE", "RUF100"]
 [tool.ruff.lint.per-file-ignores]
 # Contract tests are frozen; their noqa comments stay as written.
 "tests/test_contract_*.py" = ["RUF100"]
+# Test helper threads capture any error so the test can assert on it.
+"tests/**" = ["BLE001"]
 
 [tool.mypy]
 python_version = "3.11"

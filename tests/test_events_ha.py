@@ -252,7 +252,7 @@ def test_two_writers_serialized_keep_both_users(tmp_path, feature_config: Featur
             worker = _worker(settings, source, feature_config, apply_lock=lock)
             if not wait_until(lambda: worker.tick() == 1):
                 errors.append(AssertionError(f"{user_id} never applied"))
-        except BaseException as exc:  # noqa: BLE001 - helper thread; the test asserts on it
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [
