@@ -3332,10 +3332,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert [event.event_id for event in again] == ["retry-drain"]
 
 
-@pytest.mark.parametrize("persist_fails", [False, True])
-def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
-    tmp_path, feature_config: FeatureConfig, persist_fails: bool, caplog
-):
+def _sidecar_bug_worker(tmp_path, feature_config):  # type: ignore[no-untyped-def]
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -3373,6 +3370,14 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
         publisher=publisher,
     )
     worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    return settings, publisher, source, updater, worker
+
+
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
+    tmp_path, feature_config: FeatureConfig, persist_fails: bool, caplog
+):
+    settings, publisher, source, updater, worker = _sidecar_bug_worker(tmp_path, feature_config)
     persist = worker._persist_online_after_ack
     if persist_fails:
         worker._persist_online_after_ack = raising(OSError("persist down"))  # type: ignore[method-assign]
@@ -3395,6 +3400,21 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     assert updater.events_applied == 1
     [repaired] = publisher.published
     assert "u1" in repaired
+
+
+@pytest.mark.parametrize(("step", "label"), [("_ack_tracked", "ack"), ("_settle_live", "deferred ack")])
+def test_event_worker_post_write_error_wins_over_a_failing_ack(
+    tmp_path, feature_config: FeatureConfig, step: str, label: str, caplog
+):
+    _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    setattr(worker, step, raising(OSError("ack down")))
+    persisted: list[bool] = []
+    worker._persist_online_after_ack = lambda: persisted.append(True)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
+    assert persisted == [True]
+    assert f"Event source {label} failed after successful apply" in caplog.text
+    assert "ack down" in caplog.text
 
 
 def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]

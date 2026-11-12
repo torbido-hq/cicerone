@@ -269,11 +269,7 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         obj = s3.get_object(Bucket=bucket, Key=key)
         resolved_etag = etag or str(obj.get("ETag") or "")
         body = read_s3_body(obj, max_bytes=DEFAULT_MAX_STORAGE_READ_BYTES)
-        try:
-            return events_from_body(body, bucket=bucket, key=key, etag=resolved_etag)
-        except Exception as exc:
-            # Producer data boundary: a body that fails to parse is unreadable; callers skip it as poison.
-            raise ValueError(f"Unparsable event object s3://{bucket}/{key}") from exc
+        return events_from_body(body, bucket=bucket, key=key, etag=resolved_etag)
 
     def _register_batch(
         self,

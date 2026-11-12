@@ -838,7 +838,7 @@ def test_s3_sqs_unreadable_object_keeps_readable_siblings(keys):
 
 
 @mock_aws
-def test_s3_sqs_object_whose_parse_fails_unexpectedly_is_skipped(monkeypatch):
+def test_s3_sqs_unexpected_parse_error_propagates_and_keeps_the_message(monkeypatch):
     from cicerone.events import s3 as s3_module
 
     parse = s3_module.events_from_body
@@ -858,9 +858,35 @@ def test_s3_sqs_object_whose_parse_fails_unexpectedly_is_skipped(monkeypatch):
     sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad.json", "good.json"))
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
-    assert [event.event_id for event in source.poll(10)] == ["good"]
-    source.ack(["good"])
-    assert _sqs_held(sqs, queue_url) == 0
+    with pytest.raises(TypeError, match="parser bug"):
+        source.poll(10)
+    assert _sqs_held(sqs, queue_url) == 1
+    source.close()
+
+
+@mock_aws
+def test_s3_list_unexpected_parse_error_propagates_and_holds_the_object(monkeypatch):
+    from cicerone.events import s3 as s3_module
+
+    parse = s3_module.events_from_body
+    broken = {"events/b.json"}
+
+    def _parse(body, *, bucket, key, etag):  # type: ignore[no-untyped-def]
+        if key in broken:
+            raise TypeError("parser bug")
+        return parse(body, bucket=bucket, key=key, etag=etag)
+
+    monkeypatch.setattr(s3_module, "events_from_body", _parse)
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="a"))
+    _put_event(client, "events/b.json", event_payload(event_id="b"))
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    with pytest.raises(TypeError, match="parser bug"):
+        source.poll(10)
+    broken.clear()
+    assert [event.event_id for event in source.poll(10)] == ["a", "b"]
     source.close()
 
 

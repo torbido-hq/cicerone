@@ -685,18 +685,12 @@ class EventWorker:
             self._persist_then_reraise(unexpected)
             return applied
         except Exception:
-            record_events_flush(status="error")
-            logger.exception("Event source ack failed after successful apply; persisting without nack")
-            cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
+            self._raise_held_after_failed_ack("ack", unexpected)
             raise
         try:
             self._settle_live(live)
         except Exception:
-            record_events_flush(status="error")
-            logger.exception(
-                "Event source deferred ack failed after successful apply; persisting without nack"
-            )
-            cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
+            self._raise_held_after_failed_ack("deferred ack", unexpected)
             raise
         if post_write_failed:
             record_events_flush(status="error")
@@ -745,12 +739,20 @@ class EventWorker:
             record_events_tick_error()
         logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
+    def _raise_held_after_failed_ack(self, step: str, unexpected: Exception | None) -> None:
+        # From the ack's except block: a held post-write error wins; otherwise the caller re-raises.
+        record_events_flush(status="error")
+        logger.exception("Event source %s failed after successful apply; persisting without nack", step)
+        if unexpected is not None:
+            self._persist_then_reraise(unexpected)
+        cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
+
     def _persist_then_reraise(self, unexpected: Exception | None) -> None:
         if unexpected is None:
             self._persist_online_after_ack()
             return
         cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
-        raise unexpected from None
+        raise unexpected
 
     def _persist_online_after_ack(self) -> None:
         persisted = False

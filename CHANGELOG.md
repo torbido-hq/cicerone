@@ -58,8 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   load, ack and poll deletes, visibility extension, lag lookup) and invalid
   JSON in a notification; any other error now propagates from `poll`, `ack`,
   `nack` or `health`. A failed delete still tries the other completed
-  messages first. An event object that fails to parse for any reason is
-  still skipped as unreadable.
+  messages first. An event object that is not valid event JSON is still
+  skipped as unreadable; any other parser error propagates and the object
+  or message is retried.
 - Serve startup fails on an unexpected manifest read error instead of
   omitting `X-Generated-At`; storage, database and parse errors still omit
   it, and so does a failed refresh while serving.
@@ -286,7 +287,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When the event worker's start cleanup, its online persist after a failed
   ack, its source health refresh after a failed tick, or the online-fit abort
   after a failed refresh fails too, that failure is logged and the original
-  error propagates instead of being replaced.
+  error propagates instead of being replaced. When an ack fails after an
+  unexpected post-write error, the post-write error propagates and the ack
+  error is logged.
 
 ### Removed
 
