@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from support.events import event_payload
 
@@ -38,6 +40,18 @@ def test_event_fingerprint_does_not_collide_on_pipe_in_fields():
     assert event_fingerprint(left) != event_fingerprint(right)
     again = normalize_event(event_payload(event_id="fp-c", user_id="a|b", item_id="c"))
     assert event_fingerprint(left) == event_fingerprint(again)
+
+
+@pytest.mark.parametrize("field", ["user_id", "item_id", "event_type", "event_id", "idempotency_key"])
+@pytest.mark.parametrize("value", [[], ["a"], {}, {"a": 1}])
+def test_normalize_event_rejects_an_object_or_array_id(field, value):
+    with pytest.raises(EventNormalizeError, match=f"{field} must not be a JSON object or array"):
+        normalize_event({**event_payload(), field: value})
+
+
+def test_normalize_event_still_accepts_a_numeric_id():
+    event = normalize_event({**event_payload(), "user_id": 7, "item_id": Decimal("3")})
+    assert (event.user_id, event.item_id) == ("7", "3")
 
 
 def test_normalize_event_and_errors():

@@ -54,6 +54,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- An event whose `user_id`, `item_id`, `event_type`, `event_id` or
+  `idempotency_key` is a JSON object or array is rejected as invalid, instead
+  of being stored under its Python text or, when deeply nested, stopping the
+  event worker.
 - `model_artifacts` on new MySQL and MariaDB tables: `payload` is `LONGBLOB`,
   it was a 64 KB `BLOB`, and `written_at` is `DATETIME(6)`, so two writes in one
   second no longer look the same to the online update's check. Existing tables
