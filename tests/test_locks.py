@@ -985,15 +985,13 @@ def test_write_fence_hold_rejects_stale_generation_after_reacquire():
             WriteFence(lock).ensure()
 
 
-def test_lock_owned_falls_back_when_owned_rejects_generation():
+def test_lock_owned_propagates_type_error_raised_inside_owned():
     class Lock:
-        hold_generation = 3
+        def owned(self, generation: int | None = None) -> bool:
+            raise TypeError(f"owned bug for generation {generation}")
 
-        def owned(self) -> bool:
-            return True
-
-    assert lock_hold.lock_owned(Lock(), 3) is True
-    assert lock_hold.lock_owned(Lock(), 2) is False
+    with pytest.raises(TypeError, match="owned bug for generation 3"):
+        lock_hold.lock_owned(Lock(), 3)
 
 
 def test_bound_writer_generation_ignores_other_lock():

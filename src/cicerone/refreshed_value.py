@@ -32,6 +32,10 @@ class RefreshedValue(Generic[T]):
         with self._lock:
             self._reload()
 
+    def set(self, value: T) -> None:
+        with self._lock:
+            self._state = (time.monotonic() + self._ttl_seconds, value)
+
     def get(self) -> T:
         state = self._state
         if state is not None and time.monotonic() < state[0]:

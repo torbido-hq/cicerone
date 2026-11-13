@@ -6,7 +6,7 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
-from support.fakes import FakeGuard, fake_monotonic, patch_module_ref
+from support.fakes import FakeGuard, fake_monotonic, patch_module_ref, raising
 from support.prometheus_metrics import metric_value
 from support.settings import local_output, make_settings
 from support.waits import WAIT_SECONDS, wait_until
@@ -246,6 +246,25 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
     assert guard.calls == ["s3-poll"]
 
 
+def test_poll_input_forever_logs_an_unexpected_check_error_and_keeps_polling(tmp_path, monkeypatch, caplog):
+    validate = raising(TypeError("marker bug"))
+    monkeypatch.setattr("cicerone.trigger.validate_storage_options", validate)
+    sleeps = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] == 3:
+            raise SystemExit("stop")
+
+    patch_module_ref(monkeypatch, "cicerone.trigger.time", sleep=fake_sleep)
+    guard = FakeGuard()
+    with pytest.raises(SystemExit):
+        poll_input_forever(local_output(tmp_path), guard, interval_seconds=0.01)
+    assert validate.calls == 3
+    assert caplog.text.count("Failed to check input source for changes") == 3
+    assert guard.calls == []
+
+
 def test_current_marker_local_backend_reflects_mtime(tmp_path):
     from cicerone.trigger import _current_marker
 
@@ -256,9 +275,7 @@ def test_current_marker_local_backend_reflects_mtime(tmp_path):
     assert _current_marker(input_settings) is not None
 
 
-def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, caplog):
-    import logging
-
+def test_current_marker_local_stat_error_propagates_to_the_poller(tmp_path, monkeypatch):
     from cicerone.trigger import _current_marker
 
     input_settings = local_output(tmp_path)
@@ -268,9 +285,8 @@ def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, cap
         raise PermissionError("denied")
 
     monkeypatch.setattr("pathlib.Path.stat", boom)
-    with caplog.at_level(logging.ERROR, logger="cicerone.trigger"):
-        assert _current_marker(input_settings) is None
-    assert any("Failed to check input source" in record.message for record in caplog.records)
+    with pytest.raises(PermissionError, match="denied"):
+        _current_marker(input_settings)
 
 
 @pytest.fixture

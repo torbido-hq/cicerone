@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import socket
 from collections.abc import Sequence
+from functools import partial
 from typing import Any
 
 from cicerone.config.constants import import_extra
@@ -12,6 +13,7 @@ from cicerone.events.base import EventSourceError, EventSourceHealth, Normalized
 from cicerone.events.errors import RedisError
 from cicerone.events.json_payload import delivery_event
 from cicerone.events.normalize import EventNormalizeError
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.option_parse import optional_int, optional_nonempty_str, require_nonempty_str
 
 logger = logging.getLogger(__name__)
@@ -91,7 +93,9 @@ class RedisStreamsEventSource(QueuedEventSource):
             ready = True
         finally:
             if not ready:
-                self._release(client)
+                cleanup_after_failure(
+                    partial(self._release, client), "Redis client close after connect failure", logger
+                )
 
         with self._lock:
             previous = self._client

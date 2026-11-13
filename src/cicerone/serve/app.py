@@ -21,11 +21,13 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K, TRACK_KIND_IMPRESSION
+from cicerone.errors import OPTIONAL_STORE_READ_ERRORS, try_load
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
 from cicerone.experiment.assignment import AssignmentOverlay
 from cicerone.experiment.evaluate import exposure_row
 from cicerone.experiment.store import build_experiment_store
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
@@ -83,6 +85,7 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
             )
             time.sleep(0.05 * attempt)
         except Exception:
+            # Append-pool thread's top level: nobody reads the future.
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
@@ -131,8 +134,9 @@ def _start_refresh_loop(
             time.sleep(interval_seconds)
             reader_ok = _refresh_step(reader)
             # A stamp from a newer manifest must not label recommendations the reader kept.
-            if generated_at_cache is not None and reader_ok:
-                _refresh_step(generated_at_cache)
+            if generated_at_cache is not None and reader_ok and not _refresh_step(generated_at_cache):
+                # Without a fresh stamp the header is omitted rather than left stale.
+                generated_at_cache.set(None)
             if overlay_cache is not None:
                 _refresh_step(overlay_cache)
 
@@ -142,11 +146,13 @@ def _start_refresh_loop(
 def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
-    try:
-        latest = manifest_reader.read_latest()
-    except Exception:
-        logger.exception("Failed to read latest manifest for generated_at; omitting header")
-        return None
+    latest = try_load(
+        "read latest manifest for generated_at; omitting header",
+        manifest_reader.read_latest,
+        None,
+        log=logger,
+        errors=OPTIONAL_STORE_READ_ERRORS,
+    )
     if not latest:
         return None
     value = latest.get("generated_at")
@@ -421,5 +427,7 @@ def main() -> None:
     )
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
-    finally:
-        events_runtime.stop()
+    except BaseException:
+        cleanup_after_failure(events_runtime.stop, "Event runtime stop after a serve error failed", logger)
+        raise
+    events_runtime.stop()

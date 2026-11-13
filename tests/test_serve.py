@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
-from support.fakes import FakeManifest, FakeReader, patch_module_ref
+from support.fakes import FakeManifest, FakeReader, patch_module_ref, raising
 from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
 from cicerone.experiment.assignment import snapshot_variant_names
 from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve import create_app, main
 from cicerone.serve.app import (
+    _append_with_busy_retry,
     _read_generated_at,
     _refresh_step,
     _start_refresh_loop,
@@ -422,14 +425,17 @@ def test_recommendations_manifest_without_generated_at():
     assert body["generated_at"] is None
 
 
-def test_recommendations_survive_manifest_reader_errors():
+@pytest.mark.parametrize(
+    "error", [OSError("manifest store down"), ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")]
+)
+def test_recommendations_survive_manifest_reader_errors(error):
     class BrokenManifest:
         def read_latest(self):
-            raise RuntimeError("manifest store down")
+            raise error
 
         def read_recent(self, limit: int):
             del limit
-            raise RuntimeError("manifest store down")
+            raise error
 
     app = create_app(
         serve_settings(),
@@ -442,6 +448,20 @@ def test_recommendations_survive_manifest_reader_errors():
     assert response.status_code == 200
     assert response.json()["generated_at"] is None
     assert "X-Generated-At" not in response.headers
+
+
+def test_serve_startup_fails_on_unexpected_manifest_read_error():
+    manifest = FakeManifest({})
+    manifest.read_latest = raising(TypeError("manifest reader bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="manifest reader bug"):
+        create_app(serve_settings(), FakeReader(recs_df(), items_df()), manifest_reader=manifest)
+
+
+def test_append_logs_an_unexpected_error_without_raising(caplog):
+    write = raising(TypeError("append bug"))
+    _append_with_busy_retry(write, label="record exposure", user_id="u1")
+    assert write.calls == 1
+    assert "Failed to record exposure for user_id='u1'" in caplog.text
 
 
 def test_generated_at_cache_reads_and_refreshes_manifest():
@@ -472,7 +492,7 @@ def test_generated_at_cache_reads_and_refreshes_manifest():
     assert cache.get() is None
 
 
-def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
+def _run_refresh_ticks(monkeypatch, reader, ticks: int, generated_at_cache=None) -> dict[str, int]:
     calls = {"sleep": 0, "generated": 0, "overlay": 0}
 
     class FakeCache:
@@ -498,10 +518,21 @@ def _run_refresh_ticks(monkeypatch, reader, ticks: int) -> dict[str, int]:
         _start_refresh_loop(
             reader,
             interval_seconds=0.01,
-            generated_at_cache=FakeCache("generated"),
+            generated_at_cache=generated_at_cache or FakeCache("generated"),
             overlay_cache=FakeCache("overlay"),
         )
     return calls
+
+
+def test_refresh_loop_omits_generated_at_after_an_unexpected_manifest_error(monkeypatch):
+    manifest = FakeManifest()
+    cache = RefreshedValue(lambda: _read_generated_at(manifest))
+    cache.refresh()
+    assert cache.get() is not None
+    manifest.read_latest = raising(TypeError("manifest bug"))  # type: ignore[method-assign]
+    _run_refresh_ticks(monkeypatch, FakeReader(recs_df()), ticks=1, generated_at_cache=cache)
+    assert manifest.read_latest.calls == 1
+    assert cache.get() is None
 
 
 def test_start_refresh_loop_calls_refresh_periodically(monkeypatch):
@@ -673,6 +704,30 @@ def test_main_starts_serve_app_in_serve_mode(tmp_path, monkeypatch):
     assert uvicorn_calls == {"host": "127.0.0.1", "port": 8000}
     assert served_app is not None
     assert refresh_kwargs[0]["generated_at_cache"] is served_app.state.generated_at_cache
+
+
+def test_main_serve_error_wins_over_a_failing_events_stop(monkeypatch, caplog):
+    import cicerone.serve.app as serve_module
+
+    stop = raising(TypeError("stop bug"))
+    original = OSError("bind failed")
+    monkeypatch.setattr(serve_module, "load_settings", serve_settings)
+    monkeypatch.setattr(
+        "cicerone.io.factory.build_recommendation_reader", lambda _output: FakeReader(recs_df())
+    )
+    monkeypatch.setattr("cicerone.io.factory.build_manifest_reader", lambda _output: FakeManifest())
+    monkeypatch.setattr(
+        serve_module,
+        "start_events_runtime",
+        lambda *_args, **_kwargs: SimpleNamespace(webhook_source=None, worker=None, stop=stop),
+    )
+    monkeypatch.setattr(serve_module, "_start_refresh_loop", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(serve_module, "uvicorn", SimpleNamespace(run=raising(original)))
+    with pytest.raises(OSError) as caught:
+        main()
+    assert caught.value is original
+    assert stop.calls == 1
+    assert "Event runtime stop after a serve error failed" in caplog.text
 
 
 def test_main_fails_closed_on_invalid_feature_config(tmp_path, monkeypatch):

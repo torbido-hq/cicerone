@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from support.events import FakeOnline, event_payload
+from support.fakes import raising
 from support.settings import local_output
 
 from cicerone.artifact import ARTIFACT_FILENAME, build_artifact, dumps_artifact, loads_artifact
@@ -21,6 +22,7 @@ from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
+from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.model import train_and_recommend
 from cicerone.serve.bootstrap_events import start_events_runtime
 
@@ -993,6 +995,27 @@ def test_incremental_updater_online_named_error_logs_and_aborts(
         updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="io"))])
     assert online.aborts == 1
     assert "Online collaborative refresh failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("online io"),
+        LockLostError("events apply lock lost", kind="apply"),
+        WriterLockBusyError("dataset writer lock busy"),
+        KeyError("online bug"),
+    ],
+)
+def test_incremental_updater_failed_online_abort_does_not_replace_the_refresh_error(
+    tmp_path, feature_config: FeatureConfig, caplog, error
+):
+    updater, online, _settings = _failing_online_updater(tmp_path, feature_config, error)
+    online.abort = raising(RuntimeError("abort bug"))  # type: ignore[method-assign]
+    with pytest.raises(type(error)) as caught:
+        updater.apply([normalize_event(event_payload(user_id="u1", item_id="i1", event_id="io"))])
+    assert caught.value is error
+    assert online.abort.calls == 1
+    assert "Online fit abort after a refresh error failed" in caplog.text
 
 
 def test_incremental_updater_online_lock_lost_logs_and_aborts(

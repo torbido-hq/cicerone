@@ -9,12 +9,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
+from cicerone.amqp_options import RABBITMQ_IO_ERRORS, close_amqp_handles
 from cicerone.events.base import EventSourceError
-from cicerone.events.errors import AMQPError
+from cicerone.failure_cleanup import cleanup_after_failure
 
 logger = logging.getLogger(__name__)
-
-RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -197,11 +196,11 @@ class PikaIo:
         self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
-        close_handles(channel, connection)
-        if leftover_channel is not None and leftover_channel is not channel:
-            _close_quietly(leftover_channel, "channel")
-        if leftover_connection is not None and leftover_connection is not connection:
-            _close_quietly(leftover_connection, "connection")
+        close_handles_after_failure(channel, connection)
+        close_handles_after_failure(
+            leftover_channel if leftover_channel is not channel else None,
+            leftover_connection if leftover_connection is not connection else None,
+        )
 
     def _loop(self) -> None:
         while True:
@@ -221,6 +220,7 @@ class PikaIo:
                 try:
                     self._pump()
                 except Exception:
+                    # I/O thread's top level: callers blocked on it see the failed state.
                     self._mark_failed()
                     logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
@@ -241,8 +241,7 @@ class PikaIo:
                 return
             try:
                 result = job.fn()
-            except Exception as exc:
-                # The caller is blocked on this reply.
+            except Exception as exc:  # noqa: BLE001 - handed to the blocked caller, which re-raises it
                 payload: tuple[str, Any] = ("err", exc)
             else:
                 payload = ("err", abandoned_error()) if self._failed else ("ok", result)
@@ -282,38 +281,30 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
     if io.failed or not io._try_begin_shutdown():
         io.abandon(channel, connection)
         if not io._thread.is_alive():
-            close_handles(channel, connection)
+            close_handles_after_failure(channel, connection)
         return
-    closed = False
+
+    def _shutdown() -> None:
+        io._channel = None
+        io._connection = None
+        close_amqp_handles(channel, connection)
+
     try:
-
-        def _shutdown() -> None:
-            io._connection = None
-            close_handles(channel, connection)
-
         io.submit(_shutdown, allow_closing=True)
-        closed = True
     except RABBITMQ_IO_ERRORS:
         logger.exception("Failed to close RabbitMQ connection on I/O thread")
-    finally:
-        if not closed:
-            io.abandon(channel, connection)
-    if closed:
-        io.stop()
-
-
-def close_handles(channel: Any, connection: Any) -> None:
-    _close_quietly(channel, "channel")
-    _close_quietly(connection, "connection")
-
-
-def _close_quietly(handle: Any, label: str) -> None:
-    if handle is None:
+        io.abandon(channel, connection)
         return
-    closer = getattr(handle, "close", None)
-    if not callable(closer):
-        return
-    try:
-        closer()
     except Exception:
-        logger.exception("Failed to close RabbitMQ %s", label)
+        # The handles were already closed (or are still bound to io); stop the thread, don't close twice.
+        io.abandon(None, None)
+        raise
+    io.stop()
+
+
+def close_handles_after_failure(channel: Any, connection: Any) -> None:
+    cleanup_after_failure(
+        lambda: close_amqp_handles(channel, connection),
+        "Failed to close RabbitMQ handles after a failure",
+        logger,
+    )

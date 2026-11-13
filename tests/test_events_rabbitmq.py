@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
-from support.fakes import hide_module
+from support.fakes import hide_module, raising
 from support.waits import UNREACHED_SECONDS, WAIT_SECONDS, call_in_thread, wait_until
 
 from cicerone.config import ConfigError
@@ -450,30 +450,42 @@ def test_bind_handles_does_not_reborn_abandoned_io():
     assert io._channel is None
 
 
-def test_close_handles_closes_connection_when_channel_close_fails():
-    from cicerone.events.rabbitmq_io import close_handles
+def test_close_amqp_handles_returns_the_first_broker_error_and_raises_others():
+    from cicerone.amqp_options import close_amqp_handles
+
+    closes: list[str] = []
 
     class _Handle:
-        def __init__(self, error: BaseException | None = None) -> None:
+        def __init__(self, name: str, error: BaseException | None = None) -> None:
+            self.name = name
             self.error = error
             self.closed = False
 
         def close(self) -> None:
+            closes.append(self.name)
             self.closed = True
             if self.error is not None:
                 raise self.error
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle()
-    close_handles(channel, connection)
-    assert channel.closed is True
-    assert connection.closed is True
+    channel_error = AMQPError("channel")
+    channel, connection = _Handle("channel", channel_error), _Handle("connection", AMQPError("connection"))
+    assert close_amqp_handles(channel, connection) is channel_error
+    assert closes == ["channel", "connection"]
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle(RuntimeError("connection"))
-    close_handles(channel, connection)
+    closes.clear()
+    channel, connection = _Handle("channel", AMQPError("channel")), _Handle("connection", TypeError("bug"))
+    with pytest.raises(TypeError, match="bug"):
+        close_amqp_handles(channel, connection)
+    assert closes == ["channel", "connection"]
     assert channel.closed is True
-    assert connection.closed is True
+
+    closes.clear()
+    channel = _Handle("channel", RuntimeError("channel bug"))
+    connection = _Handle("connection", RuntimeError("connection bug"))
+    with pytest.raises(RuntimeError, match="channel bug"):
+        close_amqp_handles(channel, connection)
+    assert closes == ["channel", "connection"]
+    assert close_amqp_handles(None, None) is None
 
 
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
@@ -809,8 +821,10 @@ def test_amqp_callbacks_use_io_handles(monkeypatch):
     io_channel.basic_ack = _ack  # type: ignore[method-assign]
     io_channel.queue_declare = _declare  # type: ignore[method-assign]
     io_connection.process_data_events = _pump  # type: ignore[method-assign]
-    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
-    source._connection = SimpleNamespace(process_data_events=_fail)
+    source._channel = SimpleNamespace(
+        basic_get=_fail, basic_ack=_fail, queue_declare=_fail, close=lambda: None
+    )
+    source._connection = SimpleNamespace(process_data_events=_fail, close=lambda: None)
 
     assert source._basic_get(io) == (None, None, None)
     source._basic_ack(io, 9)
@@ -1545,6 +1559,34 @@ def test_heartbeat_runs_on_io_thread(monkeypatch):
     assert io_ident is not None
     assert ids
     assert all(ident == io_ident for ident in ids)
+
+
+def test_close_propagates_an_unexpected_close_error_without_closing_twice(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    connection = broker.connection
+    connection.channel_obj.close = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="close bug"):
+        source.close()
+    assert connection.closed is True
+    assert connection.channel_obj.close.calls == 1
+
+
+def test_reconnect_propagates_an_unexpected_close_of_the_previous_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = broker.connection
+    first.channel_obj.close = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="close bug"):
+        source.connect()
+    # The new connection stays in use; the broker redelivers what the old channel held unacked.
+    assert first.closed is True
+    assert broker.connection is not first
+    assert source._connection is broker.connection
+    source.close()
+    assert broker.connection.closed is True
 
 
 def test_reconnect_closes_previous(monkeypatch):

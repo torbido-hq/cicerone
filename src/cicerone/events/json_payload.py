@@ -7,11 +7,17 @@ from collections.abc import Mapping
 from typing import Any
 
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event, supplied_event_id
+from cicerone.events.normalize import (
+    EventNormalizeError,
+    normalize_event,
+    reject_object_fields,
+    supplied_event_id,
+)
 
 
 def delivery_event(raw: Any, fallback_id: str) -> NormalizedEvent:
     payload = decode_json_object(raw)
+    reject_object_fields(payload)
     if supplied_event_id(payload) is None:
         payload["event_id"] = fallback_id
     return normalize_event(payload)

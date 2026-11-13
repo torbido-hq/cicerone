@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from support.fakes import FakeLock, FakePublisher
+from support.fakes import FakeLock, FakePublisher, raising
 from support.settings import local_output, make_settings
 
 from cicerone import job
@@ -1731,6 +1731,34 @@ def test_finalize_job_keeps_in_flight_error_over_publisher_close_failure(tmp_pat
     with pytest.raises(KeyError, match="close failed"):
         _run(None)
     assert [payload["error"] for payload in payloads] == ["boom", "boom"]
+
+
+def test_finalize_job_keeps_track_output_error_over_manifest_write_failure(tmp_path, monkeypatch, caplog):
+    from cicerone.config import TrackSettings
+    from cicerone.job import JobManifest, JobRun, _finalize_job
+
+    original = OSError("track write failed")
+    monkeypatch.setattr(job, "_persist_track_outputs", raising(original))
+
+    class _Sink:
+        write_manifest = raising(TypeError("manifest bug"))
+
+    sink = _Sink()
+    with pytest.raises(OSError) as caught:
+        _finalize_job(
+            JobRun(
+                settings=make_settings(output=local_output(tmp_path), track=TrackSettings(enabled=True)),
+                sink=sink,
+                fence=WriteFence(),
+                track_fence=WriteFence(),
+                manifest=JobManifest(status="success"),
+                started_at="2026-01-01T00:00:00+00:00",
+            ),
+            None,
+        )
+    assert caught.value is original
+    assert sink.write_manifest.calls == 1
+    assert "Failed to write the final manifest after a track output error" in caplog.text
 
 
 def test_job_run_finalizes_with_error_raised_while_recording_failure(tmp_path, monkeypatch):

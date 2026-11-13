@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from support.fakes import hold_threads, patch_module_ref
+from support.fakes import hold_threads, patch_module_ref, raising
 
 from cicerone import scheduler
 
@@ -69,6 +69,22 @@ def test_cron_loop_does_not_rerun_a_tick_after_the_clock_steps_back(monkeypatch)
     assert runs == [None]
     assert sleeps[0] == pytest.approx(60)
     assert sleeps[1] == pytest.approx(24 * 3600, abs=1)
+
+
+def test_cron_loop_logs_a_failed_run_and_keeps_running(monkeypatch, caplog):
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 3:
+            raise SystemExit
+
+    patch_module_ref(monkeypatch, "cicerone.scheduler.time", sleep=fake_sleep)
+    run = raising(TypeError("run bug"))
+    with pytest.raises(SystemExit):
+        scheduler._cron_loop("* * * * *", run)
+    assert run.calls == 2
+    assert caplog.text.count("Scheduled run failed (TypeError: run bug)") == 2
 
 
 def test_main_raises_on_invalid_cron_schedule(tmp_path, monkeypatch):

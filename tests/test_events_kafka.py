@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_kafka import FakeConsumer, install_fake_kafka, kafka_source_options
-from support.fakes import hide_module
+from support.fakes import hide_module, raising
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -63,30 +63,6 @@ def test_optional_float_validation():
         optional_float({"n": float("inf")}, "n", 10.0, prefix="x")
     with pytest.raises(ConfigError, match="number"):
         optional_float({"n": 10**400}, "n", 10.0, prefix="x")
-
-    class _OverflowNoRepr:
-        def __float__(self) -> float:
-            raise OverflowError("too big")
-
-        def __repr__(self) -> str:
-            raise RuntimeError("repr failed")
-
-    with pytest.raises(ConfigError, match=r"must be a number, got <_OverflowNoRepr RuntimeError>$"):
-        optional_float({"n": _OverflowNoRepr()}, "n", 10.0, prefix="x")
-
-    class _NoName(type):
-        def __getattribute__(cls, name: str) -> object:
-            raise RuntimeError("no name")
-
-    class _Hostile(metaclass=_NoName):
-        def __float__(self) -> float:
-            raise OverflowError("too big")
-
-        def __repr__(self) -> str:
-            raise RuntimeError("repr failed")
-
-    with pytest.raises(ConfigError, match=r"must be a number, got <_Hostile RuntimeError>$"):
-        optional_float({"n": _Hostile()}, "n", 10.0, prefix="x")
     with pytest.raises(ConfigError, match="<= 5"):
         optional_float({"n": 5.1}, "n", 10.0, prefix="x", maximum=5.0)
     assert optional_float({"n": 5.0}, "n", 10.0, prefix="x", maximum=5.0) == 5.0
@@ -502,6 +478,18 @@ def test_connect_list_topics_unexpected_error_propagates(monkeypatch):
     with pytest.raises(RuntimeError, match="bug"):
         source.connect()
     assert created[0].closed is True
+
+
+def test_connect_error_wins_over_a_failing_consumer_close(monkeypatch, caplog):
+    broker = install_fake_kafka(monkeypatch)
+    broker.list_topics_error = KafkaException("down")
+    close = raising(TypeError("close bug"))
+    monkeypatch.setattr(FakeConsumer, "close", close)
+    source = KafkaEventSource(kafka_source_options())
+    with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert close.calls == 1
+    assert "Kafka consumer close after connect failure" in caplog.text
 
 
 def test_commit_discard_tolerates_commit_failure(monkeypatch):

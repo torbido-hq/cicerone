@@ -35,7 +35,7 @@ dependencies = [
     "psycopg[binary]>=3.3.6,<4",
     "croniter>=6.2.4,<7",
     "fastapi>=0.162.0,<0.163",
-    "python-multipart>=0.0.32,<0.0.33",
+    "python-multipart>=0.0.33,<0.0.34",
     "uvicorn[standard]>=0.54.0,<0.55",
     "prometheus-client>=0.26.0,<0.27",
     "jinja2>=3.1.6,<4",
@@ -77,11 +77,16 @@ line-length = 110
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF100"]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "BLE", "RUF100"]
 
 [tool.ruff.lint.per-file-ignores]
 # Contract tests are frozen; their noqa comments stay as written.
 "tests/test_contract_*.py" = ["RUF100"]
+# Their helper threads capture any error so the test can assert on it.
+"tests/test_content_fallback.py" = ["BLE001"]
+"tests/test_events_ha.py" = ["BLE001"]
+"tests/test_events_rabbitmq.py" = ["BLE001"]
+"tests/test_events_worker.py" = ["BLE001"]
 
 [tool.mypy]
 python_version = "3.11"

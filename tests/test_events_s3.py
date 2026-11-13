@@ -5,12 +5,13 @@ import logging
 
 import boto3
 import pytest
-from botocore.exceptions import BotoCoreError
+from botocore.exceptions import BotoCoreError, ClientError
 from moto import mock_aws
 from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fakes import raising
 
 from cicerone.config import ConfigError
+from cicerone.events import s3_sqs
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.s3 import (
     SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
@@ -705,6 +706,34 @@ def test_s3_sqs_deletes_oversize_object_message(monkeypatch):
     assert list(source.poll(10)) == []
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+@mock_aws
+def test_s3_sqs_unparsable_notification_is_deleted_as_poison(body):
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-unparsable-body")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=body.decode())
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    assert list(source.poll(10)) == []
+    assert _sqs_held(sqs, queue_url) == 0
+
+
+@mock_aws
+def test_s3_sqs_unexpected_notification_parse_error_propagates(monkeypatch):
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-parse-bug")["QueueUrl"]
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
+    monkeypatch.setattr(s3_sqs, "s3_records_from_sqs_body", raising(TypeError("parse bug")))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    with pytest.raises(TypeError, match="parse bug"):
+        list(source.poll(10))
+    assert _sqs_held(sqs, queue_url) == 1
+
+
 @mock_aws
 def test_s3_sqs_poison_and_missing_object_and_health():
     s3 = boto3.client("s3", region_name="us-east-1")
@@ -723,18 +752,22 @@ def test_s3_sqs_poison_and_missing_object_and_health():
     source.ack(["unknown-id", events[0].event_id])
 
 
-def _two_batch_sqs_source(queue_name: str):
+_ACCESS_DENIED = ClientError({"Error": {"Code": "AccessDenied"}}, "SqsCall")
+
+
+def _batched_sqs_source(queue_name: str, *keys: str):
+    """One SQS message, so one batch, per key."""
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
     queue_url = sqs.create_queue(QueueName=queue_name)["QueueUrl"]
-    for key in ("first", "second"):
+    for key in keys:
         _put_event(s3, f"{key}.json", event_payload(event_id=key))
         sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification(f"{key}.json"))
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
     events = list(source.poll(10))
-    assert len(events) == 2
+    assert len(events) == len(keys)
     return sqs, queue_url, source, events
 
 
@@ -801,6 +834,59 @@ def test_s3_sqs_unreadable_object_keeps_readable_siblings(keys):
     assert _sqs_held(sqs, queue_url) == 1
     source.ack(["good"])
     assert _sqs_held(sqs, queue_url) == 0
+    source.close()
+
+
+@mock_aws
+def test_s3_sqs_unexpected_parse_error_propagates_and_keeps_the_message(monkeypatch):
+    from cicerone.events import s3 as s3_module
+
+    parse = s3_module.events_from_body
+
+    def _parse(body, *, bucket, key, etag):  # type: ignore[no-untyped-def]
+        if key == "bad.json":
+            raise TypeError("parser bug")
+        return parse(body, bucket=bucket, key=key, etag=etag)
+
+    monkeypatch.setattr(s3_module, "events_from_body", _parse)
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-parse-bug")["QueueUrl"]
+    _put_event(s3, "bad.json", event_payload(event_id="bad"))
+    _put_event(s3, "good.json", event_payload(event_id="good"))
+    sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("bad.json", "good.json"))
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    with pytest.raises(TypeError, match="parser bug"):
+        source.poll(10)
+    assert _sqs_held(sqs, queue_url) == 1
+    source.close()
+
+
+@mock_aws
+def test_s3_list_unexpected_parse_error_propagates_and_holds_the_object(monkeypatch):
+    from cicerone.events import s3 as s3_module
+
+    parse = s3_module.events_from_body
+    broken = {"events/b.json"}
+
+    def _parse(body, *, bucket, key, etag):  # type: ignore[no-untyped-def]
+        if key in broken:
+            raise TypeError("parser bug")
+        return parse(body, bucket=bucket, key=key, etag=etag)
+
+    monkeypatch.setattr(s3_module, "events_from_body", _parse)
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket="events-bucket")
+    _put_event(client, "events/a.json", event_payload(event_id="a"))
+    _put_event(client, "events/b.json", event_payload(event_id="b"))
+    source = S3EventSource(_creds(mode="list", prefix="events/"))
+    source.connect()
+    with pytest.raises(TypeError, match="parser bug"):
+        source.poll(10)
+    broken.clear()
+    assert [event.event_id for event in source.poll(10)] == ["a", "b"]
     source.close()
 
 
@@ -1253,18 +1339,27 @@ def test_s3_list_missing_marker_starts_from_initial_marker(tmp_path):
 
 
 @mock_aws
-def test_s3_sqs_health_unexpected_lag_error_is_logged(monkeypatch, caplog):
+def test_s3_sqs_health_unexpected_lag_error_propagates(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
     queue_url = sqs.create_queue(QueueName="events-lag-unexpected")["QueueUrl"]
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", raising(TypeError("attrs")))
+    with pytest.raises(TypeError, match="attrs"):
+        source.health()
 
-    def boom(**kwargs):
-        raise RuntimeError("attrs")
 
-    monkeypatch.setattr(source._sqs, "get_queue_attributes", boom)
+@mock_aws
+def test_s3_sqs_health_client_error_is_logged(monkeypatch, caplog):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    s3.create_bucket(Bucket="events-bucket")
+    queue_url = sqs.create_queue(QueueName="events-lag-logged")["QueueUrl"]
+    source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
+    source.connect()
+    monkeypatch.setattr(source._sqs, "get_queue_attributes", raising(_ACCESS_DENIED))
     with caplog.at_level("ERROR"):
         health = source.health()
     assert health.connected is True
@@ -1291,7 +1386,7 @@ def test_s3_sqs_health_recovers_from_client_error(monkeypatch):
     assert health.lag == 0
 
 
-@pytest.mark.parametrize("error", [RuntimeError("attrs"), BotoCoreError()])
+@pytest.mark.parametrize("error", [_ACCESS_DENIED, BotoCoreError()])
 @mock_aws
 def test_s3_sqs_health_lag_error_keeps_cached_lag(monkeypatch, error):
     s3 = boto3.client("s3", region_name="us-east-1")
@@ -1359,7 +1454,7 @@ def test_s3_sqs_health_lag_error_uses_concurrently_refreshed_cache(monkeypatch):
 
 
 @mock_aws
-def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
+def test_s3_sqs_unexpected_load_error_propagates_and_leaves_message(monkeypatch):
     s3 = boto3.client("s3", region_name="us-east-1")
     sqs = boto3.client("sqs", region_name="us-east-1")
     s3.create_bucket(Bucket="events-bucket")
@@ -1368,24 +1463,16 @@ def test_s3_sqs_unexpected_load_error_leaves_message(monkeypatch):
     sqs.send_message(QueueUrl=queue_url, MessageBody=_s3_notification("ok.json"))
     source = S3EventSource(_creds(mode="sqs", queue_url=queue_url))
     source.connect()
-
-    def boom(self, s3, bucket, key, etag=""):  # type: ignore[no-untyped-def]
-        raise RuntimeError("load bug")
-
-    monkeypatch.setattr(S3EventSource, "_load_object_events", boom)
-    assert list(source.poll(10)) == []
-    attrs = sqs.get_queue_attributes(
-        QueueUrl=queue_url,
-        AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
-    )["Attributes"]
-    held = int(attrs["ApproximateNumberOfMessages"]) + int(attrs["ApproximateNumberOfMessagesNotVisible"])
-    assert held == 1
+    monkeypatch.setattr(S3EventSource, "_load_object_events", raising(TypeError("load bug")))
+    with pytest.raises(TypeError, match="load bug"):
+        list(source.poll(10))
+    assert _sqs_held(sqs, queue_url) == 1
 
 
-@pytest.mark.parametrize("error", [RuntimeError("delete bug"), BotoCoreError()])
+@pytest.mark.parametrize("error", [_ACCESS_DENIED, BotoCoreError()])
 @mock_aws
 def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeypatch, caplog, error):
-    sqs, queue_url, source, events = _two_batch_sqs_source("events-delete-error")
+    sqs, queue_url, source, events = _batched_sqs_source("events-delete-error", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "delete_message", error)
     event_ids = [event.event_id for event in events]
     with caplog.at_level("ERROR"):
@@ -1395,10 +1482,50 @@ def test_s3_sqs_ack_delete_error_is_logged_and_later_batches_are_deleted(monkeyp
     _assert_error_logged_with_traceback(caplog, "Failed to delete SQS message after ack")
 
 
-@pytest.mark.parametrize("error", [RuntimeError("visibility bug"), BotoCoreError()])
+@mock_aws
+def test_s3_sqs_ack_delete_unexpected_errors_try_every_batch_then_raise_the_first(monkeypatch, caplog):
+    sqs, queue_url, source, events = _batched_sqs_source("events-delete-unexpected", "b0", "b1", "b2")
+    first = TypeError("delete bug")
+    errors = iter([first, TypeError("second bug"), TypeError("third bug")])
+    receipts: list[str] = []
+
+    def delete_message(**kwargs):
+        receipts.append(kwargs["ReceiptHandle"])
+        raise next(errors)
+
+    monkeypatch.setattr(source._sqs, "delete_message", delete_message)
+    with pytest.raises(TypeError) as caught:
+        source.ack([event.event_id for event in events])
+    assert caught.value is first
+    assert len(set(receipts)) == 3
+    assert caplog.text.count("Failed to delete SQS message after an earlier delete error") == 2
+    assert _sqs_held(sqs, queue_url) == 3
+
+
+@mock_aws
+def test_s3_sqs_unexpected_delete_error_at_batch_registration_propagates(monkeypatch):
+    _, _, source, _events = _batched_sqs_source("events-register-delete")
+    delete = raising(TypeError("delete bug"))
+    monkeypatch.setattr(source._sqs, "delete_message", delete)
+    # A batch with nothing left completes as soon as poll registers it.
+    with pytest.raises(TypeError, match="delete bug"):
+        source._register_batch([], receipt_handle="receipt-0")
+    assert delete.calls == 1
+
+
+@mock_aws
+def test_s3_sqs_visibility_unexpected_error_propagates(monkeypatch):
+    _, _, source, events = _batched_sqs_source("events-vis-unexpected", "first", "second")
+    calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", TypeError("vis bug"))
+    with pytest.raises(TypeError, match="vis bug"):
+        source.nack(events)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("error", [_ACCESS_DENIED, BotoCoreError()])
 @mock_aws
 def test_s3_sqs_visibility_error_is_logged_and_events_stay_pending_locally(monkeypatch, caplog, error):
-    _, _, source, events = _two_batch_sqs_source("events-vis-error")
+    _, _, source, events = _batched_sqs_source("events-vis-error", "first", "second")
     calls = _fail_first_call(monkeypatch, source._sqs, "change_message_visibility", error)
     with caplog.at_level("ERROR"):
         assert source.nack(events) == ()

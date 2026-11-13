@@ -44,6 +44,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Importing `cicerone.serve.app`, `cicerone.dashboard` or `cicerone.scheduler`
   no longer calls `logging.basicConfig` (the `cicerone` CLI and `python -m`
   still configure logging).
+- The Kafka publisher wraps only Kafka client errors as `PublishError`; any
+  other error (e.g. a `TypeError` or `OSError` from flush) now propagates
+  unchanged, even after messages were produced.
+- The RabbitMQ publisher retries and wraps as `PublishError` only broker
+  errors; any other error now propagates without a retry, even after part of
+  a publish was sent.
+- Closing a RabbitMQ events connection, on `close()` or when `connect()`
+  replaces it, logs broker errors and propagates any other error instead of
+  logging it. Only a close on an I/O thread that has failed, or is abandoned
+  because it was busy, still logs every error.
+- The S3/SQS events source logs and absorbs only S3/SQS client errors (object
+  load, ack and poll deletes, visibility extension, lag lookup) and invalid
+  JSON in a notification; any other error now propagates from `poll`, `ack`,
+  `nack` or `health`. A failed delete still tries the other completed
+  messages first. An event object that is not valid event JSON is still
+  skipped as unreadable; any other parser error propagates and the object
+  or message is retried.
+- Serve startup fails on an unexpected manifest read error instead of
+  omitting `X-Generated-At`; storage, database and parse errors still omit
+  it, and so does a failed refresh while serving.
+- The events worker thread logs an unexpected error, counts it in
+  `cicerone_events_tick_errors_total` and sets
+  `cicerone_events_source_connected` to 0 before it stops.
+- A `TypeError` raised inside a lock's `owned()` now propagates instead of
+  falling back to a check without the hold generation.
 
 ### Deprecated
 
@@ -54,6 +79,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- An event whose `user_id`, `item_id`, `event_type`, `event_id` or
+  `idempotency_key` is a JSON object or array is rejected as invalid, instead
+  of being stored under its Python text or, when deeply nested, stopping the
+  event worker.
 - `model_artifacts` on new MySQL and MariaDB tables: `payload` is `LONGBLOB`,
   it was a 64 KB `BLOB`, and `written_at` is `DATETIME(6)`, so two writes in one
   second no longer look the same to the online update's check. Existing tables
@@ -259,6 +288,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   still carry user data: database driver messages can embed values, such as the
   key in a duplicate-key error, and some log lines name the `user_id` on purpose.
 - Boosts no longer raise `TypeError` on an items table with a duplicate index.
+- When the event worker's start cleanup, its online persist after a failed
+  ack, its source health refresh after a failed tick, or the online-fit abort
+  after a failed refresh fails too, that failure is logged and the original
+  error propagates instead of being replaced. When an ack fails after an
+  unexpected post-write error, the post-write error propagates and the ack
+  error is logged.
 
 ### Removed
 

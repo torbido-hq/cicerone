@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from support.events import dataset_updater, event_payload
-from support.fakes import hide_module
+from support.fakes import hide_module, raising
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -405,6 +405,18 @@ def test_connect_group_failure_closes_new_client(monkeypatch):
         source.connect()
     assert second.closed is True
     assert first.closed is False
+
+
+def test_connect_error_wins_over_a_failing_client_close(monkeypatch, caplog):
+    client = FakeRedis()
+    client.ping = raising(RedisError("down"))  # type: ignore[method-assign]
+    client.close = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    _install_fake_redis(monkeypatch, client)
+    source = RedisStreamsEventSource(_options())
+    with pytest.raises(EventSourceError, match="unreachable"):
+        source.connect()
+    assert client.close.calls == 1
+    assert "Redis client close after connect failure" in caplog.text
 
 
 def test_connect_ping_unexpected_error_propagates(monkeypatch):

@@ -5,8 +5,9 @@ import os
 import re
 
 import pytest
+from support.fakes import raising
 
-from cicerone import __version__
+from cicerone import __version__, cli
 from cicerone.cli import main
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
@@ -280,3 +281,9 @@ def test_users_help_skips_the_dashboard_config(tmp_path, monkeypatch, capsys):
         main(["users", "--help"])
     assert exc_info.value.code == 0
     assert capsys.readouterr().out.startswith("usage: cicerone users ")
+
+
+def test_run_job_logs_an_unexpected_failure_and_returns_1(monkeypatch, caplog):
+    monkeypatch.setattr("cicerone.job.run", raising(TypeError("job bug")))
+    assert cli._run_job() == 1
+    assert "Recommendation job failed" in caplog.text
