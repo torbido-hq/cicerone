@@ -1522,9 +1522,8 @@ def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
     assert [event.event_id for event in worker._retry_acks] == ["flush-unexpected-ack"]
 
 
-@pytest.mark.parametrize("timeout", [False, True])
-def test_event_worker_flush_persists_when_deferred_ack_fails(
-    tmp_path, feature_config: FeatureConfig, monkeypatch, timeout: bool
+def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     out = tmp_path / "out"
     out.mkdir()
@@ -1554,7 +1553,7 @@ def test_event_worker_flush_persists_when_deferred_ack_fails(
 
     def _deferred(applied) -> None:  # type: ignore[no-untyped-def]
         del applied
-        raise (TimeoutError if timeout else LookupError)("deferred ack bug")
+        raise LookupError("deferred ack bug")
 
     def _persist() -> None:
         persisted["n"] += 1
@@ -1562,15 +1561,55 @@ def test_event_worker_flush_persists_when_deferred_ack_fails(
     monkeypatch.setattr(worker, "_ack_live_ids", _ack)
     monkeypatch.setattr(worker, "_ack_deferred_matching", _deferred)
     monkeypatch.setattr(worker._updater, "persist_online", _persist)
-    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
-    # A timeout is absorbed like one from the ack itself; anything else propagates.
-    if timeout:
-        assert worker.tick() == 1
-        assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
-    else:
-        with pytest.raises(LookupError, match="deferred ack bug"):
-            worker.tick()
+    with pytest.raises(LookupError, match="deferred ack bug"):
+        worker.tick()
     assert persisted["n"] == 1
+
+
+def test_event_worker_deferred_ack_timeout_is_retried_next_tick(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(output=local_output(out), top_k=3)
+    payload = event_payload(event_id="deferred-timeout", item_id="i8")
+    source = WebhookEventSource({})
+    source.ingest(payload)
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    # An earlier delivery of the same event, deferred until this batch applies it.
+    deferred = normalize_event(payload)
+    worker._deferred_acks.append(deferred)
+    acks: list[list[str]] = []
+
+    def _ack(event_ids):  # type: ignore[no-untyped-def]
+        acks.append(list(event_ids))
+        if len(acks) == 2:
+            raise TimeoutError("deferred ack timed out")
+        return set(event_ids)
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack)
+    monkeypatch.setattr(worker._updater, "persist_online", lambda: None)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
+    assert worker._retry_acks == [deferred]
+    assert worker._deferred_acks == []
+
+    worker.tick()
+    assert acks[2] == ["deferred-timeout"]
+    assert worker._retry_acks == []
 
 
 def test_event_apply_errors_exclude_broad_programming_errors():
