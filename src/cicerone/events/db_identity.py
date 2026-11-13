@@ -11,6 +11,7 @@ from cicerone.events.normalize import (
     EventNormalizeError,
     normalize_event,
     parse_occurred_at,
+    reject_object_fields,
     supplied_event_id,
 )
 from cicerone.option_parse import NUMBER_PARSE_ERRORS
@@ -202,6 +203,7 @@ def cursor_key_from_payload(payload: dict[str, Any]) -> tuple[datetime, tuple[st
 
 
 def row_to_event(payload: dict[str, Any]) -> NormalizedEvent:
+    reject_object_fields(payload)
     if "event_id" in payload and supplied_event_id(payload) is None:
         raise EventNormalizeError("event_id or idempotency_key is required when the source has event_id")
     occurred_at = db_occurred_at(payload.get("occurred_at"))

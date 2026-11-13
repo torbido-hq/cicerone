@@ -17,6 +17,7 @@ from cicerone.events.db_identity import (
     _is_numeric_identity,
     _row_identity,
     _stable_event_id,
+    row_to_event,
 )
 from cicerone.events.normalize import EventNormalizeError
 from cicerone.events.registry import build_event_source, registered_event_source_kinds
@@ -1092,3 +1093,9 @@ def test_db_row_without_event_id_or_idempotency_key_is_rejected_without_blocking
     assert _polled_one_by_one(source) == ["e1", "e3"]
     assert _saved_event_id(tmp_path) == "e3"
     assert _restarted_ids(options) == []
+
+
+@pytest.mark.parametrize("field", ["event_id", "user_id"])
+def test_db_row_with_an_object_id_is_rejected(field):
+    with pytest.raises(EventNormalizeError, match=f"{field} must not be a JSON object or array"):
+        row_to_event({**event_payload(), field: {"a": 1}})

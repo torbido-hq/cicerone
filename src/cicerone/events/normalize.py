@@ -14,6 +14,7 @@ from cicerone.events.base import NormalizedEvent
 from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 _REQUIRED = ("user_id", "item_id", "event_type", "occurred_at")
+_TEXT_FIELDS = ("user_id", "item_id", "event_type", "event_id", "idempotency_key")
 
 
 class EventNormalizeError(ValueError):
@@ -96,8 +97,15 @@ def supplied_event_id(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def reject_object_fields(payload: Mapping[str, Any]) -> None:
+    for key in _TEXT_FIELDS:
+        if isinstance(payload.get(key), (Mapping, list)):
+            raise EventNormalizeError(f"{key} must not be a JSON object or array")
+
+
 def normalize_event(payload: Any) -> NormalizedEvent:
     raw = _as_mapping(payload)
+    reject_object_fields(raw)
     missing = [key for key in _REQUIRED if raw.get(key) in (None, "")]
     if missing:
         raise EventNormalizeError(f"missing required field(s): {', '.join(missing)}")
