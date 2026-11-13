@@ -675,19 +675,18 @@ class EventWorker:
         self._remember_applied(valid)
         self._log_rejected(ready)
         try:
-            live = self._ack_tracked(ready)
+            self._settle_live(self._ack_tracked(ready))
         except TimeoutError:
             record_events_flush(status="error")
-            logger.exception("Event source ack timed out after successful apply; persisting without nack")
+            logger.exception("Event source ack timed out after successful apply")
             self._persist_then_reraise(unexpected)
             return applied
         except Exception:
-            self._raise_held_after_failed_ack("ack", unexpected)
-            raise
-        try:
-            self._settle_live(live)
-        except Exception:
-            self._raise_held_after_failed_ack("deferred ack", unexpected)
+            record_events_flush(status="error")
+            logger.exception("Event source ack failed after successful apply; persisting without nack")
+            if unexpected is not None:
+                self._persist_then_reraise(unexpected)
+            cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
             raise
         if post_write_failed:
             record_events_flush(status="error")
@@ -735,14 +734,6 @@ class EventWorker:
         if count:
             record_events_tick_error()
         logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
-
-    def _raise_held_after_failed_ack(self, step: str, unexpected: Exception | None) -> None:
-        # From the ack's except block: a held post-write error wins; otherwise the caller re-raises.
-        record_events_flush(status="error")
-        logger.exception("Event source %s failed after successful apply; persisting without nack", step)
-        if unexpected is not None:
-            self._persist_then_reraise(unexpected)
-        cleanup_after_failure(self._persist_online_after_ack, _CLEANUP_FAILED, logger)
 
     def _persist_then_reraise(self, unexpected: Exception | None) -> None:
         if unexpected is None:

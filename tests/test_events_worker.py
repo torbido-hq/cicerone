@@ -1566,6 +1566,52 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
     assert persisted["n"] == 1
 
 
+def test_event_worker_deferred_ack_timeout_is_retried_next_tick(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(output=local_output(out), top_k=3)
+    payload = event_payload(event_id="deferred-timeout", item_id="i8")
+    source = WebhookEventSource({})
+    source.ingest(payload)
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    # An earlier delivery of the same event, deferred until this batch applies it.
+    deferred = normalize_event(payload)
+    worker._deferred_acks.append(deferred)
+    acks: list[list[str]] = []
+
+    def _ack(event_ids):  # type: ignore[no-untyped-def]
+        acks.append(list(event_ids))
+        if len(acks) == 2:
+            raise TimeoutError("deferred ack timed out")
+        return set(event_ids)
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack)
+    monkeypatch.setattr(worker._updater, "persist_online", lambda: None)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
+    assert worker._retry_acks == [deferred]
+    assert worker._deferred_acks == []
+
+    worker.tick()
+    assert acks[2] == ["deferred-timeout"]
+    assert worker._retry_acks == []
+
+
 def test_event_apply_errors_exclude_broad_programming_errors():
     from pandas.errors import DatabaseError
     from pyarrow.lib import ArrowInvalid
@@ -3403,18 +3449,22 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     assert "u1" in repaired
 
 
-@pytest.mark.parametrize(("step", "label"), [("_ack_tracked", "ack"), ("_settle_live", "deferred ack")])
+@pytest.mark.parametrize("step", ["_ack_tracked", "_settle_live"])
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [(OSError, "Event source ack failed"), (TimeoutError, "Event source ack timed out")],
+)
 def test_event_worker_post_write_error_wins_over_a_failing_ack(
-    tmp_path, feature_config: FeatureConfig, step: str, label: str, caplog
+    tmp_path, feature_config: FeatureConfig, step: str, error: type[OSError], logged: str, caplog
 ):
     _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
-    setattr(worker, step, raising(OSError("ack down")))
+    setattr(worker, step, raising(error("ack down")))
     persisted: list[bool] = []
     worker._persist_online_after_ack = lambda: persisted.append(True)  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="sidecar bug"):
         worker.tick()
     assert persisted == [True]
-    assert f"Event source {label} failed after successful apply" in caplog.text
+    assert f"{logged} after successful apply" in caplog.text
     assert "ack down" in caplog.text
 
 

@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.8.6] - 2026-10-20
+## [0.8.6] - 2026-11-13
 
 ### Added
 
@@ -79,6 +79,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- An ack timeout on earlier deferred events, hit while acking a written
+  batch, is handled like a timeout on the batch's own ack: the timed-out
+  acks are retried on the next tick, and it no longer counts in
+  `cicerone_events_tick_errors_total` or logs "Event worker tick failed".
 - An event whose `user_id`, `item_id`, `event_type`, `event_id` or
   `idempotency_key` is a JSON object or array is rejected as invalid, instead
   of being stored under its Python text or, when deeply nested, stopping the
