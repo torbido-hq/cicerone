@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -15,6 +13,8 @@ from cicerone.config.constants import (
     DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS,
     DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
 )
+from cicerone.errors import PUBLISH_ERRORS
+from cicerone.events.base import has_ephemeral_event_ids
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.ha import poll_without_apply_lock
@@ -23,24 +23,28 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.updater_policy import incremental_needs_users_frame
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import experiment_variant_names, resolve_assignment
+from cicerone.experiment.assignment import assign_user, experiment_variant_names
 from cicerone.experiment.recipes import resolve_variant_policy_configs
 from cicerone.experiment.store import ExperimentStore
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.base import RecommendationReader
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.factory import build_input_source, build_output_sink
-from cicerone.job_eval import PUBLISH_ERRORS
 from cicerone.locks import (
     LockBackend,
+    WriteFence,
     build_lock_backend,
     build_output_writer_lock,
     events_apply_lock_key,
     has_distributed_lock,
 )
 from cicerone.publish import RecommendationPublisher, build_publisher
+from cicerone.refreshed_value import RefreshedValue
 
 logger = logging.getLogger(__name__)
+
+_PUBLISHER_CLOSE_FAILED = "Recommendation publisher close failed"
 
 
 @dataclass
@@ -51,86 +55,32 @@ class EventsRuntime:
     publisher: RecommendationPublisher | None = None
 
     def stop(self) -> bool:
-        stopped = True
+        publisher, self.publisher = self.publisher, None
         try:
-            if self.worker is not None:
-                stopped = self.worker.stop()
-                if not stopped:
-                    logger.warning("Event worker did not stop in time")
-                    return False
-            return True
-        finally:
-            try:
-                # A pending worker-stop error must still propagate.
-                _close_publisher(self.publisher, quiet=sys.exception() is not None)
-            finally:
-                self.publisher = None
+            stopped = self.worker is None or self.worker.stop()
+        except BaseException:
+            if publisher is not None:
+                cleanup_after_failure(publisher.close, _PUBLISHER_CLOSE_FAILED, logger)
+            raise
+        _close_publisher(publisher)
+        if not stopped:
+            logger.warning("Event worker did not stop in time")
+        return stopped
 
 
-def _combine_busy_checks(*checks: Callable[[], bool] | None) -> Callable[[], bool] | None:
-    active = [check for check in checks if check is not None]
-    if not active:
-        return None
-    if len(active) == 1:
-        return active[0]
-    return lambda: any(check() for check in active)
-
-
-def _throttled_busy_check(
-    check: Callable[[], bool] | None,
-    *,
-    ttl_seconds: float,
-) -> Callable[[], bool] | None:
-    if check is None:
-        return None
-    if ttl_seconds <= 0:
-        return check
-    cached_until = 0.0
-    cached_value = False
-
-    def _wrapped() -> bool:
-        nonlocal cached_until, cached_value
-        now = time.monotonic()
-        if now < cached_until:
-            return cached_value
-        cached_value = check()
-        cached_until = now + ttl_seconds
-        return cached_value
-
-    return _wrapped
-
-
-def _assign_incremental_variant(
-    settings: Settings,
-    *,
-    ttl_seconds: float = DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
-    clock: Callable[[], float] = time.monotonic,
-) -> Callable[[str], str | None] | None:
+def _assign_incremental_variant(settings: Settings) -> Callable[[str], str | None] | None:
     if not settings.experiment.enabled:
         return None
     store = ExperimentStore(settings.output)
     experiment_id = settings.experiment.id
-    cached_until = 0.0
-    cached: tuple[str | None, tuple[str, str] | None] = (None, None)
-
-    def overlay() -> tuple[str | None, tuple[str, str] | None]:
-        nonlocal cached_until, cached
-        now = clock()
-        if ttl_seconds > 0 and now < cached_until:
-            return cached
-        cached = store.assignment_overlay(experiment_id)
-        cached_until = now + ttl_seconds
-        return cached
+    overlay = RefreshedValue(
+        lambda: store.assignment_overlay(experiment_id),
+        ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+    )
 
     def assigned(user_id: str) -> str | None:
-        promoted, pair = overlay()
-        names = experiment_variant_names(settings)
-        return resolve_assignment(
-            settings,
-            str(user_id),
-            promoted_variant=promoted,
-            active_pair=pair,
-            snapshot_names=names or None,
+        return assign_user(
+            settings, str(user_id), overlay.get(), lambda: experiment_variant_names(settings) or None
         )[1]
 
     return assigned
@@ -153,27 +103,13 @@ def _input_users_provider(settings: Settings) -> Callable[[], pd.DataFrame | Non
     return read_users
 
 
-def _stop_worker_quietly(worker: EventWorker | None) -> None:
-    if worker is None:
-        return
-    try:
-        worker.stop()
-    except Exception:
-        # The startup error must still propagate.
-        logger.exception("Event worker stop after startup failure")
-
-
-def _close_publisher(publisher: RecommendationPublisher | None, *, quiet: bool = False) -> None:
+def _close_publisher(publisher: RecommendationPublisher | None) -> None:
     if publisher is None:
         return
     try:
         publisher.close()
     except PUBLISH_ERRORS:
-        logger.exception("Recommendation publisher close failed")
-    except Exception:
-        if not quiet:
-            raise
-        logger.exception("Recommendation publisher close failed")
+        logger.exception(_PUBLISHER_CLOSE_FAILED)
 
 
 def start_events_runtime(
@@ -181,10 +117,8 @@ def start_events_runtime(
     *,
     feature_config: FeatureConfig | None,
     reader: RecommendationReader,
-    busy_check: Callable[[], bool] | None = None,
     consumed: ConsumedOverlay | None = None,
     catalog: CatalogStore | None = None,
-    start_worker: bool = True,
 ) -> EventsRuntime:
     if not settings.events.enabled:
         return EventsRuntime(webhook_source=None, worker=None)
@@ -215,19 +149,18 @@ def start_events_runtime(
             settings.events.ha,
         )
 
-    combined_busy = _combine_busy_checks(
-        busy_check,
-        (retrain_probe.is_locked if retrain_probe is not None else None),
-    )
+    retrain_busy = retrain_probe.is_locked if retrain_probe is not None else None
 
     sink = build_output_sink(
         settings.output,
-        writer_lock=build_output_writer_lock(settings),
-        fence_check=(apply_lock.owned if apply_lock is not None else None),
-        fence_lost="events apply lock lost before write",
-        fence_kind="apply",
+        fence=WriteFence(
+            build_output_writer_lock(settings),
+            apply_lock.owned if apply_lock is not None else None,
+            "events apply lock lost before write",
+            "apply",
+        ),
     )
-    publisher = build_publisher(settings, connect=False)
+    publisher = build_publisher(settings)
     worker: EventWorker | None = None
     ready = False
     try:
@@ -266,11 +199,12 @@ def start_events_runtime(
             output_settings=settings.output,
             feature_config=feature_config,
             top_k=settings.top_k,
-            busy_check=_throttled_busy_check(
-                combined_busy,
-                ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS,
+            busy_check=(
+                RefreshedValue(retrain_busy, ttl_seconds=DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS).get
+                if retrain_busy is not None
+                else None
             ),
-            write_busy_check=combined_busy,
+            write_busy_check=retrain_busy,
             fence_check=(apply_lock.owned if apply_lock is not None else None),
             on_success=reader.refresh,
             online=online,
@@ -287,6 +221,7 @@ def start_events_runtime(
         buffer = MicroBatchBuffer(
             batch_size=settings.events.incremental.batch_size,
             batch_window_seconds=settings.events.incremental.batch_window_seconds,
+            fingerprint_dedupe=has_ephemeral_event_ids(source),
         )
         worker = EventWorker(
             source,
@@ -296,20 +231,15 @@ def start_events_runtime(
             apply_lock=apply_lock,
             poll_without_lock=poll_without_apply_lock(settings.events.kind, settings.events.options),
         )
-        if start_worker:
-            worker.start()
-            logger.info(
-                "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
-                settings.events.kind,
-                settings.events.incremental.batch_size,
-                settings.events.incremental.batch_window_seconds,
-                settings.events.incremental.poll_interval_seconds,
-                settings.events.ha,
-            )
-        else:
-            # A manual tick() still needs the source connected; only the thread is skipped.
-            source.connect()
-            worker.refresh_source_health_metrics()
+        worker.start()
+        logger.info(
+            "Event worker started (kind=%s, batch_size=%d, window=%ss, poll=%ss, ha=%s)",
+            settings.events.kind,
+            settings.events.incremental.batch_size,
+            settings.events.incremental.batch_window_seconds,
+            settings.events.incremental.poll_interval_seconds,
+            settings.events.ha,
+        )
         if apply_lock is None:
             logger.warning(
                 "Incremental events assume a single writer process "
@@ -325,5 +255,7 @@ def start_events_runtime(
         return runtime
     finally:
         if not ready:
-            _stop_worker_quietly(worker)
-            _close_publisher(publisher, quiet=True)
+            if worker is not None:
+                cleanup_after_failure(worker.stop, "Event worker stop after startup failure", logger)
+            if publisher is not None:
+                cleanup_after_failure(publisher.close, _PUBLISHER_CLOSE_FAILED, logger)

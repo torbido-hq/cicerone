@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,7 +26,9 @@ from rectools.metrics.distances import PairwiseHammingDistanceCalculator
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config.constants import TRACK_KIND_IMPRESSION
-from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, log_caught
+from cicerone.evaluation.metrics import OCCURRED_AT, normalized_frame, safe_ratio, with_str_ids
+from cicerone.evaluation.tracking import filter_events_by_types, variant_blank
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
@@ -35,9 +37,9 @@ from cicerone.io.recommendation_schema import (
     USER_COLUMN,
     VARIANT_COLUMN,
 )
+from cicerone.ranking import drop_seen_pairs
 
 logger = logging.getLogger(__name__)
-_RECTOOLS_ERRORS = (ValueError, LookupError)
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,12 @@ def filter_recs_to_assigned(
     return recommendations.loc[expected.isna() | (recommendations[VARIANT_COLUMN].astype(str) == expected)]
 
 
+def _served_recs(recommendations: pd.DataFrame, assigned: Mapping[str, str] | None) -> pd.DataFrame:
+    recs = with_str_ids(recommendations)
+    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
+    return filter_recs_to_assigned(recs, assigned)
+
+
 def filter_events_to_recommended(
     events: pd.DataFrame,
     recommendations: pd.DataFrame,
@@ -83,16 +91,8 @@ def filter_events_to_recommended(
 ) -> pd.DataFrame:
     if events.empty or recommendations.empty:
         return events.iloc[0:0].copy() if not events.empty else events
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-    recs = filter_recs_to_assigned(recs, assigned)
-    keys = recs.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    frame = events.copy()
-    frame[USER_COLUMN] = frame[USER_COLUMN].astype(str)
-    frame[ITEM_COLUMN] = frame[ITEM_COLUMN].astype(str)
-    return frame.merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
+    keys = _served_recs(recommendations, assigned).loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
+    return with_str_ids(events).merge(keys, on=[USER_COLUMN, ITEM_COLUMN], how="inner")
 
 
 def _hit_rate(reco: pd.DataFrame, relevant: pd.DataFrame, *, k: int) -> float:
@@ -129,6 +129,125 @@ def _catalog_metric_defs(k: int, *, with_prev: bool) -> dict[str, object]:
         metrics[f"MeanInvUserFreq@{k}"] = MeanInvUserFreq(k=k)
         metrics[f"AvgRecPopularity@{k}"] = AvgRecPopularity(k=k)
     return metrics
+
+
+def _impression_matches_generated_at(stamp: object, generated_at: str) -> bool:
+    raw = str(stamp or "").strip()
+    if not raw:
+        return False
+    left = pd.to_datetime(raw, utc=True, errors="coerce")
+    right = pd.to_datetime(generated_at, utc=True, errors="coerce")
+    if pd.isna(left) or pd.isna(right):
+        return False
+    return bool(left == right)
+
+
+def _attach_recommendation_fields(
+    frame: pd.DataFrame,
+    recommendations: pd.DataFrame | None,
+    *,
+    on_variant: bool,
+) -> pd.DataFrame:
+    if frame.empty or recommendations is None or recommendations.empty:
+        return frame
+    keys = [USER_COLUMN, ITEM_COLUMN]
+    extra = [
+        column
+        for column in (SOURCE_COLUMN, SCORE_COLUMN, VARIANT_COLUMN)
+        if column in recommendations.columns
+    ]
+    if on_variant and VARIANT_COLUMN in extra:
+        keys.append(VARIANT_COLUMN)
+    elif VARIANT_COLUMN in extra:
+        extra = [column for column in extra if column != VARIANT_COLUMN]
+    if not extra:
+        return frame
+    columns = [*keys, *[column for column in extra if column not in keys]]
+    if "generated_at" in recommendations.columns:
+        columns.append("generated_at")
+    lookup = with_str_ids(recommendations.loc[:, columns])
+    if on_variant and VARIANT_COLUMN in lookup.columns:
+        lookup = lookup.loc[~variant_blank(lookup[VARIANT_COLUMN])]
+    if "generated_at" in lookup.columns:
+        lookup["generated_at"] = pd.to_datetime(lookup["generated_at"], utc=True, errors="coerce")
+        lookup = lookup.sort_values("generated_at", kind="mergesort", na_position="first")
+        lookup = lookup.drop(columns=["generated_at"]).drop_duplicates(subset=keys, keep="last")
+    else:
+        lookup = lookup.drop_duplicates(subset=keys, keep="first")
+    frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
+    for column in extra:
+        job_column = f"{column}_job"
+        if job_column in frame.columns:
+            frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
+            frame = frame.drop(columns=[job_column])
+    return frame
+
+
+def recs_from_impressions(
+    track_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+    recommendations: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build reco rows from impression events (optionally stamped to one job)."""
+    rows: list[dict[str, Any]] = []
+    for raw in track_rows:
+        if str(raw.get("kind") or "") != TRACK_KIND_IMPRESSION:
+            continue
+        user_id = str(raw.get(USER_COLUMN) or "")
+        item_id = str(raw.get(ITEM_COLUMN) or "")
+        if not user_id or not item_id:
+            continue
+        if generated_at and not _impression_matches_generated_at(raw.get("generated_at"), generated_at):
+            continue
+        raw_rank = raw.get(RANK_COLUMN)
+        if isinstance(raw_rank, (int, float, str)):
+            try:
+                rank = int(raw_rank)
+            except (TypeError, ValueError):
+                rank = 1
+        else:
+            rank = 1
+        row: dict[str, Any] = {
+            USER_COLUMN: user_id,
+            ITEM_COLUMN: item_id,
+            RANK_COLUMN: rank if rank >= 1 else 1,
+        }
+        source = raw.get(SOURCE_COLUMN)
+        if source:
+            row[SOURCE_COLUMN] = str(source)
+        variant = raw.get(VARIANT_COLUMN)
+        if variant:
+            row[VARIANT_COLUMN] = str(variant)
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
+    if recommendations is not None and not recommendations.empty and VARIANT_COLUMN in frame.columns:
+        blank = variant_blank(frame[VARIANT_COLUMN])
+        stamped = frame.loc[~blank].drop_duplicates(
+            subset=[USER_COLUMN, ITEM_COLUMN, VARIANT_COLUMN], keep="first"
+        )
+        unstamped = frame.loc[blank].drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+        stamped = _attach_recommendation_fields(stamped, recommendations, on_variant=True)
+        unstamped = _attach_recommendation_fields(unstamped, recommendations, on_variant=False)
+        frame = pd.concat([stamped, unstamped], ignore_index=True)
+    else:
+        frame = frame.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
+        frame = _attach_recommendation_fields(frame, recommendations, on_variant=False)
+    if SCORE_COLUMN not in frame.columns:
+        top = int(frame[RANK_COLUMN].max()) if RANK_COLUMN in frame.columns and not frame.empty else 1
+        frame[SCORE_COLUMN] = (top + 1 - frame[RANK_COLUMN]).astype(float)
+    else:
+        frame[SCORE_COLUMN] = pd.to_numeric(frame[SCORE_COLUMN], errors="coerce").fillna(0.0)
+    return frame.reset_index(drop=True)
+
+
+def _unseen_relevant(window: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
+    if window.empty or USER_COLUMN not in window.columns or ITEM_COLUMN not in window.columns:
+        return window.iloc[0:0]
+    return drop_seen_pairs(window.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates(), prev)
 
 
 def _discrete_feature(value: object) -> str | None:
@@ -221,13 +340,12 @@ def _ild_metrics(
         return {}
     try:
         calculator = PairwiseHammingDistanceCalculator(features)
-    except (ValueError, TypeError, KeyError):
-        logger.exception("RecTools PairwiseHammingDistanceCalculator failed")
+    except OPTIONAL_EVAL_ERRORS as exc:
+        log_caught("RecTools PairwiseHammingDistanceCalculator failed", exc, log=logger)
         return {}
     metrics: dict[str, float] = {}
     for k in ks:
-        reco_k = recs[recs[RANK_COLUMN] <= k]
-        reco_k = _reco_with_known_features(reco_k, features)
+        reco_k = _reco_with_known_features(recs[recs[RANK_COLUMN] <= k], features)
         if reco_k.empty:
             continue
         try:
@@ -236,136 +354,36 @@ def _ild_metrics(
                 reco=reco_k,
             )
             metrics.update({key: float(value) for key, value in computed.items()})
-        except (ValueError, TypeError, KeyError):
-            logger.exception("RecTools IntraListDiversity failed for k=%s", k)
+        except OPTIONAL_EVAL_ERRORS as exc:
+            log_caught(f"RecTools IntraListDiversity failed for k={k}", exc, log=logger)
     return metrics
 
 
-def _impression_matches_generated_at(stamp: object, generated_at: str) -> bool:
-    raw = str(stamp or "").strip()
-    if not raw:
-        return False
-    left = pd.to_datetime(raw, utc=True, errors="coerce")
-    right = pd.to_datetime(generated_at, utc=True, errors="coerce")
-    if pd.isna(left) or pd.isna(right):
-        return False
-    return bool(left == right)
-
-
-def _attach_recommendation_fields(
-    frame: pd.DataFrame,
-    recommendations: pd.DataFrame | None,
+def _serendipity_metrics(
+    recs: pd.DataFrame,
+    relevant: pd.DataFrame,
+    ks: Sequence[int],
     *,
-    on_variant: bool,
-) -> pd.DataFrame:
-    if frame.empty or recommendations is None or recommendations.empty:
-        return frame
-    keys = [USER_COLUMN, ITEM_COLUMN]
-    extra = [
-        column
-        for column in (SOURCE_COLUMN, SCORE_COLUMN, VARIANT_COLUMN)
-        if column in recommendations.columns
-    ]
-    if on_variant and VARIANT_COLUMN in extra:
-        keys.append(VARIANT_COLUMN)
-    elif VARIANT_COLUMN in extra:
-        extra = [column for column in extra if column != VARIANT_COLUMN]
-    if not extra:
-        return frame
-    columns = [*keys, *[column for column in extra if column not in keys]]
-    if "generated_at" in recommendations.columns:
-        columns.append("generated_at")
-    lookup = recommendations.loc[:, columns].copy()
-    lookup[USER_COLUMN] = lookup[USER_COLUMN].astype(str)
-    lookup[ITEM_COLUMN] = lookup[ITEM_COLUMN].astype(str)
-    if on_variant and VARIANT_COLUMN in lookup.columns:
-        blank = lookup[VARIANT_COLUMN].isna() | lookup[VARIANT_COLUMN].astype(str).str.strip().eq("")
-        lookup = lookup.loc[~blank]
-    if "generated_at" in lookup.columns:
-        lookup["generated_at"] = pd.to_datetime(lookup["generated_at"], utc=True, errors="coerce")
-        lookup = lookup.sort_values("generated_at", kind="mergesort", na_position="first")
-        lookup = lookup.drop(columns=["generated_at"]).drop_duplicates(subset=keys, keep="last")
-    else:
-        lookup = lookup.drop_duplicates(subset=keys, keep="first")
-    frame = frame.merge(lookup, on=keys, how="left", suffixes=("", "_job"))
-    for column in extra:
-        job_column = f"{column}_job"
-        if job_column in frame.columns:
-            frame[column] = frame[column].where(frame[column].notna(), frame[job_column])
-            frame = frame.drop(columns=[job_column])
-    return frame
-
-
-def recs_from_impressions(
-    track_rows: Sequence[Mapping[str, Any]],
-    *,
-    generated_at: str | None = None,
-    recommendations: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Build reco rows from impression events (optionally stamped to one job)."""
-    rows: list[dict[str, Any]] = []
-    for raw in track_rows:
-        if str(raw.get("kind") or "") != TRACK_KIND_IMPRESSION:
-            continue
-        user_id = str(raw.get(USER_COLUMN) or "")
-        item_id = str(raw.get(ITEM_COLUMN) or "")
-        if not user_id or not item_id:
-            continue
-        if generated_at and not _impression_matches_generated_at(raw.get("generated_at"), generated_at):
-            continue
-        raw_rank = raw.get(RANK_COLUMN)
-        if isinstance(raw_rank, (int, float, str)):
-            try:
-                rank = int(raw_rank)
-            except (TypeError, ValueError):
-                rank = 1
-        else:
-            rank = 1
-        row: dict[str, Any] = {
-            USER_COLUMN: user_id,
-            ITEM_COLUMN: item_id,
-            RANK_COLUMN: rank if rank >= 1 else 1,
-        }
-        source = raw.get(SOURCE_COLUMN)
-        if source:
-            row[SOURCE_COLUMN] = str(source)
-        variant = raw.get(VARIANT_COLUMN)
-        if variant:
-            row[VARIANT_COLUMN] = str(variant)
-        rows.append(row)
-    if not rows:
-        return pd.DataFrame()
-    frame = pd.DataFrame(rows)
-    frame = frame.sort_values([USER_COLUMN, RANK_COLUMN], kind="mergesort")
-    if recommendations is not None and not recommendations.empty and VARIANT_COLUMN in frame.columns:
-        blank = frame[VARIANT_COLUMN].isna() | frame[VARIANT_COLUMN].astype(str).str.strip().eq("")
-        stamped = frame.loc[~blank].drop_duplicates(
-            subset=[USER_COLUMN, ITEM_COLUMN, VARIANT_COLUMN], keep="first"
-        )
-        unstamped = frame.loc[blank].drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
-        stamped = _attach_recommendation_fields(stamped, recommendations, on_variant=True)
-        unstamped = _attach_recommendation_fields(unstamped, recommendations, on_variant=False)
-        frame = pd.concat([stamped, unstamped], ignore_index=True)
-    else:
-        frame = frame.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN], keep="first")
-        frame = _attach_recommendation_fields(frame, recommendations, on_variant=False)
-    if SCORE_COLUMN not in frame.columns:
-        top = int(frame[RANK_COLUMN].max()) if RANK_COLUMN in frame.columns and not frame.empty else 1
-        frame[SCORE_COLUMN] = (top + 1 - frame[RANK_COLUMN]).astype(float)
-    else:
-        frame[SCORE_COLUMN] = pd.to_numeric(frame[SCORE_COLUMN], errors="coerce").fillna(0.0)
-    return frame.reset_index(drop=True)
-
-
-def _unseen_relevant(window: pd.DataFrame, prev: pd.DataFrame) -> pd.DataFrame:
-    if window.empty or USER_COLUMN not in window.columns or ITEM_COLUMN not in window.columns:
-        return window.iloc[0:0]
-    relevant = window.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    if relevant.empty or prev.empty:
-        return relevant
-    seen = prev.loc[:, [USER_COLUMN, ITEM_COLUMN]].drop_duplicates()
-    merged = relevant.merge(seen, on=[USER_COLUMN, ITEM_COLUMN], how="left", indicator=True)
-    return merged.loc[merged["_merge"] == "left_only", [USER_COLUMN, ITEM_COLUMN]].reset_index(drop=True)
+    catalog: list[str],
+    prev_interactions: pd.DataFrame | None,
+) -> dict[str, float]:
+    if recs.empty or relevant.empty or prev_interactions is None or not catalog:
+        return {}
+    metrics: dict[str, float] = {}
+    for k in ks:
+        reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
+        try:
+            computed = calc_metrics(
+                {f"Serendipity@{k}": Serendipity(k=k)},
+                reco=reco_k,
+                interactions=relevant.assign(weight=1.0),
+                catalog=catalog,
+                prev_interactions=prev_interactions,
+            )
+            metrics.update({key: float(value) for key, value in computed.items()})
+        except OPTIONAL_EVAL_ERRORS as exc:
+            log_caught(f"RecTools Serendipity failed for k={k}", exc, log=logger)
+    return metrics
 
 
 def _prev_interactions(events: pd.DataFrame, generated_at: str | None) -> pd.DataFrame:
@@ -398,6 +416,65 @@ def _served_catalog(
     return list(dict.fromkeys(seen))
 
 
+def _window_events(
+    events: pd.DataFrame, generated_at: str | None, event_types: Sequence[str]
+) -> pd.DataFrame:
+    window = events
+    if generated_at and OCCURRED_AT in window.columns:
+        start = pd.to_datetime(generated_at, utc=True, errors="coerce")
+        if pd.notna(start):
+            window = window[window[OCCURRED_AT] > start]
+    return filter_events_by_types(window, event_types)
+
+
+def _recs_at_first_event(
+    recs: pd.DataFrame,
+    history: pd.DataFrame,
+    window_events: pd.DataFrame,
+    *,
+    generated_at: str | None,
+    assigned: Mapping[str, str] | None,
+) -> pd.DataFrame:
+    combined = history
+    if generated_at:
+        combined = pd.concat([history, recs.assign(generated_at=generated_at)], ignore_index=True)
+    hist_recs = recs_from_history(combined, window_events)
+    if not hist_recs.empty:
+        hist_recs = _served_recs(hist_recs, assigned)
+    return recs if hist_recs.empty else hist_recs
+
+
+def _metrics_at_ks(
+    reco: pd.DataFrame,
+    relevant: pd.DataFrame,
+    ks: Sequence[int],
+    *,
+    metric_defs: Callable[[int], dict[str, object]],
+    label: str,
+    catalog: list[str] | None = None,
+    prev_interactions: pd.DataFrame | None = None,
+) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for k in ks:
+        if relevant.empty or reco.empty:
+            metrics[f"HitRate@{k}"] = _hit_rate(reco, relevant, k=k)
+            continue
+        reco_k = reco[reco[RANK_COLUMN] <= k] if RANK_COLUMN in reco.columns else reco
+        try:
+            computed = calc_metrics(
+                metric_defs(k),
+                reco=reco_k,
+                interactions=relevant.assign(weight=1.0),
+                catalog=catalog,
+                prev_interactions=prev_interactions,
+            )
+            metrics.update({key: float(value) for key, value in computed.items()})
+        except OPTIONAL_EVAL_ERRORS as exc:
+            log_caught(f"{label} k={k}", exc, log=logger)
+            metrics[f"HitRate@{k}"] = _hit_rate(reco, relevant, k=k)
+    return metrics
+
+
 def evaluate_served(
     recommendations: pd.DataFrame,
     events: pd.DataFrame,
@@ -413,23 +490,14 @@ def evaluate_served(
 ) -> ServedEvalReport | None:
     if recommendations is None or recommendations.empty:
         return None
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-    recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-    recs = filter_recs_to_assigned(recs, assigned)
+    recs = _served_recs(recommendations, assigned)
     if recs.empty:
         return None
-    used_impressions = False
-    if impressions is not None and not impressions.empty:
-        recs = impressions.copy()
-        recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-        recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
-        recs = recs[recs[USER_COLUMN] != COLD_START_USER_ID]
-        recs = filter_recs_to_assigned(recs, assigned)
+    used_impressions = impressions is not None and not impressions.empty
+    if used_impressions:
+        recs = _served_recs(impressions, assigned)
         if recs.empty:
             return None
-        used_impressions = True
     all_events = normalized_frame(events)
     if all_events.empty:
         return ServedEvalReport(
@@ -439,110 +507,53 @@ def evaluate_served(
             by_source={},
             generated_at=generated_at,
         )
-    window_events = all_events
-    if generated_at and OCCURRED_AT in window_events.columns:
-        start = pd.to_datetime(generated_at, utc=True, errors="coerce")
-        if pd.notna(start):
-            window_events = window_events[window_events[OCCURRED_AT] > start]
-    if event_types and "event_type" in window_events.columns:
-        window_events = window_events[window_events["event_type"].astype(str).isin(set(event_types))]
+    window_events = _window_events(all_events, generated_at, event_types)
     if (
         not used_impressions
         and history is not None
         and not history.empty
         and OCCURRED_AT in window_events.columns
     ):
-        live = recs.copy()
-        if generated_at:
-            live["generated_at"] = generated_at
-            combined = pd.concat([history, live], ignore_index=True)
-        else:
-            combined = history
-        hist_recs = recs_from_history(combined, window_events)
-        if not hist_recs.empty:
-            hist_recs = hist_recs[hist_recs[USER_COLUMN] != COLD_START_USER_ID]
-            hist_recs = filter_recs_to_assigned(hist_recs, assigned)
-        if not hist_recs.empty:
-            recs = hist_recs
+        recs = _recs_at_first_event(
+            recs, history, window_events, generated_at=generated_at, assigned=assigned
+        )
     prev = _prev_interactions(all_events, generated_at)
     relevant = _unseen_relevant(window_events, prev)
-    if used_impressions and not recs.empty and not relevant.empty:
-        served_users = set(recs[USER_COLUMN].astype(str))
-        relevant = relevant.loc[relevant[USER_COLUMN].isin(served_users)]
-    n_users = int(recs[USER_COLUMN].nunique())
-    n_with_events = int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0
+    if used_impressions and not relevant.empty:
+        relevant = relevant.loc[relevant[USER_COLUMN].isin(set(recs[USER_COLUMN]))]
+    prev_interactions = None if prev.empty else prev
     catalog_ids = _served_catalog(catalog, recs, all_events)
-    metrics: dict[str, float] = {}
-    for k in ks:
-        reco_k = recs[recs[RANK_COLUMN] <= k] if RANK_COLUMN in recs.columns else recs
-        if not relevant.empty and not recs.empty:
-            interactions = relevant.copy()
-            interactions["weight"] = 1.0
-            extra: dict[str, object] = {}
-            extra.update(_catalog_metric_defs(k, with_prev=not prev.empty))
-            try:
-                computed = calc_metrics(
-                    {**_ranking_metric_defs(k), **extra},
-                    reco=reco_k,
-                    interactions=interactions,
-                    catalog=catalog_ids,
-                    prev_interactions=prev if not prev.empty else None,
-                )
-                metrics.update({key: float(value) for key, value in computed.items()})
-            except _RECTOOLS_ERRORS as exc:
-                logger.exception(
-                    "RecTools calc_metrics failed for k=%s (%s: %s)",
-                    k,
-                    type(exc).__name__,
-                    exc,
-                )
-                metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
-            if not prev.empty and catalog_ids:
-                try:
-                    surprise = calc_metrics(
-                        {f"Serendipity@{k}": Serendipity(k=k)},
-                        reco=reco_k,
-                        interactions=interactions,
-                        catalog=catalog_ids,
-                        prev_interactions=prev,
-                    )
-                    metrics.update({key: float(value) for key, value in surprise.items()})
-                except (ValueError, TypeError, KeyError):
-                    logger.exception("RecTools Serendipity failed for k=%s", k)
-        else:
-            metrics[f"HitRate@{k}"] = _hit_rate(recs, relevant, k=k)
+    metrics = _metrics_at_ks(
+        recs,
+        relevant,
+        ks,
+        metric_defs=lambda k: {
+            **_ranking_metric_defs(k),
+            **_catalog_metric_defs(k, with_prev=prev_interactions is not None),
+        },
+        label="RecTools calc_metrics failed for",
+        catalog=catalog_ids,
+        prev_interactions=prev_interactions,
+    )
+    metrics.update(
+        _serendipity_metrics(recs, relevant, ks, catalog=catalog_ids, prev_interactions=prev_interactions)
+    )
     metrics.update(_ild_metrics(recs, ks, catalog=catalog, item_features=item_features))
     by_source: dict[str, dict[str, float]] = {}
     if SOURCE_COLUMN in recs.columns:
-        for source, group in recs.groupby(SOURCE_COLUMN, dropna=True):
-            source_metrics: dict[str, float] = {}
-            for k in ks:
-                if not relevant.empty and not group.empty:
-                    reco_k = group[group[RANK_COLUMN] <= k] if RANK_COLUMN in group.columns else group
-                    interactions = relevant.copy()
-                    interactions["weight"] = 1.0
-                    try:
-                        computed = calc_metrics(
-                            {f"HitRate@{k}": HitRate(k=k)},
-                            reco=reco_k,
-                            interactions=interactions,
-                        )
-                        source_metrics.update({key: float(value) for key, value in computed.items()})
-                    except _RECTOOLS_ERRORS as exc:
-                        logger.exception(
-                            "RecTools HitRate failed for source=%s k=%s (%s: %s)",
-                            source,
-                            k,
-                            type(exc).__name__,
-                            exc,
-                        )
-                        source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
-                else:
-                    source_metrics[f"HitRate@{k}"] = _hit_rate(group, relevant, k=k)
-            by_source[str(source)] = source_metrics
+        by_source = {
+            str(source): _metrics_at_ks(
+                group,
+                relevant,
+                ks,
+                metric_defs=lambda k: {f"HitRate@{k}": HitRate(k=k)},
+                label=f"RecTools HitRate failed for source={source}",
+            )
+            for source, group in recs.groupby(SOURCE_COLUMN, dropna=True)
+        }
     return ServedEvalReport(
-        n_users=n_users,
-        n_users_with_events=n_with_events,
+        n_users=int(recs[USER_COLUMN].nunique()),
+        n_users_with_events=int(relevant[USER_COLUMN].nunique()) if not relevant.empty else 0,
         metrics=metrics,
         by_source=by_source,
         generated_at=generated_at,
@@ -551,9 +562,7 @@ def evaluate_served(
 
 def recs_from_history(history: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Use each user's newest snapshot with generated_at <= that user's first event."""
-    hist = history.copy()
-    hist[USER_COLUMN] = hist[USER_COLUMN].astype(str)
-    hist[ITEM_COLUMN] = hist[ITEM_COLUMN].astype(str)
+    hist = with_str_ids(history)
     hist["generated_at"] = pd.to_datetime(hist["generated_at"], utc=True, errors="coerce")
     hist = hist.dropna(subset=["generated_at"])
     hist = hist.drop_duplicates(subset=[USER_COLUMN, ITEM_COLUMN, "generated_at"], keep="last")

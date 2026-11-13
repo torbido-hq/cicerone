@@ -7,6 +7,7 @@ from cicerone.config import (
     AutomlSettings,
     DashboardSettings,
     EvalSettings,
+    IOSettings,
     ServeSettings,
     Settings,
     TrackSettings,
@@ -41,3 +42,11 @@ def make_settings(**overrides: Any) -> Settings:
             # Keep dict sections on the production path (e.g. load_track_settings validation).
             overrides[section] = {**nested, **flat}
     return _make_settings(**overrides)
+
+
+def local_output(path: Any) -> IOSettings:
+    return IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(path)})
+
+
+def sqlite_output(path: Any) -> IOSettings:
+    return IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{path}"})

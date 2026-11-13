@@ -8,10 +8,11 @@ from cicerone.events.normalize import event_fingerprint, normalize_event
 
 
 def test_micro_batch_buffer_count_and_dedupe():
-    buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0)
-    e1 = normalize_event(event_payload(event_id="1"))
-    e2 = normalize_event(event_payload(event_id="dup"))  # same fingerprint as e1
-    e3 = normalize_event(event_payload(event_id="3", item_id="i2"))
+    # Fingerprints dedupe only generated ids (sources without stable ids), as the worker configures it.
+    buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0, fingerprint_dedupe=True)
+    e1 = normalize_event(event_payload(event_id=None))
+    e2 = normalize_event(event_payload(event_id=None))  # same fingerprint as e1
+    e3 = normalize_event(event_payload(event_id=None, item_id="i2"))
     first = buffer.extend([e1, e2])
     assert first.kept_count == 1
     assert len(first.duplicates) == 1
@@ -45,11 +46,13 @@ def test_buffer_validation_and_len():
 
 
 def test_buffer_contains_fingerprint():
-    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
-    event = normalize_event(event_payload(event_id="fp-1", item_id="a"))
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, fingerprint_dedupe=True)
+    payload = event_payload(item_id="a")
+    payload.pop("event_id")
+    event = normalize_event(payload)
     assert buffer.contains_fingerprint(event_fingerprint(event)) is False
     buffer.extend([event])
-    assert buffer.contains_event_id("fp-1") is True
+    assert buffer.contains_event_id(event.event_id) is True
     assert buffer.contains_fingerprint(event_fingerprint(event)) is True
 
 
@@ -82,9 +85,8 @@ def test_buffer_rejects_max_events_below_batch_size():
         MicroBatchBuffer(batch_size=5, batch_window_seconds=1.0, max_events=2)
 
 
-def test_buffer_fingerprint_dedupe_can_be_disabled():
+def test_buffer_fingerprint_dedupe_off_by_default():
     buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
-    buffer.configure_fingerprint_dedupe(False, generated_only=True)
     first = normalize_event(event_payload(event_id="a", item_id="same"))
     second = normalize_event(event_payload(event_id="b", item_id="same"))
     result = buffer.extend([first, second])
@@ -93,8 +95,7 @@ def test_buffer_fingerprint_dedupe_can_be_disabled():
 
 
 def test_buffer_fingerprint_dedupe_generated_only():
-    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
-    buffer.configure_fingerprint_dedupe(True, generated_only=True)
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, fingerprint_dedupe=True)
     payload = event_payload(item_id="same")
     payload.pop("event_id")
     generated = normalize_event(payload)
@@ -105,14 +106,6 @@ def test_buffer_fingerprint_dedupe_generated_only():
     assert [event.event_id for event in result.duplicates] == [generated_dup.event_id]
 
 
-def test_buffer_rebuilds_fingerprints_when_switching_to_generated_only():
-    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
-    explicit = normalize_event(event_payload(event_id="explicit", item_id="same"))
-    buffer.extend([explicit])
-    buffer.configure_fingerprint_dedupe(True, generated_only=True)
-    payload = event_payload(item_id="same")
-    payload.pop("event_id")
-    generated = normalize_event(payload)
-    result = buffer.extend([generated])
-    assert [event.event_id for event in result.kept] == [generated.event_id]
-    assert result.duplicates == ()
+def test_micro_batch_buffer_rejects_fingerprint_dedupe_without_dedupe():
+    with pytest.raises(ValueError, match="fingerprint_dedupe requires dedupe"):
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=1.0, dedupe=False, fingerprint_dedupe=True)

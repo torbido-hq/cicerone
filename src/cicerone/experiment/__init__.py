@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cicerone.experiment.assignment import assign_variant, assignment_bucket, resolve_assignment
+from cicerone.experiment.assignment import assign_user, assign_variant, assignment_bucket
 from cicerone.experiment.evaluate import (
     PRIMARY_METRIC_WEIGHTED,
     ExperimentReport,
@@ -17,7 +17,6 @@ from cicerone.experiment.recipes import (
     COMBINER_PRIORITY,
     COMBINER_RRF,
     COMBINERS,
-    CONTROL_NAME,
     TREATMENT_NAME,
     ResolvedRecipe,
     apply_recipe,
@@ -30,6 +29,7 @@ from cicerone.experiment.recipes import (
 )
 from cicerone.experiment.stats import ComparisonResult, VariantMetric, compare_variants, variant_metric
 from cicerone.experiment.store import ExperimentStore, experiment_state
+from cicerone.io.recommendation_schema import CONTROL_NAME
 
 __all__ = [
     "COMBINER_BLEND",
@@ -47,6 +47,7 @@ __all__ = [
     "TREATMENT_NAME",
     "VariantMetric",
     "apply_recipe",
+    "assign_user",
     "assign_variant",
     "assignment_bucket",
     "compare_variants",
@@ -56,7 +57,6 @@ __all__ = [
     "exposure_row",
     "inherit_combiner",
     "recipes_manifest_json",
-    "resolve_assignment",
     "resolve_recipes",
     "resolve_variant_policy_configs",
     "union_models",

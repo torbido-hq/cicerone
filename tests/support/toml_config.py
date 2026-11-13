@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+MINIMAL_IO_TOML = """
+[input]
+kind = "dataset"
+[input.options]
+storage_backend = "local"
+path = "/tmp/in"
+
+[output]
+kind = "dataset"
+[output.options]
+storage_backend = "local"
+path = "/tmp/out"
+"""
+
 
 def write_toml(tmp_path, content: str) -> str:
     path = tmp_path / "cicerone.toml"

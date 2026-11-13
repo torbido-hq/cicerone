@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from cicerone.lazy import lazy_attribute
+
 __all__ = [
     "SERVE_API_DESCRIPTION",
     "SERVE_API_TITLE",
@@ -13,9 +15,8 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> Any:
-    if name not in __all__:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from cicerone.serve import app
+_LAZY = dict.fromkeys(__all__, "cicerone.serve.app")
 
-    return getattr(app, name)
+
+def __getattr__(name: str) -> Any:
+    return lazy_attribute(__name__, _LAZY, name)

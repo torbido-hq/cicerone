@@ -5,37 +5,37 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
+from functools import cache, partial
 from typing import Any
 from uuid import uuid4
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.openapi.utils import get_openapi
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from cicerone import __version__
 from cicerone.config import Settings, load_settings
 from cicerone.config.constants import (
-    DEFAULT_LOG_FORMAT,
     DEFAULT_SERVE_BATCH_USERS,
     DEFAULT_SERVE_ITEM_SCORES_LIMIT,
     DEFAULT_SERVE_ITEM_SCORES_MAX,
     DEFAULT_SERVE_MAX_K,
     TRACK_KIND_IMPRESSION,
 )
+from cicerone.errors import OPTIONAL_STORE_READ_ERRORS, STORE_OPEN_ERRORS, try_load
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
-from cicerone.experiment.assignment import (
-    assignment_needs_snapshot,
-    resolve_assignment,
-    snapshot_variant_names,
-)
+from cicerone.experiment.assignment import AssignmentOverlay, assign_user, snapshot_variant_names
 from cicerone.experiment.evaluate import exposure_row
-from cicerone.experiment.store import ExperimentStore
-from cicerone.feature_config import FeatureConfig, load_feature_config
+from cicerone.experiment.store import build_experiment_store
+from cicerone.failure_cleanup import cleanup_after_failure
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware, token_equals
 from cicerone.io.base import (
@@ -45,11 +45,25 @@ from cicerone.io.base import (
     recommendations_for_users,
 )
 from cicerone.io.catalog import CatalogStore
-from cicerone.io.recommendation_reader import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
-from cicerone.locks import WriterLockBusyError, build_dataset_writer_lock, build_output_writer_lock
+from cicerone.locks import (
+    WriteFence,
+    WriterLockBusyError,
+    build_dataset_writer_lock,
+)
+from cicerone.metrics import (
+    METRICS_TOKEN_HEADER,
+    record_experiment_served,
+    record_recommendations_served,
+    record_request,
+    record_serve_append_dropped,
+    update_cache_age_gauge,
+    update_events_source_health,
+)
 from cicerone.reasons import parse_reasons
+from cicerone.refreshed_value import RefreshedValue
 from cicerone.serve.bootstrap_events import start_events_runtime
 from cicerone.serve.catalog_routes import attach_catalog_events_openapi, mount_catalog_routes
 from cicerone.serve.code_samples import (
@@ -60,18 +74,9 @@ from cicerone.serve.code_samples import (
     attach_code_samples,
 )
 from cicerone.serve.consumed import consumed_item_ids, consumed_item_ids_for_users
-from cicerone.serve.events_routes import attach_events_ingest_openapi, mount_events_routes
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
-from cicerone.serve.metrics import (
-    METRICS_TOKEN_HEADER,
-    REQUEST_LATENCY_SECONDS,
-    REQUESTS_TOTAL,
-    record_experiment_served,
-    record_recommendations_served,
-    update_cache_age_gauge,
-    update_events_source_health,
-)
-from cicerone.serve.recommendations import RecommendationService
+from cicerone.serve.events_routes import EVENTS_INGEST, attach_ingest_openapi, mount_events_routes
+from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
+from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 from cicerone.serve.surfaces import mount_surface_routes
 from cicerone.serve_schemas import (
     ErrorDetail,
@@ -83,14 +88,17 @@ from cicerone.serve_schemas import (
     RecommendationsBatchResponse,
     RecommendationsResponse,
 )
-from cicerone.track.routes import attach_track_ingest_openapi, mount_track_routes
-from cicerone.track.store import TrackStore, open_track_store
+from cicerone.track.normalize import NormalizedTrack
+from cicerone.track.routes import TRACK_INGEST, mount_track_routes
+from cicerone.track.store import open_track_store
+from cicerone.track.store_db import require_track_ingest_database
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
 _APPEND_BUSY_ATTEMPTS = 3
+# Appends waiting for the writer thread; a request past this drops its append.
+_MAX_PENDING_APPENDS = 1000
 
 
 def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
@@ -110,25 +118,10 @@ def _append_with_busy_retry(write: Any, *, label: str, user_id: str) -> None:
             )
             time.sleep(0.05 * attempt)
         except Exception:
+            # Append-pool thread's top level: nobody reads the future.
             logger.exception("Failed to %s for user_id=%r", label, user_id)
             return
     logger.error("Failed to %s for user_id=%r after retries: %s", label, user_id, last)
-
-
-def _append_exposures_safe(store: ExperimentStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_exposures(rows),
-        label="append experiment exposure",
-        user_id=user_id,
-    )
-
-
-def _append_impressions_safe(store: TrackStore, rows: list[dict[str, Any]], user_id: str) -> None:
-    _append_with_busy_retry(
-        lambda: store.append_rows(rows),
-        label="append serve impressions",
-        user_id=user_id,
-    )
 
 
 SERVE_API_TITLE = "Cicerone Serve API"
@@ -165,24 +158,35 @@ A checked-in copy lives at `docs/openapi/serve.openapi.json` (regenerate with
 """.strip()
 
 
+def _refresh_step(step: RecommendationReader | SurfacesReader | RefreshedValue[Any]) -> bool:
+    # Readers are pluggable; one failed step must not end the loop.
+    try:
+        return step.refresh() is not False
+    except Exception:
+        logger.exception("Background refresh of %s failed; retrying next tick", type(step).__name__)
+        return False
+
+
 def _start_refresh_loop(
     reader: RecommendationReader,
     interval_seconds: float,
     *,
-    generated_at_cache: _GeneratedAtCache | None = None,
+    generated_at_cache: RefreshedValue[str | None] | None = None,
     surfaces: SurfacesReader | None = None,
-    overlay_cache: _AssignmentOverlayCache | None = None,
+    overlay_cache: RefreshedValue[AssignmentOverlay] | None = None,
 ) -> None:
     def _loop() -> None:
         while True:
             time.sleep(interval_seconds)
-            reader.refresh()
-            if surfaces is not None and hasattr(surfaces, "refresh"):
-                surfaces.refresh()
-            if generated_at_cache is not None:
-                generated_at_cache.refresh()
+            reader_ok = _refresh_step(reader)
+            if surfaces is not None:
+                _refresh_step(surfaces)
+            # A stamp from a newer manifest must not label recommendations the reader kept.
+            if generated_at_cache is not None and reader_ok and not _refresh_step(generated_at_cache):
+                # Without a fresh stamp the header is omitted rather than left stale.
+                generated_at_cache.set(None)
             if overlay_cache is not None:
-                overlay_cache.refresh()
+                _refresh_step(overlay_cache)
 
     threading.Thread(target=_loop, daemon=True).start()
 
@@ -190,77 +194,17 @@ def _start_refresh_loop(
 def _read_generated_at(manifest_reader: ManifestReader | None) -> str | None:
     if manifest_reader is None:
         return None
-    try:
-        latest = manifest_reader.read_latest()
-    except Exception:
-        logger.exception("Failed to read latest manifest for generated_at; omitting header")
-        return None
+    latest = try_load(
+        "read latest manifest for generated_at; omitting header",
+        manifest_reader.read_latest,
+        None,
+        log=logger,
+        errors=OPTIONAL_STORE_READ_ERRORS,
+    )
     if not latest:
         return None
     value = latest.get("generated_at")
     return str(value) if value is not None else None
-
-
-class _GeneratedAtCache:
-    """Cache manifest ``generated_at``; refresh with the recommendations loop."""
-
-    def __init__(self, manifest_reader: ManifestReader | None) -> None:
-        self._manifest_reader = manifest_reader
-        self._lock = threading.Lock()
-        self._value: str | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        value = _read_generated_at(self._manifest_reader)
-        with self._lock:
-            self._value = value
-
-    def get(self) -> str | None:
-        with self._lock:
-            return self._value
-
-
-def _route_endpoint(request: Request) -> str:
-    route = request.scope.get("route")
-    if route is not None:
-        return route.path
-    return request.url.path
-
-
-class _AssignmentOverlayCache:
-    """Last successful promote/pair overlay; refresh with the recommendations loop."""
-
-    def __init__(self, settings: Settings, store: ExperimentStore | None) -> None:
-        self._settings = settings
-        self._store = store
-        self._lock = threading.Lock()
-        self._promoted: str | None = None
-        self._pair: tuple[str, str] | None = None
-        self.refresh()
-
-    def refresh(self) -> None:
-        if self._store is None or not self._settings.experiment.enabled:
-            return
-        try:
-            promoted, pair = _assignment_overlay(self._settings, self._store)
-        except Exception:
-            logger.exception("Failed to refresh assignment overlay; keeping previous")
-            return
-        with self._lock:
-            self._promoted = promoted
-            self._pair = pair
-
-    def get(self) -> tuple[str | None, tuple[str, str] | None]:
-        with self._lock:
-            return self._promoted, self._pair
-
-
-def _assignment_overlay(
-    settings: Settings, store: ExperimentStore | None
-) -> tuple[str | None, tuple[str, str] | None]:
-    if store is None or not settings.experiment.enabled:
-        return None, None
-    return store.assignment_overlay(settings.experiment.id)
 
 
 def create_app(
@@ -276,32 +220,48 @@ def create_app(
     surfaces: SurfacesReader | None = None,
     consumed: ConsumedOverlay | None = None,
 ) -> FastAPI:
+    if settings.track.enabled and settings.output.kind == "db":
+        require_track_ingest_database(settings.output.options)
+    # One writer thread keeps appends ordered and off the request threadpool.
+    append_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cicerone-serve-append")
+    append_slots = threading.BoundedSemaphore(_MAX_PENDING_APPENDS)
+
+    def submit_append(write: Any, *, kind: str, label: str, user_id: str) -> None:
+        if not append_slots.acquire(blocking=False):
+            record_serve_append_dropped(kind)
+            logger.warning("Dropped %s append for user_id=%r: append queue is full", kind, user_id)
+            return
+        append_pool.submit(_append_with_busy_retry, write, label=label, user_id=user_id).add_done_callback(
+            lambda _done: append_slots.release()
+        )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            append_pool.shutdown(wait=True)
+
     app = FastAPI(
         title=SERVE_API_TITLE,
         version=SERVE_API_VERSION,
         description=SERVE_API_DESCRIPTION,
+        lifespan=lifespan,
     )
     app.add_middleware(SecurityHeadersMiddleware)
     dependencies = optional_bearer_deps(settings.serve.auth_token)
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    category_column = settings.serve.category_column
-    items_cache = ItemsFilterCache(
-        reader,
-        category_column=category_column,
-        availability_filters=availability_filters,
-    )
-    generated_at_cache = _GeneratedAtCache(manifest_reader)
+    generated_at_cache = RefreshedValue(lambda: _read_generated_at(manifest_reader))
+    generated_at_cache.refresh()
     app.state.generated_at_cache = generated_at_cache
     app.state.events_worker = events_worker
-    experiment_store = (
-        ExperimentStore(settings.output, writer_lock=build_output_writer_lock(settings))
-        if settings.experiment.enabled
-        else None
+    experiment_store = build_experiment_store(settings)
+    overlay_cache: RefreshedValue[AssignmentOverlay] = RefreshedValue(
+        lambda: read_assignment_overlay(settings, experiment_store), initial=(None, None)
     )
-    overlay_cache = _AssignmentOverlayCache(settings, experiment_store)
+    _refresh_step(overlay_cache)
     app.state.assignment_overlay_cache = overlay_cache
     track_store = (
-        open_track_store(settings, writer_lock=build_dataset_writer_lock(settings))
+        open_track_store(settings, fence=WriteFence(build_dataset_writer_lock(settings)))
         if settings.track.enabled
         else None
     )
@@ -310,17 +270,11 @@ def create_app(
     overlay = (
         consumed
         if consumed is not None
-        else ConsumedOverlay(
-            max_items_per_user=settings.serve.consumed_lookback,
-        )
+        else ConsumedOverlay(max_items_per_user=settings.serve.consumed_lookback)
     )
     surfaces_reader = surfaces if surfaces is not None else EmptySurfacesReader()
-    recommendation_service = RecommendationService(
-        settings,
-        reader,
-        items_cache=items_cache,
-        assignment_overlay=overlay_cache.get,
-    )
+    recommendation_service = build_recommendation_service(settings, reader, feature_config, overlay_cache.get)
+    items_cache = recommendation_service.items_cache
 
     @app.middleware("http")
     async def record_request_metrics(request: Request, call_next):
@@ -328,13 +282,13 @@ def create_app(
             return await call_next(request)
         start = time.perf_counter()
         response = await call_next(request)
-        endpoint = _route_endpoint(request)
-        REQUESTS_TOTAL.labels(
-            endpoint=endpoint,
+        route = request.scope.get("route")
+        record_request(
+            route_path=route.path if route is not None else None,
             method=request.method,
-            status=str(response.status_code),
-        ).inc()
-        REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(time.perf_counter() - start)
+            status=response.status_code,
+            duration_seconds=time.perf_counter() - start,
+        )
         return response
 
     @app.get(
@@ -368,33 +322,29 @@ def create_app(
         category: str | None,
         exclude_unavailable: bool,
         hide_consumed: bool,
-        items: Any,
-        available_ids: frozenset[str] | None,
-        ids_by_category: dict[str, frozenset[str]],
-        background_tasks: BackgroundTasks,
+        items_snapshot: Any,
         generated_at: str | None,
         recs: Any | None = None,
         fallback_recs: Any | None = None,
         assignment: tuple[str | None, str | None] | None = None,
         consumed_ids: set[str] | None = None,
     ) -> RecommendationsResponse | None:
-        if hide_consumed:
-            if consumed_ids is None:
-                consumed_ids = consumed_item_ids(
-                    user_id,
-                    history=history_reader,
-                    overlay=overlay,
-                    lookback=settings.serve.consumed_lookback,
-                )
-        else:
+        if not hide_consumed:
             consumed_ids = set()
+        elif consumed_ids is None:
+            consumed_ids = consumed_item_ids(
+                user_id,
+                history=history_reader,
+                overlay=overlay,
+                lookback=settings.serve.consumed_lookback,
+            )
         served = recommendation_service.get(
             user_id,
             top_k,
             category=category,
             exclude_unavailable=exclude_unavailable,
             consumed_ids=consumed_ids,
-            items_snapshot=(items, available_ids, ids_by_category),
+            items_snapshot=items_snapshot,
             recs=recs,
             fallback_recs=fallback_recs,
             assignment=assignment,
@@ -408,36 +358,40 @@ def create_app(
         if experiment_id and variant:
             record_experiment_served(experiment_id, variant)
             if settings.experiment.log_exposures and experiment_store is not None:
-                background_tasks.add_task(
-                    _append_exposures_safe,
-                    experiment_store,
-                    [
-                        exposure_row(
-                            user_id=user_id,
-                            experiment_id=experiment_id,
-                            variant=variant,
-                            generated_at=generated_at,
-                        )
-                    ],
-                    user_id,
+                exposure = exposure_row(
+                    user_id=user_id,
+                    experiment_id=experiment_id,
+                    variant=variant,
+                    generated_at=generated_at,
+                )
+                submit_append(
+                    partial(experiment_store.append_exposures, [exposure]),
+                    kind="exposure",
+                    label="append experiment exposure",
+                    user_id=user_id,
                 )
         if settings.serve.log_impressions and track_store is not None and not filtered.empty:
-            occurred = datetime.now(UTC).isoformat()
+            occurred = datetime.now(UTC)
             rows = [
-                {
-                    "kind": TRACK_KIND_IMPRESSION,
-                    "user_id": user_id,
-                    "item_id": str(row.item_id),
-                    "rank": int(row.rank),
-                    "occurred_at": occurred,
-                    "event_id": str(uuid4()),
-                    "variant": variant,
-                    "experiment_id": experiment_id,
-                    "generated_at": generated_at,
-                }
+                NormalizedTrack(
+                    kind=TRACK_KIND_IMPRESSION,
+                    user_id=user_id,
+                    item_id=str(row.item_id),
+                    rank=int(row.rank),
+                    occurred_at=occurred,
+                    event_id=str(uuid4()),
+                    variant=variant,
+                    experiment_id=experiment_id,
+                    generated_at=generated_at,
+                ).as_row()
                 for row in filtered.itertuples(index=False)
             ]
-            background_tasks.add_task(_append_impressions_safe, track_store, rows, user_id)
+            submit_append(
+                partial(track_store.append_rows, rows),
+                kind="impression",
+                label="append serve impressions",
+                user_id=user_id,
+            )
         return RecommendationsResponse(
             generated_at=generated_at,
             user_id=user_id,
@@ -471,7 +425,6 @@ def create_app(
     def get_recommendations(
         user_id: str,
         response: Response,
-        background_tasks: BackgroundTasks,
         limit: int | None = Query(
             default=None, gt=0, le=DEFAULT_SERVE_MAX_K, description="Top-K rows to return"
         ),
@@ -504,7 +457,6 @@ def create_app(
             top_k = settings.serve.default_k
         top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
-        items, available_ids, ids_by_category = items_cache.get()
         generated_at = generated_at_cache.get()
         body = _recommend_for_user(
             user_id,
@@ -512,16 +464,13 @@ def create_app(
             category=category,
             exclude_unavailable=exclude_unavailable,
             hide_consumed=hide_consumed,
-            items=items,
-            available_ids=available_ids,
-            ids_by_category=ids_by_category,
-            background_tasks=background_tasks,
+            items_snapshot=items_cache.get(),
             generated_at=generated_at,
         )
         if body is None:
             raise HTTPException(status_code=404, detail=f"No recommendations for user_id={user_id!r}")
-        if body.generated_at is not None:
-            response.headers["X-Generated-At"] = str(body.generated_at)
+        if generated_at is not None:
+            response.headers["X-Generated-At"] = str(generated_at)
         return body
 
     @app.post(
@@ -538,7 +487,6 @@ def create_app(
     def post_recommendations_batch(
         body: RecommendationsBatchRequest,
         response: Response,
-        background_tasks: BackgroundTasks,
     ) -> RecommendationsBatchResponse:
         raw_ids = [str(user_id).strip() for user_id in body.user_ids]
         if any(not user_id for user_id in raw_ids):
@@ -553,7 +501,8 @@ def create_app(
         hide_consumed = (
             settings.serve.exclude_consumed if body.exclude_consumed is None else body.exclude_consumed
         )
-        items, available_ids, ids_by_category = items_cache.get()
+        items_snapshot = items_cache.get()
+        items = items_snapshot[0]
         generated_at = generated_at_cache.get()
         consumed_by_user = (
             consumed_item_ids_for_users(
@@ -567,26 +516,17 @@ def create_app(
         )
         request_can_filter = bool(
             items is not None
-            and not getattr(items, "empty", True)
-            and (body.category is not None or (body.exclude_unavailable and availability_filters))
+            and not items.empty
+            and (body.category is not None or (body.exclude_unavailable and items_cache.availability_filters))
         )
-        fetch_k = max(top_k * 5, top_k) if request_can_filter or hide_consumed else top_k
-        promoted, active_pair = overlay_cache.get()
-        snapshot = (
-            snapshot_variant_names(reader)
-            if assignment_needs_snapshot(settings, promoted_variant=promoted, active_pair=active_pair)
-            else None
-        )
+        fetch_k = top_k * 5 if request_can_filter or hide_consumed else top_k
+        assignment_overlay = overlay_cache.get()
+        # One snapshot read per request, and only if some user's assignment needs it.
+        snapshot_names = cache(partial(snapshot_variant_names, reader))
         assignments: dict[str, tuple[str | None, str | None]] = {}
         by_variant: dict[str | None, list[str]] = {}
         for user_id in user_ids:
-            assignment = resolve_assignment(
-                settings,
-                user_id,
-                promoted_variant=promoted,
-                active_pair=active_pair,
-                snapshot_names=snapshot,
-            )
+            assignment = assign_user(settings, user_id, assignment_overlay, snapshot_names)
             assignments[user_id] = assignment
             by_variant.setdefault(assignment[1], []).append(user_id)
         recs_by_user: dict[str, Any] = {}
@@ -596,34 +536,26 @@ def create_app(
             fallback_by_variant[variant] = reader.get_cold_start_fallback(fetch_k, variant=variant)
         users: list[RecommendationsResponse] = []
         for user_id in user_ids:
-            variant = assignments[user_id][1]
             row = _recommend_for_user(
                 user_id,
                 top_k=top_k,
                 category=body.category,
                 exclude_unavailable=body.exclude_unavailable,
                 hide_consumed=hide_consumed,
-                items=items,
-                available_ids=available_ids,
-                ids_by_category=ids_by_category,
-                background_tasks=background_tasks,
+                items_snapshot=items_snapshot,
                 generated_at=generated_at,
                 recs=recs_by_user.get(user_id),
-                fallback_recs=fallback_by_variant[variant],
+                fallback_recs=fallback_by_variant[assignments[user_id][1]],
                 assignment=assignments[user_id],
                 consumed_ids=consumed_by_user.get(user_id, set()) if hide_consumed else None,
             )
-            if row is None:
-                users.append(
-                    RecommendationsResponse(
-                        generated_at=generated_at,
-                        user_id=user_id,
-                        fallback=False,
-                        items=[],
-                    )
+            users.append(
+                row
+                if row is not None
+                else RecommendationsResponse(
+                    generated_at=generated_at, user_id=user_id, fallback=False, items=[]
                 )
-            else:
-                users.append(row)
+            )
         if generated_at is not None:
             response.headers["X-Generated-At"] = str(generated_at)
         return RecommendationsBatchResponse(generated_at=generated_at, users=users)
@@ -676,7 +608,7 @@ def create_app(
         )
 
     mount_events_routes(app, settings, event_source=event_source)
-    mount_track_routes(app, settings, store=track_store)
+    mount_track_routes(app, settings, track_store)
     mount_catalog_routes(app, settings, catalog=catalog, overlay=overlay)
 
     def _surface_filter_ctx() -> dict:
@@ -685,7 +617,7 @@ def create_app(
             "items": snap_items,
             "available_ids": snap_available,
             "ids_by_category": snap_by_category,
-            "category_column": category_column,
+            "category_column": items_cache.category_column,
             "on_missing_category_column": recommendation_service.warn_missing_category_column,
             "history": history_reader,
             "overlay": overlay,
@@ -715,9 +647,9 @@ def create_app(
                     "$ref": "#/components/headers/X-Generated-At",
                 }
         attach_code_samples(schema)
-        attach_events_ingest_openapi(schema)
+        attach_ingest_openapi(schema, EVENTS_INGEST)
         attach_catalog_events_openapi(schema)
-        attach_track_ingest_openapi(schema)
+        attach_ingest_openapi(schema, TRACK_INGEST)
         app.openapi_schema = schema
         return app.openapi_schema
 
@@ -726,13 +658,12 @@ def create_app(
 
 
 def main() -> None:
-    from cicerone.events.consumed import ConsumedOverlay
     from cicerone.io.factory import (
         build_catalog_store,
+        build_input_source,
         build_manifest_reader,
         build_recommendation_reader,
         build_surfaces_reader,
-        build_user_history_reader,
     )
 
     settings = load_settings()
@@ -741,34 +672,23 @@ def main() -> None:
 
     reader = build_recommendation_reader(settings.output)
     manifest_reader = build_manifest_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    if feature_path.is_file():
-        feature_config = load_feature_config(feature_path)
-    else:
-        logger.warning(
-            "feature config missing at %s; serve continuing without features.toml",
-            feature_path,
-        )
-        feature_config = None
-
-    availability_filters = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability_filters,
-    )
-
+    feature_config = load_optional_feature_config(settings)
+    configure_reader_item_filters(settings, reader, feature_config)
     overlay = ConsumedOverlay(max_items_per_user=settings.serve.consumed_lookback)
-    try:
-        history_reader = build_user_history_reader(settings.input)
-    except Exception:
-        logger.exception("Failed to open [input] for consumed-item hide")
-        history_reader = None
-    try:
-        catalog = build_catalog_store(settings.input)
-    except Exception:
-        logger.exception("Failed to open [input] catalog store")
-        catalog = None
+    history_reader = try_load(
+        "open [input] for consumed-item hide",
+        partial(build_input_source, settings.input),
+        None,
+        log=logger,
+        errors=STORE_OPEN_ERRORS,
+    )
+    catalog = try_load(
+        "open [input] catalog store",
+        partial(build_catalog_store, settings.input),
+        None,
+        log=logger,
+        errors=STORE_OPEN_ERRORS,
+    )
     surfaces = build_surfaces_reader(settings.output)
     events_runtime = start_events_runtime(
         settings,
@@ -798,5 +718,7 @@ def main() -> None:
     )
     try:
         uvicorn.run(app, host=settings.serve.host, port=settings.serve.port)
-    finally:
-        events_runtime.stop()
+    except BaseException:
+        cleanup_after_failure(events_runtime.stop, "Event runtime stop after a serve error failed", logger)
+        raise
+    events_runtime.stop()

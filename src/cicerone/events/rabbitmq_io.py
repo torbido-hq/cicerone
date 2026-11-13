@@ -9,12 +9,11 @@ from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 
+from cicerone.amqp_options import RABBITMQ_IO_ERRORS, close_amqp_handles
 from cicerone.events.base import EventSourceError
-from cicerone.events.errors import AMQPError
+from cicerone.failure_cleanup import cleanup_after_failure
 
 logger = logging.getLogger(__name__)
-
-RABBITMQ_IO_ERRORS: tuple[type[BaseException], ...] = (AMQPError, OSError, TimeoutError)
 
 _IO_STOP = object()
 _IO_IDLE_SECONDS = 0.5
@@ -25,17 +24,22 @@ _JOB_STARTED = "started"
 _JOB_INVOKING = "invoking"
 _JOB_DISPATCHED = "dispatched"
 _JOB_ABANDONED = "abandoned"
+# The I/O thread's steps before it runs a job; each re-checks that the job was not abandoned.
+_JOB_LOOP_STEPS = ((_JOB_QUEUED, _JOB_CLAIMED), (_JOB_CLAIMED, _JOB_RUNNING), (_JOB_RUNNING, _JOB_STARTED))
+
+
+def abandoned_error() -> EventSourceError:
+    return EventSourceError("RabbitMQ I/O worker abandoned")
 
 
 class _IoJob:
-    __slots__ = ("fn", "reply", "state", "run_lock", "permit")
+    __slots__ = ("fn", "reply", "state", "run_lock")
 
     def __init__(self, fn: Callable[[], Any], reply: queue.Queue[tuple[str, Any]]) -> None:
         self.fn = fn
         self.reply = reply
         self.state = _JOB_QUEUED
         self.run_lock = threading.Lock()
-        self.permit = True
 
 
 class PikaIo:
@@ -87,20 +91,17 @@ class PikaIo:
         job = _IoJob(fn, reply)
 
         def _guarded() -> Any:
-            with self._state_lock:
-                if self._failed or not job.permit or job.state != _JOB_STARTED:
-                    raise EventSourceError("RabbitMQ I/O worker abandoned")
-                job.state = _JOB_INVOKING
-            with self._state_lock:
-                if self._failed or not job.permit or job.state != _JOB_INVOKING:
-                    raise EventSourceError("RabbitMQ I/O worker abandoned")
-                job.state = _JOB_DISPATCHED
+            if not (
+                self._advance(job, _JOB_STARTED, _JOB_INVOKING)
+                and self._advance(job, _JOB_INVOKING, _JOB_DISPATCHED)
+            ):
+                raise abandoned_error()
             job.run_lock.acquire()
             try:
                 with self._state_lock:
-                    if self._failed or not job.permit:
+                    if self._failed:
                         job.state = _JOB_ABANDONED
-                        raise EventSourceError("RabbitMQ I/O worker abandoned")
+                        raise abandoned_error()
                 return fn()
             finally:
                 job.run_lock.release()
@@ -122,7 +123,7 @@ class PikaIo:
         if status == "err":
             raise payload
         if self._failed:
-            raise EventSourceError("RabbitMQ I/O worker abandoned")
+            raise abandoned_error()
         return payload
 
     def _mark_failed(self) -> None:
@@ -140,20 +141,21 @@ class PikaIo:
 
     def broker_channel(self) -> Any:
         with self._state_lock:
-            if self._failed or self._channel is None:
-                raise EventSourceError("RabbitMQ I/O worker abandoned")
-            return self._channel
+            return self._live(self._channel)
 
     def broker_connection(self) -> Any:
         with self._state_lock:
-            if self._failed or self._connection is None:
-                raise EventSourceError("RabbitMQ I/O worker abandoned")
-            return self._connection
+            return self._live(self._connection)
+
+    def _live(self, handle: Any | None) -> Any:
+        if self._failed or handle is None:
+            raise abandoned_error()
+        return handle
 
     def _bind_handles(self, *, connection: Any | None = None, channel: Any | None = None) -> None:
         with self._state_lock:
             if self._failed:
-                raise EventSourceError("RabbitMQ I/O worker abandoned")
+                raise abandoned_error()
             if connection is not None:
                 self._connection = connection
             if channel is not None:
@@ -162,32 +164,15 @@ class PikaIo:
     def _abandon_unclaimed(self, job: _IoJob) -> None:
         with self._state_lock:
             self._failed = True
-            job.permit = False
             job.state = _JOB_ABANDONED
             self._detach_handles()
 
-    def _take_job(self, job: _IoJob) -> bool:
+    def _advance(self, job: _IoJob, expected: str, state: str) -> bool:
         with self._state_lock:
-            if self._failed or job.state != _JOB_QUEUED:
+            if self._failed or job.state != expected:
                 job.state = _JOB_ABANDONED
                 return False
-            job.state = _JOB_CLAIMED
-            return True
-
-    def _enter_job(self, job: _IoJob) -> bool:
-        with self._state_lock:
-            if self._failed or job.state != _JOB_CLAIMED:
-                job.state = _JOB_ABANDONED
-                return False
-            job.state = _JOB_RUNNING
-            return True
-
-    def _should_run(self, job: _IoJob) -> bool:
-        with self._state_lock:
-            if self._failed or job.state != _JOB_RUNNING:
-                job.state = _JOB_ABANDONED
-                return False
-            job.state = _JOB_STARTED
+            job.state = state
             return True
 
     def abandon(self, channel: Any, connection: Any) -> None:
@@ -211,11 +196,11 @@ class PikaIo:
         self._channel = None
         self._abandon_channel = None
         self._abandon_connection = None
-        close_handles(channel, connection)
-        if leftover_channel is not None and leftover_channel is not channel:
-            _close_quietly(leftover_channel, "channel")
-        if leftover_connection is not None and leftover_connection is not connection:
-            _close_quietly(leftover_connection, "connection")
+        close_handles_after_failure(channel, connection)
+        close_handles_after_failure(
+            leftover_channel if leftover_channel is not channel else None,
+            leftover_connection if leftover_connection is not connection else None,
+        )
 
     def _loop(self) -> None:
         while True:
@@ -235,6 +220,7 @@ class PikaIo:
                 try:
                     self._pump()
                 except Exception:
+                    # I/O thread's top level: callers blocked on it see the failed state.
                     self._mark_failed()
                     logger.exception("RabbitMQ I/O thread process_data_events failed")
                 finally:
@@ -248,31 +234,17 @@ class PikaIo:
                 if self._failed:
                     self._exit_failed()
                 return
-            if not self._take_job(job):
+            if not all(self._advance(job, expected, state) for expected, state in _JOB_LOOP_STEPS):
                 with suppress(queue.Full):
-                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
-                self._exit_failed()
-                return
-            if not self._enter_job(job):
-                with suppress(queue.Full):
-                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
-                self._exit_failed()
-                return
-            if not self._should_run(job):
-                with suppress(queue.Full):
-                    job.reply.put_nowait(("err", EventSourceError("RabbitMQ I/O worker abandoned")))
+                    job.reply.put_nowait(("err", abandoned_error()))
                 self._exit_failed()
                 return
             try:
                 result = job.fn()
-            except Exception as exc:
-                # The caller is blocked on this reply.
+            except Exception as exc:  # noqa: BLE001 - handed to the blocked caller, which re-raises it
                 payload: tuple[str, Any] = ("err", exc)
             else:
-                if self._failed:
-                    payload = ("err", EventSourceError("RabbitMQ I/O worker abandoned"))
-                else:
-                    payload = ("ok", result)
+                payload = ("err", abandoned_error()) if self._failed else ("ok", result)
             with suppress(queue.Full):
                 job.reply.put_nowait(payload)
             if self._failed:
@@ -301,7 +273,7 @@ class PikaIo:
                 job.reply.put_nowait(("err", exc))
 
     def _exit_failed(self) -> None:
-        self._fail_pending(EventSourceError("RabbitMQ I/O worker abandoned"))
+        self._fail_pending(abandoned_error())
         self._cleanup_abandoned()
 
 
@@ -309,38 +281,30 @@ def release_io(io: PikaIo, channel: Any, connection: Any) -> None:
     if io.failed or not io._try_begin_shutdown():
         io.abandon(channel, connection)
         if not io._thread.is_alive():
-            close_handles(channel, connection)
+            close_handles_after_failure(channel, connection)
         return
-    closed = False
+
+    def _shutdown() -> None:
+        io._channel = None
+        io._connection = None
+        close_amqp_handles(channel, connection)
+
     try:
-
-        def _shutdown() -> None:
-            io._connection = None
-            close_handles(channel, connection)
-
         io.submit(_shutdown, allow_closing=True)
-        closed = True
     except RABBITMQ_IO_ERRORS:
         logger.exception("Failed to close RabbitMQ connection on I/O thread")
-    finally:
-        if not closed:
-            io.abandon(channel, connection)
-    if closed:
-        io.stop()
-
-
-def close_handles(channel: Any, connection: Any) -> None:
-    _close_quietly(channel, "channel")
-    _close_quietly(connection, "connection")
-
-
-def _close_quietly(handle: Any, label: str) -> None:
-    if handle is None:
+        io.abandon(channel, connection)
         return
-    closer = getattr(handle, "close", None)
-    if not callable(closer):
-        return
-    try:
-        closer()
     except Exception:
-        logger.exception("Failed to close RabbitMQ %s", label)
+        # The handles were already closed (or are still bound to io); stop the thread, don't close twice.
+        io.abandon(None, None)
+        raise
+    io.stop()
+
+
+def close_handles_after_failure(channel: Any, connection: Any) -> None:
+    cleanup_after_failure(
+        lambda: close_amqp_handles(channel, connection),
+        "Failed to close RabbitMQ handles after a failure",
+        logger,
+    )

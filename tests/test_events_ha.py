@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any
 
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import BeatingSource, apply_after_second_beat, event_payload
 from support.prometheus_metrics import registry_metric_value
-from support.settings import make_settings
+from support.settings import local_output, make_settings
 from support.toml_config import write_toml
+from support.waits import WAIT_SECONDS, wait_until
 
-from cicerone.config import ConfigError, EventsSettings, IOSettings, load_settings
+from cicerone.config import ConfigError, EventsSettings, load_settings
 from cicerone.events.base import EventSourceError
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.ha import ingest_is_fanout, poll_without_apply_lock
@@ -21,6 +21,7 @@ from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, events_apply_lock_key
@@ -76,7 +77,7 @@ def _seed_out(tmp_path, users: list[str] | None = None):
     ]
     pd.DataFrame(rows).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     return out, settings
@@ -250,13 +251,9 @@ def test_two_writers_serialized_keep_both_users(tmp_path, feature_config: Featur
             source = WebhookEventSource({})
             source.ingest(event_payload(event_id=f"e-{user_id}", user_id=user_id, item_id=item_id))
             worker = _worker(settings, source, feature_config, apply_lock=lock)
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                if worker.tick() == 1:
-                    return
-                time.sleep(0.01)
-            errors.append(AssertionError(f"{user_id} never applied"))
-        except BaseException as exc:  # noqa: BLE001
+            if not wait_until(lambda: worker.tick() == 1):
+                errors.append(AssertionError(f"{user_id} never applied"))
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [
@@ -294,17 +291,14 @@ def test_redis_streams_unique_consumers_leader_only(tmp_path, feature_config, mo
     assert lock.acquire() is True
     assert worker_follower.tick() == 0
     lock.release()
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
+
+    def _both_applied() -> bool:
         worker_leader.tick()
         worker_follower.tick()
         recs = pd.read_parquet(_out / "recommendations.parquet")
-        if {"is1", "is2"}.issubset(set(recs["item_id"].astype(str))):
-            break
-        time.sleep(0.01)
-    else:
-        recs = pd.read_parquet(_out / "recommendations.parquet")
-        raise AssertionError(f"missing stream items in {recs['item_id'].tolist()}")
+        return {"is1", "is2"}.issubset(set(recs["item_id"].astype(str)))
+
+    assert wait_until(_both_applied)
     assert leader._consumer == "serve-1"
     assert follower._consumer == "serve-2"
 
@@ -404,7 +398,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
 
     runtime = start_events_runtime(
         make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            output=local_output(out),
             trigger_lock_backend="redis",
             trigger_redis_url="redis://localhost:6379/0",
             events=EventsSettings(enabled=True, kind="webhook", ha=True),
@@ -457,7 +451,7 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
     with caplog.at_level(logging.INFO, logger="cicerone.serve.bootstrap_events"):
         runtime = start_events_runtime(
             make_settings(
-                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                output=local_output(out),
                 trigger_lock_backend="redis",
                 trigger_redis_url="redis://localhost:6379/0",
                 events=EventsSettings(enabled=True, kind="webhook", ha=False),
@@ -495,7 +489,7 @@ def test_start_events_runtime_skips_apply_lock_in_process(
 
     runtime = start_events_runtime(
         make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+            output=local_output(out),
             events=EventsSettings(enabled=True, kind="webhook", ha=False),
         ),
         feature_config=feature_config,
@@ -738,17 +732,7 @@ def test_ha_online_aborts_pending_on_fence_loss_during_persist(tmp_path, feature
 
 def test_ha_worker_heartbeats_inflight_during_flush(tmp_path, feature_config: FeatureConfig):
     _out, settings = _seed_out(tmp_path)
-
-    class _BeatingSource(WebhookEventSource):
-        def __init__(self) -> None:
-            super().__init__({})
-            self.beats = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.beats += 1
-
-    source = _BeatingSource()
+    source = BeatingSource()
     source.ingest(event_payload(event_id="hb1", user_id="u1", item_id="ihb"))
     worker = _worker(
         settings,
@@ -757,30 +741,14 @@ def test_ha_worker_heartbeats_inflight_during_flush(tmp_path, feature_config: Fe
         apply_lock=SharedLock(),
         heartbeat_interval_seconds=0.05,
     )
-    original = worker._updater.apply
-
-    def _slow(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
-        time.sleep(0.16)
-        return original(events, persist_online=persist_online)
-
-    worker._updater.apply = _slow  # type: ignore[method-assign]
+    apply_after_second_beat(worker, source)
     assert worker.tick() == 1
     assert source.beats >= 2
 
 
 def test_ha_worker_heartbeats_once_when_interval_disabled(tmp_path, feature_config: FeatureConfig):
     _out, settings = _seed_out(tmp_path)
-
-    class _BeatingSource(WebhookEventSource):
-        def __init__(self) -> None:
-            super().__init__({})
-            self.beats = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.beats += 1
-
-    source = _BeatingSource()
+    source = BeatingSource()
     source.ingest(event_payload(event_id="hb0", user_id="u1", item_id="ihb0"))
     worker = _worker(
         settings,
@@ -814,21 +782,12 @@ def test_ha_worker_nacks_when_heartbeat_raises(tmp_path, feature_config: Feature
     assert source.health().lag == 1
 
 
-def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: FeatureConfig):
-    _out, settings = _seed_out(tmp_path)
-
-    class _LaterBoom(WebhookEventSource):
-        def __init__(self) -> None:
-            super().__init__({})
-            self.beats = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.beats += 1
-            if self.beats > 1:
-                raise EventSourceError("lost visibility")
-
-    source = _LaterBoom()
+def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_raises(
+    tmp_path, feature_config: FeatureConfig
+):
+    # The write happened, so a nack would apply the batch twice.
+    out, settings = _seed_out(tmp_path)
+    source = BeatingSource(EventSourceError("lost visibility"))
     source.ingest(event_payload(event_id="hbl", user_id="u1", item_id="ihbl"))
     worker = _worker(
         settings,
@@ -837,40 +796,49 @@ def test_ha_worker_nacks_when_later_heartbeat_raises(tmp_path, feature_config: F
         apply_lock=SharedLock(),
         heartbeat_interval_seconds=0.05,
     )
-    original = worker._updater.apply
-
-    def _slow(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
-        time.sleep(0.16)
-        return original(events, persist_online=persist_online)
-
-    worker._updater.apply = _slow  # type: ignore[method-assign]
-    assert worker.tick() == 0
+    apply_after_second_beat(worker, source)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
     assert source.beats >= 2
-    assert source.health().lag == 1
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = pd.read_parquet(out / "recommendations.parquet")
+    assert "ihbl" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+
+def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
+    tmp_path, feature_config: FeatureConfig
+):
+    # An unexpected heartbeat error is re-raised, but only after the written batch is acked.
+    out, settings = _seed_out(tmp_path)
+    source = BeatingSource(RuntimeError("heartbeat bug"))
+    source.ingest(event_payload(event_id="hbb", user_id="u1", item_id="ihbb"))
+    worker = _worker(
+        settings,
+        source,
+        feature_config,
+        apply_lock=SharedLock(),
+        heartbeat_interval_seconds=0.05,
+    )
+    apply_after_second_beat(worker, source)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(RuntimeError, match="heartbeat bug"):
+        worker.tick()
+    assert source.beats >= 2
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = pd.read_parquet(out / "recommendations.parquet")
+    assert "ihbb" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
 
 def test_inflight_heartbeat_preserves_apply_error():
-    from cicerone.events.worker import inflight_heartbeat
-
-    class _Src:
-        def __init__(self) -> None:
-            self.n = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.n += 1
-            if self.n > 1:
-                raise RuntimeError("lost visibility")
-
-    source = _Src()
+    source = BeatingSource(RuntimeError("lost visibility"))
     with pytest.raises(ValueError, match="apply boom"), inflight_heartbeat(source, [], 0.02):
-        time.sleep(0.06)
+        assert source.second_beat.wait(WAIT_SECONDS)
         raise ValueError("apply boom")
 
 
 def test_inflight_heartbeat_propagates_unexpected_error():
-    from cicerone.events.worker import inflight_heartbeat
-
     class _Src:
         def heartbeat(self, events):  # type: ignore[no-untyped-def]
             del events
@@ -882,40 +850,16 @@ def test_inflight_heartbeat_propagates_unexpected_error():
 
 
 def test_later_unexpected_heartbeat_propagates():
-    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
-
-    class _Src:
-        def __init__(self) -> None:
-            self.n = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.n += 1
-            if self.n > 1:
-                raise RuntimeError("beat bug")
-
-    source = _Src()
+    source = BeatingSource(RuntimeError("beat bug"))
     with pytest.raises(RuntimeError, match="beat bug") as captured, inflight_heartbeat(source, [], 0.02):
-        time.sleep(0.08)
+        assert source.second_beat.wait(WAIT_SECONDS)
     assert not isinstance(captured.value, HeartbeatError)
 
 
 def test_later_source_heartbeat_error_is_heartbeat_error():
-    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
-
-    class _Src:
-        def __init__(self) -> None:
-            self.n = 0
-
-        def heartbeat(self, events):  # type: ignore[no-untyped-def]
-            del events
-            self.n += 1
-            if self.n > 1:
-                raise EventSourceError("lost visibility")
-
-    source = _Src()
+    source = BeatingSource(EventSourceError("lost visibility"))
     with pytest.raises(HeartbeatError, match="heartbeat failed"), inflight_heartbeat(source, [], 0.02):
-        time.sleep(0.08)
+        assert source.second_beat.wait(WAIT_SECONDS)
 
 
 def test_ha_online_skips_persist_when_write_busy_after_apply(tmp_path, feature_config: FeatureConfig):

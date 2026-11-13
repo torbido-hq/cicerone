@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from support.toml_config import write_toml
+from support.settings import local_output
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.config import (
     ConfigError,
-    IOSettings,
     load_eval_settings,
     load_experiment_settings,
     load_settings,
@@ -14,24 +14,8 @@ from cicerone.config import (
 )
 
 
-def _minimal_io() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """
-
-
 def test_load_track_and_eval_defaults(tmp_path):
-    settings = load_settings(write_toml(tmp_path, "[job]\n" + _minimal_io()))
+    settings = load_settings(write_toml(tmp_path, "[job]\n" + MINIMAL_IO_TOML))
     assert settings.track.enabled is False
     assert settings.track.attribution_window_hours == 24.0
     assert settings.track.min_impressions == 100
@@ -47,7 +31,7 @@ def test_load_track_eval_and_log_impressions(tmp_path):
             """
             [job]
             """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
             [job.eval]
             enabled = true
@@ -83,7 +67,7 @@ def test_log_impressions_requires_track(tmp_path):
                 """
                 [job]
                 """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
                 [serve]
                 log_impressions = true
@@ -100,7 +84,7 @@ def test_ctr_metric_requires_track(tmp_path):
                 """
                 [job]
                 """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
                 [experiment]
                 enabled = true
@@ -161,19 +145,10 @@ def test_load_settings_rejects_track_with_ha_on_local_dataset(tmp_path):
                 enabled = true
                 kind = "webhook"
                 ha = true
-                [input]
-                kind = "dataset"
-                [input.options]
-                storage_backend = "local"
-                path = "/tmp/in"
-                [output]
-                kind = "dataset"
-                [output.options]
-                storage_backend = "local"
-                path = "/tmp/out"
                 [track]
                 enabled = true
-                """,
+                """
+                + MINIMAL_IO_TOML,
             )
         )
 
@@ -189,7 +164,7 @@ def test_make_settings_track_and_eval_dicts(tmp_path):
     settings = make_settings(
         track={"enabled": True, "min_impressions": 10},
         eval={"enabled": True, "ks": [5]},
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     assert settings.track.enabled is True
     assert settings.track.min_impressions == 10
@@ -204,7 +179,7 @@ def test_load_experiment_attribution(tmp_path):
             """
             [job]
             """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
             [track]
             enabled = true

@@ -14,7 +14,7 @@ from cicerone.experiment.store import ExperimentStore
 from cicerone.forget import forget_user
 from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DatabaseOutputSink
-from cicerone.locks.hold import held_writer_lock
+from cicerone.locks import WriteFence
 from cicerone.track.store import TrackStore
 
 
@@ -148,8 +148,9 @@ def test_forget_user_reuses_a_held_writer_lock(tmp_path) -> None:
     output = _local(tmp_path)
     _seed(output)
     lock = _WriterLock()
-    with held_writer_lock(lock):
-        result = forget_user(output, "u1", writer_lock=lock)
+    fence = WriteFence(lock)
+    with fence.hold():
+        result = forget_user(output, "u1", fence=fence)
         assert lock.held
     assert result.recommendations == 1
     assert _remaining_users(output) == {"u2"}
@@ -341,7 +342,7 @@ def test_forget_user_matches_padded_ids(tmp_path) -> None:
 
 
 def test_forget_user_erases_every_store_on_in_memory_sqlite() -> None:
-    from cicerone.io.db_store import create_db_engine
+    from cicerone.io.engines import create_db_engine
 
     output = IOSettings(kind="db", options={"database_url": "sqlite://"})
     _seed(output)
@@ -360,11 +361,14 @@ def test_forget_user_erases_every_store_on_in_memory_sqlite() -> None:
 def test_delete_rows_reraises_database_errors_that_are_not_missing_tables() -> None:
     from contextlib import nullcontext
 
+    from sqlalchemy.dialects import sqlite
     from sqlalchemy.exc import OperationalError
 
     from cicerone.track.store_db import delete_rows_for_user
 
     class _Conn:
+        dialect = sqlite.dialect()
+
         def begin_nested(self):
             return nullcontext()
 

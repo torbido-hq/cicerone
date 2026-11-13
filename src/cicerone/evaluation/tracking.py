@@ -12,14 +12,15 @@ import pandas as pd
 from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION
 from cicerone.evaluation.metrics import (
     SliceMetrics,
-    clicked_impressions_by_user,
     coalesce_column,
+    distinct_priors_by_user,
     fill_blank_ids,
     merge_asof_events,
     metrics_by_impression_dimensions,
     metrics_for_impression_slice,
     normalized_frame,
     with_join_keys,
+    with_str_ids,
 )
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -75,7 +76,7 @@ def conversion_events(
     return filter_events_by_types(events, conversion_event_types(configured, primary_metric=primary_metric))
 
 
-def _variant_blank(values: pd.Series) -> pd.Series:
+def variant_blank(values: pd.Series) -> pd.Series:
     return values.isna() | values.astype(str).str.strip().eq("")
 
 
@@ -89,13 +90,11 @@ def annotate_impression_source(
         if SOURCE_COLUMN not in frame.columns:
             frame[SOURCE_COLUMN] = None
         return frame
-    recs = recommendations.copy()
-    recs[USER_COLUMN] = recs[USER_COLUMN].astype(str)
-    recs[ITEM_COLUMN] = recs[ITEM_COLUMN].astype(str)
+    recs = with_str_ids(recommendations)
     join_keys = [USER_COLUMN, ITEM_COLUMN]
     if VARIANT_COLUMN in frame.columns and VARIANT_COLUMN in recs.columns:
-        blank = _variant_blank(frame[VARIANT_COLUMN])
-        rec_blank = _variant_blank(recs[VARIANT_COLUMN])
+        blank = variant_blank(frame[VARIANT_COLUMN])
+        rec_blank = variant_blank(recs[VARIANT_COLUMN])
         if bool(blank.any()):
             parts: list[pd.DataFrame] = []
             if bool((~blank).any()):
@@ -183,9 +182,9 @@ def _prepare_click_frames(
     if annotate_source:
         impressions = annotate_impression_source(impressions, recommendations)
         impressions = impressions.copy()
-    impressions = fill_blank_ids(impressions, "imp")
+    impressions = fill_blank_ids(impressions)
     if not clicks.empty:
-        clicks = fill_blank_ids(clicks, "clk")
+        clicks = fill_blank_ids(clicks)
     matched_clicks = merge_asof_events(clicks, impressions, window=window) if not clicks.empty else clicks
     return _ClickFrames(impressions, clicks, matched_clicks, window)
 
@@ -212,10 +211,7 @@ def evaluate_tracking(
     conv = normalized_frame(conversions)
     conv = with_join_keys(conv) if not conv.empty and "event_type" in conv.columns else pd.DataFrame()
     view_conv = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv
-    if not conv.empty and not matched_clicks.empty:
-        click_conv = merge_asof_events(conv, matched_clicks, window=window)
-    else:
-        click_conv = conv.iloc[0:0]
+    click_conv = _click_conversions(conv, matched_clicks, window)
     overall = metrics_for_impression_slice(impressions, matched_clicks, view_conv, click_conv)
     sliced = metrics_by_impression_dimensions(
         impressions,
@@ -230,6 +226,14 @@ def evaluate_tracking(
         by_source=sliced.get(SOURCE_COLUMN, {}),
         by_variant=sliced.get(VARIANT_COLUMN, {}),
     )
+
+
+def _click_conversions(conv: pd.DataFrame, matched_clicks: pd.DataFrame, window: timedelta) -> pd.DataFrame:
+    """Conversions after a click, keyed to the clicked impression so one impression counts once."""
+    if conv.empty or matched_clicks.empty:
+        return conv.iloc[0:0]
+    by_impression = matched_clicks.assign(event_id=matched_clicks["prior_event_id"])
+    return merge_asof_events(conv, by_impression, window=window)
 
 
 def user_track_outcomes(
@@ -250,26 +254,20 @@ def user_track_outcomes(
     window = prepared.window
     conv = with_join_keys(normalized_frame(conversions))
     if attribution == "click":
-        attributed = (
-            merge_asof_events(conv, matched_clicks, window=window)
-            if not conv.empty and not matched_clicks.empty
-            else conv.iloc[0:0]
-        )
+        attributed = _click_conversions(conv, matched_clicks, window)
     else:
         attributed = merge_asof_events(conv, impressions, window=window) if not conv.empty else conv.iloc[0:0]
     impression_counts = impressions.groupby(USER_COLUMN).size()
-    click_counts = clicked_impressions_by_user(matched_clicks)
-    conversion_counts = (
-        attributed.groupby(USER_COLUMN).size() if not attributed.empty else pd.Series(dtype=int)
-    )
+    click_counts = distinct_priors_by_user(matched_clicks)
+    conversion_counts = distinct_priors_by_user(attributed)
     for user_id, n_imp in impression_counts.items():
         user = str(user_id)
         n_clicks = float(click_counts.get(user, 0)) if not click_counts.empty else 0.0
         n_conv = float(conversion_counts.get(user, 0)) if not conversion_counts.empty else 0.0
         if primary_metric == "ctr":
             capped_clicks = min(n_clicks, float(n_imp))
-            report_users[user] = capped_clicks / float(n_imp) if n_imp else 0.0
+            report_users[user] = capped_clicks / float(n_imp)
         else:
             capped = min(n_conv, float(n_imp))
-            report_users[user] = capped / float(n_imp) if n_imp else 0.0
+            report_users[user] = capped / float(n_imp)
     return report_users

@@ -4,7 +4,7 @@ import urllib.error
 from dataclasses import replace
 
 import pytest
-from conftest import make_settings
+from support.settings import make_settings
 
 from cicerone import dashboard_retrain
 from cicerone.dashboard_retrain import RetrainError, request_retrain, retrain_configured, trigger_base_url
@@ -72,7 +72,7 @@ def test_timeout_is_reported_as_ambiguous(monkeypatch, caplog, failure):
         caplog.at_level("WARNING", logger="cicerone.dashboard_retrain"),
         pytest.raises(RetrainError, match="may still start"),
     ):
-        request_retrain(make_settings(trigger_enabled=True))
+        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token="tok"))
     assert any("timed out" in record.getMessage() for record in caplog.records)
 
 
@@ -90,7 +90,7 @@ def test_unreachable_trigger(monkeypatch, caplog):
         caplog.at_level("WARNING", logger="cicerone.dashboard_retrain"),
         pytest.raises(RetrainError, match="unreachable"),
     ):
-        request_retrain(make_settings(trigger_enabled=True))
+        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token="tok"))
     assert any("unreachable: down" in record.getMessage() for record in caplog.records)
 
 
@@ -106,7 +106,7 @@ def test_unexpected_status_is_a_failure(monkeypatch):
 
     monkeypatch.setattr(dashboard_retrain._OPENER, "open", lambda *_a, **_k: _Response())
     with pytest.raises(RetrainError, match="failed"):
-        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token=None))
+        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token="tok"))
 
 
 def test_http_error_is_a_failure(monkeypatch):
@@ -115,7 +115,7 @@ def test_http_error_is_a_failure(monkeypatch):
 
     monkeypatch.setattr(dashboard_retrain._OPENER, "open", _urlopen)
     with pytest.raises(RetrainError, match="failed"):
-        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token=None))
+        request_retrain(make_settings(trigger_enabled=True, trigger_auth_token="tok"))
 
 
 def test_a_redirect_is_not_followed_and_the_token_stays_put(caplog):
@@ -125,12 +125,12 @@ def test_a_redirect_is_not_followed_and_the_token_stays_put(caplog):
     leaked: list[str | None] = []
 
     class _Elsewhere(BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             leaked.append(self.headers.get("Authorization"))
             self.send_response(202)
             self.end_headers()
 
-        do_POST = do_GET  # noqa: N815
+        do_POST = do_GET
 
         def log_message(self, *_args):
             return None
@@ -139,7 +139,7 @@ def test_a_redirect_is_not_followed_and_the_token_stays_put(caplog):
     target = f"http://localhost:{elsewhere.server_address[1]}/trigger/retrain"
 
     class _Redirect(BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802
+        def do_POST(self):
             self.send_response(302)
             self.send_header("Location", target)
             self.send_header("Content-Length", "0")

@@ -16,6 +16,8 @@
 # Credentials / DB names: docker/postgres/defaults.env (canonical).
 # TEST_DATABASE_URL is assembled by tests/support/postgres_defaults.py from
 # POSTGRES_TEST_HOST + that file — do not hand-build the URL here.
+# MySQL (track store tests) follows the same split: docker/mysql/defaults.env,
+# tests/support/mysql_defaults.py and MYSQL_TEST_HOST.
 
 services:
   db-test:
@@ -33,6 +35,19 @@ services:
     tmpfs:
       - /var/lib/postgresql/data # throwaway, never persisted
 
+  mysql-test:
+    image: mysql:8.4
+    env_file:
+      - ./docker/mysql/defaults.env
+    healthcheck:
+      # Over TCP: the image's init server is socket-only, so this waits for the real one.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    tmpfs:
+      - /var/lib/mysql # throwaway, never persisted
+
   test:
     build:
       context: .
@@ -43,6 +58,7 @@ services:
     environment:
       # Hostname only — URL from support.postgres_defaults.resolve_test_database_url().
       POSTGRES_TEST_HOST: db-test
+      MYSQL_TEST_HOST: mysql-test
       # Required by support.system_db.reset_schema before it will drop known tables.
       ALLOW_SCHEMA_RESET_FOR_TESTS: "1"
       # Shared with `robot`/`coverage-report` so Robot-exercised lines count too.
@@ -51,6 +67,8 @@ services:
       - ./coverage-data:/app/coverage-data
     depends_on:
       db-test:
+        condition: service_healthy
+      mysql-test:
         condition: service_healthy
 
   test-sequential:

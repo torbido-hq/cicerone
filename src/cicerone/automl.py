@@ -7,6 +7,7 @@ and runs train_and_recommend.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,7 @@ from cicerone.config import (
     DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset, build_interactions
@@ -41,12 +43,9 @@ from cicerone.model_config import (
     popular_in_category_feature,
     sequential_extra_available,
 )
+from cicerone.ranking import drop_seen_pairs, keep_top_k, renumber_ranks
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_N_SPLITS = AUTOML_DEFAULT_N_SPLITS
-DEFAULT_TEST_DAYS = AUTOML_DEFAULT_TEST_DAYS
-DEFAULT_PRIMARY_METRIC = AUTOML_DEFAULT_PRIMARY_METRIC
 
 
 def median_distinct_items_per_user(events: pd.DataFrame) -> float:
@@ -178,12 +177,7 @@ def _parse_candidates(raw: list[dict[str, Any]] | None) -> list[Candidate]:
             raise ValueError(
                 f"Unknown model(s) in automl candidate {unknown}; available: {sorted(STRATEGIES)}"
             )
-        weights_value = entry.get("weights")
-        if weights_value is not None and not isinstance(weights_value, dict):
-            raise ValueError(
-                f"automl candidate 'weights' must be a table of model name -> weight, got {weights_value!r}"
-            )
-        weights = {str(k): float(v) for k, v in weights_value.items()} if weights_value is not None else None
+        weights = weights_field(entry, "weights", context="automl candidate 'weights'")
         if weights is not None:
             unknown_weights = [name for name in weights if name not in models]
             if unknown_weights:
@@ -244,30 +238,16 @@ def _make_metrics(top_k: int, *, debias: bool = False) -> dict[str, MetricAtK]:
     }
 
 
-def drop_seen_interactions(test: pd.DataFrame, train: pd.DataFrame) -> pd.DataFrame:
-    """Keep test (user, item) pairs that do not appear in train."""
-    if test.empty or train.empty:
-        return test
-    user, item = Columns.User, Columns.Item
-    if user not in test.columns or item not in test.columns:
-        return test
-    if user not in train.columns or item not in train.columns:
-        return test
-    seen = train.loc[:, [user, item]].drop_duplicates()
-    merged = test.merge(seen, on=[user, item], how="left", indicator=True)
-    return merged.loc[merged["_merge"] == "left_only"].drop(columns=["_merge"]).reset_index(drop=True)
-
-
 def drop_seen_recommendations(reco: pd.DataFrame, train: pd.DataFrame, top_k: int) -> pd.DataFrame:
     """Remove train pairs from a reco list and re-rank to ``top_k``."""
-    filtered = drop_seen_interactions(reco, train)
+    filtered = drop_seen_pairs(reco, train)
     if filtered.empty or Columns.User not in filtered.columns:
         return filtered
     if Columns.Rank in filtered.columns:
         filtered = filtered.sort_values([Columns.User, Columns.Rank], kind="mergesort")
-    trimmed = filtered.groupby(Columns.User, as_index=False).head(top_k).copy()
+    trimmed = keep_top_k(filtered, top_k).copy()
     if Columns.Rank in trimmed.columns:
-        trimmed[Columns.Rank] = trimmed.groupby(Columns.User).cumcount() + 1
+        renumber_ranks(trimmed)
     return trimmed.reset_index(drop=True)
 
 
@@ -286,7 +266,7 @@ def _evaluate_fold(
 ) -> list[dict[str, float]]:
     """Score every candidate on one fold (picklable for ProcessPoolExecutor)."""
     built = build_dataset(train_events, users, items, config, half_life_days=half_life_days)
-    test_interactions = drop_seen_interactions(
+    test_interactions = drop_seen_pairs(
         build_interactions(test_events, config, half_life_days=half_life_days),
         built.interactions,
     )
@@ -370,8 +350,8 @@ def evaluate_candidates(
     top_k: int,
     half_life_days: float,
     candidates: list[dict[str, Any]] | None = None,
-    n_splits: int = DEFAULT_N_SPLITS,
-    test_days: int = DEFAULT_TEST_DAYS,
+    n_splits: int = AUTOML_DEFAULT_N_SPLITS,
+    test_days: int = AUTOML_DEFAULT_TEST_DAYS,
     max_workers: int = 1,
     model_configs: dict[str, dict[str, Any]] | None = None,
     sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
@@ -434,6 +414,8 @@ def evaluate_candidates(
         )
         with ProcessPoolExecutor(
             max_workers=min(max_workers, len(folds)),
+            # Forking a threaded scheduler (OpenMP, logging locks) can deadlock the workers.
+            mp_context=multiprocessing.get_context("spawn"),
             initializer=_init_eval_worker,
             initargs=(worker_context,),
         ) as executor:
@@ -494,7 +476,7 @@ def _resolve_metric_key(available_metrics: list[str], primary_metric: str) -> st
 
 
 def select_best_candidate(
-    results: list[CandidateResult], primary_metric: str = DEFAULT_PRIMARY_METRIC
+    results: list[CandidateResult], primary_metric: str = AUTOML_DEFAULT_PRIMARY_METRIC
 ) -> CandidateResult:
     """Pick the highest ``primary_metric`` (exact name or ``NAME@k``). Ties keep list order."""
     if not results:

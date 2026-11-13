@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pandas.errors import DatabaseError
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 SQL_READ_ERRORS: tuple[type[BaseException], ...] = (SQLAlchemyError, DatabaseError)
+MISSING_TABLE_ERRORS: tuple[type[BaseException], ...] = (ProgrammingError, OperationalError)
 
 
 def db_error_message(exc: BaseException) -> str:

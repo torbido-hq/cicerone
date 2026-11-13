@@ -7,7 +7,9 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
+
+from cicerone.capability import CapabilityMeta
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,8 @@ class NormalizedEvent:
     occurred_at: datetime
     event_id: str
     generated_event_id: bool = False
+    # Set by a source for a row it cannot normalize: the worker acks it without applying.
+    rejected: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,10 @@ class EventSource(Protocol):
         ...
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
-        """Ack ids that still have a live delivery; return those ids."""
+        """Ack ids that still have a live delivery; return those ids.
+
+        A source may confirm only some ids (Kafka: offsets its commit passed); the rest are not retried.
+        """
         ...
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
@@ -57,6 +64,29 @@ class EventSource(Protocol):
     def health(self) -> EventSourceHealth:
         """Lag / connectivity for dashboard and metrics."""
         ...
+
+
+# Optional source capabilities; callers check them with isinstance.
+@runtime_checkable
+class HeartbeatSource(Protocol, metaclass=CapabilityMeta):
+    def heartbeat(self, events: Sequence[NormalizedEvent]) -> None:
+        """Extend visibility/leases for in-flight ``events`` during a long apply."""
+        ...
+
+
+@runtime_checkable
+class ClosableSource(Protocol, metaclass=CapabilityMeta):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class EphemeralIdSource(Protocol, metaclass=CapabilityMeta):
+    # Ids are regenerated on redelivery, so the worker dedupes by fingerprint instead.
+    ephemeral_event_ids: bool
+
+
+def has_ephemeral_event_ids(source: object) -> bool:
+    return isinstance(source, EphemeralIdSource) and bool(source.ephemeral_event_ids)
 
 
 class QueuedEventSource:
@@ -106,6 +136,14 @@ class QueuedEventSource:
             return ()
         return self._commit_acks(backend, resolved)
 
+    def close(self) -> None:
+        with self._lock:
+            handle = self._detach_unlocked()
+            self._connected = False
+            self._clear_lifecycle()
+        if handle is not None:
+            self._release(handle)
+
     def _require_ready(self) -> Any:
         with self._lock:
             backend = self._backend()
@@ -123,6 +161,13 @@ class QueuedEventSource:
         raise NotImplementedError
 
     def _commit_acks(self, backend: Any, resolved: Sequence[tuple[str, Any]]) -> Sequence[str]:
+        raise NotImplementedError
+
+    def _detach_unlocked(self) -> Any | None:
+        """Drop the backend handle and its delivery maps; return the handle to release."""
+        raise NotImplementedError
+
+    def _release(self, handle: Any) -> None:
         raise NotImplementedError
 
     def _drain_pending(self, max_events: int) -> list[NormalizedEvent]:

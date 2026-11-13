@@ -11,21 +11,12 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+import math
 from typing import Any
 
-import pandas as pd
-
-from cicerone.io.blob import S3_READ_ERRORS
-from cicerone.io.options import (
-    build_s3_client,
-    is_s3_not_found,
-    object_key,
-    read_s3_body,
-    require_option,
-    sql_identifier,
-    validate_storage_options,
-)
+from cicerone.io.blob import read_storage_bytes
+from cicerone.io.filenames import MANIFEST_FILENAME
+from cicerone.io.options import require_option, table_option, validate_storage_options
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +24,11 @@ logger = logging.getLogger(__name__)
 class DatasetManifestReader:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = validate_storage_options(options)
+        validate_storage_options(options)
 
     def _read(self) -> dict[str, Any] | None:
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / "manifest.json"
-            if not path.exists():
-                return None
-            return json.loads(path.read_text())
-
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, "manifest.json")
-        client = build_s3_client(self._options)
-        try:
-            obj = client.get_object(Bucket=bucket, Key=key)
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                return None
-            raise
-        return json.loads(read_s3_body(obj))
+        payload = read_storage_bytes(self._options, MANIFEST_FILENAME)
+        return None if payload is None else json.loads(payload)
 
     def read_latest(self) -> dict[str, Any] | None:
         return self._read()
@@ -68,10 +45,7 @@ class DbManifestReader:
         from cicerone.io.engines import engine_for
 
         self._options = options
-        self._table = sql_identifier(
-            options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
-            option="manifest_table",
-        )
+        self._table = table_option(options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         self._engine = engine_for(require_option(options, "database_url", "db"))
 
     def read_latest(self) -> dict[str, Any] | None:
@@ -79,16 +53,17 @@ class DbManifestReader:
         return rows[0] if rows else None
 
     def read_recent(self, limit: int) -> list[dict[str, Any]]:
-        from sqlalchemy import Integer, MetaData, Table, inspect, select
+        from sqlalchemy import MetaData, Table, inspect, select
 
         if not inspect(self._engine).has_table(self._table):
             return []
         table = Table(self._table, MetaData(), autoload_with=self._engine)
         stmt = select(table).order_by(table.c.generated_at.desc()).limit(limit)
-        df = pd.read_sql(stmt, self._engine)
-        # read_sql turns an integer column with a NULL into float64 (5 -> 5.0).
-        for column in table.columns:
-            if isinstance(column.type, Integer) and column.name in df:
-                df[column.name] = df[column.name].astype("Int64")
-        df = df.astype(object).where(df.notna(), None)
-        return df.to_dict(orient="records")
+        # Driver rows, not read_sql: pandas turns an integer column with a NULL into float64 (5 -> 5.0).
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [{key: None if _is_nan(value) else value for key, value in row.items()} for row in rows]
+
+
+def _is_nan(value: Any) -> bool:
+    return isinstance(value, float) and math.isnan(value)

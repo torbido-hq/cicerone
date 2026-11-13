@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import pandas as pd
 from rectools.dataset import Dataset
@@ -83,7 +83,7 @@ def build_artifact(
     )
 
 
-def _is_rectools_model(model: object) -> bool:
+def _is_rectools_model(model: object) -> TypeGuard[ModelBase]:
     return isinstance(model, ModelBase)
 
 
@@ -164,7 +164,7 @@ def dumps_artifact(artifact: ModelArtifact, *, hmac_key: str | None = None) -> b
         _write(_BUNDLE_NAME, pickle.dumps(bundle, protocol=pickle.HIGHEST_PROTOCOL))
         for name, model in artifact.fitted.items():
             if _is_rectools_model(model):
-                _write(f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}", _dump_rectools_model(model))  # type: ignore[arg-type]
+                _write(f"{_MODELS_DIR}{name}{_RECTOOLS_SUFFIX}", _dump_rectools_model(model))
             else:
                 _write(
                     f"{_MODELS_DIR}{name}{_PICKLE_SUFFIX}",
@@ -265,17 +265,14 @@ def loads_artifact(
     payload: bytes,
     *,
     hmac_key: str | None = None,
-    max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> ModelArtifact:
     """Deserialize a trusted v3 ModelArtifact zip. Legacy bare pickle is refused."""
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
-    if len(payload) > max_bytes:
-        raise ValueError(f"Artifact payload exceeds {max_bytes} bytes")
+    if len(payload) > DEFAULT_MAX_ARTIFACT_BYTES:
+        raise ValueError(f"Artifact payload exceeds {DEFAULT_MAX_ARTIFACT_BYTES} bytes")
     try:
         buffer = io.BytesIO(payload)
         with zipfile.ZipFile(buffer, mode="r") as zf:
-            _assert_artifact_size(zf, max_bytes)
+            _assert_artifact_size(zf, DEFAULT_MAX_ARTIFACT_BYTES)
             names = _assert_safe_artifact_zip(zf)
             key = _hmac_key_bytes(hmac_key)
             if key is not None:
@@ -327,27 +324,12 @@ def load_artifact(
     path: Path | str,
     *,
     hmac_key: str | None = None,
-    max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES,
 ) -> ModelArtifact:
     path = Path(path)
     logger.info("Loading model artifact from %s", path)
-    if max_bytes < 1:
-        raise ValueError("max_bytes must be >= 1")
     with path.open("rb") as handle:
-        payload = handle.read(max_bytes + 1)
-    return loads_artifact(payload, hmac_key=hmac_key, max_bytes=max_bytes)
-
-
-def save_rectools_model(path: Path | str, model: ModelBase) -> None:
-    """``model.save`` → bytes."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    model.save(path)
-
-
-def load_rectools_model(path: Path | str) -> RecommenderModel:
-    """``load_model`` from bytes."""
-    return load_model(Path(path))  # type: ignore[return-value]
+        payload = handle.read(DEFAULT_MAX_ARTIFACT_BYTES + 1)
+    return loads_artifact(payload, hmac_key=hmac_key)
 
 
 def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:

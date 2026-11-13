@@ -6,8 +6,7 @@ import pandas as pd
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.feature_config import FeatureConfig
-from cicerone.io.recommendation_reader import ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
-from cicerone.io.recommendation_schema import REASONS_COLUMN
+from cicerone.io.recommendation_schema import ITEM_COLUMN, REASONS_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
 from cicerone.reasons import dump_source_reasons
 from cicerone.weighting import event_row_weights
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import pandas as pd
 from fastapi.testclient import TestClient
 from prometheus_client import generate_latest
+from support.fakes import FakeReader
 from support.prometheus_metrics import metric_value
-from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
+from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K
 from cicerone.io.surfaces_reader import EmptySurfacesReader
@@ -43,9 +44,9 @@ class _Surfaces:
 
 def _app(**kwargs):
     return create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         surfaces=_Surfaces(),
         **kwargs,
     )
@@ -77,9 +78,9 @@ def test_session_falls_back_when_neighbors_are_filtered_out():
             return pd.DataFrame([{"item_id": "i1", "neighbor_id": "i3", "rank": 1, "score": 0.9}])
 
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         surfaces=_OnlyUnavailable(),
     )
     body = (
@@ -107,7 +108,7 @@ def test_session_falls_back_to_popular():
 
 
 def test_empty_surfaces_return_404():
-    app = create_app(_settings(), _FakeReader(_recs_df()), surfaces=EmptySurfacesReader())
+    app = create_app(serve_settings(), FakeReader(recs_df()), surfaces=EmptySurfacesReader())
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     assert client.get("/popular", headers=headers).status_code == 404
@@ -152,9 +153,9 @@ def test_session_overfetches_neighbors_before_filters():
 
     surfaces = _UnavailableFirst()
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         surfaces=surfaces,
     )
     body = (
@@ -183,9 +184,9 @@ def test_session_uses_batched_neighbor_lookup():
 
     surfaces = _Batched()
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         surfaces=surfaces,
     )
     body = (

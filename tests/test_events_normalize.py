@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 from support.events import event_payload
 
@@ -9,7 +11,27 @@ from cicerone.events.normalize import (
     events_to_dataframe,
     normalize_event,
     normalize_events,
+    supplied_event_id,
 )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({}, None),
+        ({"event_id": 0}, None),
+        ({"event_id": "", "idempotency_key": 0}, None),
+        ({"event_id": None, "idempotency_key": False}, None),
+        ({"event_id": 0, "idempotency_key": "k"}, "k"),
+        ({"event_id": "0"}, "0"),
+        ({"event_id": 7}, "7"),
+        ({"event_id": " abc "}, "abc"),
+        ({"event_id": " ", "idempotency_key": " k "}, "k"),
+        ({"event_id": " "}, None),
+    ],
+)
+def test_supplied_event_id_treats_every_empty_value_as_missing(payload, expected):
+    assert supplied_event_id(payload) == expected
 
 
 def test_event_fingerprint_does_not_collide_on_pipe_in_fields():
@@ -18,6 +40,18 @@ def test_event_fingerprint_does_not_collide_on_pipe_in_fields():
     assert event_fingerprint(left) != event_fingerprint(right)
     again = normalize_event(event_payload(event_id="fp-c", user_id="a|b", item_id="c"))
     assert event_fingerprint(left) == event_fingerprint(again)
+
+
+@pytest.mark.parametrize("field", ["user_id", "item_id", "event_type", "event_id", "idempotency_key"])
+@pytest.mark.parametrize("value", [[], ["a"], {}, {"a": 1}])
+def test_normalize_event_rejects_an_object_or_array_id(field, value):
+    with pytest.raises(EventNormalizeError, match=f"{field} must not be a JSON object or array"):
+        normalize_event({**event_payload(), field: value})
+
+
+def test_normalize_event_still_accepts_a_numeric_id():
+    event = normalize_event({**event_payload(), "user_id": 7, "item_id": Decimal("3")})
+    assert (event.user_id, event.item_id) == ("7", "3")
 
 
 def test_normalize_event_and_errors():
@@ -34,6 +68,25 @@ def test_normalize_event_and_errors():
         normalize_event({"user_id": "u1"})
     with pytest.raises(EventNormalizeError, match="quantity"):
         normalize_event(event_payload(quantity=0))
+
+
+@pytest.mark.parametrize(
+    "value", [float("nan"), float("inf"), float("-inf"), 1e20, True, "9999-12-31T23:59:59-01:00"]
+)
+def test_normalize_rejects_unusable_numeric_occurred_at(value):
+    with pytest.raises(EventNormalizeError, match="occurred_at"):
+        normalize_event(event_payload(occurred_at=value))
+
+
+def test_normalize_rejects_a_datetime_whose_timezone_has_no_offset():
+    from datetime import datetime, tzinfo
+
+    class _NoOffset(tzinfo):
+        def utcoffset(self, _dt):
+            return None
+
+    with pytest.raises(EventNormalizeError, match="timezone is required"):
+        normalize_event(event_payload(occurred_at=datetime(2026, 8, 13, 12, tzinfo=_NoOffset())))
 
 
 def test_normalize_occurred_at_epoch_and_z():
@@ -83,3 +136,9 @@ def test_normalize_more_edge_cases():
     assert str(frame["occurred_at"].dtype).startswith("datetime64")
     assert frame["occurred_at"].dt.tz is not None
     assert len(normalize_events([event_payload(event_id="z")])) == 1
+
+
+@pytest.mark.parametrize("quantity", [float("inf"), float("-inf"), 1e400])
+def test_normalize_rejects_an_infinite_quantity(quantity):
+    with pytest.raises(EventNormalizeError, match="quantity"):
+        normalize_event(event_payload(quantity=quantity))

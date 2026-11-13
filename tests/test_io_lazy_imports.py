@@ -50,7 +50,23 @@ assert "sqlalchemy" not in sys.modules
 assert "cicerone.io.db_store" not in sys.modules
 assert "cicerone.io.db_catalog" not in sys.modules
 assert "boto3" not in sys.modules
-assert "cicerone.io.recommendation_reader" not in sys.modules
+assert "cicerone.io.dataset_recommendation_reader" not in sys.modules
+"""
+    )
+
+
+def test_dataset_recommendation_reader_does_not_load_sqlalchemy(tmp_path):
+    path = tmp_path.as_posix()
+    _run(
+        f"""
+import sys
+from cicerone.config.settings import IOSettings
+from cicerone.io.factory import build_recommendation_reader
+
+build_recommendation_reader(
+    IOSettings(kind="dataset", options={{"storage_backend": "local", "path": {path!r}}})
+)
+assert "sqlalchemy" not in sys.modules
 """
     )
 
@@ -75,3 +91,16 @@ def test_requirements_txt_does_not_pin_s3fs():
     text = (_REPO / "requirements.txt").read_text()
     assert "s3fs" not in text
     assert "aiobotocore" not in text
+
+
+def test_importing_entry_modules_leaves_root_logger_unconfigured():
+    _run(
+        """
+import logging
+import cicerone.dashboard
+import cicerone.job
+import cicerone.scheduler
+import cicerone.serve.app
+assert logging.getLogger().handlers == []
+"""
+    )

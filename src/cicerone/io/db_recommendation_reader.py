@@ -15,26 +15,27 @@ from sqlalchemy.sql.elements import TextClause
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.db_errors import SQL_READ_ERRORS, db_error_message, is_missing_column_error
+from cicerone.io.db_errors import (
+    MISSING_TABLE_ERRORS,
+    SQL_READ_ERRORS,
+    db_error_message,
+    is_missing_column_error,
+)
 from cicerone.io.db_store import (
     DEFAULT_ITEM_SCORES_TABLE,
     DEFAULT_RECOMMENDATION_ITEMS_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
-    MISSING_TABLE_ERRORS,
 )
-from cicerone.io.engines import engine_for
-from cicerone.io.options import require_option, sql_identifier
+from cicerone.io.engines import engine_for, quote_identifier
+from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.recommendation_reader_common import (
-    RANK_COLUMN,
-    SOURCE_COLUMN,
-    USER_COLUMN,
-    VARIANT_COLUMN,
     ItemFilterMixin,
     item_snapshot_columns,
     normalize_items_snapshot,
 )
+from cicerone.io.recommendation_schema import RANK_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.item_scores import normalize_item_scores
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
 
@@ -44,35 +45,29 @@ _RN_COLUMN = "_cicerone_rn"
 class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._table = sql_identifier(
-            options.get("recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE),
-            option="recommendations_table",
+        self._table = table_option(options, "recommendations_table", DEFAULT_RECOMMENDATIONS_TABLE)
+        self._items_table = table_option(
+            options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE
         )
-        self._items_table = sql_identifier(
-            options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
-        )
-        self._item_scores_table = sql_identifier(
-            options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
-            option="item_scores_table",
-        )
+        self._item_scores_table = table_option(options, "item_scores_table", DEFAULT_ITEM_SCORES_TABLE)
         self._engine = engine_for(require_option(options, "database_url", "db"))
+        self._sql = {
+            name: quote_identifier(self._engine, name)
+            for name in (
+                self._table,
+                self._items_table,
+                self._item_scores_table,
+                _RN_COLUMN,
+                USER_COLUMN,
+                VARIANT_COLUMN,
+                RANK_COLUMN,
+                SOURCE_COLUMN,
+            )
+        }
         self._variant_supported: bool | None = None
         self._present_variants: tuple[str, ...] | None = None
         self._init_item_filter_state()
         self.refresh()
-
-    def configure_item_filters(
-        self,
-        *,
-        category_column: str | None = None,
-        availability_filters: Sequence[str] = (),
-    ) -> None:
-        super().configure_item_filters(
-            category_column=category_column,
-            availability_filters=availability_filters,
-        )
-        self._reload_items()
 
     def _items_select(self):
         wanted = item_snapshot_columns(
@@ -80,16 +75,19 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             availability_filters=self._availability_filters,
         )
         if wanted is None:
-            return text(f'SELECT * FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
         try:
             existing = {col["name"] for col in inspect(self._engine).get_columns(self._items_table)}
         except SQLAlchemyError:
-            return text(f'SELECT * FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
         chosen = [name for name in wanted if name in existing]
         if not chosen:
-            return text(f'SELECT * FROM "{self._items_table}"')
-        quoted = ", ".join(f'"{sql_identifier(name, option="items snapshot column")}"' for name in chosen)
-        return text(f'SELECT {quoted} FROM "{self._items_table}"')
+            return text(f"SELECT * FROM {self._sql[self._items_table]}")
+        quoted = ", ".join(
+            quote_identifier(self._engine, sql_identifier(name, option="items snapshot column"))
+            for name in chosen
+        )
+        return text(f"SELECT {quoted} FROM {self._sql[self._items_table]}")
 
     def _reload_items(self) -> bool:
         try:
@@ -116,24 +114,28 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             logger.exception("Failed to refresh recommendation items snapshot; keeping previous data")
             return False
 
-    def refresh(self) -> None:
+    def refresh(self) -> bool:
+        """False when the items snapshot could not be reloaded and the previous one was kept."""
         self._variant_supported = None
         self._present_variants = None
         started = time.perf_counter()
         items_ok = self._reload_items()
-        try:
-            frame = pd.read_sql(text(f'SELECT * FROM "{self._item_scores_table}"'), self._engine)
-            scores = normalize_item_scores(frame)
-            with self._lock:
-                self._set_item_scores(scores)
-        except MISSING_TABLE_ERRORS:
-            logger.debug(
-                "item_scores table %r not present; keeping previous data",
-                self._item_scores_table,
-            )
-        except Exception:
-            logger.exception("Failed to refresh item scores; keeping previous data")
+        self._refresh_item_scores()
         observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=items_ok)
+        return items_ok
+
+    def _refresh_item_scores(self) -> None:
+        try:
+            frame = pd.read_sql(text(f"SELECT * FROM {self._sql[self._item_scores_table]}"), self._engine)
+            scores = normalize_item_scores(frame)
+        except MISSING_TABLE_ERRORS:
+            logger.debug("item_scores table %r not present; keeping previous data", self._item_scores_table)
+            return
+        except SQL_READ_ERRORS + (ValueError,):
+            logger.exception("Failed to refresh item scores; keeping previous data")
+            return
+        with self._lock:
+            self._set_item_scores(scores)
 
     def _supports_variant_column(self) -> bool | None:
         cached = self._variant_supported
@@ -152,7 +154,7 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         message = db_error_message(exc)
         if VARIANT_COLUMN not in message:
             return False
-        if not is_missing_column_error(exc) and "no such column" not in message:
+        if not is_missing_column_error(exc):
             return False
         self._variant_supported = False
         return True
@@ -171,7 +173,7 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             return ()
         try:
             frame = pd.read_sql(
-                text(f'SELECT DISTINCT "{VARIANT_COLUMN}" FROM "{self._table}"'),
+                text(f"SELECT DISTINCT {self._sql[VARIANT_COLUMN]} FROM {self._sql[self._table]}"),
                 self._engine,
             )
         except SQL_READ_ERRORS as exc:
@@ -189,22 +191,22 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         prefer_fallback = assigned is None and self._supports_variant_column() is not False
         if assigned is not None:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'AND "{VARIANT_COLUMN}" = :variant '
-                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"AND {self._sql[VARIANT_COLUMN]} = :variant "
+                f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
             params: dict[str, Any] = {"user_id": user_id, "k": k, "variant": assigned}
         elif prefer_fallback:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'ORDER BY CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
-                f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"ORDER BY CASE WHEN {self._sql[VARIANT_COLUMN]} = :fallback THEN 0 ELSE 1 END, "
+                f"{self._sql[VARIANT_COLUMN]} ASC, {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
-            params = {"user_id": user_id, "k": k, "fallback": _rec.FALLBACK_VARIANT}
+            params = {"user_id": user_id, "k": k, "fallback": _rec.CONTROL_NAME}
         else:
             sql = text(
-                f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
             )
             params = {"user_id": user_id, "k": k}
         try:
@@ -224,8 +226,8 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                 )
                 rows = pd.read_sql(
                     text(
-                        f'SELECT * FROM "{self._table}" WHERE "{USER_COLUMN}" = :user_id '
-                        f'ORDER BY "{RANK_COLUMN}" ASC LIMIT :k'
+                        f"SELECT * FROM {self._sql[self._table]} WHERE {self._sql[USER_COLUMN]} = :user_id "
+                        f"ORDER BY {self._sql[RANK_COLUMN]} ASC LIMIT :k"
                     ),
                     self._engine,
                     params={"user_id": user_id, "k": k},
@@ -250,59 +252,55 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             return {}
         assigned = self._assigned_variant(variant)
         prefer_fallback = assigned is None and self._supports_variant_column() is not False
+        user_in = f"{self._sql[USER_COLUMN]} IN :user_ids"
+        by_rank = f"{self._sql[RANK_COLUMN]} ASC"
         if assigned is not None:
-            sql = _top_k_per_user_sql(
-                self._table,
-                where=f'"{USER_COLUMN}" IN :user_ids AND "{VARIANT_COLUMN}" = :variant',
-                order_by=f'"{RANK_COLUMN}" ASC',
+            sql = self._top_k_per_user_sql(
+                where=f"{user_in} AND {self._sql[VARIANT_COLUMN]} = :variant", order_by=by_rank
             )
             params: dict[str, Any] = {"user_ids": ids, "k": k, "variant": assigned}
         elif prefer_fallback:
-            sql = _top_k_per_user_sql(
-                self._table,
-                where=f'"{USER_COLUMN}" IN :user_ids',
+            sql = self._top_k_per_user_sql(
+                where=user_in,
                 order_by=(
-                    f'CASE WHEN "{VARIANT_COLUMN}" = :fallback THEN 0 ELSE 1 END, '
-                    f'"{VARIANT_COLUMN}" ASC, "{RANK_COLUMN}" ASC'
+                    f"CASE WHEN {self._sql[VARIANT_COLUMN]} = :fallback THEN 0 ELSE 1 END, "
+                    f"{self._sql[VARIANT_COLUMN]} ASC, {by_rank}"
                 ),
             )
-            params = {"user_ids": ids, "k": k, "fallback": _rec.FALLBACK_VARIANT}
+            params = {"user_ids": ids, "k": k, "fallback": _rec.CONTROL_NAME}
         else:
-            sql = _top_k_per_user_sql(
-                self._table,
-                where=f'"{USER_COLUMN}" IN :user_ids',
-                order_by=f'"{RANK_COLUMN}" ASC',
-            )
+            sql = self._top_k_per_user_sql(where=user_in, order_by=by_rank)
             params = {"user_ids": ids, "k": k}
         try:
             rows = _drop_window_rank(pd.read_sql(sql, self._engine, params=params))
-        except Exception as exc:
+        except SQL_READ_ERRORS as exc:
             if assigned is not None:
                 if not self._remember_missing_variant_column(exc):
                     raise
                 return self.get_recommendations_for_users(ids, k)
             if prefer_fallback and self._remember_missing_variant_column(exc):
                 return self.get_recommendations_for_users(ids, k)
-            if prefer_fallback:
-                logger.exception(
-                    "Failed to prefer leftover variant for users %r in %r",
-                    ids,
-                    self._table,
-                )
-                rows = _drop_window_rank(
-                    pd.read_sql(
-                        _top_k_per_user_sql(
-                            self._table,
-                            where=f'"{USER_COLUMN}" IN :user_ids',
-                            order_by=f'"{RANK_COLUMN}" ASC',
-                        ),
-                        self._engine,
-                        params={"user_ids": ids, "k": k},
-                    )
-                )
-            else:
+            if not prefer_fallback:
                 raise
+            logger.exception("Failed to prefer leftover variant for users %r in %r", ids, self._table)
+            rows = _drop_window_rank(
+                pd.read_sql(
+                    self._top_k_per_user_sql(where=user_in, order_by=by_rank),
+                    self._engine,
+                    params={"user_ids": ids, "k": k},
+                )
+            )
         return _frames_by_user(rows, ids, k, collapse=assigned is None)
+
+    def _top_k_per_user_sql(self, *, where: str, order_by: str) -> TextClause:
+        rn = self._sql[_RN_COLUMN]
+        return text(
+            f"SELECT * FROM ("
+            f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {self._sql[USER_COLUMN]} ORDER BY {order_by}) "
+            f"AS {rn} FROM {self._sql[self._table]} WHERE {where}"
+            f") AS ranked WHERE {rn} <= :k "
+            f"ORDER BY {self._sql[USER_COLUMN]} ASC, {rn} ASC"
+        ).bindparams(bindparam("user_ids", expanding=True))
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         variant = self._assigned_variant(variant)
@@ -310,14 +308,14 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         if not sentinel.empty:
             return sentinel
         variant = self._assigned_variant(variant)
-        variant_clause = f'AND "{VARIANT_COLUMN}" = :variant ' if variant is not None else ""
+        variant_clause = f"AND {self._sql[VARIANT_COLUMN]} = :variant " if variant is not None else ""
         pick_sql = text(
-            f'SELECT "{USER_COLUMN}", "{SOURCE_COLUMN}" FROM "{self._table}" '
-            f'WHERE "{SOURCE_COLUMN}" IN (:popular, :latest) {variant_clause}'
+            f"SELECT {self._sql[USER_COLUMN]}, {self._sql[SOURCE_COLUMN]} FROM {self._sql[self._table]} "
+            f"WHERE {self._sql[SOURCE_COLUMN]} IN (:popular, :latest) {variant_clause}"
             f"ORDER BY "
-            f'CASE "{SOURCE_COLUMN}" '
+            f"CASE {self._sql[SOURCE_COLUMN]} "
             f"WHEN :popular THEN 0 WHEN :latest THEN 1 ELSE 99 END, "
-            f'"{USER_COLUMN}" ASC '
+            f"{self._sql[USER_COLUMN]} ASC "
             f"LIMIT 1"
         )
         params: dict[str, Any] = {"popular": POPULAR_SOURCE, "latest": LATEST_SOURCE}
@@ -333,16 +331,6 @@ class DbRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             return sentinel
         sample_user = str(picked.iloc[0][USER_COLUMN])
         return self.get_recommendations(sample_user, k, variant=variant)
-
-
-def _top_k_per_user_sql(table: str, *, where: str, order_by: str) -> TextClause:
-    return text(
-        f"SELECT * FROM ("
-        f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "{USER_COLUMN}" ORDER BY {order_by}) '
-        f'AS "{_RN_COLUMN}" FROM "{table}" WHERE {where}'
-        f') AS ranked WHERE "{_RN_COLUMN}" <= :k '
-        f'ORDER BY "{USER_COLUMN}" ASC, "{_RN_COLUMN}" ASC'
-    ).bindparams(bindparam("user_ids", expanding=True))
 
 
 def _drop_window_rank(rows: pd.DataFrame) -> pd.DataFrame:

@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any, Protocol, runtime_checkable
 
 import pandas as pd
+
+from cicerone.capability import CapabilityMeta
+
+
+def manifest_newer(manifest: Mapping[str, Any], started_at: str) -> bool:
+    """Whether a stored run stamped ``manifest`` after ``started_at``; only string stamps count."""
+    return any(
+        isinstance(stamp, str) and stamp > started_at
+        for stamp in (manifest.get("generated_at"), manifest.get("last_incremental_at"))
+    )
 
 
 class InputSource(Protocol):
@@ -40,16 +51,8 @@ class OutputSink(Protocol):
 
     def write_model_artifact(self, payload: bytes) -> None: ...
 
-    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
-        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
-        ...
-
     def read_model_artifact(self) -> bytes | None:
         """Latest fitted-model blob, or ``None`` if the sink has not written one."""
-        ...
-
-    def model_artifact_fingerprint(self) -> str | None:
-        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
         ...
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
@@ -73,6 +76,51 @@ class ItemScoresWriter(Protocol):
         ...
 
 
+# Optional sink capabilities; callers check them with isinstance.
+@runtime_checkable
+class AppliedEventLog(Protocol, metaclass=CapabilityMeta):
+    """Records incremental event keys in the same write as the recommendations they produced."""
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]: ...
+
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int: ...
+
+
+@runtime_checkable
+class GuardedRecommendationsSink(Protocol, metaclass=CapabilityMeta):
+    def recommendations_write(self) -> AbstractContextManager[None]: ...
+
+
+@runtime_checkable
+class WriterHeldSink(Protocol, metaclass=CapabilityMeta):
+    def ensure_writer_held(self) -> None: ...
+
+
+@runtime_checkable
+class ArtifactFingerprintSink(Protocol, metaclass=CapabilityMeta):
+    def model_artifact_fingerprint(self) -> str | None:
+        """Cheap identity of the latest artifact (mtime/ETag/written_at), or ``None``."""
+        ...
+
+
+@runtime_checkable
+class ConditionalArtifactSink(Protocol, metaclass=CapabilityMeta):
+    def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
+        """Write only when the current fingerprint still matches ``expected_fingerprint``."""
+        ...
+
+
+def recommendations_write_guard(sink: object) -> AbstractContextManager[None]:
+    return sink.recommendations_write() if isinstance(sink, GuardedRecommendationsSink) else nullcontext()
+
+
+def ensure_sink_writer_held(sink: object) -> None:
+    if isinstance(sink, WriterHeldSink):
+        sink.ensure_writer_held()
+
+
 class RecommendationReader(Protocol):
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame: ...
 
@@ -80,8 +128,8 @@ class RecommendationReader(Protocol):
         self, user_ids: Sequence[str], k: int, *, variant: str | None = None
     ) -> dict[str, pd.DataFrame]: ...
 
-    def refresh(self) -> None:
-        """Reload caches. No-op for live backends."""
+    def refresh(self) -> bool | None:
+        """Reload caches. No-op for live backends. False means the previous recommendations were kept."""
         ...
 
     def get_items(self) -> pd.DataFrame | None:
@@ -110,6 +158,11 @@ class RecommendationReader(Protocol):
         ...
 
 
+@runtime_checkable
+class VariantSnapshotReader(Protocol, metaclass=CapabilityMeta):
+    def present_variant_names(self) -> tuple[str, ...] | None: ...
+
+
 class BaseRecommendationReader(ABC):
     """Optional base with empty defaults for serve filter / cold-start hooks.
 
@@ -118,8 +171,8 @@ class BaseRecommendationReader(ABC):
     method from scratch.
     """
 
-    def refresh(self) -> None:
-        return
+    def refresh(self) -> bool | None:
+        return None
 
     def get_items(self) -> pd.DataFrame | None:
         return None

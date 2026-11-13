@@ -13,6 +13,7 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pandas as pd
 from fastapi.testclient import TestClient
@@ -49,6 +50,7 @@ from cicerone.artifact import (
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
 from cicerone.events.updater_merge import INCREMENTAL_SOURCE
+from cicerone.events.worker import EventWorker
 from cicerone.feature_config import load_feature_config
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE, DEFAULT_ITEMS_TABLE, DEFAULT_USERS_TABLE
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
@@ -414,9 +416,10 @@ class CiceroneSystemLibrary:
 
     # -- webhook events write-through ----------------------------------------
     def start_serve_with_events_runtime(self) -> None:
-        # No worker thread: the flush happens on an explicit tick so POST /events
-        # cannot race the first poll.
-        self.events_app = mount_serve_app(self.settings, start_events_worker=False)
+        # No worker thread: start only connects the source, so POST /events cannot race
+        # the first poll and the flush happens on an explicit tick.
+        with patch.object(EventWorker, "start", lambda worker: worker._source.connect()):
+            self.events_app = mount_serve_app(self.settings)
         self.events_serve = TestClient(self.events_app)
 
     def stop_serve_events_runtime(self) -> None:

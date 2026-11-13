@@ -13,7 +13,7 @@ import pandas as pd
 
 from cicerone.blending import rank_latest_items, resolve_latest_date_column
 from cicerone.dataset import BuiltDataset
-from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
+from cicerone.model.constants import SOURCE_COLUMN
 from cicerone.model.recommend_cache import (
     RecommendCache,
     dataset_fingerprint,
@@ -22,6 +22,7 @@ from cicerone.model.recommend_cache import (
 )
 from cicerone.model.recommend_cohort import CohortPlan
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
+from cicerone.ranking import WEIGHT_COLUMN
 
 logger = logging.getLogger(__name__)
 

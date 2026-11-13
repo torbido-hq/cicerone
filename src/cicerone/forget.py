@@ -14,23 +14,20 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy.engine import Connection, Engine
 
-from cicerone.config.constants import ConfigError
 from cicerone.config.settings import IOSettings
-from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore, require_appendable_exposure_log
+from cicerone.events.errors import RedisError
+from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore
+from cicerone.io.blob import require_db_or_local_dataset
 from cicerone.io.dataset_store import DatasetOutputSink
-from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE, create_db_engine
+from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
+from cicerone.io.engines import create_db_engine
 from cicerone.io.jsonl_user import filter_user_lines
-from cicerone.io.options import exclusive_file_lock, require_option, storage_backend
+from cicerone.io.options import exclusive_file_lock, require_option
 from cicerone.io.recommendation_schema import USER_COLUMN, recommendations_sql_names
-from cicerone.locks.hold import (
-    LockBackend,
-    ensure_writer_owned,
-    held_writer_lock,
-    writer_lock_held_here,
-)
-from cicerone.track.store import TrackStore, require_appendable_track_log
+from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
+from cicerone.track.store import TrackStore
 from cicerone.track.store_common import HISTORY_DIR, HISTORY_FILENAME, TRACK_FILENAME
-from cicerone.track.store_db import delete_rows_for_user
+from cicerone.track.store_db import TrackDbBackend, delete_rows_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +52,11 @@ class _Swap:
     staged: Path | None
 
 
-def require_forget_output(output: IOSettings) -> None:
-    """Reject object-store output. JSONL rewrite there is not atomic."""
-    if output.kind == "db":
-        return
-    if output.kind == "dataset" and storage_backend(output.options) == "local":
-        return
-    raise ConfigError(FORGET_OUTPUT_ERROR)
-
-
 def forget_user(
     output: IOSettings,
     user_id: str,
     *,
-    writer_lock: LockBackend | None = None,
+    fence: WriteFence | None = None,
     redis_url: str | None = None,
     redis_key_prefix: str | None = None,
 ) -> ForgetResult:
@@ -79,25 +67,25 @@ def forget_user(
     user_id = str(user_id).strip()
     if not user_id:
         raise ValueError("user_id is required")
-    require_forget_output(output)
+    # Object-store JSONL rewrite is not atomic.
+    require_db_or_local_dataset(output, FORGET_OUTPUT_ERROR)
+    fence = fence or WriteFence()
     redis_store = None
     if redis_url:
-        redis_store = TrackStore(
-            output, writer_lock=writer_lock, redis_url=redis_url, redis_key_prefix=redis_key_prefix
-        )
+        redis_store = TrackStore(output, fence=fence, redis_url=redis_url, redis_key_prefix=redis_key_prefix)
         # Fail before erasing anything when Redis is down or misconfigured.
         redis_store.ping_redis()
     if output.kind == "db":
-        result = _forget_db(output, user_id, writer_lock=writer_lock)
+        result = _forget_db(output, user_id, fence=fence)
     else:
-        result = _forget_local(output, user_id, writer_lock=writer_lock)
+        result = _forget_local(output, user_id, fence=fence)
     if redis_store is None:
         return result
     # After the output erase: a Redis delete cannot join that transaction or swap.
     try:
         redis_removed = redis_store.delete_redis_rows(user_id)
-    except Exception as exc:
-        # Any failure here, a lost writer lease included, leaves the Redis rows behind.
+    except (RedisError, LockLostError, WriterLockBusyError) as exc:
+        # A Redis failure or a lost writer lease here leaves the Redis rows behind.
         exc.add_note("output rows were erased; run forget-user again to finish the Redis track log")
         raise
     return replace(result, track=result.track + redis_removed)
@@ -107,28 +95,28 @@ def _forget_db(
     output: IOSettings,
     user_id: str,
     *,
-    writer_lock: LockBackend | None,
+    fence: WriteFence,
 ) -> ForgetResult:
     table, _columns, user_col = recommendations_sql_names(
         output.options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
     )
-    track_store = TrackStore(output, writer_lock=writer_lock)
-    exposures = ExperimentStore(output, writer_lock=writer_lock)
+    track = TrackDbBackend(output.options, fence)
+    exposures = ExperimentStore(output, fence=fence)
     engine = create_db_engine(require_option(output.options, "database_url", "db"), options=output.options)
     with _transaction(engine) as conn:
         recommendations = delete_rows_for_user(
             conn,
             table,
             user_id,
-            fence=track_store.fence.ensure,
+            fence=fence.ensure,
             user_column=user_col,
         )
-        track = track_store.delete_user_rows(user_id, conn=conn)
+        track_rows = track.delete_user_rows(user_id, conn=conn)
         exposure_rows = exposures.delete_exposures_for_user(user_id, conn=conn)
-        history = track_store.delete_history_for_user(user_id, conn=conn)
+        history = track.delete_history_for_user(user_id, conn=conn)
     return ForgetResult(
         recommendations=recommendations,
-        track=track,
+        track=track_rows,
         exposures=exposure_rows,
         history=history,
     )
@@ -159,34 +147,26 @@ def _forget_local(
     output: IOSettings,
     user_id: str,
     *,
-    writer_lock: LockBackend | None,
+    fence: WriteFence,
 ) -> ForgetResult:
-    require_appendable_track_log(output)
-    require_appendable_exposure_log(output)
     root = Path(require_option(output.options, "path", "local"))
-    sink = DatasetOutputSink(output.options, writer_lock=writer_lock)
-
-    def _run() -> ForgetResult:
-        # Writer lease first, then file locks: the same order as a job run.
-        with (
-            sink.recommendations_write(),
-            exclusive_file_lock(root / ".track.jsonl.lock"),
-            exclusive_file_lock(root / ".exposures.jsonl.lock"),
-        ):
-            ensure_writer_owned(writer_lock)
-            swaps: list[_Swap] = []
-            try:
-                counts = _plan_local_erase(root, user_id, swaps)
-                ensure_writer_owned(writer_lock)
-                _commit_swaps(swaps)
-            finally:
-                _discard_staged(swaps)
-            return counts
-
-    if writer_lock_held_here(writer_lock):
-        return _run()
-    with held_writer_lock(writer_lock):
-        return _run()
+    sink = DatasetOutputSink(output.options, fence=fence)
+    # Writer lease first, then file locks: the same order as a job run.
+    with (
+        fence.lease(),
+        sink.recommendations_write(),
+        exclusive_file_lock(root / ".track.jsonl.lock"),
+        exclusive_file_lock(root / ".exposures.jsonl.lock"),
+    ):
+        fence.ensure()
+        swaps: list[_Swap] = []
+        try:
+            counts = _plan_local_erase(root, user_id, swaps)
+            fence.ensure()
+            _commit_swaps(swaps)
+        finally:
+            _discard_staged(swaps)
+        return counts
 
 
 def _plan_local_erase(root: Path, user_id: str, swaps: list[_Swap]) -> ForgetResult:

@@ -5,15 +5,13 @@ import os
 import re
 
 import pytest
+from support.fakes import raising
 
-from cicerone import __version__
+from cicerone import __version__, cli
 from cicerone.cli import main
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
 
-
-@pytest.fixture(autouse=True)
-def _isolate_config_env(monkeypatch):
-    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+pytestmark = pytest.mark.usefixtures("isolated_config_path")
 
 
 def _write_config(tmp_path, *, mode: str = "batch", users_path: str | None = None) -> str:
@@ -265,3 +263,27 @@ def test_package_main_exports_cli_main():
     import cicerone.__main__ as package_main
 
     assert package_main.main is main
+
+
+@pytest.mark.parametrize("command", ["users", "export-openapi"])
+def test_forwarded_help_names_cicerone_subcommand(command, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([command, "--help"])
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.startswith(f"usage: cicerone {command} ")
+
+
+def test_users_help_skips_the_dashboard_config(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "cicerone.toml"
+    config.write_text("[dashboard]\nenabled = false\n")
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", str(config))
+    with pytest.raises(SystemExit) as exc_info:
+        main(["users", "--help"])
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: cicerone users ")
+
+
+def test_run_job_logs_an_unexpected_failure_and_returns_1(monkeypatch, caplog):
+    monkeypatch.setattr("cicerone.job.run", raising(TypeError("job bug")))
+    assert cli._run_job() == 1
+    assert "Recommendation job failed" in caplog.text

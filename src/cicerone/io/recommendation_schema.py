@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from cicerone.io.options import sql_identifier
+from cicerone.io.options import sql_identifier, table_option
 from cicerone.values import is_missing
 
 USER_COLUMN = "user_id"
@@ -25,7 +25,7 @@ RECOMMENDATION_COLUMNS: tuple[str, ...] = (
 _OPTIONAL_OUTPUT_COLUMNS: tuple[str, ...] = (REASONS_COLUMN, VARIANT_COLUMN)
 
 
-FALLBACK_VARIANT = "control"
+CONTROL_NAME = "control"
 
 
 def recommendations_sql_names(
@@ -34,10 +34,7 @@ def recommendations_sql_names(
     default_table: str,
 ) -> tuple[str, str, str]:
     """Return ``(table, select_columns, user_column)`` as validated SQL identifiers."""
-    table = sql_identifier(
-        options.get("recommendations_table", default_table),
-        option="recommendations_table",
-    )
+    table = table_option(options, "recommendations_table", default_table)
     columns = ", ".join(
         sql_identifier(column, option="recommendations_column") for column in RECOMMENDATION_COLUMNS
     )
@@ -56,14 +53,18 @@ def recommendation_output_columns(frame: Any) -> list[str]:
     return columns
 
 
+def pick_control_name(names: Sequence[str]) -> str:
+    if CONTROL_NAME in names:
+        return CONTROL_NAME
+    return names[0]
+
+
 def pick_fallback_variant(names: Sequence[object]) -> str | None:
     """Prefer control when mixed leftover variant rows must collapse to one list."""
     values = [str(name) for name in names if not is_missing(name) and str(name)]
     if not values:
         return None
-    if FALLBACK_VARIANT in values:
-        return FALLBACK_VARIANT
-    return sorted(values)[0]
+    return pick_control_name(sorted(values))
 
 
 def collapse_mixed_variants(frame: Any) -> Any:
@@ -96,3 +97,10 @@ def filter_variant_rows(frame: Any, variant: str | None) -> Any:
 def has_variant_column(frame: Any) -> bool:
     columns = getattr(frame, "columns", None)
     return columns is not None and VARIANT_COLUMN in columns
+
+
+def drop_unlabelled_variant_column(frame: Any) -> Any:
+    """A ``variant`` column with no labels (e.g. fresh from ``ALTER TABLE``) means no column."""
+    if has_variant_column(frame) and pick_fallback_variant(frame[VARIANT_COLUMN].tolist()) is None:
+        return frame.drop(columns=[VARIANT_COLUMN])
+    return frame

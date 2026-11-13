@@ -7,6 +7,7 @@ scenario modules stay focused on the journeys.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,10 +17,13 @@ import pandas as pd
 
 from cicerone import job
 from cicerone.artifact import ARTIFACT_FILENAME
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO_FEATURES_CONFIG = REPO_ROOT / "config" / "features.toml"
+logger = logging.getLogger(__name__)
+
 SYSTEM_SERVE_TOKEN = "system-spec-secret"
 SYSTEM_DASHBOARD_USER = "alice"
 SYSTEM_DASHBOARD_PASSWORD = "s3cret"
@@ -132,6 +136,8 @@ def write_system_config(
     feature_config_path: Path | str = REPO_FEATURES_CONFIG,
     serve_token: str = SYSTEM_SERVE_TOKEN,
     events_webhook: bool = False,
+    models: Sequence[str] = ("collaborative", "popular"),
+    extra_toml: str = "",
 ) -> Path:
     """Write the shared system-spec TOML. ``input_kind`` / ``output_kind`` override ``kind``."""
     io_blocks = _io_toml(
@@ -163,7 +169,7 @@ def write_system_config(
         [job]
         top_k = 3
         feature_config_path = "{feature_config_path}"
-        models = ["collaborative", "popular"]
+        models = {json.dumps(list(models))}
         save_model_artifact = true
 
         [job.eval]
@@ -182,6 +188,7 @@ def write_system_config(
         [track]
         enabled = true
         {events_block}
+        {extra_toml}
         """
     )
     return path
@@ -231,27 +238,19 @@ def dashboard_users(
     return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
 
 
-def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
-    from cicerone.feature_config import load_feature_config
+def mount_serve_app(settings: Any):
     from cicerone.io.factory import build_manifest_reader, build_recommendation_reader
     from cicerone.serve import create_app
     from cicerone.serve.bootstrap_events import start_events_runtime
-    from cicerone.serve.item_filters import configure_reader_item_filters
+    from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
 
     reader = build_recommendation_reader(settings.output)
-    feature_path = Path(settings.feature_config_path)
-    feature_config = load_feature_config(feature_path) if feature_path.is_file() else None
-    availability = list(feature_config.item_availability_filters) if feature_config else []
-    configure_reader_item_filters(
-        reader,
-        category_column=settings.serve.category_column,
-        availability_filters=availability,
-    )
+    feature_config = load_optional_feature_config(settings)
+    configure_reader_item_filters(settings, reader, feature_config)
     events_runtime = start_events_runtime(
         settings,
         feature_config=feature_config,
         reader=reader,
-        start_worker=start_events_worker,
     )
     try:
         app = create_app(
@@ -262,8 +261,8 @@ def mount_serve_app(settings: Any, *, start_events_worker: bool = True):
             event_source=events_runtime.webhook_source,
             events_worker=events_runtime.worker,
         )
-    except Exception:
-        events_runtime.stop()
+    except BaseException:
+        cleanup_after_failure(events_runtime.stop, "Failed to stop the events runtime after an error", logger)
         raise
     app.state.events_runtime = events_runtime
     return app
@@ -277,9 +276,9 @@ def mount_dashboard_app(
 ):
     from cicerone.dashboard import create_app
     from cicerone.io.factory import (
+        build_input_source,
         build_manifest_reader,
         build_recommendation_reader,
-        build_user_history_reader,
     )
 
     return create_app(
@@ -287,7 +286,7 @@ def mount_dashboard_app(
         build_manifest_reader(settings.output),
         users,
         build_recommendation_reader(settings.output),
-        build_user_history_reader(settings.input),
+        build_input_source(settings.input),
         config_path=None if config_path is None else str(config_path),
     )
 

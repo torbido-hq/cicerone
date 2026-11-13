@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Sequence
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -15,19 +15,15 @@ from pyarrow.lib import ArrowInvalid, ArrowIOError
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.io import recommendation_schema as _rec
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.blob import S3_READ_ERRORS, STORAGE_READ_ERRORS, is_storage_not_found
+from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import (
-    is_s3_not_found,
+    local_path,
     read_parquet,
-    require_option,
     validate_storage_options,
 )
 from cicerone.io.recommendation_reader_common import (
     ITEMS_SNAPSHOT_FILENAME,
-    RANK_COLUMN,
-    SOURCE_COLUMN,
-    USER_COLUMN,
-    VARIANT_COLUMN,
     ItemFilterMixin,
     index_recommendations_by_user,
     item_snapshot_columns,
@@ -36,10 +32,21 @@ from cicerone.io.recommendation_reader_common import (
     resolve_fallback_user_id,
     select_cold_start_fallback,
 )
+from cicerone.io.recommendation_schema import RANK_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.item_scores import ITEM_SCORES_FILENAME, normalize_item_scores
-from cicerone.serve.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
+from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _StagedItems:
+    items: pd.DataFrame | None
+    category: str | None
+    availability: tuple[str, ...]
+    version: int
+
+
 _CACHE_IO_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ArrowInvalid,
@@ -56,20 +63,9 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         self._by_user: dict[str, pd.DataFrame] = {}
         self._fallback_user_id: str | None = None
         self._variant_names: tuple[str, ...] = ()
+        self._recommendations_loaded = False
         self._init_item_filter_state()
         self.refresh()
-
-    def configure_item_filters(
-        self,
-        *,
-        category_column: str | None = None,
-        availability_filters: Sequence[str] = (),
-    ) -> None:
-        super().configure_item_filters(
-            category_column=category_column,
-            availability_filters=availability_filters,
-        )
-        self._replace_items_snapshot()
 
     def _items_columns(
         self,
@@ -83,7 +79,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         )
         if wanted is None or self._backend != "local":
             return None
-        path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
+        path = local_path(self._options, ITEMS_SNAPSHOT_FILENAME)
         if not path.exists():
             return None
         present = set(pq.read_schema(path).names)
@@ -91,15 +87,26 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
         return chosen or None
 
     def _read_recommendations(self) -> pd.DataFrame:
-        return read_parquet(self._options, "recommendations.parquet")
+        return read_parquet(self._options, RECOMMENDATIONS_FILENAME)
 
     def _read_item_scores(self) -> pd.DataFrame:
         if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / ITEM_SCORES_FILENAME
+            path = local_path(self._options, ITEM_SCORES_FILENAME)
             if not path.exists():
                 raise FileNotFoundError(path)
-        frame = read_parquet(self._options, ITEM_SCORES_FILENAME)
-        return normalize_item_scores(frame)
+        return normalize_item_scores(read_parquet(self._options, ITEM_SCORES_FILENAME))
+
+    def _refresh_item_scores(self) -> None:
+        try:
+            scores = self._read_item_scores()
+        except _CACHE_IO_ERRORS + (ValueError,) as exc:
+            if is_storage_not_found(exc):
+                logger.debug("item_scores not found; keeping previous data")
+            else:
+                logger.exception("Failed to refresh item scores; keeping previous data")
+            return
+        with self._lock:
+            self._set_item_scores(scores)
 
     def _read_items_snapshot(
         self,
@@ -109,7 +116,7 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
     ) -> pd.DataFrame | None:
         try:
             if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / ITEMS_SNAPSHOT_FILENAME
+                path = local_path(self._options, ITEMS_SNAPSHOT_FILENAME)
                 if not path.exists():
                     return None
             frame = read_parquet(
@@ -127,14 +134,17 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
                     availability_filters=availability_filters,
                 ),
             )
-        except FileNotFoundError:
-            return None
-        except S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return None
             raise
 
-    def _replace_items_snapshot(self) -> None:
+    def _reload_items(self) -> None:
+        staged = self._load_items_snapshot()
+        with self._lock:
+            self._publish_items_locked(staged)
+
+    def _load_items_snapshot(self) -> _StagedItems:
         with self._lock:
             category = self._category_column
             availability = tuple(self._availability_filters)
@@ -144,57 +154,50 @@ class DatasetRecommendationReader(ItemFilterMixin, BaseRecommendationReader):
             category_column=category,
             availability_filters=availability,
         )
-        with self._lock:
-            if (
-                self._items_version != version
-                or self._category_column != category
-                or tuple(self._availability_filters) != availability
-            ):
-                return
-            self._items = items
-            self._items_version += 1
+        return _StagedItems(items, category, availability, version)
 
-    def refresh(self) -> None:
+    def _publish_items_locked(self, staged: _StagedItems) -> None:
+        if (
+            self._items_version != staged.version
+            or self._category_column != staged.category
+            or tuple(self._availability_filters) != staged.availability
+        ):
+            return
+        self._items = staged.items
+        self._items_version += 1
+
+    def refresh(self) -> bool:
+        """Swap recommendations and the items snapshot together; False keeps the previous pair."""
         started = time.perf_counter()
-        recommendations_ok = False
+        self._refresh_item_scores()
         try:
             cache = self._read_recommendations()
             by_user = index_recommendations_by_user(cache)
-            fallback_user_id = None
-            if COLD_START_USER_ID not in by_user:
-                fallback_user_id = resolve_fallback_user_id(by_user)
-            variant_names: tuple[str, ...] = ()
-            if VARIANT_COLUMN in cache.columns and not cache.empty:
-                variant_names = tuple(
-                    sorted(
-                        {
-                            str(name)
-                            for name in cache[VARIANT_COLUMN].tolist()
-                            if not pd.isna(name) and str(name)
-                        }
-                    )
-                )
-            with self._lock:
-                self._cache = cache
-                self._by_user = by_user
-                self._fallback_user_id = fallback_user_id
-                self._variant_names = variant_names
-            recommendations_ok = True
         except _CACHE_IO_ERRORS:
             logger.exception("Failed to refresh recommendations cache; keeping previous data")
-        self._replace_items_snapshot()
-        try:
-            scores = self._read_item_scores()
-            with self._lock:
-                self._set_item_scores(scores)
-        except FileNotFoundError:
-            logger.debug("item_scores file not found; keeping previous data")
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                logger.debug("item_scores object not found; keeping previous data")
-            else:
-                logger.exception("Failed to refresh item scores; keeping previous data")
-        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=recommendations_ok)
+            if not self._recommendations_loaded:
+                # No recommendations yet, so there is no generation to mix with.
+                self._reload_items()
+            observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=False)
+            return False
+        fallback_user_id = None
+        if COLD_START_USER_ID not in by_user:
+            fallback_user_id = resolve_fallback_user_id(by_user)
+        variant_names: tuple[str, ...] = ()
+        if VARIANT_COLUMN in cache.columns and not cache.empty:
+            names = {str(name) for name in cache[VARIANT_COLUMN].tolist() if not pd.isna(name) and str(name)}
+            variant_names = tuple(sorted(names))
+        # A hard items error raises here, before either cache changes.
+        items = self._load_items_snapshot()
+        with self._lock:
+            self._cache = cache
+            self._by_user = by_user
+            self._fallback_user_id = fallback_user_id
+            self._variant_names = variant_names
+            self._publish_items_locked(items)
+            self._recommendations_loaded = True
+        observe_cache_refresh(duration_seconds=time.perf_counter() - started, success=True)
+        return True
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         with self._lock:

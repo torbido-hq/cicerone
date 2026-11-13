@@ -9,16 +9,9 @@ import numpy as np
 import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID, LATEST_SOURCE, POPULAR_SOURCE
-from cicerone.io import recommendation_schema as _rec
+from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SOURCE_COLUMN, USER_COLUMN
 from cicerone.values import item_true_mask
 
-USER_COLUMN = _rec.USER_COLUMN
-ITEM_COLUMN = _rec.ITEM_COLUMN
-RANK_COLUMN = _rec.RANK_COLUMN
-SCORE_COLUMN = _rec.SCORE_COLUMN
-SOURCE_COLUMN = _rec.SOURCE_COLUMN
-VARIANT_COLUMN = _rec.VARIANT_COLUMN
-RECOMMENDATION_COLUMNS = _rec.RECOMMENDATION_COLUMNS
 ITEMS_SNAPSHOT_FILENAME = "items_snapshot.parquet"
 
 # Cold-start without __cold_start__: popular/latest only (never warm "blended"),
@@ -151,14 +144,18 @@ def select_cold_start_fallback(
 
 def index_recommendations_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Normalize user ids once and build an O(1) lookup for serve requests."""
+    if RANK_COLUMN in frame.columns:
+        frame = frame.sort_values(RANK_COLUMN, kind="mergesort")
+    return group_by_user(frame)
+
+
+def group_by_user(frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Rows per string user id, each group indexed from 0."""
     if frame.empty or USER_COLUMN not in frame.columns:
         return {}
-    indexed = frame.copy()
-    indexed[USER_COLUMN] = indexed[USER_COLUMN].astype(str)
-    if RANK_COLUMN in indexed.columns:
-        indexed = indexed.sort_values(RANK_COLUMN, kind="mergesort")
+    keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
     return {
-        user_id: group.reset_index(drop=True) for user_id, group in indexed.groupby(USER_COLUMN, sort=False)
+        user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
     }
 
 
@@ -179,7 +176,7 @@ class ItemFilterMixin:
     """Shared items-snapshot filter configuration for recommendation readers.
 
     Call ``_init_item_filter_state()`` from subclass ``__init__`` before
-    ``refresh`` / mixin methods. Methods also lazy-init if that was skipped.
+    ``refresh`` / mixin methods.
     """
 
     _items: pd.DataFrame | None
@@ -199,17 +196,12 @@ class ItemFilterMixin:
         self._availability_filters = []
         self._lock = threading.RLock()
 
-    def _ensure_item_filter_state(self) -> None:
-        if getattr(self, "_lock", None) is None:
-            self._init_item_filter_state()
-
     def configure_item_filters(
         self,
         *,
         category_column: str | None = None,
         availability_filters: Sequence[str] = (),
     ) -> None:
-        self._ensure_item_filter_state()
         with self._lock:
             self._category_column = category_column
             self._availability_filters = list(availability_filters)
@@ -219,14 +211,17 @@ class ItemFilterMixin:
                 availability_filters=self._availability_filters,
             )
             self._items_version += 1
+        self._reload_items()
+
+    def _reload_items(self) -> object:
+        """Re-read the items snapshot after the filters change."""
+        return None
 
     def items_version(self) -> int:
-        self._ensure_item_filter_state()
         with self._lock:
             return self._items_version
 
     def get_items(self) -> pd.DataFrame | None:
-        self._ensure_item_filter_state()
         with self._lock:
             return self._items
 
@@ -238,16 +233,13 @@ class ItemFilterMixin:
             self._item_score_ids = scores[ITEM_COLUMN].to_numpy(dtype=str)
 
     def get_item_scores(self) -> pd.DataFrame:
-        self._ensure_item_filter_state()
         with self._lock:
             return self._item_scores
 
     def get_item_score_ids(self) -> np.ndarray:
-        self._ensure_item_filter_state()
         with self._lock:
             return self._item_score_ids
 
     def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray]:
-        self._ensure_item_filter_state()
         with self._lock:
             return self._item_scores, self._item_score_ids

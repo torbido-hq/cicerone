@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.settings import IOSettings
 from cicerone.io.catalog import (
@@ -21,7 +22,7 @@ from cicerone.io.catalog import (
 from cicerone.io.dataset_catalog import DatasetCatalogStore
 from cicerone.io.db_catalog import DatabaseCatalogStore
 from cicerone.io.db_store import DatabaseInputSource
-from cicerone.io.factory import build_catalog_store, build_user_history_reader
+from cicerone.io.factory import build_catalog_store, build_input_source
 from cicerone.io.options import read_parquet
 
 
@@ -238,7 +239,7 @@ def test_dataset_catalog_get_events_uses_user_filter(tmp_path, monkeypatch):
         seen.append(kwargs.get("filters"))
         return read_parquet(options, filename, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.dataset_catalog.read_parquet", spy)
+    monkeypatch.setattr("cicerone.io.options.read_parquet", spy)
     events = store.get_events_for_user("u1", 10)
     assert list(events["item_id"]) == ["i1"]
     assert [("user_id", "==", "u1")] in seen
@@ -263,7 +264,7 @@ def test_dataset_catalog_get_events_falls_back_when_filter_unsupported(tmp_path,
             raise ValueError("No match for FieldRef.Name(user_id)")
         return read_parquet(options, filename, **kwargs)
 
-    monkeypatch.setattr("cicerone.io.dataset_catalog.read_parquet", boom)
+    monkeypatch.setattr("cicerone.io.options.read_parquet", boom)
     events = store.get_events_for_user("u1", 10)
     assert list(events["item_id"]) == ["i1"]
 
@@ -379,7 +380,7 @@ def test_database_catalog_sqlite_keeps_structured_extras():
 
 def test_database_catalog_shares_memory_engine_with_history():
     settings = IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"})
-    history = build_user_history_reader(settings)
+    history = build_input_source(settings)
     catalog = build_catalog_store(settings)
     assert isinstance(history, DatabaseInputSource)
     assert isinstance(catalog, DatabaseCatalogStore)
@@ -446,7 +447,7 @@ def test_database_catalog_first_create_is_race_safe():
     def write(index: int) -> None:
         try:
             store.upsert_user({"user_id": f"u{index}", "comment": str(index)})
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=write, args=(index,)) for index in range(8)]

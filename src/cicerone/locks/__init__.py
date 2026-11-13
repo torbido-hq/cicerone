@@ -6,26 +6,18 @@ Default single-instance exclusion is RunGuard's threading.Lock (no backend).
 
 from __future__ import annotations
 
-from typing import Any
-
 from cicerone.config.constants import DEFAULT_DATASET_APPEND_LOCK_TTL_SECONDS
 from cicerone.config.lock_url import resolve_postgres_lock_url
 from cicerone.config.settings import Settings
-from cicerone.deprecation import renamed_attribute
 from cicerone.locks.hold import (
     LockBackend,
     LockLostError,
     WriteFence,
     WriterLockBusyError,
-    acquire_blocking,
-    ensure_writer_owned,
-    held_writer_lock,
+    acquire_until,
     writer_lock_held_here,
 )
 from cicerone.locks.keys import (
-    PG_ADVISORY_KEY1,
-    PG_ADVISORY_KEY2,
-    REDIS_LOCK_KEY,
     REDIS_LOCK_TTL_MS,
     advisory_keys_from_lock_key,
     dataset_append_lock_key,
@@ -39,13 +31,10 @@ __all__ = [
     "LockLostError",
     "WriteFence",
     "WriterLockBusyError",
-    "PG_ADVISORY_KEY1",
-    "PG_ADVISORY_KEY2",
     "PostgresAdvisoryLock",
-    "REDIS_LOCK_KEY",
     "REDIS_LOCK_TTL_MS",
     "RedisLock",
-    "acquire_blocking",
+    "acquire_until",
     "advisory_keys_from_lock_key",
     "build_dataset_writer_lock",
     "build_output_writer_lock",
@@ -53,8 +42,6 @@ __all__ = [
     "dataset_append_lock_key",
     "events_apply_lock_key",
     "has_distributed_lock",
-    "ensure_writer_owned",
-    "held_writer_lock",
     "writer_lock_held_here",
 ]
 
@@ -111,18 +98,3 @@ def build_lock_backend(
             ttl_ms=int(ttl * 1000),
         )
     raise AssertionError(f"build_lock_backend is only for distributed backends, got {backend!r}")
-
-
-_RENAMED = {
-    "_acquire_once": "cicerone.locks.hold.acquire_once",
-    "_acquire_until": "cicerone.locks.hold.acquire_until",
-    "_bind_writer_generation": "cicerone.locks.hold.bind_writer_generation",
-    "_bound_writer_generation": "cicerone.locks.hold.bound_writer_generation",
-    "_lock_owned": "cicerone.locks.hold.lock_owned",
-    "_unbind_writer_generation": "cicerone.locks.hold.unbind_writer_generation",
-    "_writer_hold": "cicerone.locks.hold.writer_hold",
-}
-
-
-def __getattr__(name: str) -> Any:
-    return renamed_attribute(__name__, _RENAMED, name)

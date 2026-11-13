@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import threading
-import time
 
 import boto3
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
 from moto import mock_aws
+from support.fakes import FakeGuard, fake_monotonic, patch_module_ref, raising
 from support.prometheus_metrics import metric_value
+from support.settings import local_output, make_settings
+from support.waits import WAIT_SECONDS, wait_until
 
 from cicerone.config import IOSettings, Settings
 from cicerone.trigger import RunGuard, create_app, poll_input_forever
@@ -16,16 +17,6 @@ from cicerone.trigger import RunGuard, create_app, poll_input_forever
 
 def _settings(**overrides) -> Settings:
     return make_settings(**{"trigger_enabled": True, "trigger_auth_token": "secret", **overrides})
-
-
-class _FakeGuard:
-    def __init__(self, result: bool = True):
-        self.result = result
-        self.calls: list[str] = []
-
-    def trigger(self, triggered_by: str) -> bool:
-        self.calls.append(triggered_by)
-        return self.result
 
 
 def test_run_guard_records_retrain_trigger_metrics():
@@ -86,11 +77,7 @@ def test_run_guard_busy_property():
     assert started.wait(timeout=2)
     assert guard.busy is True
     release.set()
-    for _ in range(50):
-        if not guard.busy:
-            break
-        time.sleep(0.01)
-    assert guard.busy is False
+    assert wait_until(lambda: not guard.busy)
 
 
 def test_run_guard_starts_a_run_when_idle():
@@ -138,16 +125,18 @@ def test_run_guard_ignores_trigger_within_debounce_window():
     assert guard.trigger("webhook") is False
 
 
-def test_run_guard_allows_trigger_after_debounce_window_elapses():
+def test_run_guard_allows_trigger_after_debounce_window_elapses(monkeypatch):
+    clock = fake_monotonic(monkeypatch, "cicerone.trigger.time")
     done = threading.Event()
 
     def fake_run(triggered_by: str) -> None:
         done.set()
 
-    guard = RunGuard(debounce_seconds=0.01, run_fn=fake_run)
+    guard = RunGuard(debounce_seconds=60, run_fn=fake_run)
     assert guard.trigger("webhook") is True
-    assert done.wait(timeout=5)
-    time.sleep(0.05)
+    assert done.wait(WAIT_SECONDS)
+    assert wait_until(lambda: not guard.busy)
+    clock.now += 61
 
     assert guard.trigger("webhook") is True
 
@@ -159,19 +148,13 @@ def test_run_guard_recovers_after_run_fn_raises():
     guard = RunGuard(debounce_seconds=0, run_fn=failing_run)
     assert guard.trigger("webhook") is True
 
-    for _ in range(50):
-        with guard._lock:
-            if not guard._running:
-                break
-        time.sleep(0.05)
-
-    assert guard._running is False
+    assert wait_until(lambda: not guard.busy)
     assert isinstance(guard.last_error, ValueError)
     assert "boom" in str(guard.last_error)
 
 
 def test_trigger_endpoint_requires_auth():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.post("/trigger/retrain")
@@ -180,7 +163,7 @@ def test_trigger_endpoint_requires_auth():
 
 
 def test_trigger_endpoint_rejects_wrong_token():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.post("/trigger/retrain", headers={"Authorization": "Bearer wrong"})
@@ -189,7 +172,7 @@ def test_trigger_endpoint_rejects_wrong_token():
 
 
 def test_trigger_endpoint_starts_a_run():
-    guard = _FakeGuard(result=True)
+    guard = FakeGuard(result=True)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -201,7 +184,7 @@ def test_trigger_endpoint_starts_a_run():
 
 
 def test_trigger_endpoint_returns_429_when_debounced():
-    guard = _FakeGuard(result=False)
+    guard = FakeGuard(result=False)
     app = create_app(_settings(), guard)
     client = TestClient(app)
 
@@ -211,7 +194,7 @@ def test_trigger_endpoint_returns_429_when_debounced():
 
 
 def test_trigger_endpoint_health_requires_no_auth():
-    app = create_app(_settings(), _FakeGuard())
+    app = create_app(_settings(), FakeGuard())
     client = TestClient(app)
 
     response = client.get("/health")
@@ -220,21 +203,21 @@ def test_trigger_endpoint_health_requires_no_auth():
 
 
 def test_trigger_docs_are_disabled():
-    client = TestClient(create_app(_settings(), _FakeGuard()))
+    client = TestClient(create_app(_settings(), FakeGuard()))
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
     assert client.get("/openapi.json").status_code == 404
 
 
 def test_trigger_security_headers_on_health():
-    response = TestClient(create_app(_settings(), _FakeGuard())).get("/health")
+    response = TestClient(create_app(_settings(), FakeGuard())).get("/health")
     assert response.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def test_poll_input_forever_disabled_for_db_input(caplog):
     input_settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
-    guard = _FakeGuard()
+    guard = FakeGuard()
 
     poll_input_forever(input_settings, guard, interval_seconds=0.01)
 
@@ -243,7 +226,6 @@ def test_poll_input_forever_disabled_for_db_input(caplog):
 
 def _run_poller(tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: None) -> None:
     """Poll ``ticks`` times; the input marker is v1 at start and v2 on every poll after."""
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     markers = iter(["v1"])
     monkeypatch.setattr("cicerone.trigger._current_marker", lambda _settings: next(markers, "v2"))
     sleeps = {"n": 0}
@@ -254,13 +236,13 @@ def _run_poller(tmp_path, monkeypatch, guard, *, ticks, on_tick=lambda _tick: No
         if sleeps["n"] > ticks:
             raise SystemExit("stop")
 
-    monkeypatch.setattr("cicerone.trigger.time.sleep", fake_sleep)
+    patch_module_ref(monkeypatch, "cicerone.trigger.time", sleep=fake_sleep)
     with pytest.raises(SystemExit):
-        poll_input_forever(input_settings, guard, interval_seconds=0.01)
+        poll_input_forever(local_output(tmp_path), guard, interval_seconds=0.01)
 
 
 def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
-    guard = _FakeGuard()
+    guard = FakeGuard()
 
     _run_poller(tmp_path, monkeypatch, guard, ticks=1)
 
@@ -268,7 +250,7 @@ def test_poll_input_forever_triggers_on_change(tmp_path, monkeypatch):
 
 
 def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
-    guard = _FakeGuard(result=False)
+    guard = FakeGuard(result=False)
 
     def accept_on_third_tick(tick: int) -> None:
         if tick == 3:
@@ -282,7 +264,7 @@ def test_poll_input_forever_retries_a_rejected_trigger(tmp_path, monkeypatch):
 def test_poll_input_forever_survives_a_lock_backend_outage(tmp_path, monkeypatch):
     from cicerone.locks.redis import RedisError
 
-    guard = _FakeGuard()
+    guard = FakeGuard()
     outage = {"left": 1}
     real_trigger = guard.trigger
 
@@ -306,53 +288,63 @@ def test_poll_input_forever_triggers_a_change_seen_during_a_run_once_it_ends(tmp
     def blocking_run(triggered_by: str) -> None:
         runs.append(triggered_by)
         if triggered_by == "cron":
-            release.wait(timeout=5)
+            release.wait(WAIT_SECONDS)
 
     guard = RunGuard(debounce_seconds=0, run_fn=blocking_run)
     assert guard.trigger("cron") is True
-    real_sleep = time.sleep
-
-    def wait_until_idle() -> None:
-        deadline = time.monotonic() + 5
-        while guard.busy and time.monotonic() < deadline:
-            real_sleep(0.01)
 
     def end_the_cron_run_on_third_tick(tick: int) -> None:
         if tick == 3:
             release.set()
-            wait_until_idle()
+            assert wait_until(lambda: not guard.busy)
 
     _run_poller(tmp_path, monkeypatch, guard, ticks=4, on_tick=end_the_cron_run_on_third_tick)
 
-    wait_until_idle()
+    assert wait_until(lambda: not guard.busy)
     assert runs == ["cron", "s3-poll"]
+
+
+def test_poll_input_forever_logs_an_unexpected_check_error_and_keeps_polling(tmp_path, monkeypatch, caplog):
+    validate = raising(TypeError("marker bug"))
+    monkeypatch.setattr("cicerone.trigger.validate_storage_options", validate)
+    sleeps = {"n": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["n"] += 1
+        if sleeps["n"] == 3:
+            raise SystemExit("stop")
+
+    patch_module_ref(monkeypatch, "cicerone.trigger.time", sleep=fake_sleep)
+    guard = FakeGuard()
+    with pytest.raises(SystemExit):
+        poll_input_forever(local_output(tmp_path), guard, interval_seconds=0.01)
+    assert validate.calls == 3
+    assert caplog.text.count("Failed to check input source for changes") == 3
+    assert guard.calls == []
 
 
 def test_current_marker_local_backend_reflects_mtime(tmp_path):
     from cicerone.trigger import _current_marker
 
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    input_settings = local_output(tmp_path)
     assert _current_marker(input_settings) is None
 
     (tmp_path / "events.parquet").write_bytes(b"data")
     assert _current_marker(input_settings) is not None
 
 
-def test_current_marker_local_stat_error_returns_none(tmp_path, monkeypatch, caplog):
-    import logging
-
+def test_current_marker_local_stat_error_propagates_to_the_poller(tmp_path, monkeypatch):
     from cicerone.trigger import _current_marker
 
-    input_settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    input_settings = local_output(tmp_path)
     (tmp_path / "events.parquet").write_bytes(b"data")
 
     def boom(self):
         raise PermissionError("denied")
 
     monkeypatch.setattr("pathlib.Path.stat", boom)
-    with caplog.at_level(logging.ERROR, logger="cicerone.trigger"):
-        assert _current_marker(input_settings) is None
-    assert any("Failed to check input source" in record.message for record in caplog.records)
+    with pytest.raises(PermissionError, match="denied"):
+        _current_marker(input_settings)
 
 
 @pytest.fixture

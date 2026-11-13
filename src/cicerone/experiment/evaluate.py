@@ -21,17 +21,20 @@ from cicerone.config.constants import (
     PRIMARY_METRIC_WEIGHTED,
 )
 from cicerone.config.settings import ExperimentSettings
-from cicerone.experiment.assignment import active_pair_traffic, assign_variant
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, log_caught
+from cicerone.experiment.assignment import active_pair_traffic, assign_variant, live_active_pair
 from cicerone.experiment.guardrails import GuardrailReport, evaluate_guardrails
 from cicerone.experiment.recipes import ResolvedRecipe
-from cicerone.experiment.stats import ComparisonResult, compare_variants, pick_control_name, variant_metric
+from cicerone.experiment.stats import ComparisonResult, compare_variants, variant_metric
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RANK_COLUMN,
     USER_COLUMN,
     VARIANT_COLUMN,
     filter_variant_rows,
+    pick_control_name,
 )
+from cicerone.values import utc_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -108,16 +111,9 @@ def evaluate_experiment(
 ) -> ExperimentReport:
     variants = [(recipe.name, recipe.traffic) for recipe in recipes]
     names = [recipe.name for recipe in recipes]
-    if (
-        active_pair is not None
-        and experiment.allocation == ALLOCATION_THOMPSON
-        and active_pair[0] in names
-        and active_pair[1] in names
-        and promoted_variant is None
-    ):
-        variants = active_pair_traffic(
-            active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
-        )
+    live_pair = live_active_pair(active_pair, names)
+    if live_pair is not None and experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
+        variants = active_pair_traffic(*live_pair, explore_traffic=experiment.explore_traffic)
         names = [name for name, _traffic in variants]
     assigned: dict[str, str] = {}
     attribution = experiment.attribution
@@ -180,6 +176,7 @@ def evaluate_experiment(
                 control,
                 variant_metric(name, values_by_variant[name]),
                 alpha=alpha,
+                min_users=min_impressions,
             )
         )
     guardrails: list[GuardrailReport] = []
@@ -256,8 +253,8 @@ def _intersection_value(reco: pd.DataFrame, ref: pd.DataFrame, *, k: int) -> flo
     right = right.loc[right[USER_COLUMN].isin(shared)]
     try:
         value = float(Intersection(k=k).calc(left, right))
-    except (ValueError, TypeError, KeyError):
-        logger.exception("RecTools Intersection failed for k=%s", k)
+    except OPTIONAL_EVAL_ERRORS as exc:
+        log_caught(f"RecTools Intersection failed for k={k}", exc, log=logger)
         return None
     if pd.isna(value):
         return None
@@ -299,17 +296,8 @@ def _list_intersections(
 def _parse_cutoff(value: object) -> tuple[pd.Timestamp | None, bool]:
     if value is None or value == "":
         return None, False
-    stamp = _as_timestamp(value)
+    stamp = utc_stamp(value)
     return stamp, stamp is None
-
-
-def _as_timestamp(value: object) -> pd.Timestamp | None:
-    if value is None or value == "":
-        return None
-    stamp = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(stamp):
-        return None
-    return stamp
 
 
 def _first_exposures(
@@ -327,7 +315,7 @@ def _first_exposures(
         variant = str(row.get("variant") or "")
         if not user_id or variant not in names:
             continue
-        when = _as_timestamp(row.get("exposed_at"))
+        when = utc_stamp(row.get("exposed_at"))
         previous = starts.get(user_id)
         if user_id not in assigned:
             assigned[user_id] = variant

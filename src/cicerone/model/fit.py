@@ -8,9 +8,15 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+import pandas as pd
 from rectools.dataset import Dataset
 
-from cicerone.config import DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS, ConfigError, EpochMetricsSettings
+from cicerone.config import (
+    DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
+    ConfigError,
+    EpochMetricsSettings,
+    Settings,
+)
 from cicerone.content_fallback import build_content_fallback_model
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureColumn
@@ -29,30 +35,34 @@ from cicerone.model.strategies import (
     as_recommender_model,
     build_strategy_model,
 )
-from cicerone.model_config import SEQUENTIAL_STRATEGY, default_model_configs, resolve_model_configs
+from cicerone.model_config import (
+    SEQUENTIAL_STRATEGY,
+    apply_legacy_item_based_k_neighbors,
+    resolve_model_configs,
+)
 
 logger = logging.getLogger(__name__)
 
 _FIT_POOL_LIGHTFM_THREADS = LIGHTFM_NUM_THREADS_SEQUENTIAL
-_FIT_WORKER: _FitWorkerContext | None = None
+_FIT_WORKER: _FitContext | None = None
 
 
 @dataclass(frozen=True)
-class _FitWorkerContext:
-    """Shared ProcessPool payload — pickled once per worker, not per strategy."""
+class _FitContext:
+    """Inputs shared by every strategy fit; a ProcessPool pickles it once per worker, not per strategy."""
 
     dataset: Dataset
-    epoch_interactions: object | None
+    epoch_interactions: pd.DataFrame | None
     epoch_metrics: EpochMetricsSettings | None
     epoch_metrics_top_k: int
-    model_configs: dict[str, dict[str, Any]] | None
-    content_feature_columns: list[FeatureColumn] | None
+    model_configs: dict[str, dict[str, Any]]
+    content_feature_columns: list[FeatureColumn]
     content_max_neighbors: int
-    content_items: object | None
-    content_interactions: object | None
+    content_items: pd.DataFrame | None
+    content_interactions: pd.DataFrame | None
 
 
-def _init_fit_worker(lightfm_threads: int, context: _FitWorkerContext) -> None:
+def _init_fit_worker(lightfm_threads: int, context: _FitContext) -> None:
     """ProcessPool initializer: LightFM threads + shared fit payload."""
     global _FIT_POOL_LIGHTFM_THREADS, _FIT_WORKER
     _FIT_POOL_LIGHTFM_THREADS = lightfm_threads
@@ -63,18 +73,7 @@ def _fit_strategy_on_worker(name: str) -> tuple[str, RecommenderModel]:
     ctx = _FIT_WORKER
     if ctx is None:
         raise RuntimeError("fit worker is not initialized")
-    return _fit_strategy(
-        name,
-        ctx.dataset,
-        ctx.epoch_interactions,
-        ctx.epoch_metrics,
-        ctx.epoch_metrics_top_k,
-        ctx.model_configs,
-        ctx.content_feature_columns,
-        ctx.content_max_neighbors,
-        ctx.content_items,
-        ctx.content_interactions,
-    )
+    return _fit_strategy(name, ctx)
 
 
 def _resolve_model_configs_for_fit(
@@ -82,43 +81,21 @@ def _resolve_model_configs_for_fit(
     item_based_k_neighbors: int | None,
 ) -> dict[str, dict[str, Any]]:
     """Apply optional k_neighbors override onto a copy of model configs."""
-    if model_configs is None and item_based_k_neighbors is None:
-        return default_model_configs()
     if model_configs is None:
-        return resolve_model_configs(
-            legacy_k_neighbors=item_based_k_neighbors,
-            legacy_k_neighbors_explicit=item_based_k_neighbors is not None,
-        )
-    configs = {name: deepcopy(cfg) for name, cfg in model_configs.items()}
-    if item_based_k_neighbors is not None:
-        item_cfg = configs.setdefault("item_based", deepcopy(default_model_configs()["item_based"]))
-        model_section = item_cfg.setdefault("model", {})
-        model_section["K"] = int(item_based_k_neighbors)
-        configs["item_based"] = item_cfg
-    return configs
+        return resolve_model_configs(legacy_k_neighbors=item_based_k_neighbors)
+    return apply_legacy_item_based_k_neighbors(model_configs, k_neighbors=item_based_k_neighbors)
 
 
-def _fit_strategy(
-    name: str,
-    dataset: Dataset,
-    epoch_interactions: object | None,
-    epoch_metrics: EpochMetricsSettings | None,
-    epoch_metrics_top_k: int,
-    model_configs: dict[str, dict[str, Any]] | None = None,
-    content_feature_columns: list[FeatureColumn] | None = None,
-    content_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    content_items: object | None = None,
-    content_interactions: object | None = None,
-) -> tuple[str, RecommenderModel]:
+def _fit_strategy(name: str, ctx: _FitContext) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
     strategy = STRATEGIES[name]
     if name == "content_fallback":
         model = as_recommender_model(
             build_content_fallback_model(
-                feature_columns=content_feature_columns or [],
-                max_neighbors=content_max_neighbors,
-                items=content_items,  # type: ignore[arg-type]
-                interactions=content_interactions,  # type: ignore[arg-type]
+                feature_columns=ctx.content_feature_columns,
+                max_neighbors=ctx.content_max_neighbors,
+                items=ctx.content_items,
+                interactions=ctx.content_interactions,
             )
         )
     elif strategy.factory is not None:
@@ -126,22 +103,22 @@ def _fit_strategy(
     else:
         model = build_strategy_model(
             name,
-            model_configs=model_configs,
+            model_configs=ctx.model_configs,
             lightfm_num_threads=_FIT_POOL_LIGHTFM_THREADS,
         )
-    if name in {"collaborative", SEQUENTIAL_STRATEGY} and epoch_metrics is not None:
-        if epoch_interactions is None:
+    if name in {"collaborative", SEQUENTIAL_STRATEGY} and ctx.epoch_metrics is not None:
+        if ctx.epoch_interactions is None:
             raise ValueError("epoch_interactions is required when epoch metric logging is enabled")
         fit_with_epoch_metrics(
             model,
-            dataset,
-            epoch_interactions,  # type: ignore[arg-type]
-            settings=epoch_metrics,
-            top_k=epoch_metrics_top_k,
+            ctx.dataset,
+            ctx.epoch_interactions,
+            settings=ctx.epoch_metrics,
+            top_k=ctx.epoch_metrics_top_k,
             label="Collaborative" if name == "collaborative" else "Sequential",
         )
     else:
-        model.fit(dataset)
+        model.fit(ctx.dataset)
     return name, model
 
 
@@ -171,10 +148,6 @@ class ModelRunPlan:
 
     enabled_models: tuple[str, ...]
     recommend_models: tuple[str, ...]
-
-    @property
-    def content_fallback_active(self) -> bool:
-        return "content_fallback" in self.recommend_models
 
 
 def resolve_recommend_models(
@@ -223,19 +196,33 @@ def plan_model_run(
     return ModelRunPlan(enabled_models=tuple(resolved), recommend_models=tuple(recommend))
 
 
-def resolve_run_models(
-    enabled_models: list[str] | None,
-    *,
-    blending_enabled: bool,
-    content_fallback_enabled: bool = False,
-) -> tuple[list[str], list[str]]:
-    """Like ``plan_model_run``, returning plain lists for existing callers."""
-    plan = plan_model_run(
-        enabled_models,
-        blending_enabled=blending_enabled,
-        content_fallback_enabled=content_fallback_enabled,
-    )
-    return list(plan.enabled_models), list(plan.recommend_models)
+@dataclass(frozen=True)
+class FitOptions:
+    """Strategy-fit settings; ``fit=`` replaces the matching ``fit_strategies`` keywords."""
+
+    max_workers: int = 1
+    epoch_metrics: EpochMetricsSettings | None = None
+    item_based_k_neighbors: int | None = None
+    model_configs: dict[str, dict[str, Any]] | None = None
+    content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> FitOptions:
+        return cls(
+            max_workers=settings.max_workers,
+            epoch_metrics=settings.epoch_metrics,
+            item_based_k_neighbors=settings.item_based_k_neighbors,
+            model_configs=deepcopy(settings.model_configs),
+            content_fallback_max_neighbors=settings.content_fallback_max_neighbors,
+        )
+
+
+def merge_fit_options(fit: FitOptions | None, keywords: FitOptions) -> FitOptions:
+    if fit is None:
+        return keywords
+    if keywords != FitOptions():
+        raise TypeError("pass fit= or the individual fit keywords, not both")
+    return fit
 
 
 def fit_strategies(
@@ -250,8 +237,25 @@ def fit_strategies(
     model_configs: dict[str, dict[str, Any]] | None = None,
     content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     content_feature_columns: list[FeatureColumn] | None = None,
+    *,
+    fit: FitOptions | None = None,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
     """Fit (or cache-hit) enabled strategies; parallel when ``max_workers > 1``."""
+    options = merge_fit_options(
+        fit,
+        FitOptions(
+            max_workers=max_workers,
+            epoch_metrics=epoch_metrics,
+            item_based_k_neighbors=item_based_k_neighbors,
+            model_configs=model_configs,
+            content_fallback_max_neighbors=content_fallback_max_neighbors,
+        ),
+    )
+    max_workers = options.max_workers
+    epoch_metrics = options.epoch_metrics
+    item_based_k_neighbors = options.item_based_k_neighbors
+    model_configs = options.model_configs
+    content_fallback_max_neighbors = options.content_fallback_max_neighbors
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
     resolved_configs = _resolve_model_configs_for_fit(model_configs, item_based_k_neighbors)
@@ -300,26 +304,24 @@ def fit_strategies(
         if epoch_metrics is not None and ("collaborative" in to_fit or SEQUENTIAL_STRATEGY in to_fit)
         else None
     )
-    content_cols = list(content_feature_columns or [])
-    content_items = built.items if "content_fallback" in to_fit else None
-    content_interactions = built.interactions if "content_fallback" in to_fit else None
     if to_fit:
+        fits_content = "content_fallback" in to_fit
+        context = _FitContext(
+            dataset=dataset,
+            epoch_interactions=epoch_interactions,
+            epoch_metrics=epoch_metrics,
+            epoch_metrics_top_k=epoch_metrics_top_k,
+            model_configs=resolved_configs,
+            content_feature_columns=list(content_feature_columns or []),
+            content_max_neighbors=content_fallback_max_neighbors,
+            content_items=built.items if fits_content else None,
+            content_interactions=built.interactions if fits_content else None,
+        )
         if max_workers > 1 and len(to_fit) > 1:
-            worker_context = _FitWorkerContext(
-                dataset=dataset,
-                epoch_interactions=epoch_interactions,
-                epoch_metrics=epoch_metrics,
-                epoch_metrics_top_k=epoch_metrics_top_k,
-                model_configs=resolved_configs,
-                content_feature_columns=content_cols,
-                content_max_neighbors=content_fallback_max_neighbors,
-                content_items=content_items,
-                content_interactions=content_interactions,
-            )
             with ProcessPoolExecutor(
                 max_workers=min(max_workers, len(to_fit)),
                 initializer=_init_fit_worker,
-                initargs=(LIGHTFM_NUM_THREADS_PARALLEL, worker_context),
+                initargs=(LIGHTFM_NUM_THREADS_PARALLEL, context),
             ) as executor:
                 for name, model in executor.map(_fit_strategy_on_worker, to_fit):
                     logger.info("Fitted '%s' on %d interactions", name, len(built.interactions))
@@ -327,18 +329,7 @@ def fit_strategies(
         else:
             for name in to_fit:
                 logger.info("Fitting '%s' on %d interactions", name, len(built.interactions))
-                _, model = _fit_strategy(
-                    name,
-                    dataset,
-                    epoch_interactions,
-                    epoch_metrics,
-                    epoch_metrics_top_k,
-                    resolved_configs,
-                    content_cols,
-                    content_fallback_max_neighbors,
-                    content_items,
-                    content_interactions,
-                )
+                _, model = _fit_strategy(name, context)
                 models[name] = model
         if strategy_cache is not None:
             for name in to_fit:

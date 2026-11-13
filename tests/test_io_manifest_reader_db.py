@@ -77,7 +77,7 @@ def test_db_reader_read_recent_propagates_real_connection_errors():
 
 
 def test_db_reader_nan_columns_from_a_pre_upgrade_row_become_none():
-    # Pre-upgrade NULL status/error columns surface as NaN via read_sql.
+    # A pre-upgrade row leaves the status/error columns NULL.
     engine = create_engine(TEST_DATABASE_URL)
     with engine.begin() as conn:
         conn.execute(
@@ -117,6 +117,40 @@ def test_db_reader_keeps_integer_columns_integral_next_to_a_null():
     assert [type(run["incremental_events_applied"]) for run in runs] == [int, type(None)]
     assert [run["incremental_events_applied"] for run in runs] == [1, None]
     assert [run["n_events"] for run in runs] == [1, 7]
+
+
+def test_db_reader_keeps_integers_beyond_float_precision_next_to_a_null():
+    # Through float64 or a signed Int64 cast, 2**63 - 1 rounds to 2**63 and fails to load.
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text('CREATE TABLE "recommendation_runs" ("generated_at" TEXT, "n_events" BIGINT)'))
+        conn.execute(
+            text('INSERT INTO "recommendation_runs" ("generated_at", "n_events") VALUES (:g, :n)'),
+            [
+                {"g": "2026-07-28T00:00:00+00:00", "n": 2**63 - 1},
+                {"g": "2026-07-27T00:00:00+00:00", "n": None},
+            ],
+        )
+
+    runs = DbManifestReader({"database_url": TEST_DATABASE_URL}).read_recent(2)
+
+    assert [run["n_events"] for run in runs] == [2**63 - 1, None]
+
+
+def test_db_reader_nan_float_becomes_none():
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text('CREATE TABLE "recommendation_runs" ("generated_at" TEXT, "score" DOUBLE PRECISION)')
+        )
+        conn.execute(
+            text('INSERT INTO "recommendation_runs" ("generated_at", "score") VALUES (:g, \'NaN\'::float8)'),
+            {"g": "2026-07-28T00:00:00+00:00"},
+        )
+
+    latest = DbManifestReader({"database_url": TEST_DATABASE_URL}).read_latest()
+
+    assert latest["score"] is None
 
 
 def test_db_reader_missing_database_url_raises():

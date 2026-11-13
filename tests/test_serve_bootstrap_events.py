@@ -20,34 +20,44 @@ from cicerone.serve.bootstrap_events import (
 )
 
 
+class _Reader:
+    def __init__(self) -> None:
+        self.refreshed = 0
+
+    def refresh(self) -> None:
+        self.refreshed += 1
+
+
+class _Pub:
+    def __init__(self, close_error: Exception | None = None) -> None:
+        self.closed = 0
+        self.connected = 0
+        self._close_error = close_error
+
+    def connect(self) -> None:
+        self.connected += 1
+
+    def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed += 1
+        if self._close_error is not None:
+            raise self._close_error
+
+
 def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    seen: dict[str, bool] = {}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub()
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-
-    def tracking(_settings, *, connect=True):
-        seen["connect"] = connect
-        return _Pub()
-
-    bootstrap.build_publisher = tracking  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -66,22 +76,16 @@ def test_start_events_runtime_defers_publisher_connect(tmp_path, feature_config:
         runtime.stop()
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
-    assert seen["connect"] is False
+    assert pub.connected == 0
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def __init__(self) -> None:
-            self.refreshed = 0
-
-        def refresh(self) -> None:
-            self.refreshed += 1
 
     reader = _Reader()
     disabled = start_events_runtime(
@@ -125,55 +129,6 @@ def test_start_events_runtime_disabled_and_webhook(tmp_path, feature_config: Fea
     assert enabled.worker.tick() == 1
     assert reader.refreshed == 1
     enabled.stop()
-    assert enabled.worker._thread is None or not enabled.worker._thread.is_alive()
-
-
-def test_start_events_runtime_can_skip_background_worker(tmp_path, feature_config: FeatureConfig):
-    out = tmp_path / "out"
-    out.mkdir()
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
-    ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def __init__(self) -> None:
-            self.refreshed = 0
-
-        def refresh(self) -> None:
-            self.refreshed += 1
-
-    reader = _Reader()
-    runtime = start_events_runtime(
-        make_settings(
-            output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
-            events=EventsSettings(
-                enabled=True,
-                kind="webhook",
-                incremental=EventsIncrementalSettings(
-                    batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
-                ),
-            ),
-        ),
-        feature_config=feature_config,
-        reader=reader,  # type: ignore[arg-type]
-        start_worker=False,
-    )
-    assert runtime.worker is not None
-    assert runtime.worker._thread is None
-    assert isinstance(runtime.webhook_source, WebhookEventSource)
-    runtime.webhook_source.ingest(
-        {
-            "user_id": "u1",
-            "item_id": "i9",
-            "event_type": "purchase",
-            "occurred_at": "2026-08-13T12:00:00Z",
-            "event_id": "skip-start-1",
-        }
-    )
-    assert runtime.worker.tick() == 1
-    assert reader.refreshed == 1
-    runtime.stop()
-    assert runtime.worker._thread is None
 
 
 def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_config: FeatureConfig):
@@ -185,10 +140,6 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     pd.DataFrame([{"user_id": "u1", "region_slug": "lazio"}]).to_parquet(inp / "users.parquet", index=False)
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     runtime = start_events_runtime(
         make_settings(
@@ -214,7 +165,6 @@ def test_start_events_runtime_wires_input_users_provider(tmp_path, feature_confi
             ],
         ),
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -234,10 +184,6 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     def _fail_build(_input):
         raise AssertionError("input users must not be read without user-scoped eligibility")
 
@@ -255,7 +201,6 @@ def test_start_events_runtime_skips_users_provider_without_user_scoped_rules(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -272,10 +217,6 @@ def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     def _fail_build(_input):
         raise AssertionError("input users must not be read when experiment arms are not user-scoped")
@@ -313,7 +254,6 @@ def test_start_events_runtime_skips_users_when_variants_are_not_user_scoped(
         ),
         feature_config=scoped,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -347,10 +287,6 @@ def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_co
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
@@ -372,7 +308,6 @@ def test_start_events_runtime_wires_variant_feature_configs(tmp_path, feature_co
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -390,10 +325,6 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
@@ -408,7 +339,6 @@ def test_start_events_runtime_wires_automl_challenger_variant_feature_configs(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -426,10 +356,6 @@ def test_start_events_runtime_wires_custom_automl_variant_policy_names(
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     runtime = start_events_runtime(
         make_settings(
@@ -453,7 +379,6 @@ def test_start_events_runtime_wires_custom_automl_variant_policy_names(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     try:
         assert runtime.worker is not None
@@ -465,14 +390,74 @@ def test_start_events_runtime_wires_custom_automl_variant_policy_names(
         runtime.stop()
 
 
-def test_start_events_runtime_without_worker_connects_source(tmp_path, feature_config: FeatureConfig):
+def test_start_events_runtime_connects_source(tmp_path, feature_config: FeatureConfig):
     out = tmp_path / "out"
     out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    connected = {"n": 0}
 
-    class _Reader:
-        def refresh(self) -> None:
+    class _Source:
+        ephemeral_event_ids = False
+
+        def connect(self) -> None:
+            connected["n"] += 1
+
+        def poll(self, max_events: int = 100) -> list:
+            if connected["n"] == 0:
+                raise RuntimeError("connect() required before poll")
+            return []
+
+        def ack(self, event_ids):
+            return tuple(event_ids)
+
+        def nack(self, events):
+            return ()
+
+        def health(self):
+            from cicerone.events.base import EventSourceHealth
+
+            return EventSourceHealth(connected=connected["n"] > 0, lag=0)
+
+        def close(self) -> None:
             return None
 
+    from cicerone.serve import bootstrap_events as bootstrap
+
+    original = bootstrap.build_event_source
+    bootstrap.build_event_source = lambda _kind, _options: _Source()  # type: ignore[assignment]
+    runtime = None
+    try:
+        runtime = start_events_runtime(
+            make_settings(
+                output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+                events=EventsSettings(
+                    enabled=True,
+                    kind="db",
+                    options={"database_url": "sqlite+pysqlite:///:memory:"},
+                    incremental=EventsIncrementalSettings(
+                        batch_size=1, batch_window_seconds=60.0, poll_interval_seconds=0.05
+                    ),
+                ),
+            ),
+            feature_config=feature_config,
+            reader=_Reader(),  # type: ignore[arg-type]
+        )
+        assert connected["n"] == 1
+        assert runtime.worker is not None
+        assert runtime.worker._thread.is_alive()
+        assert runtime.worker.tick() == 0
+    finally:
+        bootstrap.build_event_source = original
+        if runtime is not None:
+            runtime.stop()
+
+
+@pytest.mark.usefixtures("worker_without_thread")
+def test_start_events_runtime_connects_webhook_source_until_stop(tmp_path, feature_config: FeatureConfig):
+    out = tmp_path / "out"
+    out.mkdir()
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
@@ -480,7 +465,6 @@ def test_start_events_runtime_without_worker_connects_source(tmp_path, feature_c
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
     assert isinstance(runtime.webhook_source, WebhookEventSource)
     assert runtime.webhook_source.health().connected is True
@@ -488,7 +472,7 @@ def test_start_events_runtime_without_worker_connects_source(tmp_path, feature_c
     assert runtime.webhook_source.health().connected is False
 
 
-def test_start_events_runtime_without_worker_reports_source_health(
+def test_start_events_runtime_reports_source_health_on_start(
     tmp_path, feature_config: FeatureConfig, monkeypatch: pytest.MonkeyPatch
 ):
     import cicerone.events.worker as worker_module
@@ -501,11 +485,6 @@ def test_start_events_runtime_without_worker_reports_source_health(
         "update_events_source_health",
         lambda *, connected, lag: reported.append(connected),
     )
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
@@ -513,10 +492,11 @@ def test_start_events_runtime_without_worker_reports_source_health(
         ),
         feature_config=feature_config,
         reader=_Reader(),  # type: ignore[arg-type]
-        start_worker=False,
     )
-    assert reported == [True]
-    runtime.stop()
+    try:
+        assert reported[0] is True
+    finally:
+        runtime.stop()
 
 
 def test_start_events_runtime_closes_publisher(tmp_path, feature_config: FeatureConfig):
@@ -525,24 +505,12 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-            raise RuntimeError("close failed")
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub(RuntimeError("close failed"))
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -563,7 +531,7 @@ def test_start_events_runtime_closes_publisher(tmp_path, feature_config: Feature
         assert runtime.publisher is None
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
-    assert closed["n"] == 1
+    assert pub.closed == 1
 
 
 def test_stop_swallows_publisher_publish_error(tmp_path, feature_config: FeatureConfig):
@@ -572,24 +540,12 @@ def test_stop_swallows_publisher_publish_error(tmp_path, feature_config: Feature
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-            raise PublishError("close failed")
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub(PublishError("close failed"))
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -609,7 +565,7 @@ def test_stop_swallows_publisher_publish_error(tmp_path, feature_config: Feature
         assert runtime.publisher is None
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
-    assert closed["n"] == 1
+    assert pub.closed == 1
 
 
 def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: FeatureConfig):
@@ -618,23 +574,12 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub()
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -658,7 +603,7 @@ def test_stop_closes_publisher_when_worker_hangs(tmp_path, feature_config: Featu
         finally:
             runtime.worker.stop = real_stop  # type: ignore[method-assign]
             runtime.worker.stop()
-        assert closed["n"] == 1
+        assert pub.closed == 1
         assert runtime.publisher is None
     finally:
         bootstrap.build_publisher = original  # type: ignore[assignment]
@@ -670,18 +615,7 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub()
 
     from cicerone.events.worker import EventWorker
     from cicerone.serve import bootstrap_events as bootstrap
@@ -692,7 +626,7 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     def _boom(self) -> None:
         raise RuntimeError("start fail")
 
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     EventWorker.start = _boom  # type: ignore[method-assign]
     try:
         with pytest.raises(RuntimeError, match="start fail"):
@@ -713,7 +647,7 @@ def test_start_events_runtime_closes_publisher_on_startup_error(tmp_path, featur
     finally:
         bootstrap.build_publisher = original_pub  # type: ignore[assignment]
         EventWorker.start = original_start  # type: ignore[method-assign]
-    assert closed["n"] == 1
+    assert pub.closed == 1
 
 
 def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config: FeatureConfig):
@@ -722,19 +656,7 @@ def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-            raise RuntimeError("close failed")
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub(RuntimeError("close failed"))
 
     from cicerone.events.worker import EventWorker
     from cicerone.serve import bootstrap_events as bootstrap
@@ -745,7 +667,7 @@ def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config
     def _boom(self) -> None:
         raise RuntimeError("start fail")
 
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     EventWorker.start = _boom  # type: ignore[method-assign]
     try:
         with pytest.raises(RuntimeError, match="start fail"):
@@ -766,7 +688,7 @@ def test_startup_error_survives_publisher_close_failure(tmp_path, feature_config
     finally:
         bootstrap.build_publisher = original_pub  # type: ignore[assignment]
         EventWorker.start = original_start  # type: ignore[method-assign]
-    assert closed["n"] == 1
+    assert pub.closed == 1
 
 
 def test_startup_error_survives_worker_stop_failure(tmp_path, feature_config: FeatureConfig):
@@ -776,10 +698,6 @@ def test_startup_error_survives_worker_stop_failure(tmp_path, feature_config: Fe
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     stopped = {"n": 0}
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     from cicerone.events.worker import EventWorker
 
@@ -824,24 +742,12 @@ def test_publisher_close_does_not_replace_worker_stop_error(tmp_path, feature_co
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    closed = {"n": 0}
-
-    class _Pub:
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            return None
-
-        def close(self) -> None:
-            closed["n"] += 1
-            raise RuntimeError("close failed")
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
+    pub = _Pub(RuntimeError("close failed"))
 
     from cicerone.serve import bootstrap_events as bootstrap
 
     original = bootstrap.build_publisher
-    bootstrap.build_publisher = lambda _settings, **_kwargs: _Pub()  # type: ignore[assignment]
+    bootstrap.build_publisher = lambda _settings: pub  # type: ignore[assignment]
     try:
         runtime = start_events_runtime(
             make_settings(
@@ -867,7 +773,7 @@ def test_publisher_close_does_not_replace_worker_stop_error(tmp_path, feature_co
         try:
             with pytest.raises(RuntimeError, match="stop fail"):
                 runtime.stop()
-            assert closed["n"] == 1
+            assert pub.closed == 1
             assert runtime.publisher is None
         finally:
             runtime.worker.stop = real_stop  # type: ignore[method-assign]
@@ -882,10 +788,6 @@ def test_start_events_runtime_without_feature_config(tmp_path):
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     runtime = start_events_runtime(
         make_settings(
@@ -928,7 +830,9 @@ def _experiment_settings(tmp_path):
     )
 
 
-def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(tmp_path, monkeypatch):
+def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(
+    tmp_path, monkeypatch, refresh_clock
+):
     settings = _experiment_settings(tmp_path)
     store = ExperimentStore(settings.output)
     store.write_state(experiment_state("exp-1", promoted_variant="treatment"))
@@ -940,15 +844,14 @@ def test_assign_incremental_variant_caches_promote_read_and_follows_live_winner(
         return original(self, experiment_id)
 
     monkeypatch.setattr(ExperimentStore, "assignment_overlay", counting)
-    now = {"t": 0.0}
-    assigned = _assign_incremental_variant(settings, clock=lambda: now["t"])
+    assigned = _assign_incremental_variant(settings)
     assert assigned is not None
     assert assigned("u1") == "treatment"
     assert assigned("u2") == "treatment"
     assert reads["n"] == 1
     store.write_state(experiment_state("exp-1", promoted_variant="control"))
     assert assigned("u1") == "treatment"
-    now["t"] += DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS
+    refresh_clock.now += DEFAULT_EVENTS_RETRAIN_PROBE_TTL_SECONDS
     assert assigned("u1") == "control"
     assert assigned("u2") == "control"
     assert reads["n"] == 2
@@ -983,10 +886,6 @@ def test_start_events_runtime_assign_variant_caches_winner_within_ttl(tmp_path, 
     ).to_parquet(Path(settings.output.options["path"]) / "recommendations.parquet", index=False)
     ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant="treatment"))
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         settings,
         feature_config=feature_config,
@@ -999,39 +898,3 @@ def test_start_events_runtime_assign_variant_caches_winner_within_ttl(tmp_path, 
     ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant="control"))
     assert assigned("u1") == "treatment"
     runtime.stop()
-
-
-def test_combine_busy_checks():
-    from cicerone.serve.bootstrap_events import _combine_busy_checks
-
-    assert _combine_busy_checks(None, None) is None
-    single = _combine_busy_checks(lambda: True)
-    assert single is not None
-    assert single() is True
-    both = _combine_busy_checks(lambda: False, lambda: True)
-    assert both is not None
-    assert both() is True
-
-
-def test_throttled_busy_check():
-    from cicerone.serve.bootstrap_events import _throttled_busy_check
-
-    assert _throttled_busy_check(None, ttl_seconds=1.0) is None
-    calls = {"n": 0}
-
-    def probe() -> bool:
-        calls["n"] += 1
-        return False
-
-    live = _throttled_busy_check(probe, ttl_seconds=0)
-    assert live is not None
-    assert live() is False
-    assert live() is False
-    assert calls["n"] == 2
-
-    calls["n"] = 0
-    cached = _throttled_busy_check(probe, ttl_seconds=60.0)
-    assert cached is not None
-    assert cached() is False
-    assert cached() is False
-    assert calls["n"] == 1

@@ -6,15 +6,14 @@ import threading
 import boto3
 import pandas as pd
 import pytest
-from moto import mock_aws
 
 from cicerone.config import ConfigError
-from cicerone.io.recommendation_reader import (
-    DatasetRecommendationReader,
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
+from cicerone.io.recommendation_reader_common import (
+    narrow_items_frame,
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
-from cicerone.io.recommendation_reader_common import narrow_items_frame
 
 
 def _write_recommendations(path, rows) -> None:
@@ -426,6 +425,62 @@ def test_dataset_reader_items_hard_s3_reraises_and_keeps_filters(tmp_path, monke
     assert list(reader.get_items()["item_id"]) == ["i1"]
 
 
+def test_dataset_reader_items_failure_keeps_the_previous_recommendations(tmp_path, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    import cicerone.io.dataset_recommendation_reader as reader_mod
+
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    pd.DataFrame([{"item_id": "i1", "category": "beer"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i2", "rank": 1, "score": 0.9}])
+    original = reader_mod.read_parquet
+
+    def _read(options, filename, **kwargs):
+        if filename == "items_snapshot.parquet":
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
+        return original(options, filename, **kwargs)
+
+    monkeypatch.setattr(reader_mod, "read_parquet", _read)
+    with pytest.raises(ClientError, match="AccessDenied"):
+        reader.refresh()
+    assert list(reader.get_recommendations("u1", k=1)["item_id"]) == ["i1"]
+    monkeypatch.setattr(reader_mod, "read_parquet", original)
+    assert reader.refresh() is True
+    assert list(reader.get_recommendations("u1", k=1)["item_id"]) == ["i2"]
+
+
+def test_dataset_reader_refresh_reports_kept_recommendations(tmp_path):
+    _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
+    pd.DataFrame([{"item_id": "i1", "category": "beer"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    reader.configure_item_filters(category_column="category")
+    version = reader.items_version()
+    (tmp_path / "recommendations.parquet").write_bytes(b"not parquet")
+    pd.DataFrame([{"item_id": "i9", "category": "wine"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    assert reader.refresh() is False
+    assert list(reader.get_recommendations("u1", k=1)["item_id"]) == ["i1"]
+    assert reader.items_version() == version
+    assert list(reader.get_items()["item_id"]) == ["i1"]
+
+
+def test_dataset_reader_loads_items_before_any_recommendations_exist(tmp_path):
+    pd.DataFrame([{"item_id": "i1", "category": "beer"}]).to_parquet(
+        tmp_path / "items_snapshot.parquet", index=False
+    )
+    reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
+    items = reader.get_items()
+    assert items is not None
+    assert list(items["item_id"]) == ["i1"]
+    assert reader.get_recommendations("u1", k=1).empty
+
+
 def test_dataset_reader_refresh_propagates_index_errors(tmp_path, monkeypatch):
     _write_recommendations(tmp_path, [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9}])
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
@@ -529,20 +584,6 @@ def test_dataset_reader_construction_tolerates_missing_file(tmp_path):
     assert reader.get_recommendations("u1", k=10).empty
     assert reader.get_items() is None
     assert reader.get_cold_start_fallback(k=5).empty
-
-
-@pytest.fixture
-def s3_options():
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="test-bucket")
-        yield {
-            "storage_backend": "s3",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-            "bucket": "test-bucket",
-            "prefix": "recommendations/latest",
-        }
 
 
 def test_dataset_reader_s3_backend_returns_top_k(s3_options):

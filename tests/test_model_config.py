@@ -17,12 +17,12 @@ from rectools.models import (
     RandomModel,
     model_from_config,
 )
-from support.toml_config import write_toml
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.artifact import (
     ARTIFACT_SCHEMA_VERSION,
-    load_rectools_model,
-    save_rectools_model,
+    _dump_rectools_model,
+    _load_rectools_model,
 )
 from cicerone.config import ConfigError, load_settings
 from cicerone.dataset import build_dataset
@@ -37,22 +37,6 @@ from cicerone.model_config import (
     item_based_k_from_config,
     resolve_model_configs,
 )
-
-
-def _minimal_io_toml() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-    """
 
 
 def _tiny_dataset(feature_config):
@@ -122,7 +106,6 @@ def test_build_strategy_model_matches_model_from_config():
 def test_legacy_k_neighbors_translates_to_model_K():
     configs = resolve_model_configs(
         legacy_k_neighbors=15,
-        legacy_k_neighbors_explicit=True,
     )
     assert configs["item_based"]["model"]["K"] == 15
     model = model_from_config(configs["item_based"])
@@ -139,7 +122,7 @@ def test_native_model_item_based_K_from_toml(tmp_path):
         [model.item_based.model]
         cls = "TFIDFRecommender"
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -158,7 +141,7 @@ def test_legacy_and_native_k_conflict_raises(tmp_path):
         k_neighbors = 9
         [model.item_based.model]
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     with pytest.raises(ConfigError, match="Conflicting item_based neighbor"):
@@ -172,7 +155,7 @@ def test_legacy_k_neighbors_still_loads(tmp_path):
         [job]
         [job.item_based]
         k_neighbors = 13
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -195,16 +178,14 @@ def test_example_cicerone_toml_has_no_active_model_section():
         )
 
 
-def test_rectools_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_rectools_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("popular")
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
 
-    path = tmp_path / "popular.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),
@@ -212,16 +193,14 @@ def test_rectools_save_load_model_recommend_round_trip(tmp_path, feature_config)
     )
 
 
-def test_collaborative_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_collaborative_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("collaborative", lightfm_num_threads=1)
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
 
-    path = tmp_path / "collaborative.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=False)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),
@@ -229,16 +208,14 @@ def test_collaborative_save_load_model_recommend_round_trip(tmp_path, feature_co
     )
 
 
-def test_item_based_save_load_model_recommend_round_trip(tmp_path, feature_config):
+def test_item_based_save_load_model_recommend_round_trip(feature_config):
     built = _tiny_dataset(feature_config)
     model = build_strategy_model("item_based")
     model.fit(built.dataset)
     users = list(built.dataset.user_id_map.external_ids)
     before = model.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=True)
 
-    path = tmp_path / "item_based.rectools"
-    save_rectools_model(path, model)
-    loaded = load_rectools_model(path)
+    loaded = _load_rectools_model(_dump_rectools_model(model))
     after = loaded.recommend(users=users, dataset=built.dataset, k=2, filter_viewed=True)
     pd.testing.assert_frame_equal(
         before.sort_values([Columns.User, Columns.Rank]).reset_index(drop=True),
@@ -255,7 +232,7 @@ def test_legacy_and_native_k_same_value_ok(tmp_path):
         k_neighbors = 11
         [model.item_based.model]
         K = 11
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     settings = load_settings(config_path)
@@ -319,7 +296,7 @@ def test_unknown_model_table_raises(tmp_path):
         [job]
         [model.not_a_strategy]
         cls = "PopularModel"
-        {_minimal_io_toml()}
+        {MINIMAL_IO_TOML}
         """,
     )
     with pytest.raises(ConfigError, match="unknown strategy"):
@@ -364,7 +341,6 @@ def test_legacy_k_neighbors_creates_model_dict_when_absent():
     configs = apply_legacy_item_based_k_neighbors(
         {"item_based": {"cls": "ImplicitItemKNNWrapperModel"}},
         k_neighbors=7,
-        k_neighbors_explicit=True,
     )
     assert configs["item_based"]["model"]["K"] == 7
 

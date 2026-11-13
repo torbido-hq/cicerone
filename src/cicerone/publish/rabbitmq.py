@@ -10,40 +10,29 @@ from typing import Any
 import pandas as pd
 
 from cicerone.amqp_options import (
+    RABBITMQ_IO_ERRORS,
     amqp_timeout_seconds,
     apply_amqp_timeouts,
+    close_amqp_handles,
     optional_exchange,
     optional_routing_key,
     require_amqp_url,
     require_queue,
 )
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import ConfigError, import_extra
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.publish.base import PublishError
 from cicerone.publish.payload import user_recommendation_messages
 
 logger = logging.getLogger(__name__)
 
 _PREFIX = "publish.options"
+_RETRY_ERRORS: tuple[type[BaseException], ...] = (ConfigError, *RABBITMQ_IO_ERRORS)
 
 
 @dataclass
 class _Progress:
     sent: int = 0
-
-
-def _rabbitmq_publish_errors() -> tuple[type[BaseException], ...]:
-    # Imported lazily: events.errors loads this package while it is initializing.
-    from cicerone.events.errors import AMQPError
-
-    return (AMQPError, OSError, TimeoutError)
-
-
-def _close_quietly(connection: Any) -> None:
-    try:
-        connection.close()
-    except Exception:
-        # Connect's original error must still propagate.
-        logger.exception("Failed to close RabbitMQ publisher connection after connect error")
 
 
 def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
@@ -54,13 +43,6 @@ def validate_rabbitmq_publish_options(options: dict[str, Any]) -> None:
         require_queue(options, prefix=_PREFIX)
     else:
         optional_routing_key(options, prefix=_PREFIX)
-
-
-def _missing_extra() -> ConfigError:
-    return ConfigError(
-        'publish.kind = "rabbitmq" requires the pika package; '
-        "install with: pip install 'cicerone-recommender[rabbitmq]'"
-    )
 
 
 class RabbitMQPublisher:
@@ -79,10 +61,7 @@ class RabbitMQPublisher:
     def connect(self) -> None:
         if self._channel is not None:
             return
-        try:
-            import pika
-        except ImportError as exc:
-            raise _missing_extra() from exc
+        pika = import_extra("pika", "rabbitmq", 'publish.kind = "rabbitmq"')
         connection = None
         connected = False
         try:
@@ -96,11 +75,15 @@ class RabbitMQPublisher:
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
             connected = True
-        except _rabbitmq_publish_errors() as exc:
+        except RABBITMQ_IO_ERRORS as exc:
             raise ConfigError(f"publish.options.amqp_url is unreachable or setup failed: {exc}") from exc
         finally:
             if connection is not None and not connected:
-                _close_quietly(connection)
+                cleanup_after_failure(
+                    connection.close,
+                    "Failed to close RabbitMQ publisher connection after connect error",
+                    logger,
+                )
         self._connection = connection
         self._channel = channel
         self._connected_once = True
@@ -118,37 +101,17 @@ class RabbitMQPublisher:
                 return
         try:
             self._publish_from(messages, progress)
-        except Exception as exc:
-            if not isinstance(exc, _rabbitmq_publish_errors()) and not progress.sent:
-                raise
+        except RABBITMQ_IO_ERRORS:
             logger.exception("RabbitMQ publish failed; recovering publisher")
             self._retry_unsent(messages, progress)
 
     def _retry_unsent(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         try:
             self._recover()
-        except ConfigError as exc:
-            self._fail_unless_sent(progress, exc)
-            return
-        except Exception:
-            if not progress.sent:
-                raise
-            # Accepted records must not be raised back to a caller that would republish them.
-            logger.exception("RabbitMQ publisher recover failed after confirm")
-            return
-        try:
             self._publish_from(messages, progress)
-        except Exception as exc:
-            if isinstance(exc, _rabbitmq_publish_errors()) or progress.sent:
-                self._fail_unless_sent(progress, exc)
-                return
-            raise
-
-    def _fail_unless_sent(self, progress: _Progress, exc: BaseException) -> None:
-        if progress.sent:
-            logger.exception("RabbitMQ publish stopped after confirm; accepted records are not retried")
-            return
-        raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
+        except _RETRY_ERRORS as exc:
+            # Callers republish every user; consumers dedupe on the stable message_id.
+            raise PublishError(f"RabbitMQ publish failed: {exc}") from exc
 
     def _publish_from(self, messages: Sequence[tuple[str, bytes, str]], progress: _Progress) -> None:
         channel = self._require()
@@ -181,26 +144,7 @@ class RabbitMQPublisher:
         connection = self._connection
         self._channel = None
         self._connection = None
-        close_exc: BaseException | None = None
-        unexpected: BaseException | None = None
-        for handle, label in ((channel, "channel"), (connection, "connection")):
-            if handle is None:
-                continue
-            closer = getattr(handle, "close", None)
-            if not callable(closer):
-                continue
-            try:
-                closer()
-            except Exception as exc:
-                logger.exception("Failed to close RabbitMQ publisher %s", label)
-                if isinstance(exc, _rabbitmq_publish_errors()):
-                    if close_exc is None:
-                        close_exc = exc
-                    continue
-                if unexpected is None:
-                    unexpected = exc
-        if unexpected is not None:
-            raise unexpected
+        close_exc = close_amqp_handles(channel, connection)
         if close_exc is not None:
             raise PublishError(f"RabbitMQ publisher close failed: {close_exc}") from close_exc
 

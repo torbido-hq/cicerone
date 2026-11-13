@@ -11,7 +11,8 @@ from urllib.parse import unquote_plus
 
 from cicerone.config import ConfigError
 from cicerone.events.base import NormalizedEvent
-from cicerone.events.normalize import EventNormalizeError, normalize_event
+from cicerone.events.json_payload import delivery_event
+from cicerone.events.normalize import EventNormalizeError
 
 logger = logging.getLogger("cicerone.events.s3")
 
@@ -51,33 +52,7 @@ def validate_s3_event_options(options: dict[str, Any]) -> str:
     return resolved
 
 
-def as_int(options: dict[str, Any], key: str, default: int) -> int:
-    raw = options.get(key, default)
-    try:
-        return int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be an integer, got {raw!r}") from exc
-
-
-def positive_int(options: dict[str, Any], key: str, default: int) -> int:
-    value = as_int(options, key, default)
-    if value < 1:
-        raise ConfigError(f"events.options.{key} must be an integer >= 1, got {value}")
-    return value
-
-
-def positive_float(options: dict[str, Any], key: str, default: float) -> float:
-    raw = options.get(key, default)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"events.options.{key} must be a float > 0, got {raw!r}") from exc
-    if value <= 0:
-        raise ConfigError(f"events.options.{key} must be > 0, got {value}")
-    return value
-
-
-# One SQS message / S3 object → Batch. Events go pending → (on poll) in_flight;
+# One SQS message / S3 object → _Batch. Events go pending → (on poll) in_flight;
 # ack clears remaining; marker/SQS delete only for leading fully-acked batches.
 @dataclass
 class Batch:
@@ -99,20 +74,13 @@ def normalize_prefix(raw: Any) -> str:
     return f"{prefix}/" if prefix else ""
 
 
-def _stable_event_id(payload: dict[str, Any], *, bucket: str, key: str, etag: str, index: int) -> str:
-    existing = payload.get("event_id") or payload.get("idempotency_key")
-    if existing not in (None, ""):
-        return str(existing)
-    return f"{bucket}/{key}|{etag}|{index}"
-
-
 def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[NormalizedEvent]:
     text = body.decode("utf-8").strip()
     if not text:
         return []
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         raise ValueError(f"invalid JSON in s3://{bucket}/{key}") from exc
     if isinstance(data, dict):
         payloads: list[Any] = [data]
@@ -131,8 +99,7 @@ def events_from_body(body: bytes, *, bucket: str, key: str, etag: str) -> list[N
             )
             continue
         try:
-            event_id = _stable_event_id(payload, bucket=bucket, key=key, etag=etag, index=index)
-            events.append(normalize_event({**payload, "event_id": event_id}))
+            events.append(delivery_event(payload, f"{bucket}/{key}|{etag}|{index}"))
         except EventNormalizeError:
             logger.warning(
                 "Skipping invalid event %d in s3://%s/%s",
