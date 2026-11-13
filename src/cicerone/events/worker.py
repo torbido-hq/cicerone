@@ -681,7 +681,7 @@ class EventWorker:
             self._settle_live(self._ack_tracked(ready))
         except TimeoutError:
             record_events_flush(status="error")
-            logger.exception("Event source ack timed out after successful apply; persisting without nack")
+            logger.exception("Event source ack timed out after successful apply")
             self._persist_then_reraise(unexpected)
             return applied
         except Exception:

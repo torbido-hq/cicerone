@@ -1561,9 +1561,11 @@ def test_event_worker_flush_persists_when_deferred_ack_fails(
     monkeypatch.setattr(worker, "_ack_live_ids", _ack)
     monkeypatch.setattr(worker, "_ack_deferred_matching", _deferred)
     monkeypatch.setattr(worker._updater, "persist_online", _persist)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
     # A timeout is absorbed like one from the ack itself; anything else propagates.
     if timeout:
         assert worker.tick() == 1
+        assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
     else:
         with pytest.raises(LookupError, match="deferred ack bug"):
             worker.tick()
@@ -3408,17 +3410,21 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
 
 
 @pytest.mark.parametrize("step", ["_ack_tracked", "_settle_live"])
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [(OSError, "Event source ack failed"), (TimeoutError, "Event source ack timed out")],
+)
 def test_event_worker_post_write_error_wins_over_a_failing_ack(
-    tmp_path, feature_config: FeatureConfig, step: str, caplog
+    tmp_path, feature_config: FeatureConfig, step: str, error: type[OSError], logged: str, caplog
 ):
     _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
-    setattr(worker, step, raising(OSError("ack down")))
+    setattr(worker, step, raising(error("ack down")))
     persisted: list[bool] = []
     worker._persist_online_after_ack = lambda: persisted.append(True)  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="sidecar bug"):
         worker.tick()
     assert persisted == [True]
-    assert "Event source ack failed after successful apply" in caplog.text
+    assert f"{logged} after successful apply" in caplog.text
     assert "ack down" in caplog.text
 
 
