@@ -72,3 +72,16 @@ def test_delivery_event_id(ids, expected):
 def test_delivery_event_rejects_invalid(raw):
     with pytest.raises(EventNormalizeError):
         delivery_event(raw, "fallback")
+
+
+def _deeply_nested() -> list:
+    value: list = []
+    for _ in range(100_000):
+        value = [value]
+    return value
+
+
+@pytest.mark.parametrize("field", ["event_id", "idempotency_key"])
+def test_delivery_event_rejects_a_deeply_nested_id(field):
+    with pytest.raises(EventNormalizeError, match=f"{field} must not be a JSON object or array"):
+        delivery_event({**event_payload(), field: _deeply_nested()}, "fallback")
