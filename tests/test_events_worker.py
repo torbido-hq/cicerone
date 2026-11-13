@@ -1521,8 +1521,9 @@ def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
     assert [event.event_id for event in worker._retry_acks] == ["flush-unexpected-ack"]
 
 
-def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
-    tmp_path, feature_config: FeatureConfig, monkeypatch
+@pytest.mark.parametrize("timeout", [False, True])
+def test_event_worker_flush_persists_when_deferred_ack_fails(
+    tmp_path, feature_config: FeatureConfig, monkeypatch, timeout: bool
 ):
     out = tmp_path / "out"
     out.mkdir()
@@ -1552,7 +1553,7 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
 
     def _deferred(applied) -> None:  # type: ignore[no-untyped-def]
         del applied
-        raise LookupError("deferred ack bug")
+        raise (TimeoutError if timeout else LookupError)("deferred ack bug")
 
     def _persist() -> None:
         persisted["n"] += 1
@@ -1560,8 +1561,12 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
     monkeypatch.setattr(worker, "_ack_live_ids", _ack)
     monkeypatch.setattr(worker, "_ack_deferred_matching", _deferred)
     monkeypatch.setattr(worker._updater, "persist_online", _persist)
-    with pytest.raises(LookupError, match="deferred ack bug"):
-        worker.tick()
+    # A timeout is absorbed like one from the ack itself; anything else propagates.
+    if timeout:
+        assert worker.tick() == 1
+    else:
+        with pytest.raises(LookupError, match="deferred ack bug"):
+            worker.tick()
     assert persisted["n"] == 1
 
 
@@ -3402,9 +3407,9 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     assert "u1" in repaired
 
 
-@pytest.mark.parametrize(("step", "label"), [("_ack_tracked", "ack"), ("_settle_live", "deferred ack")])
+@pytest.mark.parametrize("step", ["_ack_tracked", "_settle_live"])
 def test_event_worker_post_write_error_wins_over_a_failing_ack(
-    tmp_path, feature_config: FeatureConfig, step: str, label: str, caplog
+    tmp_path, feature_config: FeatureConfig, step: str, caplog
 ):
     _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
     setattr(worker, step, raising(OSError("ack down")))
@@ -3413,7 +3418,7 @@ def test_event_worker_post_write_error_wins_over_a_failing_ack(
     with pytest.raises(RuntimeError, match="sidecar bug"):
         worker.tick()
     assert persisted == [True]
-    assert f"Event source {label} failed after successful apply" in caplog.text
+    assert "Event source ack failed after successful apply" in caplog.text
     assert "ack down" in caplog.text
 
 
