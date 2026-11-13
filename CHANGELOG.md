@@ -79,6 +79,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `cicerone_events_tick_errors_total` counts an unexpected error after a
+  batch is written once, not twice, when it stops the event worker, and now
+  also counts an event source or apply error from the drain on worker stop.
 - An event whose `user_id`, `item_id`, `event_type`, `event_id` or
   `idempotency_key` is a JSON object or array is rejected as invalid, instead
   of being stored under its Python text or, when deeply nested, stopping the

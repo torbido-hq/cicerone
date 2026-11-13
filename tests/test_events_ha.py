@@ -825,7 +825,8 @@ def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
         worker.tick()
     assert source.beats >= 2
     assert source.health().lag == 0
-    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    # Re-raised, so the worker loop counts it, not the flush.
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
     written = pd.read_parquet(out / "recommendations.parquet")
     assert "ihbb" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 

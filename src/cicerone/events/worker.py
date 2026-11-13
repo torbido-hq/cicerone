@@ -232,8 +232,10 @@ class EventWorker:
         try:
             self._drain_buffer_on_stop()
         except EVENT_WORKER_ERRORS:
+            record_events_tick_error()
             logger.exception("Event worker drain on stop failed")
         except BaseException:
+            record_events_tick_error()
             cleanup_after_failure(self._close_source, _CLEANUP_FAILED, logger)
             raise
         self._close_source()
@@ -631,11 +633,12 @@ class EventWorker:
                 # last_apply_written describes the previous batch until this batch's apply starts.
                 if not applied and not (apply_started and self._updater.last_apply_written):
                     raise
-                if not isinstance(exc, _POST_WRITE_ERRORS):
+                if isinstance(exc, _POST_WRITE_ERRORS):
+                    record_events_tick_error()
+                else:
+                    # Re-raised after the ack; the worker loop or the stop drain counts it.
                     unexpected = exc
-                # The worker loop counts a re-raised worker error itself.
-                counted_by_loop = unexpected is not None and isinstance(unexpected, EVENT_WORKER_ERRORS)
-                self._log_post_write_failure(ready, exc, count=not counted_by_loop)
+                logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
                 if isinstance(exc, LockLostError) and exc.kind == "apply":
                     update_events_leader(False)
                 applied = applied or len(valid)
@@ -731,13 +734,6 @@ class EventWorker:
         for event in events:
             if event.rejected is not None:
                 logger.warning("Skipping invalid event row %s", event.rejected)
-
-    def _log_post_write_failure(
-        self, ready: list[NormalizedEvent], exc: BaseException, *, count: bool = True
-    ) -> None:
-        if count:
-            record_events_tick_error()
-        logger.error("%s; acking %d written event(s)", exc, len(ready), exc_info=exc)
 
     def _raise_held_after_failed_ack(self, step: str, unexpected: Exception | None) -> None:
         # From the ack's except block: a held post-write error wins; otherwise the caller re-raises.

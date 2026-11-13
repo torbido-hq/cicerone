@@ -3391,7 +3391,8 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     worker._persist_online_after_ack = persist  # type: ignore[method-assign]
     assert source.health().lag == 0
     assert updater.events_applied == 1
-    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    # Re-raised, so the worker loop counts it, not the flush.
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
     written = load_recommendations_frame(settings.output)
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -3400,6 +3401,33 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     assert updater.events_applied == 1
     [repaired] = publisher.published
     assert "u1" in repaired
+
+
+def test_event_worker_loop_counts_a_post_write_bug_once(tmp_path, feature_config: FeatureConfig):
+    _, _, source, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker._loop()
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
+
+
+def test_event_worker_stop_drain_counts_a_post_write_bug_once(tmp_path, feature_config: FeatureConfig):
+    _, _, source, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    worker._buffer.extend(source.poll())
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker._drain_and_close()
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
+
+
+def test_event_worker_stop_drain_counts_a_worker_error(tmp_path, feature_config):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._drain_buffer_on_stop = raising(EventSourceError("drain down"))  # type: ignore[method-assign]
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    worker._drain_and_close()
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
 
 
 @pytest.mark.parametrize(("step", "label"), [("_ack_tracked", "ack"), ("_settle_live", "deferred ack")])
