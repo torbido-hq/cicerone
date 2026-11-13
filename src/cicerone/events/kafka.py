@@ -6,6 +6,7 @@ import logging
 import socket
 from collections import deque
 from collections.abc import Sequence, Set
+from functools import partial
 from typing import Any
 
 from cicerone.config.constants import import_extra
@@ -13,6 +14,7 @@ from cicerone.events.base import EventSourceError, EventSourceHealth, Normalized
 from cicerone.events.errors import KafkaException
 from cicerone.events.json_payload import delivery_event
 from cicerone.events.normalize import EventNormalizeError
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.kafka_options import kafka_client_config, kafka_timeout_seconds
 from cicerone.option_parse import optional_nonempty_str, require_nonempty_str
 
@@ -67,7 +69,9 @@ class KafkaEventSource(QueuedEventSource):
             ready = True
         finally:
             if not ready:
-                self._release(consumer)
+                cleanup_after_failure(
+                    partial(self._release, consumer), "Kafka consumer close after connect failure", logger
+                )
 
         with self._lock:
             previous = self._detach_unlocked()

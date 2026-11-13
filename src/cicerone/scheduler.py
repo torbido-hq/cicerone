@@ -36,6 +36,7 @@ def _cron_loop(schedule: str, run: Callable[[], None]) -> None:
         try:
             run()
         except Exception as exc:
+            # Cron loop's top level: one failed run must not stop the schedule.
             logger.exception(
                 "Scheduled run failed (%s: %s); will retry at the next scheduled time",
                 type(exc).__name__,

@@ -23,7 +23,7 @@ from cicerone.events.worker import EventWorker, HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.metrics import update_events_leader
+from cicerone.metrics import update_events_leader, update_events_source_health
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -3332,7 +3332,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert [event.event_id for event in again] == ["retry-drain"]
 
 
-def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feature_config: FeatureConfig):
+def _sidecar_bug_worker(tmp_path, feature_config):  # type: ignore[no-untyped-def]
     out = tmp_path / "out"
     out.mkdir()
     pd.DataFrame(
@@ -3370,11 +3370,25 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
         publisher=publisher,
     )
     worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    return settings, publisher, source, updater, worker
+
+
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
+    tmp_path, feature_config: FeatureConfig, persist_fails: bool, caplog
+):
+    settings, publisher, source, updater, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    persist = worker._persist_online_after_ack
+    if persist_fails:
+        worker._persist_online_after_ack = raising(OSError("persist down"))  # type: ignore[method-assign]
     before_tick = registry_metric_value("cicerone_events_tick_errors_total")
 
     # An unexpected publisher bug is re-raised, but only after the written batch is acked.
     with pytest.raises(RuntimeError, match="sidecar bug"):
         worker.tick()
+    # A failing online persist is then only logged; the publisher bug still wins.
+    assert caplog.text.count(_CLEANUP_FAILED) == int(persist_fails)
+    worker._persist_online_after_ack = persist  # type: ignore[method-assign]
     assert source.health().lag == 0
     assert updater.events_applied == 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
@@ -3386,6 +3400,21 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(tmp_path, feat
     assert updater.events_applied == 1
     [repaired] = publisher.published
     assert "u1" in repaired
+
+
+@pytest.mark.parametrize(("step", "label"), [("_ack_tracked", "ack"), ("_settle_live", "deferred ack")])
+def test_event_worker_post_write_error_wins_over_a_failing_ack(
+    tmp_path, feature_config: FeatureConfig, step: str, label: str, caplog
+):
+    _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    setattr(worker, step, raising(OSError("ack down")))
+    persisted: list[bool] = []
+    worker._persist_online_after_ack = lambda: persisted.append(True)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
+    assert persisted == [True]
+    assert f"Event source {label} failed after successful apply" in caplog.text
+    assert "ack down" in caplog.text
 
 
 def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]
@@ -3777,6 +3806,133 @@ def test_event_worker_failed_abort_still_returns_the_batch(tmp_path, feature_con
     assert worker._source.nack.calls == 1
     assert caplog.text.count(_CLEANUP_FAILED) == 1
     assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_failed_start_drain_does_not_replace_the_connect_error(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+    worker._source.connect = raising(original)  # type: ignore[method-assign]
+    worker._drain_stopped_start = raising(TypeError("drain bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._drain_stopped_start.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_failed_health_refresh_does_not_replace_the_tick_error(
+    tmp_path, feature_config, monkeypatch, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    del worker._source.nack
+    original = KeyError("apply bug")
+    _fail_apply(worker, monkeypatch, original)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.health.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_aborted_start_close_failure_does_not_replace_the_connect_error(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+
+    def connect() -> None:
+        worker._stop.set()
+        raise original
+
+    worker._source.connect = connect  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_loop_reports_an_unexpected_error_before_the_thread_ends(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    update_events_source_health(connected=True, lag=0)
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
+    assert registry_metric_value("cicerone_events_source_connected") == 0
+    assert worker._source_unhealthy is True
+    assert "Event worker stopped on an unexpected error" in caplog.text
+
+
+def test_event_worker_loop_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    import threading
+
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._thread = threading.current_thread()
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    worker._close_source = raising(KeyError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_tick_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("tick bug")
+
+    def tick_locked() -> int:
+        worker._stop.set()
+        raise original
+
+    worker._tick_locked = tick_locked  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_drain_error_wins_over_a_failing_source_close(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("drain bug")
+    worker._drain_buffer_on_stop = raising(original)  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker._drain_and_close()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="health bug"):
+        worker.tick()
+
+
+@pytest.mark.parametrize("failing_ack", ["_ack_tracked", "_settle_live"])
+def test_event_worker_failed_persist_after_an_ack_error_does_not_replace_it(
+    tmp_path, feature_config, caplog, failing_ack
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    original = KeyError("ack bug")
+    setattr(worker, failing_ack, raising(original))
+    worker._persist_online_after_ack = raising(RuntimeError("persist bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._persist_online_after_ack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
 
 
 def test_event_worker_nack_bug_outside_an_error_still_propagates(tmp_path, feature_config, caplog):

@@ -120,6 +120,7 @@ class RedisLock:
                             self._mark_lost(generation)
                             break
                 except Exception:
+                    # Refresh thread's top level; the finally marks the lock lost.
                     logger.exception("Unexpected Redis lock refresh failure")
                 finally:
                     if not self._stop_refresh.is_set():

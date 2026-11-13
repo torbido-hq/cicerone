@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any
 
 from cicerone.amqp_options import (
+    RABBITMQ_IO_ERRORS,
     amqp_timeout_seconds,
     apply_amqp_timeouts,
     prefetch_count,
@@ -20,10 +21,9 @@ from cicerone.events.base import EventSourceError, EventSourceHealth, Normalized
 from cicerone.events.json_payload import decode_json_object
 from cicerone.events.normalize import EventNormalizeError, normalize_event
 from cicerone.events.rabbitmq_io import (
-    RABBITMQ_IO_ERRORS,
     PikaIo,
     abandoned_error,
-    close_handles,
+    close_handles_after_failure,
     release_io,
 )
 
@@ -316,7 +316,7 @@ class RabbitMQEventSource(QueuedEventSource):
             if not opened:
                 io._channel = None
                 io._connection = None
-                close_handles(channel, connection)
+                close_handles_after_failure(channel, connection)
         return connection, channel
 
     def _pump_connection(self, io: PikaIo) -> None:

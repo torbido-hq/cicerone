@@ -8,6 +8,7 @@ from pandas.errors import DatabaseError
 from pyarrow.lib import ArrowException
 from sqlalchemy.exc import SQLAlchemyError
 
+from cicerone.amqp_options import AMQPError
 from cicerone.events.base import EventBackpressureError, EventSourceError
 from cicerone.io.blob import S3_READ_ERRORS
 from cicerone.io.replace_users import RecommendationSchemaError
@@ -15,7 +16,6 @@ from cicerone.publish.base import PublishError
 
 if TYPE_CHECKING:
     from confluent_kafka import KafkaException
-    from pika.exceptions import AMQPError
     from redis.exceptions import RedisError
 else:
     try:
@@ -23,13 +23,6 @@ else:
     except ImportError:
 
         class KafkaException(Exception):
-            pass
-
-    try:
-        from pika.exceptions import AMQPError
-    except ImportError:
-
-        class AMQPError(Exception):
             pass
 
     try:

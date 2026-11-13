@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -41,6 +42,7 @@ from cicerone.experiment.thompson import (
     track_rows_since,
     window_trials_from_slices,
 )
+from cicerone.failure_cleanup import cleanup_after_failure
 from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.base import OutputSink, recommendations_write_guard
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
@@ -662,18 +664,15 @@ def _publish_job_sidecar(run: JobRun) -> None:
 
 def _finalize_job(run: JobRun, error: BaseException | None) -> None:
     settings, manifest = run.settings, run.manifest
-    manifest_written = run.written.manifest_written
-    replace_success_manifest = run.replace_success_manifest
-    persist_exc: BaseException | None = None
     close_exc: BaseException | None = None
     if run.publisher is not None:
         try:
             run.publisher.close()
-        except _PUBLISH_ERRORS as exc:
-            _log_caught("Failed to close recommendation publisher", exc, log=logger)
         except Exception as exc:
-            _log_caught("Failed to close recommendation publisher", exc, log=logger)
-            close_exc = exc
+            # Logged here; an unexpected one is re-raised after the manifest records it.
+            logger.exception("Failed to close recommendation publisher (%s: %s)", type(exc).__name__, exc)
+            if not isinstance(exc, _PUBLISH_ERRORS):
+                close_exc = exc
     if manifest.status == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
             _persist_track_outputs(
@@ -690,9 +689,29 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
         except Exception as exc:
             manifest.status = "failed"
             manifest.error = truncate_job_error(exc)
-            manifest_written = False
-            persist_exc = exc
-            replace_success_manifest = True
+            cleanup_after_failure(
+                partial(_write_final_manifest, run, error, close_exc=close_exc, persist_exc=exc),
+                "Failed to write the final manifest after a track output error",
+                logger,
+            )
+            if isinstance(close_exc, LockLostError):
+                raise close_exc from exc
+            raise
+    _write_final_manifest(run, error, close_exc=close_exc, persist_exc=None)
+    if close_exc is not None and (error is None or isinstance(close_exc, LockLostError)):
+        raise close_exc
+
+
+def _write_final_manifest(
+    run: JobRun,
+    error: BaseException | None,
+    *,
+    close_exc: BaseException | None,
+    persist_exc: BaseException | None,
+) -> None:
+    manifest = run.manifest
+    manifest_written = run.written.manifest_written and persist_exc is None
+    replace_success_manifest = run.replace_success_manifest or persist_exc is not None
     if close_exc is not None and manifest.status == "success" and not isinstance(close_exc, LockLostError):
         manifest.status = "failed"
         manifest.error = truncate_job_error(close_exc)
@@ -718,12 +737,6 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
             if manifest.status == "success":
                 raise
     logger.info("Job finished: %s", json.dumps(manifest.as_dict()))
-    if isinstance(close_exc, LockLostError):
-        raise close_exc
-    if persist_exc is not None:
-        raise persist_exc
-    if close_exc is not None and error is None:
-        raise close_exc
 
 
 def run(triggered_by: str = "manual", *, fence_check: Callable[[], bool] | None = None) -> None:
@@ -854,6 +867,7 @@ if __name__ == "__main__":
     configure_logging(None, None)
     try:
         run()
-    except Exception as exc:
-        _log_caught("Recommendation job failed", exc, log=logger)
+    except Exception:
+        # Module entry point: any job failure becomes exit code 1.
+        logger.exception("Recommendation job failed")
         sys.exit(1)
