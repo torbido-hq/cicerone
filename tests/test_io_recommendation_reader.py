@@ -8,12 +8,12 @@ import pandas as pd
 import pytest
 
 from cicerone.config import ConfigError
-from cicerone.io.recommendation_reader import (
-    DatasetRecommendationReader,
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
+from cicerone.io.recommendation_reader_common import (
+    narrow_items_frame,
     normalize_items_snapshot,
     select_cold_start_fallback,
 )
-from cicerone.io.recommendation_reader_common import narrow_items_frame
 
 
 def _write_recommendations(path, rows) -> None:

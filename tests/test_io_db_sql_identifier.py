@@ -8,6 +8,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
 from cicerone.io.db_store import (
     DEFAULT_MANIFEST_TABLE,
     DEFAULT_RECOMMENDATIONS_TABLE,
@@ -16,7 +17,6 @@ from cicerone.io.db_store import (
 )
 from cicerone.io.manifest_reader import DbManifestReader
 from cicerone.io.options import sql_identifier
-from cicerone.io.recommendation_reader import DbRecommendationReader
 
 
 def test_sql_identifier_accepts_simple_names():

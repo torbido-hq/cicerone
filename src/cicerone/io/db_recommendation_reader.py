@@ -23,14 +23,11 @@ from cicerone.io.db_store import DEFAULT_RECOMMENDATION_ITEMS_TABLE, DEFAULT_REC
 from cicerone.io.engines import engine_for, quote_identifier
 from cicerone.io.options import require_option, sql_identifier, table_option
 from cicerone.io.recommendation_reader_common import (
-    RANK_COLUMN,
-    SOURCE_COLUMN,
-    USER_COLUMN,
-    VARIANT_COLUMN,
     ItemFilterMixin,
     item_snapshot_columns,
     normalize_items_snapshot,
 )
+from cicerone.io.recommendation_schema import RANK_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.metrics import observe_cache_refresh, record_cache_hit, record_cache_miss
 
 logger = logging.getLogger(__name__)

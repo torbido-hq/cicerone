@@ -68,9 +68,6 @@ class _BoundedSeen:
             self._seen.discard(self._order.popleft())
 
 
-__all__ = ["EventWorker", "HeartbeatError", "inflight_heartbeat"]
-
-
 class EventWorker:
     def __init__(
         self,

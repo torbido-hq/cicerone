@@ -12,7 +12,7 @@ from support.prometheus_metrics import metric_samples, metric_value, registry_me
 from support.settings import make_settings
 
 from cicerone.config import Settings
-from cicerone.io.recommendation_reader import DatasetRecommendationReader
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
 from cicerone.metrics import METRICS_TOKEN_HEADER
 from cicerone.serve import create_app
 

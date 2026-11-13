@@ -48,8 +48,8 @@ def test_user_recommendation_messages_one_per_user():
 
 
 def test_user_recommendation_messages_empty():
-    assert user_recommendation_messages(pd.DataFrame()) == []
-    assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
+    assert list(user_recommendation_messages(pd.DataFrame())) == []
+    assert list(user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]}))) == []
 
 
 def test_publish_recommendations_wraps_typeerror() -> None:

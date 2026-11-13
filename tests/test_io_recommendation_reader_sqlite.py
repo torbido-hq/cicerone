@@ -10,8 +10,8 @@ from sqlalchemy import Connection, create_engine, text
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from support.fakes import patch_module_ref, raising
 
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
 from cicerone.io.db_store import DatabaseOutputSink
-from cicerone.io.recommendation_reader import DbRecommendationReader
 from cicerone.io.replace_users import RecommendationSchemaError
 from cicerone.locks import LockLostError, WriteFence
 

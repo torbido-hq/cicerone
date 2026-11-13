@@ -4,7 +4,9 @@ import pytest
 from support.settings import local_output
 
 from cicerone.config import IOSettings
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.factory import (
     build_input_source,
@@ -13,7 +15,6 @@ from cicerone.io.factory import (
     build_recommendation_reader,
 )
 from cicerone.io.manifest_reader import DatasetManifestReader, DbManifestReader
-from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRecommendationReader
 from cicerone.job_eval import retrain_fence
 from cicerone.locks import WriteFence
 

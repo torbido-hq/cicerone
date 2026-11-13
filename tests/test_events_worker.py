@@ -19,7 +19,8 @@ from cicerone.events.normalize import event_fingerprint, normalize_event
 from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker, HeartbeatError
+from cicerone.events.worker import EventWorker
+from cicerone.events.worker_heartbeat import HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, WriterLockBusyError
