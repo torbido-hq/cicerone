@@ -9,7 +9,13 @@ from typing import Any, TypeVar, cast
 
 from cicerone.config.constants import DEFAULT_MODELS, RRF_K, STRATEGY_NAMES, ConfigError
 from cicerone.config.settings import Settings, VariantSettings
-from cicerone.config.validation import unique_policy_names, validate_model_weights, validate_rrf_k
+from cicerone.config.validation import (
+    parse_policy_rules,
+    require_finite,
+    unique_policy_names,
+    validate_model_weights,
+    validate_rrf_k,
+)
 from cicerone.feature_config import (
     BLENDING_CURVES,
     BlendingConfig,
@@ -18,14 +24,15 @@ from cicerone.feature_config import (
     FeatureConfig,
     parse_boost_rules,
     parse_eligibility_rules,
+    parse_latest_date_columns,
 )
+from cicerone.io.recommendation_schema import CONTROL_NAME
 
 COMBINER_PRIORITY = "priority"
 COMBINER_RRF = "rrf"
 COMBINER_BLEND = "blend"
 COMBINERS: tuple[str, ...] = (COMBINER_PRIORITY, COMBINER_RRF, COMBINER_BLEND)
 
-CONTROL_NAME = "control"
 TREATMENT_NAME = "treatment"
 
 
@@ -78,7 +85,7 @@ def apply_recipe(feature_config: FeatureConfig, recipe: ResolvedRecipe) -> Featu
     )
 
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", BoostRule, EligibilityRule)
 
 
 def resolve_boost_policy(
@@ -104,7 +111,7 @@ def resolve_eligibility_policy(
 def _pick_named(inherited: Sequence[_T], names: Sequence[str], *, label: str) -> tuple[_T, ...]:
     by_name: dict[str, _T] = {}
     for rule in inherited:
-        name = rule.name  # type: ignore[attr-defined]
+        name = rule.name
         if name in by_name:
             raise ConfigError(f"{label} duplicate inherited rule name {name!r}")
         by_name[name] = rule
@@ -123,11 +130,7 @@ def _resolve_policy_spec(
     rule_type: type[_T],
 ) -> tuple[_T, ...]:
     if spec is True:
-        return _pick_named(
-            inherited,
-            [rule.name for rule in inherited],  # type: ignore[attr-defined]
-            label=label,
-        )
+        return _pick_named(inherited, [rule.name for rule in inherited], label=label)
     if spec is False:
         return ()
     if not isinstance(spec, (list, tuple)):
@@ -139,12 +142,7 @@ def _resolve_policy_spec(
         names = unique_policy_names(items, label=label)
         return _pick_named(inherited, names, label=label)
     if all(isinstance(item, Mapping) for item in items):
-        try:
-            rules = tuple(parse([dict(item) for item in items]))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ConfigError(f"{label}: {exc}") from exc
-        unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
-        return rules
+        return parse_policy_rules(cast(tuple[Mapping[str, Any], ...], items), parse, label=label)
     if all(isinstance(item, rule_type) for item in items):
         return cast(tuple[_T, ...], items)
     raise ConfigError(f"{label} must be true, false, rule names, or rule tables")
@@ -380,28 +378,18 @@ def _recipe_blending(
 ) -> BlendingConfig:
     enabled = combiner == COMBINER_BLEND
     overlay = variant.blending or {}
+    label = f"experiment.variants[{variant.name}].blending"
     updates: dict[str, Any] = {"enabled": enabled}
     if "curve" in overlay:
         curve = str(overlay["curve"])
         if curve not in BLENDING_CURVES:
             raise ConfigError(f"experiment.variants[{variant.name}].blending.curve {curve!r} is invalid")
-        updates["curve"] = curve  # type: ignore[assignment]
-    if "midpoint" in overlay:
-        updates["midpoint"] = float(overlay["midpoint"])
-    if "steepness" in overlay:
-        updates["steepness"] = float(overlay["steepness"])
-    if "saturate_at" in overlay:
-        updates["saturate_at"] = float(overlay["saturate_at"])
-    if "popular_share" in overlay:
-        updates["popular_share"] = float(overlay["popular_share"])
-    if "rrf_k" in overlay:
-        updates["rrf_k"] = float(overlay["rrf_k"])
+        updates["curve"] = curve
+    for field in ("midpoint", "steepness", "saturate_at", "popular_share", "rrf_k"):
+        if field in overlay:
+            updates[field] = require_finite(float(overlay[field]), name=f"{label}.{field}")
     if "latest_date_columns" in overlay:
-        raw = overlay["latest_date_columns"]
-        if isinstance(raw, str):
-            updates["latest_date_columns"] = (raw,)
-        else:
-            updates["latest_date_columns"] = tuple(str(column) for column in raw)
+        updates["latest_date_columns"] = parse_latest_date_columns(overlay["latest_date_columns"])
     return replace(base, **updates)
 
 

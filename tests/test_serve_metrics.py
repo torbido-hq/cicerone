@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 import pandas as pd
-from conftest import make_settings
+import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
+from support.fakes import FakeReader
 from support.prometheus_metrics import metric_samples, metric_value, registry_metric_value
+from support.settings import make_settings
 
 from cicerone.config import Settings
-from cicerone.io.recommendation_reader import DatasetRecommendationReader
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
+from cicerone.metrics import METRICS_TOKEN_HEADER
 from cicerone.serve import create_app
-from cicerone.serve.metrics import METRICS_TOKEN_HEADER
 
 
 def _settings(**overrides) -> Settings:
@@ -31,35 +32,6 @@ def _metrics_headers() -> dict[str, str]:
     return {METRICS_TOKEN_HEADER: "metrics-secret"}
 
 
-class _FakeReader:
-    def __init__(self, recs: pd.DataFrame):
-        self._recs = recs
-
-    def refresh(self) -> None:
-        pass
-
-    def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        rows = self._recs[self._recs["user_id"] == user_id].sort_values("rank")
-        if variant is not None and "variant" in rows.columns:
-            rows = rows[rows["variant"].astype(str) == str(variant)]
-        return rows.head(k).reset_index(drop=True)
-
-    def get_items(self):
-        return None
-
-    def items_version(self) -> int:
-        return 0
-
-    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return self._recs.iloc[0:0]
-
-    def get_item_scores(self):
-        return pd.DataFrame()
-
-    def configure_item_filters(self, *, category_column=None, availability_filters=()) -> None:
-        del category_column, availability_filters
-
-
 def _recs_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -70,7 +42,7 @@ def _recs_df() -> pd.DataFrame:
 
 
 def test_metrics_returns_prometheus_text_format():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(CONTENT_TYPE_LATEST)
@@ -82,13 +54,13 @@ def test_metrics_returns_prometheus_text_format():
 
 
 def test_metrics_disabled_returns_not_found():
-    app = create_app(_settings(serve_metrics_enabled=False), _FakeReader(_recs_df()))
+    app = create_app(_settings(serve_metrics_enabled=False), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 404
 
 
 def test_metrics_token_required_when_configured():
-    app = create_app(_settings(serve_metrics_token="metrics-secret"), _FakeReader(_recs_df()))
+    app = create_app(_settings(serve_metrics_token="metrics-secret"), FakeReader(_recs_df()))
     client = TestClient(app)
     assert client.get("/metrics").status_code == 401
     response = client.get("/metrics", headers=_metrics_headers())
@@ -96,13 +68,13 @@ def test_metrics_token_required_when_configured():
 
 
 def test_metrics_does_not_require_bearer_token():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     response = TestClient(app).get("/metrics", headers=_metrics_headers())
     assert response.status_code == 200
 
 
 def test_metrics_endpoint_excluded_from_request_counters():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     client = TestClient(app)
     before = client.get("/metrics", headers=_metrics_headers()).text
     before_metrics_requests = sum(
@@ -125,7 +97,7 @@ def test_metrics_endpoint_excluded_from_request_counters():
 
 
 def test_recommend_request_increments_request_and_source_metrics():
-    app = create_app(_settings(), _FakeReader(_recs_df()))
+    app = create_app(_settings(), FakeReader(_recs_df()))
     client = TestClient(app)
     before = client.get("/metrics", headers=_metrics_headers()).text
     before_requests = metric_value(
@@ -158,6 +130,30 @@ def test_recommend_request_increments_request_and_source_metrics():
     )
 
 
+def test_request_metrics_bound_unmatched_paths_and_unknown_methods():
+    app = create_app(_settings(), FakeReader(_recs_df()))
+    client = TestClient(app)
+    unmatched = {"endpoint": "unmatched", "method": "GET", "status": "404"}
+    other_method = {"endpoint": "/health", "method": "other", "status": "405"}
+    matched = {"endpoint": "/health", "method": "GET", "status": "200"}
+    before = client.get("/metrics", headers=_metrics_headers()).text
+
+    assert client.get("/no-such-route-7f3a").status_code == 404
+    assert client.request("PROPFIND", "/health").status_code == 405
+    assert client.get("/health").status_code == 200
+
+    after = client.get("/metrics", headers=_metrics_headers()).text
+    for labels in (unmatched, other_method, matched):
+        assert metric_value(after, "cicerone_requests_total", labels) == (
+            metric_value(before, "cicerone_requests_total", labels) + 1
+        )
+    samples = metric_samples(after, "cicerone_requests_total")
+    assert not any(labels["endpoint"] == "/no-such-route-7f3a" for labels, _ in samples)
+    assert not any(labels["method"] == "PROPFIND" for labels, _ in samples)
+    latency = ("cicerone_request_latency_seconds_count", {"endpoint": "unmatched"})
+    assert metric_value(after, *latency) == metric_value(before, *latency) + 1
+
+
 def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
     recs = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"}]
@@ -166,7 +162,7 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
 
     # Snapshot counters before constructing the reader (its __init__ calls refresh).
     probe = (
-        TestClient(create_app(_settings(), _FakeReader(_recs_df())))
+        TestClient(create_app(_settings(), FakeReader(_recs_df())))
         .get("/metrics", headers=_metrics_headers())
         .text
     )
@@ -175,7 +171,6 @@ def test_cache_refresh_metrics_on_success_and_failure(tmp_path: Path):
 
     reader = DatasetRecommendationReader({"storage_backend": "local", "path": str(tmp_path)})
     reader.refresh()
-    time.sleep(0.01)
 
     app = create_app(_settings(), reader)
     metrics = TestClient(app).get("/metrics", headers=_metrics_headers()).text
@@ -224,7 +219,7 @@ def test_cache_hit_and_miss_counters(tmp_path: Path):
 
 def test_unknown_stored_source_is_ignored():
 
-    from cicerone.serve.metrics import record_recommendations_served
+    from cicerone.metrics import record_recommendations_served
 
     before = metric_value(
         generate_latest().decode(),
@@ -256,7 +251,7 @@ def test_unknown_stored_source_is_ignored():
 
 def test_cache_age_zero_before_successful_refresh(monkeypatch):
 
-    import cicerone.serve.metrics as metrics_mod
+    import cicerone.metrics as metrics_mod
 
     monkeypatch.setattr(metrics_mod, "_last_successful_refresh_at", None)
     metrics_mod.update_cache_age_gauge()
@@ -265,7 +260,7 @@ def test_cache_age_zero_before_successful_refresh(monkeypatch):
 
 def test_events_metrics_defaults_and_flush_recording():
 
-    from cicerone.serve import metrics as metrics_mod
+    from cicerone import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=False, lag=None)
     body = generate_latest().decode()
@@ -326,7 +321,7 @@ def test_metrics_endpoint_refreshes_events_source_health():
         updater,
     )
     worker.refresh_source_health_metrics()
-    app = create_app(settings, _FakeReader(_recs_df()), events_worker=worker)
+    app = create_app(settings, FakeReader(_recs_df()), events_worker=worker)
     body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
     assert "cicerone_events_source_lag" in body
     assert metric_value(body, "cicerone_events_source_connected") == 1.0
@@ -334,8 +329,8 @@ def test_metrics_endpoint_refreshes_events_source_health():
 
 
 def test_metrics_endpoint_resets_events_gauges_without_worker():
-    app = create_app(_settings(), _FakeReader(_recs_df()), events_worker=None)
-    from cicerone.serve import metrics as metrics_mod
+    app = create_app(_settings(), FakeReader(_recs_df()), events_worker=None)
+    from cicerone import metrics as metrics_mod
 
     metrics_mod.update_events_source_health(connected=True, lag=9)
     body = TestClient(app).get("/metrics", headers=_metrics_headers()).text
@@ -343,13 +338,39 @@ def test_metrics_endpoint_resets_events_gauges_without_worker():
     assert metric_value(body, "cicerone_events_source_lag") == -1.0
 
 
-def test_record_events_flush_clamps_unknown_status(caplog):
+@pytest.mark.parametrize(
+    ("record", "kwarg", "metric", "labels", "message"),
+    [
+        (
+            "record_events_flush",
+            "status",
+            "cicerone_events_flush_total",
+            {"status": "error"},
+            "events flush status",
+        ),
+        (
+            "record_events_lock",
+            "status",
+            "cicerone_events_lock_total",
+            {"status": "skip"},
+            "events lock status",
+        ),
+        (
+            "record_events_apply_busy",
+            "reason",
+            "cicerone_events_apply_busy_total",
+            {"reason": "lock"},
+            "events apply busy reason",
+        ),
+    ],
+)
+def test_events_recorders_clamp_unknown_labels(caplog, record, kwarg, metric, labels, message):
     import logging
 
-    from cicerone.serve import metrics as metrics_mod
+    from cicerone import metrics as metrics_mod
 
-    before = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
-    with caplog.at_level(logging.WARNING, logger="cicerone.serve.metrics"):
-        metrics_mod.record_events_flush(status="weird")
-    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before + 1
-    assert any("Unknown events flush status" in rec.message for rec in caplog.records)
+    before = registry_metric_value(metric, labels)
+    with caplog.at_level(logging.WARNING, logger="cicerone.metrics"):
+        getattr(metrics_mod, record)(**{kwarg: "weird"})
+    assert registry_metric_value(metric, labels) == before + 1
+    assert any(f"Unknown {message}" in rec.message for rec in caplog.records)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import importlib
+from types import ModuleType
+from typing import Literal, get_args
 
 DEFAULT_CONFIG_PATH = "/app/config/cicerone.toml"
 DEFAULT_FEATURE_CONFIG_PATH = "/app/config/features.toml"
@@ -51,6 +53,8 @@ StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
 DEFAULT_MODE: Mode = "batch"
+StorageBackend = Literal["local", "s3"]
+STORAGE_BACKENDS: frozenset[str] = frozenset(get_args(StorageBackend))
 LOCK_BACKENDS: tuple[str, ...] = ("in_process", "postgres", "redis")
 DEFAULT_LOCK_KEY = "cicerone:scheduler:run_guard"
 DEFAULT_LOCK_TTL_SECONDS = 24 * 60 * 60
@@ -72,6 +76,8 @@ DEFAULT_SERVE_ITEM_SCORES_LIMIT = 1000
 DEFAULT_SERVE_ITEM_SCORES_MAX = 5000
 DEFAULT_SERVE_CONSUMED_LOOKBACK = 1000
 DEFAULT_CONSUMED_OVERLAY_MAX_USERS = 2048
+MAX_PORT = 65535
+MYSQL_KEY_CHARS = 255
 DEFAULT_MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_STORAGE_READ_BYTES = 512 * 1024 * 1024
 ARTIFACT_HMAC_KEY_MIN_BYTES = 16
@@ -113,3 +119,14 @@ DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 class ConfigError(ValueError):
     """Invalid config content or knobs (not missing files / unset env vars)."""
+
+
+def import_extra(module: str, extra: str, setting: str) -> ModuleType:
+    """Import an optional extra's module; ``setting`` names the config that needs it."""
+    try:
+        return importlib.import_module(module)
+    except ImportError as exc:
+        raise ConfigError(
+            f"{setting} requires the {module.replace('_', '-')} package; "
+            f"install with: pip install 'cicerone-recommender[{extra}]'"
+        ) from exc

@@ -25,11 +25,15 @@ from cicerone.config.constants import (
 )
 from cicerone.config.settings import ExperimentSettings, VariantSettings
 from cicerone.config.validation import (
+    float_field,
+    parse_policy_rules,
+    require_finite,
     require_open_unit_interval,
     require_unit_interval,
     unique_policy_names,
     validate_model_weights,
     validate_rrf_k,
+    weights_field,
 )
 from cicerone.feature_config import parse_boost_rules, parse_eligibility_rules
 
@@ -130,7 +134,7 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
     name = str(raw.get("name") or "").strip()
     if not name:
         raise ConfigError(f"experiment.variants[{index}].name is required")
-    traffic = float(raw.get("traffic", 0.0))
+    traffic = float_field(raw, f"experiment.variants[{name}].traffic", 0.0, require_finite)
     if traffic < 0:
         raise ConfigError(f"experiment.variants[{name}].traffic must be >= 0, got {traffic}")
     models = list(raw["models"]) if "models" in raw else None
@@ -138,9 +142,8 @@ def _load_variant(raw: Any, index: int) -> VariantSettings:
         from cicerone.experiment.recipes import validate_variant_models
 
         validate_variant_models(models, variant_name=name)
-    weights = {str(key): float(value) for key, value in raw["weights"].items()} if "weights" in raw else None
-    if weights is None and "model_weights" in raw:
-        weights = {str(key): float(value) for key, value in raw["model_weights"].items()}
+    weights_key = "weights" if raw.get("weights") is not None else "model_weights"
+    weights = weights_field(raw, weights_key, context=f"experiment.variants[{name}].weights")
     validate_model_weights(weights, context=f"experiment.variants[{name}].weights")
     rrf_k = float(raw["rrf_k"]) if "rrf_k" in raw else None
     validate_rrf_k(rrf_k, context=f"experiment.variants[{name}].rrf_k")
@@ -199,12 +202,7 @@ def _load_policy_spec(
         return unique_policy_names(value, label=label)
     if not all(isinstance(item, dict) for item in value):
         raise ConfigError(f"{label} must be true, false, a list of rule names, or an array of rule tables")
-    try:
-        rules = tuple(parse_table([dict(item) for item in value]))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ConfigError(f"{label}: {exc}") from exc
-    unique_policy_names([rule.name for rule in rules], label=label)  # type: ignore[attr-defined]
-    return rules
+    return parse_policy_rules(value, parse_table, label=label)
 
 
 def _normalize_traffic(variants: tuple[VariantSettings, ...]) -> tuple[VariantSettings, ...]:

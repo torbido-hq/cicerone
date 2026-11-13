@@ -20,9 +20,9 @@ from cicerone.dataset import BuiltDataset, build_interactions
 from cicerone.events.base import NormalizedEvent
 from cicerone.events.normalize import events_to_dataframe
 from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
-from cicerone.io.base import OutputSink
+from cicerone.io.base import ArtifactFingerprintSink, ConditionalArtifactSink, OutputSink
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN, recommendation_output_columns
-from cicerone.locks import LockLostError
+from cicerone.locks import WriteFence
 from cicerone.model import recommend_with_models
 from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
 
@@ -136,7 +136,9 @@ class OnlineTrainer:
         self._fit_partial_epochs = fit_partial_epochs
         self._fit_min_events = fit_min_events
         self._max_extra_interactions = max_extra_interactions
-        self._fence_check = fence_check
+        self._fence = WriteFence(
+            check=fence_check, lost="events apply lock lost before online write", kind="apply"
+        )
         self._explain = explain if explain is not None else ExplainSettings()
         self._max_workers = max_workers
         self._hmac_key = hmac_key
@@ -172,7 +174,7 @@ class OnlineTrainer:
         pending = self._pending
         if pending is None:
             return
-        self._ensure_fence()
+        self._fence.ensure()
         payload = dumps_artifact(pending.artifact, hmac_key=self._hmac_key)
         if not self._write_payload_if_current(pending, payload):
             logger.warning("Model artifact changed during online refresh; dropping pending fit")
@@ -254,7 +256,7 @@ class OnlineTrainer:
             and pending_fit >= self._fit_min_events
             and callable(getattr(collaborative, "fit_partial", None))
         ):
-            self._ensure_fence()
+            self._fence.ensure()
             collaborative = copy.deepcopy(collaborative)
             collaborative.fit_partial(working, self._fit_partial_epochs)
             epochs_run = self._fit_partial_epochs
@@ -342,10 +344,9 @@ class OnlineTrainer:
         return True
 
     def _fingerprint(self) -> str | None:
-        getter = getattr(self._sink, "model_artifact_fingerprint", None)
-        if not callable(getter):
+        if not isinstance(self._sink, ArtifactFingerprintSink):
             return None
-        token = getter()
+        token = self._sink.model_artifact_fingerprint()
         return None if token is None else str(token)
 
     def _install(self, artifact: ModelArtifact, digest: bytes, token: str | None = None) -> None:
@@ -399,16 +400,11 @@ class OnlineTrainer:
         return models, fitted, skip_sequential
 
     def _write_payload_if_current(self, pending: _PendingRefresh, payload: bytes) -> bool:
-        self._ensure_fence()
-        replace = getattr(self._sink, "replace_model_artifact_if", None)
+        self._fence.ensure()
         expected = pending.baseline_token
-        if callable(replace) and expected is not None:
-            return bool(replace(payload, expected))
+        if isinstance(self._sink, ConditionalArtifactSink) and expected is not None:
+            return bool(self._sink.replace_model_artifact_if(payload, expected))
         if self._artifact_replaced(pending):
             return False
         self._sink.write_model_artifact(payload)
         return True
-
-    def _ensure_fence(self) -> None:
-        if self._fence_check is not None and not self._fence_check():
-            raise LockLostError("events apply lock lost before online write", kind="apply")

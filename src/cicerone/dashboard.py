@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -16,15 +17,18 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from cicerone.cli import configure_logging
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_CONFIG_PATH, DEFAULT_LOG_FORMAT
+from cicerone.config.constants import DEFAULT_CONFIG_PATH
 from cicerone.dashboard_config import config_display
 from cicerone.dashboard_experiments import clear_promotion, experiment_context, promote_winner
 from cicerone.dashboard_lookup import lookup_inspector
 from cicerone.dashboard_quality import quality_context
 from cicerone.dashboard_retrain import RetrainError, request_retrain, retrain_configured
 from cicerone.dashboard_users import load_users
-from cicerone.feature_config import load_feature_config
+from cicerone.errors import OPTIONAL_IO_ERRORS, STORE_OPEN_ERRORS, log_caught
+from cicerone.experiment.store import build_experiment_store
+from cicerone.feature_config import FeatureConfig
 from cicerone.http_auth import require_basic_auth
 from cicerone.http_security import (
     CSRF_FORM_FIELD,
@@ -39,10 +43,11 @@ from cicerone.http_security import (
     set_flash_cookie,
 )
 from cicerone.io.base import ManifestReader, RecommendationReader, UserHistoryReader
-from cicerone.io.factory import build_manifest_reader, build_recommendation_reader, build_user_history_reader
-from cicerone.serve.item_filters import ItemsFilterCache, configure_reader_item_filters
+from cicerone.io.factory import build_input_source, build_manifest_reader, build_recommendation_reader
+from cicerone.refreshed_value import RefreshedValue
+from cicerone.serve.item_filters import configure_reader_item_filters, load_optional_feature_config
+from cicerone.serve.recommendations import build_recommendation_service, read_assignment_overlay
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 ROBOTS_TAG = "noindex, nofollow, noarchive, nosnippet, noimageindex"
@@ -51,8 +56,9 @@ ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
 _TEMPLATES.env.globals["robots_tag"] = ROBOTS_TAG
-_EXPERIMENTS_PATH = "/dashboard/experiments"
 _DASHBOARD_PATH = "/dashboard"
+_EXPERIMENTS_PATH = "/dashboard/experiments"
+_LOOKUP_REFRESH_TTL_SECONDS = 5.0
 _LOGOUT_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -101,28 +107,18 @@ def _flash_error(error: str) -> str:
     return "Experiment report is not available"
 
 
-def _dashboard_redirect(
-    request: Request | None = None,
-    *,
-    message: str = "",
-    error: str = "",
+def _flash_redirect(
+    request: Request, url: str, *, ok: str | None = None, error: str | None = None
 ) -> RedirectResponse:
-    response = RedirectResponse(url=_DASHBOARD_PATH, status_code=303)
-    if request is not None and (message or error):
-        set_flash_cookie(request, response, ok=message or None, error=error or None)
+    response = RedirectResponse(url=url, status_code=303)
+    set_flash_cookie(request, response, ok=ok, error=error)
     return response
 
 
-def _experiments_redirect(
-    request: Request | None = None,
-    *,
-    message: str = "",
-    promote_error: str = "",
-) -> RedirectResponse:
-    response = RedirectResponse(url=_EXPERIMENTS_PATH, status_code=303)
-    if request is not None and (message or promote_error):
-        set_flash_cookie(request, response, ok=message or None, error=promote_error or None)
-    return response
+def _promotion_redirect(request: Request, error: str | None, message: str) -> RedirectResponse:
+    if error:
+        return _flash_redirect(request, _EXPERIMENTS_PATH, error=_flash_error(error))
+    return _flash_redirect(request, _EXPERIMENTS_PATH, ok=message)
 
 
 def _compute_staleness(manifest: dict[str, Any] | None, cron_schedule: str, now: datetime) -> dict[str, Any]:
@@ -220,7 +216,7 @@ def create_app(
     recommendation_reader: RecommendationReader | None = None,
     history_reader: UserHistoryReader | None = None,
     config_path: str | None = None,
-    availability_filters: Sequence[str] | None = None,
+    feature_config: FeatureConfig | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="cicerone-dashboard",
@@ -231,30 +227,6 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
     auth = require_basic_auth(users)
-    filters = (
-        list(availability_filters)
-        if availability_filters is not None
-        else _item_availability_filters(settings)
-    )
-    items_cache = (
-        ItemsFilterCache(
-            recommendation_reader,
-            category_column=settings.serve.category_column,
-            availability_filters=filters,
-        )
-        if recommendation_reader is not None
-        else None
-    )
-
-    def _lookup(user_id: str) -> dict[str, Any]:
-        return lookup_inspector(
-            settings,
-            recommendation_reader,
-            history_reader,
-            user_id,
-            items_cache=items_cache,
-            availability_filters=filters,
-        )
 
     @app.middleware("http")
     async def anti_index_headers(
@@ -288,6 +260,31 @@ def create_app(
             "incremental": _incremental_status(history),
             "trigger_enabled": retrain_configured(settings),
         }
+
+    experiment_store = build_experiment_store(settings)
+    reader_refresh = (
+        RefreshedValue(recommendation_reader.refresh, ttl_seconds=_LOOKUP_REFRESH_TTL_SECONDS)
+        if recommendation_reader is not None
+        else None
+    )
+    recommendation_service = (
+        build_recommendation_service(
+            settings,
+            recommendation_reader,
+            feature_config,
+            partial(read_assignment_overlay, settings, experiment_store),
+        )
+        if recommendation_reader is not None
+        else None
+    )
+
+    def _lookup(user_id: str) -> dict[str, Any]:
+        if reader_refresh is not None and user_id.strip():
+            try:
+                reader_refresh.get()
+            except OPTIONAL_IO_ERRORS as exc:
+                log_caught("Failed to refresh recommendation reader for dashboard lookup", exc, log=logger)
+        return lookup_inspector(settings, recommendation_service, history_reader, user_id)
 
     @app.get("/partials/status", dependencies=[Depends(auth)])
     def status_partial(request: Request):
@@ -325,8 +322,8 @@ def create_app(
         try:
             message = request_retrain(settings)
         except RetrainError as exc:
-            return _dashboard_redirect(request, error=str(exc))
-        return _dashboard_redirect(request, message=message)
+            return _flash_redirect(request, _DASHBOARD_PATH, error=str(exc))
+        return _flash_redirect(request, _DASHBOARD_PATH, ok=message)
 
     @app.get("/dashboard/logout")
     def logout() -> HTMLResponse:
@@ -338,7 +335,7 @@ def create_app(
 
     @app.get("/dashboard/experiments", dependencies=[Depends(auth)])
     def experiments(request: Request):
-        context = experiment_context(settings)
+        context = experiment_context(settings, experiment_store)
         message, promote_error = parse_flash_cookie(request.cookies.get(FLASH_COOKIE))
         context["message"] = message
         context["promote_error"] = promote_error
@@ -361,10 +358,9 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        error = promote_winner(settings, variant.strip())
-        if error:
-            return _experiments_redirect(request, promote_error=_flash_error(error))
-        return _experiments_redirect(request, message="Promoted")
+        return _promotion_redirect(
+            request, promote_winner(settings, experiment_store, variant.strip()), "Promoted"
+        )
 
     @app.post("/dashboard/experiments/unpromote", dependencies=[Depends(auth)])
     def experiments_unpromote(
@@ -372,10 +368,7 @@ def create_app(
         csrf_token: str = Form("", alias=CSRF_FORM_FIELD),
     ):
         require_csrf(request, csrf_token)
-        error = clear_promotion(settings)
-        if error:
-            return _experiments_redirect(request, promote_error=_flash_error(error))
-        return _experiments_redirect(request, message="Resumed split")
+        return _promotion_redirect(request, clear_promotion(settings, experiment_store), "Resumed split")
 
     @app.get("/dashboard/config", dependencies=[Depends(auth)])
     def config_page(request: Request):
@@ -388,34 +381,6 @@ def create_app(
         return _html(request, "config.html", context, settings=settings)
 
     return app
-
-
-def _item_availability_filters(settings: Settings, *, warn_missing: bool = False) -> list[str]:
-    feature_path = Path(settings.feature_config_path)
-    if not feature_path.is_file():
-        if warn_missing:
-            logger.warning(
-                "feature config missing at %s; dashboard lookup continuing without features.toml",
-                feature_path,
-            )
-        return []
-    try:
-        return list(load_feature_config(feature_path).item_availability_filters)
-    except Exception:
-        logger.exception("Failed to load feature config for dashboard lookup")
-        return []
-
-
-def _configure_lookup_filters(
-    settings: Settings, rec_reader: RecommendationReader | None, filters: Sequence[str]
-) -> None:
-    if rec_reader is None or not hasattr(rec_reader, "configure_item_filters"):
-        return
-    configure_reader_item_filters(
-        rec_reader,
-        category_column=settings.serve.category_column,
-        availability_filters=list(filters),
-    )
 
 
 def main() -> None:
@@ -431,16 +396,16 @@ def main() -> None:
         )
 
     reader = build_manifest_reader(settings.output)
+    feature_config = load_optional_feature_config(settings)
     try:
         rec_reader = build_recommendation_reader(settings.output)
-    except Exception:
+        configure_reader_item_filters(settings, rec_reader, feature_config)
+    except STORE_OPEN_ERRORS:
         logger.exception("Recommendation store is not available; dashboard lookup will be disabled")
         rec_reader = None
-    filters = _item_availability_filters(settings, warn_missing=True)
-    _configure_lookup_filters(settings, rec_reader, filters)
     try:
-        history_reader = build_user_history_reader(settings.input)
-    except Exception:
+        history_reader = build_input_source(settings.input)
+    except STORE_OPEN_ERRORS:
         logger.exception("Event store is not available; dashboard history pane will be disabled")
         history_reader = None
     loaded_config_path = os.environ.get("CICERONE_CONFIG_PATH") or DEFAULT_CONFIG_PATH
@@ -451,10 +416,11 @@ def main() -> None:
         rec_reader,
         history_reader,
         config_path=loaded_config_path,
-        availability_filters=filters,
+        feature_config=feature_config,
     )
     uvicorn.run(app, host=settings.dashboard.host, port=settings.dashboard.port)
 
 
 if __name__ == "__main__":
+    configure_logging(None, None)
     main()

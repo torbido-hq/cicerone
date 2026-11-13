@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import Any
 
 from cicerone.events.base import (
@@ -12,6 +11,7 @@ from cicerone.events.base import (
     EventSourceHealth,
     NormalizedEvent,
 )
+from cicerone.lazy import lazy_attribute
 
 __all__ = [
     "DbEventSource",
@@ -30,24 +30,18 @@ __all__ = [
     "registered_event_source_kinds",
 ]
 
-_LAZY: dict[str, tuple[str, str]] = {
-    "DbEventSource": ("cicerone.events.db", "DbEventSource"),
-    "KafkaEventSource": ("cicerone.events.kafka", "KafkaEventSource"),
-    "RabbitMQEventSource": ("cicerone.events.rabbitmq", "RabbitMQEventSource"),
-    "RedisStreamsEventSource": ("cicerone.events.redis_streams", "RedisStreamsEventSource"),
-    "S3EventSource": ("cicerone.events.s3", "S3EventSource"),
-    "WebhookEventSource": ("cicerone.events.webhook", "WebhookEventSource"),
-    "build_event_source": ("cicerone.events.registry", "build_event_source"),
-    "register_event_source": ("cicerone.events.registry", "register_event_source"),
-    "registered_event_source_kinds": ("cicerone.events.registry", "registered_event_source_kinds"),
+_LAZY = {
+    "DbEventSource": "cicerone.events.db",
+    "KafkaEventSource": "cicerone.events.kafka",
+    "RabbitMQEventSource": "cicerone.events.rabbitmq",
+    "RedisStreamsEventSource": "cicerone.events.redis_streams",
+    "S3EventSource": "cicerone.events.s3",
+    "WebhookEventSource": "cicerone.events.webhook",
+    "build_event_source": "cicerone.events.registry",
+    "register_event_source": "cicerone.events.registry",
+    "registered_event_source_kinds": "cicerone.events.registry",
 }
 
 
 def __getattr__(name: str) -> Any:
-    spec = _LAZY.get(name)
-    if spec is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attr = spec
-    value = getattr(importlib.import_module(module_name), attr)
-    globals()[name] = value
-    return value
+    return lazy_attribute(__name__, _LAZY, name)

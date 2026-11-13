@@ -1,20 +1,39 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
+import boto3
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from moto import mock_aws
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from support.settings import make_settings
+from support.fakes import fake_monotonic
+from support.mysql_defaults import resolve_mysql_test_database_url
+from support.postgres_defaults import resolve_test_database_url
+from support.settings import sqlite_output
 from support.system_spec import SKIP_NO_TEST_DB
 
+from cicerone.config import IOSettings
 from cicerone.feature_config import FeatureColumn, FeatureConfig
 from cicerone.io import options as io_options
-from cicerone.io.engines import dispose_engines
+from cicerone.io.engines import dispose_engines, quote_identifier
+from cicerone.locks import hold as lock_hold
 
-# Re-export for existing `from conftest import make_settings` call sites.
-__all__ = ["make_settings"]
+# 0.8 pytest system specs, kept for the port to Robot (system_tests/); not run on 0.9.
+collect_ignore = [
+    "test_system_dataset.py",
+    "test_system_dataset_quality.py",
+    "test_system_db.py",
+    "test_system_db_quality.py",
+    "test_system_events.py",
+    "test_system_mixed.py",
+    "test_system_mixed_quality.py",
+]
 
 _READ_S3_PARQUET_PYARROW = io_options._read_s3_parquet_pyarrow
 
@@ -32,6 +51,43 @@ def enable_native_arrow_s3(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(io_options, "_read_s3_parquet_pyarrow", _READ_S3_PARQUET_PYARROW)
 
 
+@pytest.fixture
+def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A busy writer lock fails at once instead of after the acquire timeout."""
+    monkeypatch.setattr(lock_hold, "DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.0)
+
+
+@pytest.fixture
+def worker_without_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # EventWorker.start connects the source but runs no loop, so the test drives tick().
+    monkeypatch.setattr(
+        "cicerone.events.worker.EventWorker.start",
+        lambda self: self._source.connect(),
+    )
+
+
+@pytest.fixture
+def default_int_digit_limit() -> Iterator[None]:
+    """Pin the limit UNPARSABLE_JSON_BODIES relies on; PYTHONINTMAXSTRDIGITS can change it."""
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    yield
+    sys.set_int_max_str_digits(previous)
+
+
+@pytest.fixture
+def s3_options() -> Iterator[dict[str, str]]:
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="test-bucket")
+        yield {
+            "storage_backend": "s3",
+            "access_key_id": "test",
+            "secret_access_key": "test",
+            "bucket": "test-bucket",
+            "prefix": "recommendations/latest",
+        }
+
+
 @pytest.fixture(autouse=True)
 def _dispose_shared_engines() -> Iterator[None]:
     dispose_engines()
@@ -41,8 +97,6 @@ def _dispose_shared_engines() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def db_engine() -> Iterator[Engine]:
-    from support.postgres_defaults import resolve_test_database_url
-
     url = resolve_test_database_url()
     if not url:
         pytest.skip(SKIP_NO_TEST_DB)
@@ -60,6 +114,57 @@ def clean_schema(db_engine: Engine) -> Iterator[None]:
     reset_schema(db_engine)
     yield
     reset_schema(db_engine)
+
+
+_STORE_TABLES = ("track", "eval", "history", "experiment_state", "exposures", "model_artifact")
+
+
+def _track_output(backend: str, tmp_path: Path) -> Iterator[IOSettings]:
+    """A db output with its own store tables; skips a server that isn't configured."""
+    url = {
+        "sqlite": lambda: sqlite_output(tmp_path / "track.db").options["database_url"],
+        "postgres": resolve_test_database_url,
+        "mysql": resolve_mysql_test_database_url,
+    }[backend]()
+    if not url:
+        pytest.skip(f"{backend} test server not configured (POSTGRES_TEST_HOST / MYSQL_TEST_HOST)")
+    suffix = uuid4().hex
+    tables = {f"{name}_table": f"{name}_{suffix}" for name in _STORE_TABLES}
+    yield IOSettings(kind="db", options={"database_url": url, **tables})
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        for table in tables.values():
+            conn.execute(text(f"DROP TABLE IF EXISTS {quote_identifier(conn, table)}"))
+    engine.dispose()
+
+
+@pytest.fixture(params=["sqlite", "postgres", "mysql"])
+def track_db_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output(request.param, tmp_path)
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def non_mysql_track_output(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output(request.param, tmp_path)
+
+
+@pytest.fixture
+def mysql_track_output(tmp_path: Path) -> Iterator[IOSettings]:
+    yield from _track_output("mysql", tmp_path)
+
+
+@pytest.fixture
+def isolated_config_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset ``CICERONE_CONFIG_PATH`` and restore it after ``cli.main`` sets it."""
+    # setenv first so monkeypatch records the restore even when the variable was unset.
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "")
+    monkeypatch.delenv("CICERONE_CONFIG_PATH")
+
+
+@pytest.fixture
+def refresh_clock(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Monotonic clock for ``RefreshedValue`` TTLs; advance ``refresh_clock.now``."""
+    return fake_monotonic(monkeypatch, "cicerone.refreshed_value.time")
 
 
 @pytest.fixture

@@ -1,9 +1,10 @@
-"""Prometheus metrics for serve mode (default global registry)."""
+"""Prometheus metrics for serve, events and trigger (default global registry)."""
 
 from __future__ import annotations
 
 import logging
 import time
+from http import HTTPMethod
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -78,7 +79,11 @@ EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS = Gauge(
 )
 EVENTS_TICK_ERRORS_TOTAL = Counter(
     "cicerone_events_tick_errors_total",
-    "Unhandled exceptions in the event worker tick loop",
+    "Unhandled exceptions in the event worker tick loop, and flush failures after a committed write",
+)
+EVENTS_REPLAYED_TOTAL = Counter(
+    "cicerone_events_replayed_total",
+    "Redelivered events already applied by an earlier write, acked without applying",
 )
 EVENTS_LOCK_TOTAL = Counter(
     "cicerone_events_lock_total",
@@ -99,6 +104,11 @@ TRACK_INGEST_TOTAL = Counter(
     "POST /track ingest outcomes",
     ["kind", "status"],
 )
+SERVE_APPENDS_DROPPED_TOTAL = Counter(
+    "cicerone_serve_appends_dropped_total",
+    "Serve exposure and impression appends dropped because the append queue was full",
+    ["kind"],
+)
 UP = Gauge("cicerone_up", "Serve process liveness (always 1 while running)")
 UP.set(1)
 
@@ -110,6 +120,7 @@ _EVENTS_LOCK_STATUSES = frozenset({"acquired", "skip"})
 _EVENTS_APPLY_BUSY_REASONS = frozenset({"lock", "retrain"})
 _TRACK_KINDS = frozenset({"impression", "click", "other"})
 _TRACK_STATUSES = frozenset({"accepted", "error"})
+_HTTP_METHODS = frozenset(HTTPMethod)
 
 _SOURCE_TO_METRIC: dict[str, str] = {
     "personalized": "collaborative",
@@ -131,6 +142,13 @@ EVENTS_SOURCE_CONNECTED.set(0)
 EVENTS_SOURCE_LAG.set(-1)
 EVENTS_LAST_SUCCESS_TIMESTAMP_SECONDS.set(0)
 EVENTS_LEADER.set(0)
+
+
+def record_request(*, route_path: str | None, method: str, status: int, duration_seconds: float) -> None:
+    endpoint = route_path if route_path is not None else "unmatched"
+    label_method = method if method in _HTTP_METHODS else "other"
+    REQUESTS_TOTAL.labels(endpoint=endpoint, method=label_method, status=str(status)).inc()
+    REQUEST_LATENCY_SECONDS.labels(endpoint=endpoint).observe(duration_seconds)
 
 
 def record_cache_hit() -> None:
@@ -176,12 +194,15 @@ def record_experiment_served(experiment_id: str, variant: str) -> None:
     RECOMMENDATIONS_EXPERIMENT_TOTAL.labels(experiment_id=experiment_id, variant=variant).inc()
 
 
+def _bounded_label(what: str, value: str, allowed: frozenset[str], fallback: str) -> str:
+    if value in allowed:
+        return value
+    logger.warning("Unknown %s %r; recording as %s", what, value, fallback)
+    return fallback
+
+
 def record_events_flush(*, status: str, events: int = 0) -> None:
-    if status in _EVENTS_FLUSH_STATUSES:
-        label = status
-    else:
-        logger.warning("Unknown events flush status %r; recording as error", status)
-        label = "error"
+    label = _bounded_label("events flush status", status, _EVENTS_FLUSH_STATUSES, "error")
     EVENTS_FLUSH_TOTAL.labels(status=label).inc()
     if label == "success" and events > 0:
         EVENTS_FLUSH_EVENTS_TOTAL.inc(events)
@@ -192,11 +213,13 @@ def record_events_tick_error() -> None:
     EVENTS_TICK_ERRORS_TOTAL.inc()
 
 
+def record_events_replayed(count: int) -> None:
+    EVENTS_REPLAYED_TOTAL.inc(count)
+
+
 def record_events_lock(*, status: str) -> None:
-    if status not in _EVENTS_LOCK_STATUSES:
-        logger.warning("Unknown events lock status %r; recording as skip", status)
-        status = "skip"
-    EVENTS_LOCK_TOTAL.labels(status=status).inc()
+    label = _bounded_label("events lock status", status, _EVENTS_LOCK_STATUSES, "skip")
+    EVENTS_LOCK_TOTAL.labels(status=label).inc()
 
 
 def update_events_leader(is_leader: bool) -> None:
@@ -204,15 +227,17 @@ def update_events_leader(is_leader: bool) -> None:
 
 
 def record_events_apply_busy(*, reason: str) -> None:
-    if reason not in _EVENTS_APPLY_BUSY_REASONS:
-        logger.warning("Unknown events apply busy reason %r; recording as lock", reason)
-        reason = "lock"
-    EVENTS_APPLY_BUSY_TOTAL.labels(reason=reason).inc()
+    label = _bounded_label("events apply busy reason", reason, _EVENTS_APPLY_BUSY_REASONS, "lock")
+    EVENTS_APPLY_BUSY_TOTAL.labels(reason=label).inc()
 
 
 def update_events_source_health(*, connected: bool, lag: int | None) -> None:
     EVENTS_SOURCE_CONNECTED.set(1 if connected else 0)
     EVENTS_SOURCE_LAG.set(-1 if lag is None else max(0, int(lag)))
+
+
+def record_serve_append_dropped(kind: str) -> None:
+    SERVE_APPENDS_DROPPED_TOTAL.labels(kind=kind).inc()
 
 
 def record_track_ingest(*, kind: str, status: str, count: int = 1) -> None:

@@ -7,13 +7,14 @@ import json
 import logging
 import threading
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import bindparam, create_engine, text
 
 from cicerone.blending import LATEST_SOURCE, POPULAR_SOURCE
+from cicerone.errors import OPTIONAL_IO_ERRORS, OPTIONAL_STORE_READ_ERRORS
+from cicerone.io.blob import read_parquet_if_exists, read_storage_bytes
 from cicerone.io.db_errors import is_missing_table_error
 from cicerone.io.db_store import (
     DEFAULT_LATEST_TABLE,
@@ -22,10 +23,6 @@ from cicerone.io.db_store import (
     MISSING_TABLE_ERRORS,
 )
 from cicerone.io.options import (
-    build_s3_client,
-    is_s3_not_found,
-    object_key,
-    read_parquet,
     require_option,
     sql_identifier,
     validate_storage_options,
@@ -80,57 +77,25 @@ class EmptySurfacesReader(SurfacesReader):
 class DatasetSurfacesReader(SurfacesReader):
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = validate_storage_options(options)
+        validate_storage_options(options)
         self._lock = threading.Lock()
         self._popular = empty_surface_frame(source=POPULAR_SOURCE)
         self._latest = empty_surface_frame(source=LATEST_SOURCE)
         self._neighbors = empty_neighbors_frame()
         self._have_stamp = False
-        self._s3_client = None
         self.refresh()
-
-    def _get_s3_client(self):
-        if self._s3_client is None:
-            self._s3_client = build_s3_client(self._options)
-        return self._s3_client
 
     def _read_bytes(self, filename: str) -> bytes | None:
         try:
-            if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / filename
-                return path.read_bytes()
-            bucket = require_option(self._options, "bucket", "s3")
-            key = object_key(self._options, filename)
-            response = self._get_s3_client().get_object(Bucket=bucket, Key=key)
-            body = response["Body"]
-            try:
-                return body.read()
-            finally:
-                body.close()
-        except FileNotFoundError:
-            return None
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return None
+            return read_storage_bytes(self._options, filename)
+        except OPTIONAL_STORE_READ_ERRORS:
             logger.exception("Failed to load surface file %s", filename)
             return None
 
     def _read(self, filename: str) -> pd.DataFrame | None:
         try:
-            if self._backend == "local":
-                path = Path(require_option(self._options, "path", "local")) / filename
-                if not path.exists():
-                    return None
-            return read_parquet(
-                self._options,
-                filename,
-                s3_client=self._get_s3_client() if self._backend == "s3" else None,
-            )
-        except FileNotFoundError:
-            return None
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return None
+            return read_parquet_if_exists(self._options, filename)
+        except OPTIONAL_STORE_READ_ERRORS:
             logger.exception("Failed to load surface file %s", filename)
             return None
 
@@ -153,7 +118,7 @@ class DatasetSurfacesReader(SurfacesReader):
                 popular = pd.read_parquet(io.BytesIO(files[0][1]))
                 latest = pd.read_parquet(io.BytesIO(files[1][1]))
                 neighbors = pd.read_parquet(io.BytesIO(files[2][1]))
-            except Exception:
+            except OPTIONAL_IO_ERRORS:
                 logger.exception("Failed to parse stamped surface snapshots")
                 return
             with self._lock:

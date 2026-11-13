@@ -1,0 +1,59 @@
+"""Exception groups for optional steps, and the shared log line for caught errors."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from typing import TypeVar
+
+from botocore.exceptions import BotoCoreError, ClientError
+from pyarrow.lib import ArrowInvalid, ArrowTypeError
+from sqlalchemy.exc import SQLAlchemyError
+
+from cicerone.events.errors import RedisError
+from cicerone.io.replace_users import RecommendationSchemaError
+from cicerone.publish.base import PublishError
+
+logger = logging.getLogger(__name__)
+
+# Storage that can't be reached or written; a retry may succeed.
+STORE_UNAVAILABLE_ERRORS: tuple[type[BaseException], ...] = (OSError, SQLAlchemyError, BotoCoreError)
+# No bare TypeError: those are bugs and must fail the job. ArrowTypeError is a data/schema mismatch.
+OPTIONAL_IO_ERRORS: tuple[type[BaseException], ...] = (
+    *STORE_UNAVAILABLE_ERRORS,
+    ValueError,
+    ArrowInvalid,
+    ArrowTypeError,
+    RecommendationSchemaError,
+    RedisError,
+)
+# Optional store reads, S3 client errors (e.g. AccessDenied) included.
+OPTIONAL_STORE_READ_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, ClientError)
+# Opening an optional store: its driver extra may not be installed.
+STORE_OPEN_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_STORE_READ_ERRORS, ImportError)
+OPTIONAL_EVAL_ERRORS: tuple[type[BaseException], ...] = (ValueError, LookupError)
+PUBLISH_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError, PublishError)
+SINK_WRITE_ERRORS: tuple[type[BaseException], ...] = (*OPTIONAL_IO_ERRORS, RuntimeError)
+
+
+def log_caught(message: str, exc: BaseException, *, log: logging.Logger | None = None) -> None:
+    (log or logger).exception("%s (%s: %s)", message, type(exc).__name__, exc)
+
+
+T = TypeVar("T")
+D = TypeVar("D")
+
+
+def try_load(
+    label: str,
+    fn: Callable[[], T],
+    default: D,
+    *,
+    log: logging.Logger,
+    errors: tuple[type[BaseException], ...] = OPTIONAL_IO_ERRORS,
+) -> T | D:
+    try:
+        return fn()
+    except errors as exc:
+        log_caught(f"Failed to {label}", exc, log=log)
+        return default

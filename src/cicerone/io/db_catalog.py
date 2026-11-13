@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 from sqlalchemy import bindparam, inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
@@ -25,8 +26,8 @@ from cicerone.io.db_store import (
     DEFAULT_ITEMS_TABLE,
     DEFAULT_USERS_TABLE,
     MISSING_TABLE_ERRORS,
-    create_db_engine,
 )
+from cicerone.io.engines import create_db_engine
 from cicerone.io.options import require_option, sql_identifier
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import OCCURRED_AT_COLUMN, newest_events
@@ -123,7 +124,7 @@ class DatabaseCatalogStore:
         try:
             frame.head(0).to_sql(table, conn, if_exists="fail", index=False)
             savepoint.commit()
-        except Exception:
+        except (SQLAlchemyError, ValueError):
             savepoint.rollback()
             if not inspect(conn).has_table(table):
                 raise
@@ -136,7 +137,7 @@ class DatabaseCatalogStore:
         try:
             conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" TEXT'))
             savepoint.commit()
-        except Exception:
+        except SQLAlchemyError:
             savepoint.rollback()
             columns = self._columns(conn, table) or []
             if column not in columns:
@@ -148,7 +149,7 @@ class DatabaseCatalogStore:
         try:
             conn.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS "{index}" ON "{table}" ("{key}")'))
             savepoint.commit()
-        except Exception:
+        except SQLAlchemyError:
             savepoint.rollback()
             logger.exception("Failed to ensure unique index on %s.%s", table, key)
             return False

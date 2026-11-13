@@ -3,26 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
+from support.fakes import FakeManifest
+from support.settings import make_settings
+from support.system_spec import dashboard_users
 
 from cicerone.config import EventsSettings, IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.dashboard_config import MISSING, REDACTED, _normalize, config_display
-
-
-class _FakeReader:
-    def read_latest(self) -> dict | None:
-        return None
-
-    def read_recent(self, limit: int) -> list[dict]:
-        return []
-
-
-def _users_with(username: str, password: str) -> dict[str, str]:
-    import bcrypt
-
-    return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
 
 
 def _section(display: dict, section_id: str) -> dict:
@@ -51,7 +39,10 @@ def _secret_settings(**overrides):
         ),
         output=IOSettings(
             kind="db",
-            options={"database_url": "postgresql://user:hunter2@localhost/cicerone"},
+            options={
+                "database_url": "postgresql://user:hunter2@localhost/cicerone",
+                "item_scores_table": "item_scores",
+            },
             artifact_hmac_key="0123456789abcdef",
         ),
         events=EventsSettings(
@@ -125,6 +116,18 @@ def test_config_display_redacts_secrets_and_keeps_safe_values():
     assert "overlay cap" in display["hints"]["serve.consumed_lookback"]["text"]
 
 
+def test_config_hints_name_displayed_fields():
+    display = config_display(_secret_settings())
+    sections = {section["id"]: section["fields"] for section in display["sections"]}
+    for key in display["hints"]:
+        section_id, *path = key.split(".")
+        assert section_id in sections, key
+        fields = sections[section_id]
+        for part in path:
+            assert isinstance(fields, dict) and part in fields, key
+            fields = fields[part]
+
+
 def test_config_display_missing_feature_file(tmp_path):
     settings = make_settings(feature_config_path=str(tmp_path / "missing.toml"))
     features = _section(config_display(settings), "features")
@@ -181,19 +184,21 @@ def test_config_display_empty_model_configs_wraps_missing():
 
 
 def test_config_page_requires_auth():
-    app = create_app(make_settings(dashboard_enabled=True), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(
+        make_settings(dashboard_enabled=True), FakeManifest(None), dashboard_users("alice", "s3cret")
+    )
     response = TestClient(app).get("/dashboard/config")
     assert response.status_code == 401
 
 
 def test_config_page_renders_redacted_html(tmp_path):
-    users = _users_with("alice", "s3cret")
+    users = dashboard_users("alice", "s3cret")
     hash_value = users["alice"]
     features = tmp_path / "features.toml"
     features.write_text("[event_weights]\npurchase = 4.0\n")
     app = create_app(
         _secret_settings(top_k=25, feature_config_path=str(features)),
-        _FakeReader(),
+        FakeManifest(None),
         users,
         config_path="/app/config/cicerone.dashboard.toml",
     )
@@ -257,8 +262,8 @@ def test_config_page_unset_token_is_em_dash(tmp_path):
             dashboard_enabled=True,
             feature_config_path=str(tmp_path / "missing.toml"),
         ),
-        _FakeReader(),
-        _users_with("alice", "s3cret"),
+        FakeManifest(None),
+        dashboard_users("alice", "s3cret"),
     )
     html = TestClient(app).get("/dashboard/config", auth=("alice", "s3cret")).text
     assert "super-secret" not in html

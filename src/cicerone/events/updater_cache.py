@@ -12,7 +12,7 @@ from cicerone.events.store import (
     empty_recommendations_frame,
     load_recommendations_for_users,
 )
-from cicerone.io.recommendation_reader import USER_COLUMN
+from cicerone.io.recommendation_reader_common import group_by_user
 
 
 class UpdaterUserCache:
@@ -34,15 +34,6 @@ class UpdaterUserCache:
                 return
             self._cached_by_user.pop(victim)
 
-    def _frames_by_user(self, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
-        if frame.empty or USER_COLUMN not in frame.columns:
-            return {}
-        # One assign for str user ids; reset_index materializes each group (no extra .copy()).
-        keyed = frame.assign(**{USER_COLUMN: frame[USER_COLUMN].astype(str)})
-        return {
-            user_id: group.reset_index(drop=True) for user_id, group in keyed.groupby(USER_COLUMN, sort=False)
-        }
-
     def _evict_users(self, user_ids: Collection[str]) -> None:
         for user_id in user_ids:
             self._cached_by_user.pop(user_id, None)
@@ -51,7 +42,7 @@ class UpdaterUserCache:
         missing = sorted(user_id for user_id in user_ids if user_id not in self._cached_by_user)
         if missing:
             loaded = load_recommendations_for_users(self._output_settings, missing)
-            by_user = self._frames_by_user(loaded)
+            by_user = group_by_user(loaded)
             for user_id in missing:
                 self._cache_put(
                     user_id,
@@ -73,7 +64,7 @@ class UpdaterUserCache:
     def _store_users_in_cache(self, user_ids: set[str], merged: pd.DataFrame) -> None:
         # After a successful replace, every id in user_ids was written. Missing from
         # merged means cleared rows — store empty frames (key present = loaded).
-        by_user = self._frames_by_user(merged)
+        by_user = group_by_user(merged)
         for user_id in user_ids:
             self._cache_put(
                 user_id,

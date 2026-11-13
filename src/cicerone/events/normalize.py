@@ -11,8 +11,10 @@ from uuid import uuid4
 import pandas as pd
 
 from cicerone.events.base import NormalizedEvent
+from cicerone.option_parse import NUMBER_PARSE_ERRORS
 
 _REQUIRED = ("user_id", "item_id", "event_type", "occurred_at")
+_TEXT_FIELDS = ("user_id", "item_id", "event_type", "event_id", "idempotency_key")
 
 
 class EventNormalizeError(ValueError):
@@ -29,12 +31,15 @@ def parse_occurred_at(value: Any) -> datetime:
     # stdlib only — keep webhook ingest off the pandas path
     if isinstance(value, datetime):
         dt = value
+    elif isinstance(value, bool):
+        raise EventNormalizeError("occurred_at is invalid")
     elif isinstance(value, (int, float)):
         # Unix epoch seconds are always interpreted as UTC.
         try:
             return datetime.fromtimestamp(float(value), tz=UTC)
         except (OverflowError, OSError, ValueError) as exc:
-            raise EventNormalizeError("occurred_at is invalid") from exc
+            # NaN, infinity, or a timestamp outside the platform's datetime range.
+            raise EventNormalizeError("occurred_at is out of range") from exc
     elif isinstance(value, str):
         text = value.strip()
         if text.endswith(("Z", "z")):
@@ -45,9 +50,13 @@ def parse_occurred_at(value: Any) -> datetime:
             raise EventNormalizeError("occurred_at is invalid") from exc
     else:
         raise EventNormalizeError("occurred_at is invalid")
-    if dt.tzinfo is None:
+    if dt.tzinfo is None or dt.utcoffset() is None:
         raise EventNormalizeError("occurred_at timezone is required; use an explicit offset or 'Z'")
-    return dt.astimezone(UTC)
+    try:
+        return dt.astimezone(UTC)
+    except (OverflowError, OSError) as exc:
+        # e.g. 9999-12-31T23:59-01:00 lands past datetime.max in UTC.
+        raise EventNormalizeError("occurred_at is out of range") from exc
 
 
 def _parse_quantity(value: Any) -> int:
@@ -55,7 +64,8 @@ def _parse_quantity(value: Any) -> int:
         return 1
     try:
         quantity = int(value)
-    except (TypeError, ValueError) as exc:
+    except NUMBER_PARSE_ERRORS as exc:
+        # OverflowError: JSON ``Infinity`` / ``1e400`` parse to float inf.
         raise EventNormalizeError("quantity must be an integer") from exc
     if quantity < 1:
         raise EventNormalizeError("quantity must be >= 1")
@@ -78,8 +88,24 @@ def event_fingerprint(event: NormalizedEvent) -> str:
     return sha256(payload).hexdigest()
 
 
+def supplied_event_id(payload: Mapping[str, Any]) -> str | None:
+    for key in ("event_id", "idempotency_key"):
+        value = payload.get(key)
+        text = str(value).strip() if value else ""
+        if text:
+            return text
+    return None
+
+
+def reject_object_fields(payload: Mapping[str, Any]) -> None:
+    for key in _TEXT_FIELDS:
+        if isinstance(payload.get(key), (Mapping, list)):
+            raise EventNormalizeError(f"{key} must not be a JSON object or array")
+
+
 def normalize_event(payload: Any) -> NormalizedEvent:
     raw = _as_mapping(payload)
+    reject_object_fields(raw)
     missing = [key for key in _REQUIRED if raw.get(key) in (None, "")]
     if missing:
         raise EventNormalizeError(f"missing required field(s): {', '.join(missing)}")
@@ -90,9 +116,9 @@ def normalize_event(payload: Any) -> NormalizedEvent:
     if not user_id or not item_id or not event_type:
         raise EventNormalizeError("user_id, item_id, and event_type must be non-empty")
 
-    supplied = raw.get("event_id") or raw.get("idempotency_key")
-    generated = not supplied
-    event_id = str(supplied) if supplied else str(uuid4())
+    supplied = supplied_event_id(raw)
+    generated = supplied is None
+    event_id = supplied or str(uuid4())
     return NormalizedEvent(
         user_id=user_id,
         item_id=item_id,

@@ -4,38 +4,26 @@ import re
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
+from support.fakes import FakeManifest
+from support.settings import local_output, make_settings, sqlite_output
+from support.system_spec import dashboard_users
 
-from cicerone.config import IOSettings
 from cicerone.dashboard import ROBOTS_TAG, create_app
 from cicerone.http_security import CSRF_COOKIE
 from cicerone.track.store import TrackStore
 
 
-def _users_with(username: str, password: str) -> dict[str, str]:
-    import bcrypt
-
-    return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
-
-
-class _FakeReader:
-    def __init__(self, history: list[dict] | None = None):
-        self._history = history or []
-
-    def read_latest(self):
-        return self._history[0] if self._history else None
-
-    def read_recent(self, limit: int):
-        return self._history[:limit]
+def _manifest(history: list[dict]) -> FakeManifest:
+    return FakeManifest(history[0] if history else None, history)
 
 
 def _settings(tmp_path, **overrides):
     return make_settings(
         **{
             "dashboard_enabled": True,
-            "output": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
-            "input": IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+            "output": local_output(tmp_path),
+            "input": local_output(tmp_path),
             **overrides,
         }
     )
@@ -61,7 +49,7 @@ def _assert_quality_chrome(response) -> None:
 
 
 def test_quality_page_empty_when_track_off(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(_settings(tmp_path), FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "[track]" in response.text
@@ -70,7 +58,7 @@ def test_quality_page_empty_when_track_off(tmp_path):
 
 
 def test_quality_page_requires_auth(tmp_path):
-    app = create_app(_settings(tmp_path), _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(_settings(tmp_path), FakeManifest(None), dashboard_users("alice", "s3cret"))
     assert TestClient(app).get("/dashboard/quality").status_code == 401
 
 
@@ -107,7 +95,7 @@ def test_quality_page_shows_stored_metrics(tmp_path):
             },
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "Impressions" in response.text
@@ -138,7 +126,7 @@ def test_quality_page_live_metrics_from_track_rows(tmp_path):
             ).as_row()
         ]
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Impressions" in response.text
@@ -179,7 +167,7 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
     assert context["track_live"] is True
     assert context["track_as_of"] is None
     assert context["track_eval"]["overall"]["n_impressions"] == 1
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "Live from the track store." in response.text
@@ -368,7 +356,7 @@ def test_quality_page_shows_stored_served_eval(tmp_path):
             },
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     assert "By source" in response.text
@@ -425,7 +413,7 @@ def test_replay_metric_names_are_source_keys_only():
 
 def test_quality_eval_enabled_empty_replay_copy(tmp_path):
     settings = _settings(tmp_path, eval={"enabled": True})
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Production replay is on" in response.text
 
@@ -712,7 +700,7 @@ def test_quality_page_splits_catalog_metrics(tmp_path):
             }
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Catalog" in response.text
@@ -785,13 +773,13 @@ def test_quality_page_shows_previous_run_delta(tmp_path):
             "track_eval": previous,
         },
     ]
-    context = quality_context(settings, _FakeReader(history))
+    context = quality_context(settings, _manifest(history))
     assert context["quality_deltas"]["ctr"] == "+10.00 pp"
     assert context["quality_deltas"]["cvr_click"] == "+3.00 pp"
     assert context["quality_deltas"]["ndcg"] == "+0.1000"
     assert context["quality_deltas"]["coverage"] == "+0.0500"
     assert len(context["quality_history"]) == 2
-    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "+10.00 pp" in response.text
     assert "Recent quality" in response.text
@@ -938,7 +926,7 @@ def test_quality_context_stale_report_skips_newer_manifest(tmp_path):
             },
         },
     ]
-    context = quality_context(settings, _FakeReader(history))
+    context = quality_context(settings, _manifest(history))
     assert context["quality_deltas"]["ndcg"] == "+0.1000"
     assert context["quality_deltas"]["coverage"] == "+0.0500"
     assert context["quality_deltas"]["ctr"] == "+10.00 pp"
@@ -982,7 +970,7 @@ def test_quality_live_track_replay_delta_skips_current_manifest(tmp_path):
             "served_eval": {"metrics": {"NDCG@10": 0.3, "CatalogCoverage@10": 0.2}},
         },
     ]
-    context = quality_context(settings, _FakeReader(history))
+    context = quality_context(settings, _manifest(history))
     assert context["track_live"] is True
     assert context["quality_deltas"]["ndcg"] == "+0.1000"
     assert context["quality_deltas"]["coverage"] == "+0.0500"
@@ -1070,7 +1058,7 @@ def test_quality_page_catalog_delta_only_on_selected_cutoff(tmp_path):
             },
         },
     ]
-    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     catalog = response.text.split("Production replay catalog metrics", 1)[1]
     coverage_five = catalog.split("CatalogCoverage@5", 1)[1].split("</tr>", 1)[0]
@@ -1111,7 +1099,7 @@ def test_quality_history_single_run_footnote(tmp_path):
             "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.0}},
         }
     ]
-    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Recent quality" in response.text
     assert "Only the latest run is available" in response.text
@@ -1120,14 +1108,8 @@ def test_quality_history_single_run_footnote(tmp_path):
 def test_quality_history_single_footnote_skips_db_output(tmp_path):
     from cicerone.dashboard_quality import quality_context
 
-    db_path = tmp_path / "quality.db"
-    url = f"sqlite+pysqlite:///{db_path}"
-    settings = _settings(
-        tmp_path,
-        track={"enabled": True},
-        output=IOSettings(kind="db", options={"database_url": url}),
-        input=IOSettings(kind="db", options={"database_url": url}),
-    )
+    db_output = sqlite_output(tmp_path / "quality.db")
+    settings = _settings(tmp_path, track={"enabled": True}, output=db_output, input=db_output)
     history = [
         {
             "status": "success",
@@ -1136,10 +1118,10 @@ def test_quality_history_single_footnote_skips_db_output(tmp_path):
             "track_eval": {"overall": {"ctr": 0.1, "cvr_click": 0.0}},
         }
     ]
-    context = quality_context(settings, _FakeReader(history))
+    context = quality_context(settings, _manifest(history))
     assert len(context["quality_history"]) == 1
     assert context["quality_history_single"] is False
-    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Recent quality" in response.text
     assert "Only the latest run is available" not in response.text
@@ -1188,11 +1170,11 @@ def test_quality_history_single_ignores_filtered_manifests(tmp_path):
         "triggered_by": "cron",
         "generated_at": "2026-09-06T12:00:00+00:00",
     }
-    context = quality_context(settings, _FakeReader([evaluable, incremental, failed, empty_eval]))
+    context = quality_context(settings, _manifest([evaluable, incremental, failed, empty_eval]))
     assert context["quality_history_single"] is True
     assert len(context["quality_history"]) == 1
     app = create_app(
-        settings, _FakeReader([evaluable, incremental, failed, empty_eval]), _users_with("alice", "s3cret")
+        settings, _manifest([evaluable, incremental, failed, empty_eval]), dashboard_users("alice", "s3cret")
     )
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Recent quality" in response.text
@@ -1232,10 +1214,10 @@ def test_quality_history_single_false_when_only_filtered_manifests(tmp_path):
         "track_eval": {"overall": {"ctr": 0.3, "cvr_click": 0.0}},
     }
     for history in ([incremental], [failed]):
-        context = quality_context(settings, _FakeReader(history))
+        context = quality_context(settings, _manifest(history))
         assert context["quality_history_single"] is False
         assert context["quality_history"] == []
-        app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+        app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
         response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
         assert "Recent quality" not in response.text
         assert "Only the latest run is available" not in response.text
@@ -1281,7 +1263,7 @@ def test_rank_curve_inverted_note(tmp_path):
             }
         }
     )
-    app = create_app(settings, _FakeReader(), _users_with("alice", "s3cret"))
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     assert "Rank CTR is not weakly decreasing" in response.text
 
@@ -1404,7 +1386,7 @@ def test_quality_page_shows_diversity_metrics(tmp_path):
             "served_eval": {"metrics": {"IntraListDiversity@10": 0.3, "Serendipity@10": 0.15}},
         },
     ]
-    app = create_app(settings, _FakeReader(history), _users_with("alice", "s3cret"))
+    app = create_app(settings, _manifest(history), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/quality", auth=("alice", "s3cret"))
     _assert_quality_chrome(response)
     diversity = response.text.split("Production replay diversity metrics", 1)[1]

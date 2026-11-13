@@ -43,8 +43,9 @@ _FLASH_ERR_COOKIE = {
     "Set [dashboard].trigger_url to reach a trigger that is not on this host": (
         "err:Set%20%5Bdashboard%5D.trigger_url%20to%20reach%20a%20trigger%20that%20is%20not%20on%20this%20host"
     ),
+    "Writer lock is busy": "err:Writer%20lock%20is%20busy",
+    "Writer lock was lost": "err:Writer%20lock%20was%20lost",
 }
-FLASH_OK = frozenset(_FLASH_OK_COOKIE)
 FLASH_ERR = frozenset(_FLASH_ERR_COOKIE)
 
 _SECURITY_HEADERS = {

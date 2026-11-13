@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
-from test_serve import _FakeReader, _recs_df, _settings
+from support.fakes import FakeReader
+from support.serve import recs_df, serve_settings
 
 from cicerone.config import EventsSettings
 from cicerone.events.consumed import ConsumedOverlay
@@ -11,7 +12,7 @@ from cicerone.serve import create_app
 
 
 def test_catalog_routes_without_store_are_not_implemented():
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=None)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=None)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     missing = client.get("/users/u1", headers=headers)
@@ -22,7 +23,7 @@ def test_catalog_routes_without_store_are_not_implemented():
 
 def test_dataset_catalog_crud_round_trip(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
 
@@ -62,7 +63,7 @@ def test_dataset_catalog_crud_round_trip(tmp_path):
 
 def test_catalog_events_reject_blank_ids(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store)
     response = TestClient(app).post(
         "/catalog/events",
         json={
@@ -82,7 +83,7 @@ def test_catalog_events_reject_blank_ids(tmp_path):
 
 def test_catalog_events_reject_overflow_occurred_at(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+    response = TestClient(create_app(serve_settings(), FakeReader(recs_df()), catalog=store)).post(
         "/catalog/events",
         json={
             "events": [
@@ -102,7 +103,7 @@ def test_catalog_events_reject_overflow_occurred_at(tmp_path):
 def test_catalog_events_update_consumed_overlay(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     overlay = ConsumedOverlay()
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store, consumed=overlay)
     response = TestClient(app).post(
         "/catalog/events",
         json={
@@ -124,7 +125,7 @@ def test_catalog_events_update_consumed_overlay(tmp_path):
 
 def test_catalog_events_reject_oversized_batch(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+    response = TestClient(create_app(serve_settings(), FakeReader(recs_df()), catalog=store)).post(
         "/catalog/events",
         json={
             "events": [
@@ -144,7 +145,7 @@ def test_catalog_events_reject_oversized_batch(tmp_path):
 
 def test_catalog_events_reject_blank_event_type(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).post(
+    response = TestClient(create_app(serve_settings(), FakeReader(recs_df()), catalog=store)).post(
         "/catalog/events",
         json={
             "events": [
@@ -163,7 +164,7 @@ def test_catalog_events_reject_blank_event_type(tmp_path):
 
 def test_catalog_put_rejects_invalid_sql_column():
     store = DatabaseCatalogStore({"database_url": "sqlite+pysqlite://"})
-    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).put(
+    response = TestClient(create_app(serve_settings(), FakeReader(recs_df()), catalog=store)).put(
         "/users/u1",
         json={"bad-name": "x"},
         headers={"Authorization": "Bearer secret"},
@@ -173,7 +174,7 @@ def test_catalog_put_rejects_invalid_sql_column():
 
 def test_catalog_put_rejects_whitespace_path_ids(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    response = TestClient(create_app(_settings(), _FakeReader(_recs_df()), catalog=store)).put(
+    response = TestClient(create_app(serve_settings(), FakeReader(recs_df()), catalog=store)).put(
         "/users/%20",
         json={"comment": "alice"},
         headers={"Authorization": "Bearer secret"},
@@ -184,8 +185,8 @@ def test_catalog_put_rejects_whitespace_path_ids(tmp_path):
 def test_catalog_events_reject_oversized_body(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     app = create_app(
-        _settings(events=EventsSettings(options={"max_body_bytes": 64})),
-        _FakeReader(_recs_df()),
+        serve_settings(events=EventsSettings(options={"max_body_bytes": 64})),
+        FakeReader(recs_df()),
         catalog=store,
     )
     response = TestClient(app).post(
@@ -199,7 +200,7 @@ def test_catalog_events_reject_oversized_body(tmp_path):
 def test_catalog_events_replace_overlay_item_for_same_event_id(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     overlay = ConsumedOverlay()
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store, consumed=overlay)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     first = {
@@ -220,7 +221,7 @@ def test_catalog_events_replace_overlay_item_for_same_event_id(tmp_path):
 def test_catalog_events_keep_hidden_item_when_sibling_event_still_consumes_it(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     overlay = ConsumedOverlay()
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store, consumed=overlay)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     first = {
@@ -253,7 +254,7 @@ def test_catalog_delete_clears_consumed_overlay(tmp_path):
     overlay = ConsumedOverlay()
     overlay.add("u1", "i9")
     overlay.add("u1", "i2")
-    app = create_app(_settings(), _FakeReader(_recs_df()), catalog=store, consumed=overlay)
+    app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store, consumed=overlay)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     client.delete("/catalog/events/u1?item_id=i9", headers=headers)

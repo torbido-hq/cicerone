@@ -10,8 +10,8 @@ from typing import Any
 
 from cicerone import __version__
 from cicerone.config import Settings
+from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught
 from cicerone.feature_config import load_feature_config
-from cicerone.job_eval import OPTIONAL_IO_ERRORS, log_caught
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,6 @@ HINTS: dict[str, dict[str, str]] = {
         "text": "Write one impression row per returned GET item. Not a browser render.",
         "docs": f"{_DOCS}/evaluation/#auto-impressions",
     },
-    "serve.enabled": {"text": "Whether this config starts the serve API."},
     "serve.auth_token": {"text": "Bearer token for GET /recommendations. Shown redacted."},
     "serve.default_k": {"text": "Default number of rows when the client omits limit."},
     "serve.exclude_consumed": {
@@ -170,7 +169,7 @@ HINTS: dict[str, dict[str, str]] = {
     },
     "dashboard.enabled": {"text": "Whether this config starts the dashboard process."},
     "dashboard.users_path": {"text": "TOML of dashboard usernames to bcrypt hashes."},
-    "dashboard.lookup_k": {"text": "Max recommendation rows shown in Inspect user."},
+    "dashboard.lookup_k": {"text": "Deprecated, no effect: Inspect user shows serve.default_k rows."},
     "dashboard.lookup_events": {"text": "Max recent input events shown in Inspect user."},
     "events": {
         "text": "Incremental ingest between full retrains, plus optional online LightFM.",

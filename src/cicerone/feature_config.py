@@ -8,6 +8,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from cicerone.config.validation import (
+    float_field,
+    int_field,
+    require_finite,
+    require_positive_float,
+    require_positive_int,
+)
+
 DEFAULT_CONFIG_PATH = Path("/app/config/features.toml")
 
 ELIGIBILITY_OPS = frozenset({"item_true", "eq", "user_in_item_list", "item_in_user_list"})
@@ -84,13 +92,6 @@ class FeatureConfig:
     merge_item_availability: bool = True
 
 
-def _parse_boost_overfetch_factor(raw: Any) -> int:
-    factor = DEFAULT_BOOST_OVERFETCH_FACTOR if raw is None else int(raw)
-    if factor < 1:
-        raise ValueError(f"boost_overfetch_factor must be >= 1, got {factor}")
-    return factor
-
-
 def parse_eligibility_rules(raw_rules: Sequence[Mapping[str, Any]]) -> list[EligibilityRule]:
     rules: list[EligibilityRule] = []
     for raw in raw_rules:
@@ -135,7 +136,10 @@ def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule
         value_factors_raw = raw.get("value_factors") or {}
         if not isinstance(value_factors_raw, dict):
             raise ValueError(f"Boost rule {name!r} value_factors must be a table/dict")
-        value_factors = {str(k): float(v) for k, v in value_factors_raw.items()}
+        value_factors = {
+            str(k): require_finite(float(v), name=f"Boost rule {name!r} value_factors[{k}]")
+            for k, v in value_factors_raw.items()
+        }
         if kind == "value_map" and not value_factors:
             raise ValueError(f"Boost rule {name!r} with kind 'value_map' requires value_factors")
         if kind == "boolean" and "factor" not in raw:
@@ -147,9 +151,9 @@ def parse_boost_rules(raw_boosts: Sequence[Mapping[str, Any]]) -> list[BoostRule
                 name=name,
                 kind=cast(BoostKind, kind),
                 item_column=item_column,
-                factor=float(raw.get("factor", 1.0)),
+                factor=require_finite(float(raw.get("factor", 1.0)), name=f"Boost rule {name!r} factor"),
                 value_factors=value_factors,
-                weight=float(raw.get("weight", 0.0)),
+                weight=require_finite(float(raw.get("weight", 0.0)), name=f"Boost rule {name!r} weight"),
             )
         )
     return boosts
@@ -161,33 +165,31 @@ def _parse_blending(raw: dict[str, Any] | None) -> BlendingConfig:
     curve = str(raw.get("curve", "sigmoid"))
     if curve not in BLENDING_CURVES:
         raise ValueError(f"Unknown blending curve {curve!r}; available: {sorted(BLENDING_CURVES)}")
-    popular_share = float(raw.get("popular_share", DEFAULT_BLENDING_POPULAR_SHARE))
+    popular_share = float_field(raw, "blending.popular_share", DEFAULT_BLENDING_POPULAR_SHARE, require_finite)
     if popular_share < 0 or popular_share > 1:
         raise ValueError(f"blending.popular_share must be in [0, 1], got {popular_share}")
-    steepness = float(raw.get("steepness", DEFAULT_BLENDING_STEEPNESS))
-    if steepness <= 0:
-        raise ValueError(f"blending.steepness must be > 0, got {steepness}")
-    saturate_at = float(raw.get("saturate_at", DEFAULT_BLENDING_SATURATE_AT))
-    if saturate_at <= 0:
-        raise ValueError(f"blending.saturate_at must be > 0, got {saturate_at}")
-    rrf_k = float(raw.get("rrf_k", DEFAULT_BLENDING_RRF_K))
-    if rrf_k <= 0:
-        raise ValueError(f"blending.rrf_k must be > 0, got {rrf_k}")
-    date_columns_raw = raw.get("latest_date_columns", list(DEFAULT_LATEST_DATE_COLUMNS))
-    if isinstance(date_columns_raw, str):
-        date_columns: tuple[str, ...] = (date_columns_raw,)
-    else:
-        date_columns = tuple(str(c) for c in date_columns_raw)
+    steepness = float_field(raw, "blending.steepness", DEFAULT_BLENDING_STEEPNESS, require_positive_float)
+    saturate_at = float_field(
+        raw, "blending.saturate_at", DEFAULT_BLENDING_SATURATE_AT, require_positive_float
+    )
+    rrf_k = float_field(raw, "blending.rrf_k", DEFAULT_BLENDING_RRF_K, require_positive_float)
+    date_columns = parse_latest_date_columns(raw.get("latest_date_columns", DEFAULT_LATEST_DATE_COLUMNS))
     return BlendingConfig(
         enabled=bool(raw.get("enabled", False)),
         curve=cast(BlendingCurve, curve),
-        midpoint=float(raw.get("midpoint", DEFAULT_BLENDING_MIDPOINT)),
+        midpoint=float_field(raw, "blending.midpoint", DEFAULT_BLENDING_MIDPOINT, require_finite),
         steepness=steepness,
         saturate_at=saturate_at,
         popular_share=popular_share,
         latest_date_columns=date_columns,
         rrf_k=rrf_k,
     )
+
+
+def parse_latest_date_columns(raw: str | Sequence[object]) -> tuple[str, ...]:
+    if isinstance(raw, str):
+        return (raw,)
+    return tuple(str(column) for column in raw)
 
 
 def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
@@ -209,7 +211,10 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         return columns
 
     return FeatureConfig(
-        event_weights={k: float(v) for k, v in raw.get("event_weights", {}).items()},
+        event_weights={
+            k: require_finite(float(v), name=f"event_weights.{k}")
+            for k, v in raw.get("event_weights", {}).items()
+        },
         quantity_scaled_events=set(raw.get("quantity_scaled_events", [])),
         event_caps={k: int(v) for k, v in raw.get("event_caps", {}).items()},
         user_features=_columns("user_features"),
@@ -217,7 +222,9 @@ def load_feature_config(path: Path | str | None = None) -> FeatureConfig:
         item_availability_filters=list(raw.get("item_availability_filters", [])),
         eligibility=parse_eligibility_rules(list(raw.get("eligibility", []))),
         boosts=parse_boost_rules(_raw_boost_rules(raw)),
-        boost_overfetch_factor=_parse_boost_overfetch_factor(raw.get("boost_overfetch_factor")),
+        boost_overfetch_factor=int_field(
+            raw, "boost_overfetch_factor", DEFAULT_BOOST_OVERFETCH_FACTOR, require_positive_int
+        ),
         blending=_parse_blending(raw.get("blending")),
     )
 

@@ -6,7 +6,8 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from test_serve import _FakeReader, _feature_config, _items_df, _recs_df, _settings
+from support.fakes import FakeReader
+from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.io.db_store import DatabaseInputSource
@@ -98,9 +99,9 @@ def test_consumed_item_ids_for_users_unions_history_and_overlay():
 def test_recommendations_hide_consumed_from_history():
     history = _History(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         history_reader=history,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
@@ -111,7 +112,7 @@ def test_recommendations_batch_uses_bulk_history():
     history = _CountingHistory(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     recs = pd.concat(
         [
-            _recs_df(),
+            recs_df(),
             pd.DataFrame(
                 [{"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.8, "source": "personalized"}]
             ),
@@ -119,9 +120,9 @@ def test_recommendations_batch_uses_bulk_history():
         ignore_index=True,
     )
     app = create_app(
-        _settings(),
-        _FakeReader(recs, _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs, items_df()),
+        feature_config=serve_feature_config(),
         history_reader=history,
     )
     client = TestClient(app)
@@ -148,9 +149,9 @@ def test_recommendations_hide_consumed_from_memory_sqlite_history():
         )
         conn.execute(text("INSERT INTO events VALUES ('u1', 'i1', 'view', 1, '2026-08-21')"))
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         history_reader=source,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
@@ -208,9 +209,9 @@ def test_recommendations_hide_consumed_from_overlay():
     overlay = ConsumedOverlay()
     overlay.add("u1", "i2")
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         consumed=overlay,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()
@@ -220,9 +221,9 @@ def test_recommendations_hide_consumed_from_overlay():
 def test_recommendations_exclude_consumed_query_false_keeps_history_items():
     history = _History(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     app = create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        feature_config=serve_feature_config(),
         history_reader=history,
     )
     body = (
@@ -240,7 +241,7 @@ def test_consumed_item_ids_for_users_isolates_single_user_errors():
     class _Partial(_History):
         def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
             if user_id == "u2":
-                raise RuntimeError("unavailable")
+                raise OSError("unavailable")
             return super().get_events_for_user(user_id, limit)
 
     history = _Partial(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}]))
@@ -300,7 +301,7 @@ def test_consumed_item_ids_for_users_bulk_error_falls_back_per_user():
         def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
             self.bulk += 1
             del user_ids, limit
-            raise RuntimeError("bulk down")
+            raise OSError("bulk down")
 
     history = _BoomBulk(
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
@@ -342,7 +343,7 @@ def test_consumed_item_ids_history_error_keeps_overlay():
     class _Boom:
         def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
             del user_id, limit
-            raise RuntimeError("unavailable")
+            raise OSError("unavailable")
 
         def get_user(self, user_id: str):
             del user_id
@@ -367,9 +368,9 @@ def test_recommendations_category_only_does_not_fill():
         ]
     )
     app = create_app(
-        _settings(),
-        _FakeReader(recs, _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs, items_df()),
+        feature_config=serve_feature_config(),
     )
     body = (
         TestClient(app)
@@ -397,9 +398,9 @@ def test_recommendations_fill_after_hide():
     )
     history = _History(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     app = create_app(
-        _settings(),
-        _FakeReader(recs, _items_df()),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs, items_df()),
+        feature_config=serve_feature_config(),
         history_reader=history,
     )
     body = TestClient(app).get("/recommendations/u1", headers={"Authorization": "Bearer secret"}).json()

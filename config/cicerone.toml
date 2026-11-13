@@ -35,8 +35,8 @@ feature_config_path = "/app/config/features.toml"
 # zero-interaction items; also gated by [job.content_fallback].enabled),
 # "popular" (global popularity fallback), "popular_in_category" (diversity mix
 # by an item category feature), "latest" (trending in the last two weeks),
-# "random" (sanity baseline). Sequential, ease, als, popular_in_category, and
-# random are opt-in (not in the default models list). Sequences
+# "random" (sanity baseline). The default models list is collaborative,
+# item_based, popular; every other name is opt-in. Sequences
 # are unique items ordered by last interaction (see README).
 # models = ["collaborative", "item_based", "popular", "latest"]
 
@@ -237,12 +237,13 @@ feature_config_path = "/app/config/features.toml"
 kind = "dataset"
 
 [input.options]
-storage_backend = "s3" # "s3" | "local"
+storage_backend = "s3" # "s3" | "local" (default "local")
 endpoint_url = "${INPUT_S3_ENDPOINT_URL}"
 access_key_id = "${INPUT_S3_ACCESS_KEY_ID}"
 secret_access_key = "${INPUT_S3_SECRET_ACCESS_KEY}"
 bucket = "${INPUT_S3_BUCKET}"
 prefix = "datasets/latest"
+# region = "auto" # S3 region (default "auto")
 # storage_backend = "local" instead uses a single "path" option, e.g.:
 # storage_backend = "local"
 # path = "/data/input"
@@ -274,6 +275,9 @@ prefix = "recommendations/latest"
 # default_k = 10 # used when a request doesn't specify ?limit= / ?k=
 # refresh_interval_seconds = 60
 # category_column = "category" # items column used by ?category= filter
+# metrics_enabled = false # GET /metrics; needs metrics_token (sent as X-Metrics-Token)
+# metrics_token = "${METRICS_TOKEN}"
+# log_impressions = false # needs [track]; records returned GET items
 
 # Optional: ingest interaction events on the serve process for micro-batch
 # incremental updates between full retrains (write-through to [output]).
@@ -344,7 +348,7 @@ prefix = "recommendations/latest"
 # consumer_group = "cicerone"
 # # consumer_name = "serve-1"       # default: hostname
 # # group_start_id = "0-0"
-# # block_ms = 0
+# # block_ms = 1000              # unset = non-blocking; 0 = wait forever
 # # claim_idle_ms = 300000
 
 # Kafka consumer group. Requires: pip install 'cicerone-recommender[kafka]'
@@ -402,7 +406,7 @@ prefix = "recommendations/latest"
 # users_path = "/app/config/dashboard_users.toml"
 # refresh_interval_seconds = 30 # how often the page polls /partials/status
 # history_limit = 20 # recent runs shown (only meaningful for [output].kind = "db")
-# lookup_k = 20 # inspector recommendation rows (capped at job.top_k)
+# lookup_k: deprecated, no effect (removed in 0.9.0); Inspect user shows [serve].default_k rows
 # lookup_events = 20 # inspector event rows (from [input], newest first)
 # lookup_user_attrs = ["region_slug"] # allowlisted user columns; default none
 
@@ -411,7 +415,7 @@ prefix = "recommendations/latest"
 # [experiment]
 # enabled = true
 # id = "rrf-vs-blend-2026-08"
-# primary_metric = "purchase"  # event_type, or "weighted"
+# primary_metric = "purchase"  # event_type, "weighted", "ctr", or "conversion"
 # # allocation = "fixed"       # or "thompson" (needs pip install 'cicerone-recommender[bandits]')
 # # explore_traffic = 0.5      # challenger share when allocation = thompson
 # # rotate_min_prob = 0.9      # P(champion is best) before a new challenger
@@ -473,4 +477,5 @@ prefix = "recommendations/latest"
 # manifest_table = "recommendation_runs"
 # model_artifact_table = "model_artifacts"  # used when [job].save_model_artifact = true
 # item_scores_table = "item_scores"  # catalog popular/latest for search indexers
+# applied_events_table = "incremental_applied_events"  # incremental event keys already applied
 

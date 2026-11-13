@@ -191,7 +191,11 @@ def test_weighted_interactions_caps_keep_most_recent(feature_config):
 def test_explode_features_categorical_column():
     df = pd.DataFrame([{"item_id": "i1", "category": "beer"}, {"item_id": "i2", "category": None}])
     result = _explode_features(
-        df, "item_id", Columns.Item, [FeatureColumn(column="category", type="categorical")]
+        df,
+        "item_id",
+        Columns.Item,
+        [FeatureColumn(column="category", type="categorical")],
+        table="item_features",
     )
 
     assert list(result[Columns.Item]) == ["i1"]
@@ -202,7 +206,11 @@ def test_explode_features_categorical_column():
 def test_explode_features_list_column_produces_one_row_per_value():
     df = pd.DataFrame([{"user_id": "u1", "favorite_styles": ["ipa", "stout"]}])
     result = _explode_features(
-        df, "user_id", Columns.User, [FeatureColumn(column="favorite_styles", type="list")]
+        df,
+        "user_id",
+        Columns.User,
+        [FeatureColumn(column="favorite_styles", type="list")],
+        table="user_features",
     )
 
     assert sorted(result["value"]) == ["ipa", "stout"]
@@ -210,10 +218,16 @@ def test_explode_features_list_column_produces_one_row_per_value():
 
 def test_explode_features_missing_column_is_skipped(caplog):
     df = pd.DataFrame([{"item_id": "i1"}])
-    result = _explode_features(
-        df, "item_id", Columns.Item, [FeatureColumn(column="does_not_exist", type="categorical")]
-    )
+    with caplog.at_level("WARNING"):
+        result = _explode_features(
+            df,
+            "item_id",
+            Columns.Item,
+            [FeatureColumn(column="does_not_exist", type="categorical")],
+            table="item_features",
+        )
     assert result.empty
+    assert "Configured item_features column 'does_not_exist' not found" in caplog.text
 
 
 def test_normalize_feature_df_requires_feature_column():

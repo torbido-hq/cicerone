@@ -242,14 +242,10 @@ def test_dumps_artifact_rejects_short_hmac_key(feature_config, sample_events, sa
         dumps_artifact(artifact, hmac_key="short")
 
 
-def test_loads_artifact_rejects_nonpositive_max_bytes():
-    with pytest.raises(ValueError, match="max_bytes"):
-        loads_artifact(b"x", max_bytes=0)
-
-
-def test_loads_artifact_rejects_oversize_payload():
+def test_loads_artifact_rejects_oversize_payload(monkeypatch):
+    monkeypatch.setattr("cicerone.artifact.DEFAULT_MAX_ARTIFACT_BYTES", 8)
     with pytest.raises(ValueError, match="exceeds"):
-        loads_artifact(b"PK\x03\x04" + b"x" * 20, max_bytes=8)
+        loads_artifact(b"PK\x03\x04" + b"x" * 20)
 
 
 def test_load_artifact_rejects_oversize_file(tmp_path, monkeypatch):
@@ -274,16 +270,10 @@ def test_load_artifact_rejects_oversize_file(tmp_path, monkeypatch):
         return handle
 
     monkeypatch.setattr(Path, "open", _open)
+    monkeypatch.setattr("cicerone.artifact.DEFAULT_MAX_ARTIFACT_BYTES", 8)
     with pytest.raises(ValueError, match="exceeds"):
-        load_artifact(path, max_bytes=8)
+        load_artifact(path)
     assert reads == [9]
-
-
-def test_load_artifact_rejects_nonpositive_max_bytes(tmp_path):
-    path = tmp_path / "model.artifact"
-    path.write_bytes(b"x")
-    with pytest.raises(ValueError, match="max_bytes"):
-        load_artifact(path, max_bytes=0)
 
 
 def test_loads_artifact_rejects_oversize_hmac_member():
@@ -296,10 +286,10 @@ def test_loads_artifact_rejects_oversize_hmac_member():
         dest.writestr("bundle.pkl", b"x")
         dest.writestr("hmac.sha256", b"x" * 200)
     with pytest.raises(ValueError, match="HMAC member"):
-        loads_artifact(out.getvalue(), hmac_key="0123456789abcdef", max_bytes=1024)
+        loads_artifact(out.getvalue(), hmac_key="0123456789abcdef")
 
 
-def test_loads_artifact_rejects_oversize_uncompressed_member():
+def test_loads_artifact_rejects_oversize_uncompressed_member(monkeypatch):
     import io
     import zipfile
 
@@ -309,8 +299,9 @@ def test_loads_artifact_rejects_oversize_uncompressed_member():
         dest.writestr("bundle.pkl", b"x" * 50_000)
     payload = out.getvalue()
     assert len(payload) < 500
+    monkeypatch.setattr("cicerone.artifact.DEFAULT_MAX_ARTIFACT_BYTES", 500)
     with pytest.raises(ValueError, match="exceeds"):
-        loads_artifact(payload, max_bytes=500)
+        loads_artifact(payload)
 
 
 def test_fit_strategies_populates_cache(feature_config, sample_events, sample_users, sample_items):

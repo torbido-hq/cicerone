@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import replace
+
 import pandas as pd
 import pytest
-from support.events import event_payload
+from support.events import dataset_updater, event_payload
+from support.fakes import FakeLock, patch_module_ref, raising
 from support.prometheus_metrics import registry_metric_value
+from support.settings import local_output
+from support.waits import WAIT_SECONDS, call_in_thread, wait_until
 
-from cicerone.config import ConfigError, EventsSettings, IOSettings, make_settings
-from cicerone.events.base import EventSourceError, EventSourceHealth
+from cicerone.config import ConfigError, EventsSettings, make_settings
+from cicerone.events.base import EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.errors import EVENT_APPLY_ERRORS
 from cicerone.events.normalize import event_fingerprint, normalize_event
+from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.events.worker_heartbeat import HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
+from cicerone.locks import LockLostError, WriterLockBusyError
+from cicerone.metrics import update_events_leader, update_events_source_health
 
 
 def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
@@ -24,7 +34,7 @@ def test_event_worker_tick(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
         events=EventsSettings(enabled=True, kind="webhook"),
     )
@@ -49,7 +59,7 @@ def test_event_worker_records_flush_metrics(tmp_path, feature_config: FeatureCon
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -79,7 +89,7 @@ def test_event_worker_busy_nacks(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -103,7 +113,7 @@ def test_event_worker_apply_failure_nacks(tmp_path, feature_config: FeatureConfi
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -136,7 +146,7 @@ def test_event_worker_apply_unexpected_nacks_and_raises(tmp_path, feature_config
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -166,7 +176,7 @@ def test_event_worker_apply_runtime_error_nacks_and_raises(tmp_path, feature_con
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -196,7 +206,7 @@ def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_conf
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -224,7 +234,7 @@ def test_event_worker_apply_config_error_nacks_and_raises(tmp_path, feature_conf
 
 def test_event_worker_health_unexpected_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -248,7 +258,7 @@ def test_event_worker_health_unexpected_raises(tmp_path, feature_config: Feature
 
 def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -272,7 +282,7 @@ def test_event_worker_health_runtime_error_raises(tmp_path, feature_config: Feat
 
 def test_event_worker_health_value_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -296,7 +306,7 @@ def test_event_worker_health_value_error_raises(tmp_path, feature_config: Featur
 
 def test_event_worker_health_type_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -320,7 +330,7 @@ def test_event_worker_health_type_error_raises(tmp_path, feature_config: Feature
 
 def test_event_worker_health_config_error_raises(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
 
@@ -343,10 +353,8 @@ def test_event_worker_health_config_error_raises(tmp_path, feature_config: Featu
 
 
 def test_event_worker_loop_survives_source_error(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     polls = {"n": 0}
@@ -370,9 +378,7 @@ def test_event_worker_loop_survives_source_error(tmp_path, feature_config: Featu
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and polls["n"] < 2:
-        time.sleep(0.01)
+    assert wait_until(lambda: polls["n"] >= 2)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert polls["n"] >= 2
@@ -386,7 +392,7 @@ def test_event_worker_persist_unexpected_raises(tmp_path, feature_config: Featur
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -426,7 +432,7 @@ def test_event_worker_persist_config_error_aborts_and_raises(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -467,7 +473,7 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -491,10 +497,8 @@ def test_event_worker_persist_writer_lock_busy_is_dropped(
 
 
 def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     connects = {"n": 0}
@@ -523,9 +527,7 @@ def test_event_worker_loop_survives_unreachable_reconnect(tmp_path, feature_conf
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 3:
-        time.sleep(0.01)
+    assert wait_until(lambda: connects["n"] >= 3)
     thread = worker._thread
     assert thread is not None and thread.is_alive()
     assert connects["n"] >= 3
@@ -536,7 +538,7 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
     out = tmp_path / "out"
     out.mkdir()
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -566,7 +568,7 @@ def test_event_worker_partial_apply_nacks(tmp_path, feature_config: FeatureConfi
 
 def test_event_worker_tick_noop_when_empty(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     worker = EventWorker(
         WebhookEventSource({}),
@@ -585,7 +587,7 @@ def test_event_worker_stop_closes_source_when_drain_raises_unexpected(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
         top_k=3,
     )
     closed = {"n": 0}
@@ -622,7 +624,7 @@ def test_event_worker_stop_returns_false_when_join_times_out(tmp_path, feature_c
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -662,7 +664,7 @@ def test_event_worker_stop_closes_on_join_timeout_when_idle(tmp_path, feature_co
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -697,7 +699,7 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -737,10 +739,9 @@ def test_event_worker_stop_skips_close_during_apply_ack(tmp_path, feature_config
 
 def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     poll_started = threading.Event()
     poll_release = threading.Event()
@@ -773,9 +774,7 @@ def test_event_worker_stop_skips_close_during_poll(tmp_path, feature_config: Fea
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     poll_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "poll-start" in order
     assert "close" in order
     assert order.index("poll-start") < order.index("close")
@@ -785,7 +784,7 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     poll_started = threading.Event()
     poll_release = threading.Event()
@@ -829,7 +828,6 @@ def test_event_worker_stop_skips_close_during_never_started_tick(tmp_path, featu
 
 def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -837,7 +835,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     ack_started = threading.Event()
@@ -874,9 +872,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     ack_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "ack-done" in order
     assert "close" in order
     assert order.index("ack-done") < order.index("close")
@@ -884,7 +880,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
 
 def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     order: list[str] = []
     nacked: list[str] = []
@@ -921,9 +917,11 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
     assert order == ["connect", "connect", "nack"]
 
 
-def test_event_worker_reconnect_keeps_retry_acks_until_live_delivery(tmp_path, feature_config: FeatureConfig):
+def test_event_worker_reconnect_acks_redelivery_of_a_dropped_retry_ack(
+    tmp_path, feature_config: FeatureConfig
+):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     nacked: list[str] = []
 
@@ -951,16 +949,18 @@ def test_event_worker_reconnect_keeps_retry_acks_until_live_delivery(tmp_path, f
     assert nacked == []
     assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
     worker._flush_retry_acks()
-    assert [item.event_id for item in worker._retry_acks] == ["retry-live"]
-    source.ingest(event_payload(event_id="retry-live", item_id="i9"))
-    assert [item.event_id for item in source.poll(1)] == ["retry-live"]
-    worker._flush_retry_acks()
     assert worker._retry_acks == []
+    source.ingest(event_payload(event_id="retry-live", item_id="i9"))
+    worker._poll_into_buffer()
+    assert worker._buffer.flush() == []
+    assert source.ack(["retry-live"]) == ()
+    assert nacked == []
+    assert source.health().lag == 0
 
 
 def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _NackBoom(WebhookEventSource):
@@ -990,7 +990,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _UnexpectedNack(WebhookEventSource):
@@ -1021,7 +1021,7 @@ def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
 
 def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _SilentNack(WebhookEventSource):
@@ -1056,7 +1056,7 @@ def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature
 
 def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
 
@@ -1088,7 +1088,7 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
 
 def test_event_worker_flush_restores_rejected_nack(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _RejectNack(WebhookEventSource):
@@ -1123,7 +1123,7 @@ def test_event_worker_reconnect_holds_tick_guard(tmp_path, feature_config: Featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1168,7 +1168,7 @@ def test_event_worker_start_health_holds_tick_guard(tmp_path, feature_config: Fe
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1209,7 +1209,7 @@ def test_event_worker_remembers_numeric_event_id_after_ack_timeout(tmp_path, fea
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -1268,7 +1268,7 @@ def test_event_worker_ack_timeout_persists_without_nack(tmp_path, feature_config
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     nacked: list[str] = []
@@ -1306,7 +1306,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -1363,7 +1363,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
 
 def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="already-1", item_id="idone"))
     acked: list[str] = []
@@ -1404,11 +1404,56 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
     assert acked == ["already-1", "already-1"]
 
 
+def test_event_worker_drops_unconfirmed_acks(tmp_path, feature_config: FeatureConfig):
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(
+        WebhookEventSource({}), MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater
+    )
+    gone = [normalize_event(event_payload(event_id=f"gone-{n}")) for n in range(3)]
+    worker._ack_unbuffered(gone)
+    assert worker._retry_acks == []
+
+
+def test_event_worker_retries_failed_acks_until_success_but_not_unconfirmed_acks(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    monkeypatch.setattr("cicerone.events.worker._APPLIED_EVENT_ID_CAP", 1)
+    acked: list[list[str]] = []
+
+    class _AckDownTwice(WebhookEventSource):
+        failures = 2
+
+        def ack(self, event_ids):  # type: ignore[no-untyped-def,override]
+            acked.append(list(event_ids))
+            if self.failures:
+                self.failures -= 1
+                raise OSError("ack down")
+            return super().ack(event_ids)
+
+    source = _AckDownTwice({})
+    source.connect()
+    source.ingest(event_payload(event_id="held"))
+    held = list(source.poll(1))
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0), updater)
+    gone = normalize_event(event_payload(event_id="gone"))
+
+    with pytest.raises(OSError, match="ack down"):
+        worker._ack_unbuffered([*held, gone])
+    with pytest.raises(OSError, match="ack down"):
+        worker._flush_retry_acks()
+    assert [event.event_id for event in worker._retry_acks] == ["held", "gone"]
+    worker._flush_retry_acks()
+    assert worker._retry_acks == []
+    worker._flush_retry_acks()
+    assert acked == [["held", "gone"]] * 3
+
+
 def test_event_worker_preserves_retry_acks_on_unexpected_ack_errors(
     tmp_path, feature_config: FeatureConfig, monkeypatch
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="unexpected-ack"))
     worker = EventWorker(
@@ -1451,7 +1496,7 @@ def test_event_worker_flush_preserves_retry_acks_on_unexpected_ack(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -1486,7 +1531,7 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -1521,6 +1566,52 @@ def test_event_worker_flush_persists_when_deferred_ack_is_unexpected(
     assert persisted["n"] == 1
 
 
+def test_event_worker_deferred_ack_timeout_is_retried_next_tick(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(output=local_output(out), top_k=3)
+    payload = event_payload(event_id="deferred-timeout", item_id="i8")
+    source = WebhookEventSource({})
+    source.ingest(payload)
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        IncrementalUpdater(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    # An earlier delivery of the same event, deferred until this batch applies it.
+    deferred = normalize_event(payload)
+    worker._deferred_acks.append(deferred)
+    acks: list[list[str]] = []
+
+    def _ack(event_ids):  # type: ignore[no-untyped-def]
+        acks.append(list(event_ids))
+        if len(acks) == 2:
+            raise TimeoutError("deferred ack timed out")
+        return set(event_ids)
+
+    monkeypatch.setattr(worker, "_ack_live_ids", _ack)
+    monkeypatch.setattr(worker._updater, "persist_online", lambda: None)
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick
+    assert worker._retry_acks == [deferred]
+    assert worker._deferred_acks == []
+
+    worker.tick()
+    assert acks[2] == ["deferred-timeout"]
+    assert worker._retry_acks == []
+
+
 def test_event_apply_errors_exclude_broad_programming_errors():
     from pandas.errors import DatabaseError
     from pyarrow.lib import ArrowInvalid
@@ -1540,7 +1631,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     payload = event_payload(item_id="ifp")
@@ -1577,7 +1668,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
     worker = EventWorker(
         _FailApplyAck(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -1594,10 +1685,8 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
 
 
 def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
     polls_at_connect: list[int] = []
@@ -1626,19 +1715,15 @@ def test_event_worker_skips_poll_when_startup_health_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and not polls_at_connect:
-        time.sleep(0.01)
+    connected = wait_until(lambda: polls_at_connect)
     worker.stop(join_timeout_seconds=2.0)
-    assert polls_at_connect
+    assert connected
     assert polls_at_connect[0] >= 2
 
 
 def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feature_config: FeatureConfig):
-    import time
-
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     connects = {"n": 0}
 
@@ -1662,21 +1747,19 @@ def test_event_worker_reconnects_when_source_reports_disconnected(tmp_path, feat
         poll_interval_seconds=0.01,
     )
     worker.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and connects["n"] < 2:
-        time.sleep(0.01)
+    reconnected = wait_until(lambda: connects["n"] >= 2)
     worker.stop(join_timeout_seconds=2.0)
-    assert connects["n"] >= 2
+    assert reconnected
 
 
 def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
     connects = {"n": 0}
     closes = {"n": 0}
 
@@ -1685,7 +1768,7 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(1.0)
+                release.wait()
             super().connect()
 
         def close(self) -> None:
@@ -1707,24 +1790,24 @@ def test_event_worker_stop_closes_reconnect_in_progress(tmp_path, feature_config
         poll_interval_seconds=0.01,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    try:
+        assert reconnect_started.wait(WAIT_SECONDS)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while the reconnect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1732,7 +1815,7 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     class _SlowSecondConnect(WebhookEventSource):
         def connect(self) -> None:
             if started.is_set():
-                release.wait(timeout=2)
+                release.wait()
                 return
             started.set()
             super().connect()
@@ -1753,22 +1836,29 @@ def test_event_worker_stop_does_not_block_on_dead_thread_during_restart(
     assert worker._thread is not None and worker._thread.is_alive() is False
     starter = threading.Thread(target=worker.start)
     starter.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and worker._source_guard.acquire(blocking=False):
+
+    def _source_guard_held() -> bool:
+        if not worker._source_guard.acquire(blocking=False):
+            return True
         worker._source_guard.release()
-        time.sleep(0.01)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    release.set()
-    starter.join(timeout=2)
+        return False
+
+    try:
+        assert wait_until(_source_guard_held)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while the restart's connect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    starter.join(timeout=WAIT_SECONDS)
 
 
 def test_event_worker_start_never_acquires_tick_while_holding_source(tmp_path, feature_config: FeatureConfig):
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     owned = threading.local()
     inversions: list[str] = []
@@ -1821,7 +1911,7 @@ def test_event_worker_start_does_not_revive_after_completed_stop(tmp_path, featu
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     started = threading.Event()
@@ -1878,7 +1968,7 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     starter_thread: list[threading.Thread] = []
@@ -1939,10 +2029,9 @@ def test_event_worker_start_does_not_reacquire_guard_after_launch(tmp_path, feat
 
 def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     started = threading.Event()
     release = threading.Event()
@@ -1951,7 +2040,7 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     class _SlowStart(WebhookEventSource):
         def connect(self) -> None:
             started.set()
-            release.wait(timeout=2)
+            release.wait()
             super().connect()
 
         def close(self) -> None:
@@ -1971,22 +2060,21 @@ def test_event_worker_start_aborts_if_stopped_during_connect(tmp_path, feature_c
     )
     starter = threading.Thread(target=worker.start)
     starter.start()
-    assert started.wait(timeout=2)
-    began = time.monotonic()
-    assert worker.stop(join_timeout_seconds=0.05) is False
-    assert time.monotonic() - began < 0.4
-    release.set()
-    starter.join(timeout=2)
+    try:
+        assert started.wait(WAIT_SECONDS)
+        stopped, stop_result = call_in_thread(lambda: worker.stop(join_timeout_seconds=0.05))
+        # stop must return while start's connect is still blocked.
+        assert stopped.wait(WAIT_SECONDS)
+        assert stop_result == [False]
+    finally:
+        release.set()
+    starter.join(timeout=WAIT_SECONDS)
     assert worker._thread is None or worker._thread.is_alive() is False
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -1994,7 +2082,7 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     started = threading.Event()
@@ -2030,9 +2118,7 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert closes["n"] == 1
     assert worker._finalized is True
     frame = pd.read_parquet(out / "recommendations.parquet")
@@ -2043,7 +2129,6 @@ def test_event_worker_start_abort_drains_and_closes_once(tmp_path, feature_confi
 
 def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     out = tmp_path / "out"
     out.mkdir()
@@ -2051,7 +2136,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     started = threading.Event()
@@ -2095,9 +2180,7 @@ def test_event_worker_start_abort_drains_when_connect_raises(tmp_path, feature_c
     assert worker.stop(join_timeout_seconds=0.05) is False
     release.set()
     starter.join(timeout=2)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
+    assert wait_until(lambda: closes["n"] >= 1)
     assert errors
     assert closes["n"] == 1
     assert worker._finalized is True
@@ -2112,7 +2195,7 @@ def test_event_worker_unexpected_start_failure_drains_and_closes(tmp_path, featu
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     closes = {"n": 0}
@@ -2156,7 +2239,7 @@ def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, featur
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     closes = {"n": 0}
@@ -2196,12 +2279,12 @@ def test_event_worker_unexpected_loop_failure_drains_and_closes(tmp_path, featur
 
 def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     reconnect_started = threading.Event()
+    release = threading.Event()
     closes = {"n": 0}
     connects = {"n": 0}
 
@@ -2210,7 +2293,7 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
             connects["n"] += 1
             if connects["n"] >= 2:
                 reconnect_started.set()
-                time.sleep(0.2)
+                release.wait(WAIT_SECONDS)
                 raise OSError("broker down")
             super().connect()
 
@@ -2233,28 +2316,25 @@ def test_event_worker_reconnect_closes_after_failed_connect(tmp_path, feature_co
         poll_interval_seconds=0.01,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    worker.stop(join_timeout_seconds=0.05)
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    try:
+        assert reconnect_started.wait(WAIT_SECONDS)
+        worker.stop(join_timeout_seconds=0.05)
+    finally:
+        release.set()
+    assert wait_until(lambda: closes["n"] >= 1)
 
 
 def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config: FeatureConfig):
-    import threading
-    import time
-
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
-    reconnect_started = threading.Event()
     polls = {"n": 0}
+    polls_at_reconnect: list[int] = []
 
     class _FailReconnect(WebhookEventSource):
         def connect(self) -> None:
             if polls["n"] > 0:
-                reconnect_started.set()
+                polls_at_reconnect.append(polls["n"])
                 raise OSError("broker down")
             super().connect()
 
@@ -2277,16 +2357,15 @@ def test_event_worker_skips_tick_after_failed_reconnect(tmp_path, feature_config
         poll_interval_seconds=0.02,
     )
     worker.start()
-    assert reconnect_started.wait(timeout=2)
-    after = polls["n"]
-    time.sleep(0.08)
-    assert polls["n"] == after
+    # A tick between failed reconnects would poll, so every reconnect would see a new count.
+    assert wait_until(lambda: len(polls_at_reconnect) >= 3)
     worker.stop(join_timeout_seconds=1.0)
+    assert len(set(polls_at_reconnect)) == 1
 
 
 def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closed = {"n": 0}
 
@@ -2313,10 +2392,9 @@ def test_event_worker_stop_closes_source_once(tmp_path, feature_config: FeatureC
 
 def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     health_started = threading.Event()
     health_release = threading.Event()
@@ -2350,9 +2428,7 @@ def test_event_worker_stop_waits_for_health_before_close(tmp_path, feature_confi
     assert worker.stop(join_timeout_seconds=0.05) is False
     assert "close" not in order
     health_release.set()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and "close" not in order:
-        time.sleep(0.01)
+    assert wait_until(lambda: "close" in order)
     assert "health-start" in order
     assert "close" in order
     assert order.index("health-start") < order.index("close")
@@ -2363,7 +2439,7 @@ def test_event_worker_start_returns_before_first_poll(tmp_path, feature_config: 
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     healths = {"n": 0}
     poll_started = threading.Event()
@@ -2402,7 +2478,7 @@ def test_event_worker_start_returns_before_first_poll(tmp_path, feature_config: 
 
 def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     polled = {"n": 0}
 
@@ -2428,7 +2504,7 @@ def test_event_worker_tick_skips_when_stopped(tmp_path, feature_config: FeatureC
 
 def test_event_worker_stop_returns_true_when_idle(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     worker = EventWorker(
         WebhookEventSource({}),
@@ -2449,7 +2525,7 @@ def test_event_worker_stop_swallows_source_close_errors(tmp_path, feature_config
     import logging
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _BoomClose(WebhookEventSource):
@@ -2477,7 +2553,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
     tmp_path, feature_config: FeatureConfig
 ):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     payload = event_payload(item_id="ipend")
     payload.pop("event_id")
@@ -2508,7 +2584,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
 
     worker = EventWorker(
         _Replay(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2529,7 +2605,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2573,7 +2649,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
     source = _Redeliver()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2595,7 +2671,7 @@ def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_con
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2655,7 +2731,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -2694,7 +2770,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
     source = _TwoShots()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         _CountApply(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2717,7 +2793,7 @@ def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -2748,7 +2824,7 @@ def test_event_worker_held_explicit_id_does_not_block_generated_fingerprint_ack(
     assert event_fingerprint(held) == event_fingerprint(generated)
     worker = EventWorker(
         _Ephemeral(),  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2767,7 +2843,7 @@ def test_event_worker_acks_buffer_duplicates(tmp_path, feature_config: FeatureCo
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -2796,7 +2872,7 @@ def test_event_worker_acks_deferred_fingerprint_duplicate_after_apply(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -2825,7 +2901,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     payload = event_payload(item_id="i1")
@@ -2864,7 +2940,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
     source = _Ephemeral()
     worker = EventWorker(
         source,  # type: ignore[arg-type]
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, max_events=10, fingerprint_dedupe=True),
         IncrementalUpdater(
             sink=build_output_sink(settings.output),
             output_settings=settings.output,
@@ -2887,7 +2963,7 @@ def test_event_worker_writer_lock_busy_restores_rejected_nacks(tmp_path, feature
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -2919,7 +2995,7 @@ def test_event_worker_writer_lock_busy_restores_rejected_nacks(tmp_path, feature
 
 def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
 
     class _RejectOverflow(WebhookEventSource):
@@ -2950,7 +3026,7 @@ def test_event_worker_restores_rejected_overflow(tmp_path, feature_config: Featu
 
 def test_event_worker_does_not_ack_buffered_redelivery(tmp_path, feature_config: FeatureConfig):
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     event = normalize_event(event_payload(event_id="pending-1", item_id="ipend"))
     acked: list[str] = []
@@ -2995,7 +3071,7 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     applies: list[str] = []
@@ -3050,10 +3126,9 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
 
 def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: FeatureConfig):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     stop_thread: list[threading.Thread] = []
@@ -3097,9 +3172,7 @@ def test_event_worker_stop_does_not_drain_newer_start(tmp_path, feature_config: 
 
     stopper = threading.Thread(target=_stop)
     stopper.start()
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and first.is_alive():
-        time.sleep(0.01)
+    assert wait_until(lambda: not first.is_alive())
     assert first.is_alive() is False
     worker.start()
     second = worker._thread
@@ -3114,7 +3187,7 @@ def test_event_worker_stop_dead_thread_does_not_drain_newer_start(tmp_path, feat
     import threading
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     inner = threading.Lock()
     stop_thread: list[threading.Thread] = []
@@ -3175,10 +3248,9 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
     tmp_path, feature_config: FeatureConfig
 ):
     import threading
-    import time
 
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     closes = {"n": 0}
 
@@ -3197,23 +3269,18 @@ def test_event_worker_start_abort_after_launch_does_not_reacquire_locks(
         ),
         poll_interval_seconds=0.01,
     )
-    original_start = threading.Thread.start
 
-    def _start(self: threading.Thread) -> None:
-        if self.name == "cicerone-events":
-            worker._stop.set()
-            worker._stop_epoch += 1
-        original_start(self)
+    class _StopOnStart(threading.Thread):
+        def start(self) -> None:
+            if self.name == "cicerone-events":
+                worker._stop.set()
+                worker._stop_epoch += 1
+            super().start()
 
-    threading.Thread.start = _start  # type: ignore[method-assign]
-    try:
+    with pytest.MonkeyPatch.context() as patch:
+        patch_module_ref(patch, "cicerone.events.worker.threading", Thread=_StopOnStart)
         worker.start()
-    finally:
-        threading.Thread.start = original_start  # type: ignore[method-assign]
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and closes["n"] < 1:
-        time.sleep(0.01)
-    assert closes["n"] >= 1
+    assert wait_until(lambda: closes["n"] >= 1)
     assert worker._thread is None or worker._thread.is_alive() is False
     assert worker._tick_guard.acquire(blocking=False)
     worker._tick_guard.release()
@@ -3228,7 +3295,7 @@ def test_event_worker_nacks_overflow(tmp_path, feature_config: FeatureConfig):
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -3256,7 +3323,7 @@ def test_event_worker_stop_drains_buffer(tmp_path, feature_config: FeatureConfig
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
     source = WebhookEventSource({})
@@ -3286,7 +3353,7 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=3,
     )
 
@@ -3310,3 +3377,667 @@ def test_event_worker_stop_returns_retry_acks_when_drain_ack_fails(tmp_path, fea
     assert worker.stop(join_timeout_seconds=2.0) is True
     again = list(source.poll(10))
     assert [event.event_id for event in again] == ["retry-drain"]
+
+
+def _sidecar_bug_worker(tmp_path, feature_config):  # type: ignore[no-untyped-def]
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=local_output(out),
+        top_k=3,
+    )
+
+    class _BuggyPublisher:
+        def __init__(self) -> None:
+            self.connects = 0
+            self.published: list[list[str]] = []
+
+        def connect(self) -> None:
+            self.connects += 1
+            if self.connects == 1:
+                raise RuntimeError("sidecar bug")
+
+        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
+            self.published.append(list(user_ids or []))
+
+        def close(self) -> None:
+            return None
+
+    publisher = _BuggyPublisher()
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+        publisher=publisher,
+    )
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    return settings, publisher, source, updater, worker
+
+
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
+    tmp_path, feature_config: FeatureConfig, persist_fails: bool, caplog
+):
+    settings, publisher, source, updater, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    persist = worker._persist_online_after_ack
+    if persist_fails:
+        worker._persist_online_after_ack = raising(OSError("persist down"))  # type: ignore[method-assign]
+    before_tick = registry_metric_value("cicerone_events_tick_errors_total")
+
+    # An unexpected publisher bug is re-raised, but only after the written batch is acked.
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
+    # A failing online persist is then only logged; the publisher bug still wins.
+    assert caplog.text.count(_CLEANUP_FAILED) == int(persist_fails)
+    worker._persist_online_after_ack = persist  # type: ignore[method-assign]
+    assert source.health().lag == 0
+    assert updater.events_applied == 1
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
+    written = load_recommendations_frame(settings.output)
+    assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
+
+    source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+    assert updater.events_applied == 1
+    [repaired] = publisher.published
+    assert "u1" in repaired
+
+
+@pytest.mark.parametrize("step", ["_ack_tracked", "_settle_live"])
+@pytest.mark.parametrize(
+    ("error", "logged"),
+    [(OSError, "Event source ack failed"), (TimeoutError, "Event source ack timed out")],
+)
+def test_event_worker_post_write_error_wins_over_a_failing_ack(
+    tmp_path, feature_config: FeatureConfig, step: str, error: type[OSError], logged: str, caplog
+):
+    _, _, _, _, worker = _sidecar_bug_worker(tmp_path, feature_config)
+    setattr(worker, step, raising(error("ack down")))
+    persisted: list[bool] = []
+    worker._persist_online_after_ack = lambda: persisted.append(True)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="sidecar bug"):
+        worker.tick()
+    assert persisted == [True]
+    assert f"{logged} after successful apply" in caplog.text
+    assert "ack down" in caplog.text
+
+
+def _written_items(settings, user_id: str) -> set[str]:  # type: ignore[no-untyped-def]
+    written = load_recommendations_frame(settings.output)
+    return set(written[written["user_id"] == user_id]["item_id"].astype(str))
+
+
+def test_event_worker_drops_leadership_when_the_apply_lock_is_lost_after_the_write(
+    tmp_path, feature_config: FeatureConfig
+):
+    lost = {"after_write": False}
+    settings, sink, updater = dataset_updater(
+        tmp_path, feature_config, fence_check=lambda: not lost["after_write"]
+    )
+    replace = sink.replace_recommendations_for_users
+
+    def _replace_then_lose(*args, **kwargs):  # type: ignore[no-untyped-def]
+        written = replace(*args, **kwargs)
+        lost["after_write"] = True
+        return written
+
+    sink.replace_recommendations_for_users = _replace_then_lose  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    update_events_leader(True)
+
+    assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
+    assert registry_metric_value("cicerone_events_leader") == 0
+    source.ingest(event_payload(event_id="post-write-lost", user_id="u1", item_id="i9"))
+    assert worker.tick() == 0
+
+
+def test_event_worker_acks_when_the_manifest_write_fails_after_the_recommendations(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings, sink, updater = dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+
+    assert worker.tick() == 1
+    assert "i9" in _written_items(settings, "u1")
+    assert source.health().lag == 0
+
+
+def test_event_worker_counts_a_post_write_failure_as_a_flush_error(tmp_path, feature_config: FeatureConfig):
+    _settings, sink, updater = dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="manifest-fails-metric", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+    before_success = registry_metric_value("cicerone_events_flush_total", {"status": "success"})
+    before_events = registry_metric_value("cicerone_events_flush_events_total")
+
+    assert worker.tick() == 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "success"}) == before_success
+    assert registry_metric_value("cicerone_events_flush_events_total") == before_events
+
+
+def test_event_worker_counts_a_post_write_failure_when_the_online_persist_raises(
+    tmp_path, feature_config: FeatureConfig
+):
+    _settings, sink, updater = dataset_updater(tmp_path, feature_config)
+
+    def _manifest_fails(_manifest):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    def _persist_bug() -> None:
+        raise RuntimeError("persist bug")
+
+    sink.write_manifest = _manifest_fails  # type: ignore[method-assign]
+    updater.persist_online = _persist_bug  # type: ignore[method-assign]
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="persist-raises", user_id="u1", item_id="i9"))
+    worker = EventWorker(source, MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    before_error = registry_metric_value("cicerone_events_flush_total", {"status": "error"})
+
+    with pytest.raises(RuntimeError, match="persist bug"):
+        worker.tick()
+    assert registry_metric_value("cicerone_events_flush_total", {"status": "error"}) == before_error + 1
+    assert source.health().lag == 0
+
+
+def test_event_worker_leaves_unwritten_events_unacked_when_interrupted(
+    tmp_path, feature_config: FeatureConfig
+):
+    out = tmp_path / "out"
+    out.mkdir()
+    settings = make_settings(
+        output=local_output(out),
+        top_k=3,
+    )
+    source = WebhookEventSource({})
+    source.ingest(event_payload(event_id="interrupted-before"))
+
+    class _InterruptedBeforeWrite(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+            del events, persist_online
+            raise KeyboardInterrupt
+
+    worker = EventWorker(
+        source,
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0),
+        _InterruptedBeforeWrite(
+            sink=build_output_sink(settings.output),
+            output_settings=settings.output,
+            feature_config=feature_config,
+            top_k=3,
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        worker.tick()
+    assert source.health().lag == 1
+
+
+class _ListSource:
+    def __init__(self, events) -> None:  # type: ignore[no-untyped-def]
+        self.pending = list(events)
+        self.acks: list[list[str]] = []
+
+    def connect(self) -> None:
+        return None
+
+    def poll(self, max_events: int = 100):  # type: ignore[no-untyped-def]
+        del max_events
+        polled, self.pending = self.pending, []
+        return polled
+
+    def ack(self, event_ids):  # type: ignore[no-untyped-def]
+        self.acks.append(list(event_ids))
+        return list(event_ids)
+
+    def nack(self, events):  # type: ignore[no-untyped-def]
+        return list(events)
+
+    def health(self) -> EventSourceHealth:
+        return EventSourceHealth(connected=True, lag=len(self.pending))
+
+
+def _rejected_event(event_id: str) -> NormalizedEvent:
+    return replace(
+        normalize_event(event_payload(event_id=event_id)), rejected=f'(bad row): {{"event_id": "{event_id}"}}'
+    )
+
+
+def _recording_worker(tmp_path, feature_config, source, applies: list[str], batch_size: int) -> EventWorker:  # type: ignore[no-untyped-def]
+    out = tmp_path / "out"
+    out.mkdir()
+    pd.DataFrame(
+        [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
+    ).to_parquet(out / "recommendations.parquet", index=False)
+    settings = make_settings(
+        output=local_output(out),
+        top_k=3,
+    )
+
+    class _CountApply(IncrementalUpdater):
+        def apply(self, events, *, persist_online: bool = True):  # type: ignore[no-untyped-def,override]
+            applies.extend(item.event_id for item in events)
+            return super().apply(events, persist_online=persist_online)
+
+    updater = _CountApply(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    return EventWorker(source, MicroBatchBuffer(batch_size=batch_size, batch_window_seconds=60.0), updater)
+
+
+def test_event_worker_kafka_apply_starts_no_heartbeat_thread(
+    tmp_path, feature_config: FeatureConfig, monkeypatch
+):
+    import threading
+
+    from support.fake_kafka import install_fake_kafka, kafka_source_options
+
+    from cicerone.events.base import HeartbeatSource
+    from cicerone.events.kafka import KafkaEventSource
+
+    broker = install_fake_kafka(monkeypatch)
+    broker.add("cicerone.events", event_payload(event_id="k1", item_id="i1"))
+    source = KafkaEventSource(kafka_source_options())
+    assert not isinstance(source, HeartbeatSource)
+    source.connect()
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
+    # Threads alive during apply, by name: independent of which module starts the heartbeat.
+    live_during_apply: list[str] = []
+    original_apply = worker._updater.apply
+
+    def _apply_snapshot(events, *, persist_online: bool = True):  # type: ignore[no-untyped-def]
+        live_during_apply.extend(thread.name for thread in threading.enumerate())
+        return original_apply(events, persist_online=persist_online)
+
+    worker._updater.apply = _apply_snapshot  # type: ignore[method-assign]
+    worker._buffer.extend(source.poll(1))
+    assert worker._flush_ready(worker._buffer.flush()) == 1
+    assert applies == ["k1"]
+    assert live_during_apply
+    assert "cicerone-events-heartbeat" not in live_during_apply
+    source.close()
+
+
+def test_event_worker_acks_rejected_events_with_their_batch_without_applying(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    first = normalize_event(event_payload(event_id="w1", item_id="i1"))
+    last = normalize_event(event_payload(event_id="w2", item_id="i2"))
+    source = _ListSource([first, _rejected_event("r1"), last])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=3)
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.worker"):
+        assert worker.tick() == 2
+        assert worker.tick() == 0
+    assert applies == ["w1", "w2"]
+    assert source.acks == [["w1", "r1", "w2"]]
+    assert caplog.text.count("Skipping invalid event row") == 1
+    assert '(bad row): {"event_id": "r1"}' in caplog.text
+
+
+def test_event_worker_acks_a_rejected_only_batch_and_logs_each_delivery(
+    tmp_path, feature_config: FeatureConfig, caplog
+):
+    rejected = _rejected_event("r1")
+    source = _ListSource([rejected])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=1)
+    with caplog.at_level(logging.WARNING, logger="cicerone.events.worker"):
+        assert worker.tick() == 0
+        source.pending = [rejected]
+        assert worker.tick() == 0
+    assert applies == []
+    assert source.acks == [["r1"], ["r1"]]
+    assert caplog.text.count("Skipping invalid event row") == 2
+
+
+@pytest.mark.parametrize("with_valid", [False, True])
+def test_event_worker_applies_a_valid_event_after_a_rejected_one_with_its_id(
+    tmp_path, feature_config: FeatureConfig, with_valid: bool
+):
+    first = [normalize_event(event_payload(event_id="w1", item_id="i1"))] if with_valid else []
+    source = _ListSource([*first, _rejected_event("r1")])
+    applies: list[str] = []
+    worker = _recording_worker(tmp_path, feature_config, source, applies, batch_size=len(first) + 1)
+    assert worker.tick() == len(first)
+
+    retry = [normalize_event(event_payload(event_id="r1", item_id="i2"))]
+    if with_valid:
+        retry.append(normalize_event(event_payload(event_id="w2", item_id="i3")))
+    source.pending = retry
+    assert worker.tick() == len(retry)
+    assert "r1" in applies
+    assert source.acks[-1] == [event.event_id for event in retry]
+
+
+def test_event_worker_rejects_ephemeral_source_without_fingerprint_dedupe(
+    tmp_path, feature_config: FeatureConfig
+):
+    settings = make_settings(
+        output=local_output(tmp_path),
+        top_k=3,
+    )
+
+    class _EphemeralWebhook(WebhookEventSource):
+        ephemeral_event_ids = True
+
+    updater = IncrementalUpdater(
+        sink=build_output_sink(settings.output),
+        output_settings=settings.output,
+        feature_config=feature_config,
+        top_k=3,
+    )
+    with pytest.raises(ValueError, match="fingerprint_dedupe=True"):
+        EventWorker(_EphemeralWebhook({}), MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0), updater)
+    EventWorker(
+        _EphemeralWebhook({}),
+        MicroBatchBuffer(batch_size=1, batch_window_seconds=60.0, fingerprint_dedupe=True),
+        updater,
+    )
+
+
+_CLEANUP_FAILED = "Event worker cleanup after an error failed"
+
+
+def _nack_failing_worker(tmp_path, feature_config, *, apply_lock=None):  # type: ignore[no-untyped-def]
+    source = WebhookEventSource({})
+    for n in range(2):
+        source.ingest(event_payload(event_id=f"e{n}", user_id="u1", item_id=f"i{n}"))
+    _settings, _sink, updater = dataset_updater(tmp_path, feature_config)
+    worker = EventWorker(
+        source, MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0), updater, apply_lock=apply_lock
+    )
+    source.nack = raising(TypeError("nack bug"))  # type: ignore[method-assign]
+    return worker
+
+
+def _fail_lookup(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.applied_before = raising(error)
+
+
+def _fail_repair(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(IncrementalUpdater, "post_write_pending", property(lambda _self: True))
+    worker._updater.repair_post_write = raising(error)
+
+
+def _fail_apply(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.apply = raising(error)
+
+
+def _fail_replayed_ack(worker, monkeypatch, error):  # type: ignore[no-untyped-def]
+    worker._updater.applied_before = lambda events: [events[0]]
+    worker._source.ack = raising(error)
+
+
+def _buffered_ids(worker) -> list[str]:  # type: ignore[no-untyped-def]
+    return [event.event_id for event in worker._take_buffered()]
+
+
+@pytest.mark.parametrize(
+    ("fail", "buffered"),
+    [
+        (_fail_lookup, ["e0", "e1"]),
+        (_fail_repair, ["e0", "e1"]),
+        (_fail_apply, ["e0", "e1"]),
+        # e0 counts as applied once replayed, so only e1 is returned.
+        (_fail_replayed_ack, ["e1"]),
+    ],
+)
+def test_event_worker_failed_nack_does_not_replace_the_original_error(
+    tmp_path, feature_config, monkeypatch, caplog, fail, buffered
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("site bug")
+    fail(worker, monkeypatch, original)
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == buffered
+
+
+@pytest.mark.parametrize(
+    ("fail", "error", "status"),
+    [
+        (_fail_lookup, OSError("storage unreachable"), "error"),
+        (_fail_apply, OSError("storage unreachable"), "error"),
+        (_fail_apply, HeartbeatError("heartbeat failed"), "error"),
+        (_fail_apply, LockLostError("lease lost", kind="apply"), "error"),
+        (_fail_apply, WriterLockBusyError("writer busy"), "busy"),
+    ],
+)
+def test_event_worker_failed_nack_after_a_handled_error_returns_zero(
+    tmp_path, feature_config, monkeypatch, caplog, fail, error, status
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    fail(worker, monkeypatch, error)
+    before = registry_metric_value("cicerone_events_flush_total", {"status": status})
+    assert worker.tick() == 0
+    assert registry_metric_value("cicerone_events_flush_total", {"status": status}) == before + 1
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_failed_abort_still_returns_the_batch(tmp_path, feature_config, monkeypatch, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("apply bug")
+    _fail_apply(worker, monkeypatch, original)
+    worker._updater.abort_online = raising(RuntimeError("abort bug"))
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.nack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_failed_start_drain_does_not_replace_the_connect_error(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+    worker._source.connect = raising(original)  # type: ignore[method-assign]
+    worker._drain_stopped_start = raising(TypeError("drain bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._drain_stopped_start.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_failed_health_refresh_does_not_replace_the_tick_error(
+    tmp_path, feature_config, monkeypatch, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    del worker._source.nack
+    original = KeyError("apply bug")
+    _fail_apply(worker, monkeypatch, original)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._source.health.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_aborted_start_close_failure_does_not_replace_the_connect_error(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = OSError("connect down")
+
+    def connect() -> None:
+        worker._stop.set()
+        raise original
+
+    worker._source.connect = connect  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(OSError) as caught:
+        worker.start()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_loop_reports_an_unexpected_error_before_the_thread_ends(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    update_events_source_health(connected=True, lag=0)
+    before = registry_metric_value("cicerone_events_tick_errors_total")
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert registry_metric_value("cicerone_events_tick_errors_total") == before + 1
+    assert registry_metric_value("cicerone_events_source_connected") == 0
+    assert worker._source_unhealthy is True
+    assert "Event worker stopped on an unexpected error" in caplog.text
+
+
+def test_event_worker_loop_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    import threading
+
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._thread = threading.current_thread()
+    worker.tick = raising(TypeError("tick bug"))  # type: ignore[method-assign]
+    worker._close_source = raising(KeyError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="tick bug"):
+        worker._loop()
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_tick_error_wins_over_a_failing_stop_cleanup(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("tick bug")
+
+    def tick_locked() -> int:
+        worker._stop.set()
+        raise original
+
+    worker._tick_locked = tick_locked  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_drain_error_wins_over_a_failing_source_close(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    original = KeyError("drain bug")
+    worker._drain_buffer_on_stop = raising(original)  # type: ignore[method-assign]
+    worker._close_source = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker._drain_and_close()
+    assert caught.value is original
+    assert worker._close_source.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_health_refresh_error_after_a_clean_tick_propagates(tmp_path, feature_config):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    worker._source.health = raising(TypeError("health bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="health bug"):
+        worker.tick()
+
+
+@pytest.mark.parametrize("failing_ack", ["_ack_tracked", "_settle_live"])
+def test_event_worker_failed_persist_after_an_ack_error_does_not_replace_it(
+    tmp_path, feature_config, caplog, failing_ack
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    original = KeyError("ack bug")
+    setattr(worker, failing_ack, raising(original))
+    worker._persist_online_after_ack = raising(RuntimeError("persist bug"))  # type: ignore[method-assign]
+    with pytest.raises(KeyError) as caught:
+        worker.tick()
+    assert caught.value is original
+    assert worker._persist_online_after_ack.calls == 1
+    assert caplog.text.count(_CLEANUP_FAILED) == 1
+
+
+def test_event_worker_nack_bug_outside_an_error_still_propagates(tmp_path, feature_config, caplog):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    # Apply reports busy (0 applied): the nack is the normal return path, not error cleanup.
+    worker._updater.apply = lambda *_args, **_kwargs: 0
+    with pytest.raises(TypeError, match="nack bug"):
+        worker.tick()
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["e0", "e1"]
+
+
+def test_event_worker_stop_drain_flush_error_wins_over_a_failed_pending_nack(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    original = KeyError("apply bug")
+    worker._updater.apply = raising(original)
+    with pytest.raises(KeyError) as caught:
+        worker._drain_buffer_on_stop()
+    assert caught.value is original
+    assert worker._source.nack.calls == 2
+    assert caplog.text.count(_CLEANUP_FAILED) == 2
+    # The buffer holds two events; the returned pending ack overflows into _held, as on main.
+    assert [event.event_id for event in worker._held] == ["pending"]
+    assert _buffered_ids(worker) == ["e0", "e1", "pending"]
+
+
+def test_event_worker_stop_drain_after_a_clean_flush_propagates_a_pending_nack_bug(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config)
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    worker._updater.apply = lambda events, **_kwargs: len(events)
+    with pytest.raises(TypeError, match="nack bug"):
+        worker._drain_buffer_on_stop()
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["pending"]
+
+
+def test_event_worker_stop_drain_with_lease_held_elsewhere_propagates_a_nack_bug(
+    tmp_path, feature_config, caplog
+):
+    worker = _nack_failing_worker(tmp_path, feature_config, apply_lock=FakeLock(acquires=False))
+    worker._poll_into_buffer()
+    worker._retry_acks = [normalize_event(event_payload(event_id="pending", item_id="i9"))]
+    with pytest.raises(TypeError, match="nack bug"):
+        worker._drain_buffer_on_stop()
+    # Pending acks join the leftover nack, so the except branch has nothing left to return.
+    assert worker._source.nack.calls == 1
+    assert _CLEANUP_FAILED not in caplog.text
+    assert _buffered_ids(worker) == ["e0", "e1", "pending"]

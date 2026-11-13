@@ -3,30 +3,22 @@ from __future__ import annotations
 import logging
 
 import pytest
-from support.toml_config import write_toml
+from support.settings import make_settings
+from support.toml_config import MINIMAL_IO_TOML, write_toml
 
-from cicerone.config import ConfigError, load_experiment_settings, load_settings
+from cicerone.config import (
+    ConfigError,
+    ExperimentSettings,
+    IOSettings,
+    VariantSettings,
+    load_experiment_settings,
+    load_settings,
+)
 from cicerone.feature_config import BoostRule, EligibilityRule
 
 
-def _minimal_io() -> str:
-    return """
-        [input]
-        kind = "dataset"
-        [input.options]
-        storage_backend = "local"
-        path = "/tmp/in"
-
-        [output]
-        kind = "dataset"
-        [output.options]
-        storage_backend = "local"
-        path = "/tmp/out"
-        """
-
-
 def test_load_experiment_defaults_disabled(tmp_path):
-    settings = load_settings(write_toml(tmp_path, "[job]\n" + _minimal_io()))
+    settings = load_settings(write_toml(tmp_path, "[job]\n" + MINIMAL_IO_TOML))
     assert settings.experiment.enabled is False
     assert settings.experiment.variants == ()
     assert settings.experiment.log_exposures is False
@@ -42,7 +34,7 @@ def test_load_experiment_variants_and_remainder_traffic(tmp_path, caplog):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [experiment]
             enabled = true
@@ -100,6 +92,27 @@ def test_load_experiment_rejects_traffic_over_one():
                 ],
             }
         )
+
+
+def test_load_experiment_variant_null_weights_fall_back_to_model_weights():
+    settings = load_experiment_settings(
+        {"variants": [{"name": "a", "weights": None, "model_weights": {"latest": 1}}]}
+    )
+    assert settings.variants[0].model_weights == {"latest": 1.0}
+
+
+def test_load_experiment_variant_weights_prefer_weights_over_model_weights():
+    variants = [
+        {"name": "a", "weights": {"popular": 2}, "model_weights": {"latest": 9}},
+        {"name": "b", "model_weights": {"latest": 1}},
+    ]
+    a, b = load_experiment_settings({"variants": variants}).variants
+    assert a.model_weights == {"popular": 2.0}
+    assert b.model_weights == {"latest": 1.0}
+    with pytest.raises(ConfigError, match=r"variants\[b\].weights value\(s\) must be non-negative"):
+        load_experiment_settings({"variants": [{"name": "b", "model_weights": {"latest": -1}}]})
+    with pytest.raises(ConfigError, match=r"variants\[b\].weights must be a table of model name -> weight"):
+        load_experiment_settings({"variants": [{"name": "b", "weights": 1}]})
 
 
 def test_load_experiment_requires_id_and_two_variants():
@@ -219,16 +232,6 @@ def test_load_settings_rejects_log_exposures_with_ha_on_local_dataset(tmp_path):
                 enabled = true
                 kind = "webhook"
                 ha = true
-                [input]
-                kind = "dataset"
-                [input.options]
-                storage_backend = "local"
-                path = "/tmp/in"
-                [output]
-                kind = "dataset"
-                [output.options]
-                storage_backend = "local"
-                path = "/tmp/out"
                 [experiment]
                 enabled = true
                 id = "exp"
@@ -239,7 +242,8 @@ def test_load_settings_rejects_log_exposures_with_ha_on_local_dataset(tmp_path):
                 [[experiment.variants]]
                 name = "treatment"
                 traffic = 0.5
-                """,
+                """
+                + MINIMAL_IO_TOML,
             )
         )
 
@@ -293,7 +297,7 @@ def test_load_experiment_policy_names_and_tables(tmp_path):
             """
             [job]
             """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
             [experiment]
             enabled = true
@@ -553,7 +557,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [track]
             enabled = true
@@ -580,7 +584,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
                 """
             [job]
             """
-                + _minimal_io()
+                + MINIMAL_IO_TOML
                 + """
             [experiment]
             enabled = true
@@ -603,7 +607,7 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
             """
         [job]
         """
-            + _minimal_io()
+            + MINIMAL_IO_TOML
             + """
         [track]
         enabled = true
@@ -625,3 +629,50 @@ def test_load_settings_thompson_requires_extra_and_track(tmp_path, monkeypatch):
     assert settings.experiment.allocation == "thompson"
     assert settings.experiment.explore_traffic == pytest.approx(0.5)
     assert settings.experiment.rotate_min_prob == pytest.approx(0.9)
+
+
+_MYSQL_OUTPUT = {"database_url": "mysql+pymysql://u:p@host/db"}
+
+
+def _db_experiment_settings(options: dict[str, str], experiment_id: str):
+    variants = (
+        VariantSettings(name="control", traffic=0.5),
+        VariantSettings(name="treatment", traffic=0.5),
+    )
+    return make_settings(
+        experiment=ExperimentSettings(enabled=True, id=experiment_id, variants=variants),
+        output=IOSettings(kind="db", options=options),
+    )
+
+
+def test_experiment_id_over_255_characters_is_refused_on_mysql() -> None:
+    with pytest.raises(ConfigError, match="experiment.id is longer than 255 characters"):
+        _db_experiment_settings(_MYSQL_OUTPUT, "x" * 256)
+
+
+def test_experiment_id_of_255_characters_is_accepted_on_mysql() -> None:
+    assert _db_experiment_settings(_MYSQL_OUTPUT, "é" * 255).experiment.id == "é" * 255
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["sqlite+pysqlite:///x.db", "postgresql+psycopg://u:p@host/db", "mariadb+pymysql://u:p@host/db"],
+)
+def test_long_experiment_id_is_accepted_on_other_backends(url) -> None:
+    long_id = "x" * 256
+    assert _db_experiment_settings({"database_url": url}, long_id).experiment.id == long_id
+
+
+def test_long_experiment_id_is_accepted_on_mysql_when_the_experiment_is_disabled() -> None:
+    settings = make_settings(
+        experiment=ExperimentSettings(enabled=False, id="x" * 256),
+        output=IOSettings(kind="db", options=_MYSQL_OUTPUT),
+    )
+    assert settings.experiment.id == "x" * 256
+
+
+def test_long_experiment_id_with_an_unparsable_url_raises_config_error() -> None:
+    with pytest.raises(ConfigError, match="not a valid database URL") as caught:
+        _db_experiment_settings({"database_url": "not a url"}, "x" * 256)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True

@@ -12,29 +12,31 @@ import uvicorn
 from croniter import croniter
 
 from cicerone import job
+from cicerone.cli import configure_logging
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import DEFAULT_LOG_FORMAT
 from cicerone.locks import LockBackend, build_lock_backend
 
-logging.basicConfig(level=logging.INFO, format=DEFAULT_LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 
-def _seconds_until_next_run(schedule: str, now: datetime) -> float:
-    next_run = croniter(schedule, now).get_next(datetime)
-    return max((next_run - now).total_seconds(), 0)
+def _next_run(schedule: str, now: datetime, last_tick: datetime) -> datetime:
+    # Anchored on the last tick too, so a backward clock step cannot fire it twice.
+    return croniter(schedule, max(now, last_tick)).get_next(datetime)
 
 
 def _cron_loop(schedule: str, run: Callable[[], None]) -> None:
+    tick = datetime.now(UTC)
     while True:
         now = datetime.now(UTC)
-        sleep_seconds = _seconds_until_next_run(schedule, now)
+        tick = _next_run(schedule, now, tick)
+        sleep_seconds = max((tick - now).total_seconds(), 0)
         logger.info("Next run scheduled in %.0fs", sleep_seconds)
         time.sleep(sleep_seconds)
 
         try:
             run()
         except Exception as exc:
+            # Cron loop's top level: one failed run must not stop the schedule.
             logger.exception(
                 "Scheduled run failed (%s: %s); will retry at the next scheduled time",
                 type(exc).__name__,
@@ -91,4 +93,5 @@ def _run_with_trigger(settings: Settings, schedule: str) -> None:
 
 
 if __name__ == "__main__":
+    configure_logging(None, None)
     main()

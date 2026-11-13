@@ -16,6 +16,7 @@ from cicerone.config import (
     load_track_settings,
     make_settings,
 )
+from cicerone.events.errors import RedisError
 from cicerone.track.normalize import normalize_track
 from cicerone.track.store import TrackStore
 from cicerone.track.store_redis import default_redis_key_prefix
@@ -114,7 +115,7 @@ class _FakePipeline:
         for name, args in self._queued:
             try:
                 results.append(getattr(self._client, name)(*args))
-            except Exception as exc:
+            except RedisError as exc:
                 results.append(exc)
         self._queued.clear()
         self._client._done("execute")
@@ -448,14 +449,16 @@ def test_forget_user_notes_a_lost_writer_lease_after_the_output_erase(tmp_path, 
 
 
 def test_job_treats_a_redis_track_read_failure_as_optional(caplog):
-    from cicerone.events.errors import RedisError
-    from cicerone.job_eval import try_load
+    import logging
+
+    from cicerone.errors import try_load
 
     def boom() -> list[dict[str, object]]:
         raise RedisError("Timeout reading from socket")
 
-    with caplog.at_level("ERROR", logger="cicerone.job_eval"):
-        assert try_load("read track rows", boom, None) is None
+    log = logging.getLogger("cicerone.job_eval")
+    with caplog.at_level("ERROR", logger=log.name):
+        assert try_load("read track rows", boom, None, log=log) is None
     assert any("Failed to read track rows (RedisError" in record.getMessage() for record in caplog.records)
 
 

@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
+from typing import Any
 
 import sqlalchemy
-from sqlalchemy import Engine
+from sqlalchemy import Column, Connection, Engine, MetaData, String, Table, Text
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+from sqlalchemy.pool import StaticPool
+
+from cicerone.config.constants import MYSQL_KEY_CHARS, ConfigError
+from cicerone.io.options import require_option
+
+# MySQL can't index plain TEXT; this collation keeps ids differing by case, accent or trailing space distinct.
+TEXT_KEY_TYPE = Text().with_variant(String(MYSQL_KEY_CHARS, collation="utf8mb4_0900_bin"), "mysql")
+# JSON stored as text; MySQL TEXT's 64 KB is too small for a by-rank report with a large top_k.
+JSON_PAYLOAD_TYPE = Text().with_variant(MEDIUMTEXT(), "mysql")
 
 _engines: dict[str, Engine] = {}
 _checkouts: dict[str, int] = {}
@@ -16,11 +30,83 @@ def engine_for(database_url: str) -> Engine:
     with _engines_lock:
         engine = _engines.get(database_url)
         if engine is None:
-            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True)
+            engine = sqlalchemy.create_engine(database_url, pool_pre_ping=True, hide_parameters=True)
             _engines[database_url] = engine
             _checkouts[database_url] = 0
         _checkouts[database_url] += 1
         return engine
+
+
+_MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
+_MEMORY_ENGINES_LOCK = threading.Lock()
+
+
+def _is_memory_sqlite(database_url: str) -> bool:
+    if database_backend_name(database_url) != "sqlite":
+        return False
+    return make_url(database_url).database in (None, "", ":memory:")
+
+
+def _new_db_engine(database_url: str) -> Engine:
+    if not _is_memory_sqlite(database_url):
+        return engine_for(database_url)
+    return sqlalchemy.create_engine(
+        database_url,
+        pool_pre_ping=True,
+        hide_parameters=True,
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
+
+
+def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:
+    if options is not None and _is_memory_sqlite(database_url):
+        key = id(options)
+        with _MEMORY_ENGINES_LOCK:
+            cached = _MEMORY_ENGINES.get(key)
+            if cached is not None:
+                cached_options, engine = cached
+                if cached_options is options:
+                    return engine
+            engine = _new_db_engine(database_url)
+            _MEMORY_ENGINES[key] = (options, engine)
+            return engine
+    return _new_db_engine(database_url)
+
+
+def quote_identifier(bind: Engine | Connection, name: str) -> str:
+    """``name`` quoted the way the dialect (and pandas/SQLAlchemy table creation) quotes it."""
+    return bind.dialect.identifier_preparer.quote(name)
+
+
+def database_backend_name(database_url: str) -> str:
+    try:
+        return make_url(database_url).get_backend_name()
+    except ArgumentError:
+        # The URL can hold a password, so it stays out of the message and the traceback.
+        raise ConfigError("database_url is not a valid database URL") from None
+
+
+def is_mysql_family(bind: Engine | Connection) -> bool:
+    return bind.dialect.name in ("mysql", "mariadb")
+
+
+def store_table(name: str, *columns: Column[Any]) -> Table:
+    return Table(name, MetaData(), *columns, mysql_charset="utf8mb4", mysql_engine="InnoDB")
+
+
+def insert_sql(bind: Engine | Connection, table: str, names: Sequence[str]) -> str:
+    """``INSERT`` of one row bound by column name (``:name``), every identifier quoted."""
+    columns = ", ".join(quote_identifier(bind, name) for name in names)
+    values = ", ".join(f":{name}" for name in names)
+    return f"INSERT INTO {quote_identifier(bind, table)} ({columns}) VALUES ({values})"
+
+
+def sql_source(bind: Engine | Connection, query: str | None, table: str, alias: str) -> str:
+    """A configured read-only SELECT as an aliased subquery, else the quoted table."""
+    if query:
+        return f"({query.strip().rstrip(';').strip()}) AS {alias}"
+    return quote_identifier(bind, table)
 
 
 def release_engine(database_url: str) -> None:
@@ -45,3 +131,23 @@ def dispose_engines() -> None:
         _checkouts.clear()
     for engine in engines:
         engine.dispose()
+
+
+class LazyEngine:
+    """Check out ``create_db_engine`` once, on first use, even under concurrent first calls."""
+
+    def __init__(self, options: dict[str, Any]):
+        self._options = options
+        self._engine: Engine | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> Engine:
+        engine = self._engine
+        if engine is not None:
+            return engine
+        with self._lock:
+            if self._engine is None:
+                self._engine = create_db_engine(
+                    require_option(self._options, "database_url", "db"), options=self._options
+                )
+            return self._engine

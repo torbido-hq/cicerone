@@ -10,17 +10,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 from cicerone.config.constants import (
     ALLOCATION_THOMPSON,
     ATTRIBUTION_CLICK,
     BANDITS_EXTRA_HINT,
+    DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     THOMPSON_P_BEST_DRAWS,
     ConfigError,
 )
 from cicerone.evaluation.metrics import SliceMetrics
-from cicerone.experiment.recipes import CONTROL_NAME, ResolvedRecipe
+from cicerone.experiment.assignment import active_pair_traffic, live_active_pair
+from cicerone.experiment.recipes import ResolvedRecipe
+from cicerone.experiment.store import active_pair_from_state
+from cicerone.io.recommendation_schema import pick_control_name
+from cicerone.values import utc_stamp
 
 
 def bandits_extra_available() -> bool:
@@ -109,19 +113,19 @@ def window_trials_from_slices(
 def track_rows_since(
     rows: Sequence[Mapping[str, Any]],
     started_at: str | None,
+    *,
+    until: datetime,
 ) -> list[dict[str, Any]]:
-    if not started_at:
-        return [dict(row) for row in rows]
-    stamp = pd.to_datetime(started_at, utc=True, errors="coerce")
-    if pd.isna(stamp):
+    """Rows with ``occurred_at`` in ``[started_at, until)``; ``until`` starts the next window."""
+    start = utc_stamp(started_at) if started_at else None
+    if started_at and start is None:
         return []
     out: list[dict[str, Any]] = []
     for row in rows:
-        when = pd.to_datetime(row.get("occurred_at"), utc=True, errors="coerce")
-        if pd.isna(when):
+        when = utc_stamp(row.get("occurred_at"))
+        if when is None or when >= until or (start is not None and when < start):
             continue
-        if when >= stamp:
-            out.append(dict(row))
+        out.append(dict(row))
     return out
 
 
@@ -134,9 +138,7 @@ def pick_champion_name(names: Sequence[str], promoted_variant: str | None = None
         raise ValueError("pick_champion_name requires at least one name")
     if promoted_variant is not None and promoted_variant in names:
         return promoted_variant
-    if CONTROL_NAME in names:
-        return CONTROL_NAME
-    return str(names[0])
+    return pick_control_name(names)
 
 
 def _rng(seed: int | None) -> np.random.Generator:
@@ -200,18 +202,10 @@ def select_active_recipes(
     by_name = {recipe.name: recipe for recipe in recipes}
     if champion not in by_name:
         return recipes
-    share = float(explore_traffic)
-    if challenger not in by_name or challenger == champion:
-        return (replace_traffic(by_name[champion], 1.0),)
-    champ_share = max(0.0, 1.0 - share)
-    return (
-        replace_traffic(by_name[champion], champ_share),
-        replace_traffic(by_name[challenger], share),
+    pair = active_pair_traffic(
+        champion, challenger if challenger in by_name else champion, explore_traffic=explore_traffic
     )
-
-
-def replace_traffic(recipe: ResolvedRecipe, traffic: float) -> ResolvedRecipe:
-    return replace(recipe, traffic=float(traffic))
+    return tuple(replace(by_name[name], traffic=traffic) for name, traffic in pair)
 
 
 def allocate_thompson(
@@ -220,7 +214,7 @@ def allocate_thompson(
     previous: Mapping[str, Any] | None = None,
     window_trials: Mapping[str, ArmCounts] | None = None,
     min_impressions: int = 0,
-    rotate_min_prob: float = 0.9,
+    rotate_min_prob: float = DEFAULT_THOMPSON_ROTATE_MIN_PROB,
     promoted_variant: str | None = None,
     guardrails_ok: bool = True,
     now: datetime | None = None,
@@ -235,19 +229,18 @@ def allocate_thompson(
     prev = dict(previous or {})
     stored = parse_arm_counts(prev.get("arms"))
     window = dict(window_trials or {})
-    prev_champion = str(prev.get("champion") or "")
-    prev_challenger = str(prev.get("challenger") or "")
-    pair_ok = prev_champion in labels and prev_challenger in labels
-    champion = pick_champion_name(labels, promoted_variant or (prev_champion if pair_ok else None))
+    live_pair = live_active_pair(active_pair_from_state(prev), labels)
+    champion = pick_champion_name(labels, promoted_variant or (live_pair[0] if live_pair else None))
     arms = {name: stored.get(name, ArmCounts(0, 0)) for name in labels}
-    if pair_ok:
+    if live_pair is not None:
+        prev_champion, prev_challenger = live_pair
         window_impressions = 0
         for name in (prev_champion, prev_challenger):
             extra = window.get(name, ArmCounts(0, 0))
             arms[name] = add_counts(arms[name], extra)
             window_impressions += extra.impressions
         pair_impressions = int(prev.get("pair_impressions") or 0) + window_impressions
-        if promoted_variant and prev_champion in labels and prev_champion != champion:
+        if promoted_variant and prev_champion != champion:
             challenger = prev_champion
         else:
             challenger = prev_challenger if prev_challenger != champion else _other_name(labels, champion)
@@ -261,7 +254,7 @@ def allocate_thompson(
         challenger = sample_arm([name for name in labels if name != champion], arms, seed=seed)
     rotated = False
     can_rotate = (
-        pair_ok
+        live_pair is not None
         and promoted_variant is None
         and pair_impressions >= max(0, int(min_impressions))
         and guardrails_ok

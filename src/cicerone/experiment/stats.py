@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from cicerone.experiment.recipes import CONTROL_NAME
-
 _LOG_LOG_FLOOR = 3.0
 _VARIANCE_FLOOR = 1e-12
 
@@ -63,6 +61,7 @@ def compare_variants(
     treatment: VariantMetric,
     *,
     alpha: float,
+    min_users: int,
 ) -> ComparisonResult:
     difference = treatment.mean - control.mean
     radius = math.hypot(
@@ -71,7 +70,8 @@ def compare_variants(
     )
     ci_low = difference - radius
     ci_high = difference + radius
-    decided = math.isfinite(radius) and (ci_high < 0 or ci_low > 0)
+    enough = min(control.n_users, treatment.n_users) >= min_users
+    decided = enough and math.isfinite(radius) and (ci_high < 0 or ci_low > 0)
     winner: str | None = None
     if decided:
         winner = treatment.name if difference > 0 else control.name
@@ -85,9 +85,3 @@ def compare_variants(
         winner=winner,
         alpha=alpha,
     )
-
-
-def pick_control_name(names: list[str]) -> str:
-    if CONTROL_NAME in names:
-        return CONTROL_NAME
-    return names[0]

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
+from cicerone.errors import OPTIONAL_STORE_READ_ERRORS
 from cicerone.events.consumed import ConsumedOverlay
 from cicerone.io.base import UserHistoryReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
@@ -69,7 +70,7 @@ def consumed_item_ids(
         return ids
     try:
         events = history.get_events_for_user(user_id, lookback)
-    except Exception as exc:
+    except OPTIONAL_STORE_READ_ERRORS as exc:
         if not _missing_history(exc):
             _log_history_failure(user_id)
         return ids
@@ -111,7 +112,7 @@ def _history_frames_for_users(
     if callable(bulk):
         try:
             return dict(bulk(user_ids, lookback))
-        except Exception as exc:
+        except OPTIONAL_STORE_READ_ERRORS as exc:
             if _missing_history(exc):
                 return {}
             _log_history_failure(user_ids[0])
@@ -119,7 +120,7 @@ def _history_frames_for_users(
     for user_id in user_ids:
         try:
             frames[user_id] = history.get_events_for_user(user_id, lookback)
-        except Exception as exc:
+        except OPTIONAL_STORE_READ_ERRORS as exc:
             if _missing_history(exc):
                 return frames
             _log_history_failure(user_id)

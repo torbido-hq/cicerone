@@ -12,7 +12,6 @@ from cicerone.events.base import EventSourceError, NormalizedEvent
 from cicerone.events.s3_parse import (
     SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
     SQS_MALFORMED_RECEIVE_LIMIT,
-    SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
     Batch,
     MalformedS3Notification,
     s3_records_from_sqs_body,
@@ -127,7 +126,7 @@ class S3SqsPoll:
         while loaded < need:
             response = sqs.receive_message(
                 QueueUrl=queue_url,
-                MaxNumberOfMessages=min(self._max_messages, 10),
+                MaxNumberOfMessages=self._max_messages,
                 WaitTimeSeconds=self._wait_time_seconds if loaded == 0 else 0,
                 VisibilityTimeout=SQS_APPLY_VISIBILITY_TIMEOUT_SECONDS,
                 MessageSystemAttributeNames=["ApproximateReceiveCount"],
@@ -158,7 +157,7 @@ class S3SqsPoll:
                         exc_info=exc,
                     )
                     pairs = list(exc.valid_pairs)
-                except Exception:
+                except (ValueError, RecursionError):
                     logger.exception("Invalid S3 notification on SQS; deleting poison message")
                     if _delete_poison_message(sqs, queue_url, receipt):
                         made_progress = True
@@ -178,19 +177,12 @@ class S3SqsPoll:
                     continue
                 batch_events: list[NormalizedEvent] = []
                 failed = False
-                poison = False
                 for bucket, key in matched:
                     try:
                         batch_events.extend(self._load_object_events(s3, bucket, key))
                     except ValueError:
-                        logger.exception(
-                            "Unreadable s3://%s/%s from SQS notification; deleting poison message",
-                            bucket,
-                            key,
-                        )
-                        poison = True
-                        break
-                    except Exception:
+                        logger.exception("Skipping unreadable s3://%s/%s from SQS notification", bucket, key)
+                    except S3_READ_ERRORS:
                         logger.exception(
                             "Failed to load s3://%s/%s from SQS notification; leaving message for retry",
                             bucket,
@@ -198,11 +190,11 @@ class S3SqsPoll:
                         )
                         failed = True
                         break
-                if poison:
+                if failed:
+                    continue
+                if not batch_events:
                     if _delete_poison_message(sqs, queue_url, receipt):
                         made_progress = True
-                    continue
-                if failed:
                     continue
                 novel = [event for event in batch_events if event.event_id not in held_ids]
                 if not novel:
@@ -224,7 +216,7 @@ class S3SqsPoll:
         *,
         sqs: Any,
         queue_url: str | None,
-        timeout_seconds: int = SQS_NACK_VISIBILITY_TIMEOUT_SECONDS,
+        timeout_seconds: int,
     ) -> None:
         if not receipts or sqs is None or queue_url is None:
             return
@@ -235,7 +227,7 @@ class S3SqsPoll:
                     ReceiptHandle=receipt,
                     VisibilityTimeout=timeout_seconds,
                 )
-            except Exception:
+            except S3_READ_ERRORS:
                 logger.exception("Failed to extend SQS visibility")
 
     def _adopt_sqs_receipt(self, receipt: str, event_ids: set[str]) -> None:

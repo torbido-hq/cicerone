@@ -9,12 +9,12 @@ from typing import Any
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from cicerone.config.constants import ConfigError
+from cicerone.config.constants import import_extra
 from cicerone.config.settings import IOSettings
 from cicerone.io.recommendation_schema import USER_COLUMN
+from cicerone.redis_client import redis_from_url
 
 _REDIS_TIMEOUT_SECONDS = 5.0
-_REDIS_EXTRA = "install with: pip install 'cicerone-recommender[redis]'"
 _HDEL_BATCH = 1000
 # HSCAN page size: big hashes are read in pages instead of one blocking HVALS/HGETALL reply.
 _SCAN_COUNT = 1000
@@ -108,12 +108,9 @@ class RedisTrackLog:
 
 
 def _connect(redis_url: str) -> Any:
-    try:
-        import redis
-    except ImportError as exc:
-        raise ConfigError(f"track.redis_url requires the redis package; {_REDIS_EXTRA}") from exc
+    import_extra("redis", "redis", "track.redis_url")
     # No eager ping: a down Redis surfaces as a RedisError on first use, which callers handle.
-    return redis.Redis.from_url(
+    return redis_from_url(
         redis_url,
         decode_responses=True,
         socket_timeout=_REDIS_TIMEOUT_SECONDS,

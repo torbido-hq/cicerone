@@ -6,7 +6,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import FastAPI, HTTPException
@@ -16,10 +15,18 @@ from cicerone import job
 from cicerone.config import IOSettings, Settings
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.http_security import SecurityHeadersMiddleware
-from cicerone.io.options import build_s3_client, object_key, validate_storage_options
+from cicerone.io.blob import S3_READ_ERRORS
+from cicerone.io.filenames import EVENTS_FILENAME
+from cicerone.io.options import (
+    build_s3_client,
+    is_s3_not_found,
+    local_path,
+    s3_location,
+    validate_storage_options,
+)
 from cicerone.locks import LockBackend
 from cicerone.locks.redis import RedisError
-from cicerone.serve.metrics import record_retrain_trigger
+from cicerone.metrics import record_retrain_trigger
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +94,7 @@ class RunGuard:
             else:
                 self._run_fn(triggered_by=triggered_by, fence_check=self._backend.owned)
         except Exception as exc:
+            # Run thread's top level; the error is kept as last_error.
             logger.exception("Triggered run (%s) failed", triggered_by)
             with self._lock:
                 self._last_error = exc
@@ -101,22 +109,22 @@ class RunGuard:
 
 def _current_marker(input_settings: IOSettings) -> str | None:
     options = input_settings.options
-    try:
-        backend = validate_storage_options(options)
-        if backend == "local":
-            path = Path(options["path"]) / "events.parquet"
-            if not path.exists():
-                return None
-            return str(path.stat().st_mtime)
+    backend = validate_storage_options(options)
+    if backend == "local":
+        path = local_path(options, EVENTS_FILENAME)
+        if not path.exists():
+            return None
+        return str(path.stat().st_mtime)
 
-        client = build_s3_client(options)
-        bucket = options["bucket"]
-        key = object_key(options, "events.parquet")
+    client = build_s3_client(options)
+    bucket, key = s3_location(options, EVENTS_FILENAME)
+    try:
         head = client.head_object(Bucket=bucket, Key=key)
-        return str(head["LastModified"])
-    except Exception:
-        logger.exception("Failed to check input source for changes; treating as unchanged")
-        return None
+    except S3_READ_ERRORS as exc:
+        if is_s3_not_found(exc):
+            return None
+        raise
+    return str(head["LastModified"])
 
 
 def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_seconds: float) -> None:
@@ -128,10 +136,18 @@ def poll_input_forever(input_settings: IOSettings, guard: RunGuard, interval_sec
         )
         return
 
-    last_marker = _current_marker(input_settings)
+    def checked_marker() -> str | None:
+        # Poller thread's top level: an unexpected error must not stop polling.
+        try:
+            return _current_marker(input_settings)
+        except Exception:
+            logger.exception("Failed to check input source for changes; treating as unchanged")
+            return None
+
+    last_marker = checked_marker()
     while True:
         time.sleep(interval_seconds)
-        marker = _current_marker(input_settings)
+        marker = checked_marker()
         if marker is None or marker == last_marker:
             continue
         try:

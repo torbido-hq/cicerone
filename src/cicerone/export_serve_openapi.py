@@ -17,7 +17,7 @@ import pandas as pd
 
 from cicerone.config import EventsSettings, ServeSettings, make_settings
 from cicerone.io.base import BaseRecommendationReader
-from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
+from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS
 from cicerone.serve import create_app
 
 
@@ -42,7 +42,9 @@ def build_openapi() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Export the Cicerone serve OpenAPI schema")
+    parser = argparse.ArgumentParser(
+        prog="cicerone export-openapi", description="Export the Cicerone serve OpenAPI schema"
+    )
     parser.add_argument(
         "-o",
         "--output",

@@ -10,6 +10,10 @@ from cicerone.config.constants import ConfigError
 MAX_BROKER_TIMEOUT_SECONDS = (2**31 - 1) / 1000.0  # signed 32-bit milliseconds
 
 
+# What int()/float() raise on a value that isn't a usable number.
+NUMBER_PARSE_ERRORS = (TypeError, ValueError, OverflowError)
+
+
 def require_nonempty_str(options: dict[str, Any], key: str, *, prefix: str) -> str:
     value = options.get(key)
     if value in (None, "") or (isinstance(value, str) and not str(value).strip()):
@@ -26,12 +30,16 @@ def optional_nonempty_str(options: dict[str, Any], key: str, *, prefix: str) -> 
     return text
 
 
-def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str, minimum: int) -> int:
+def as_int(options: dict[str, Any], key: str, default: int, *, prefix: str) -> int:
     raw = options.get(key, default)
     try:
-        value = int(raw)
-    except (TypeError, ValueError, OverflowError) as exc:
+        return int(raw)
+    except NUMBER_PARSE_ERRORS as exc:
         raise ConfigError(f"{prefix}.{key} must be an integer, got {raw!r}") from exc
+
+
+def optional_int(options: dict[str, Any], key: str, default: int, *, prefix: str, minimum: int) -> int:
+    value = as_int(options, key, default, prefix=prefix)
     if value < minimum:
         raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {value}")
     return value
@@ -50,31 +58,14 @@ def optional_float(
     raw = options.get(key, default)
     try:
         value = float(raw)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ConfigError(f"{prefix}.{key} must be a number{_option_detail(raw)}") from exc
+    except NUMBER_PARSE_ERRORS as exc:
+        raise ConfigError(f"{prefix}.{key} must be a number, got {raw!r}") from exc
     if not math.isfinite(value):
-        raise ConfigError(f"{prefix}.{key} must be finite{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be finite, got {raw!r}")
     if value <= minimum_exclusive:
-        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be > {minimum_exclusive}, got {raw!r}")
     if minimum is not None and value < minimum:
-        raise ConfigError(f"{prefix}.{key} must be >= {minimum}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be >= {minimum}, got {raw!r}")
     if maximum is not None and value > maximum:
-        raise ConfigError(f"{prefix}.{key} must be <= {maximum}{_option_detail(raw)}")
+        raise ConfigError(f"{prefix}.{key} must be <= {maximum}, got {raw!r}")
     return value
-
-
-def _type_name(value: object) -> str:
-    # Read the type slot directly so a metaclass cannot turn this into a new error.
-    name = type.__dict__["__name__"].__get__(type(value), type)
-    if isinstance(name, str):
-        return name
-    return "unrepresentable"
-
-
-def _option_detail(raw: Any) -> str:
-    try:
-        rendered = repr(raw)
-    except Exception as exc:
-        # The configuration error must still be raised.
-        rendered = f"<{_type_name(raw)} {_type_name(exc)}>"
-    return f", got {rendered}"

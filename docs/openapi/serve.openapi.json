@@ -289,7 +289,7 @@
             "title": "Event Id"
           },
           "event_type": {
-            "description": "Must match a key in features.toml [event_weights] to affect weights",
+            "description": "Types missing from features.toml [event_weights] carry no weight; without a features.toml, every type counts as a signal and quantity's size affects only the popular ranking, except online refresh, which uses the artifact's config",
             "title": "Event Type",
             "type": "string"
           },
@@ -2771,7 +2771,7 @@
                 }
               }
             },
-            "description": "Writer lock busy or lost, or the Redis track log is unavailable"
+            "description": "Writer lock busy or lost, or the track store or Redis log is unavailable"
           }
         },
         "security": [

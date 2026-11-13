@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, TypeVar
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import Any
 
 import pandas as pd
 
 from cicerone.config import Settings
+from cicerone.errors import (
+    OPTIONAL_EVAL_ERRORS,
+    OPTIONAL_IO_ERRORS,
+    OPTIONAL_STORE_READ_ERRORS,
+    log_caught,
+    try_load,
+)
 from cicerone.evaluation import (
     conversion_event_types,
     conversion_events_for_settings,
@@ -21,13 +29,10 @@ from cicerone.evaluation.context import prefer_history
 from cicerone.events.store import load_recommendations_for_users
 from cicerone.io.base import ManifestReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
-from cicerone.job_eval import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, log_caught
-from cicerone.locks import LockLostError
 from cicerone.track.store import TrackStore, open_track_store
 from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
 
 logger = logging.getLogger(__name__)
-_T = TypeVar("_T")
 _CATALOG_PREFIXES = ("CatalogCoverage", "MeanInvUserFreq", "AvgRecPopularity")
 _DIVERSITY_PREFIXES = ("IntraListDiversity", "Serendipity")
 _TRACK_REC_COLUMNS = (USER_COLUMN, ITEM_COLUMN, SOURCE_COLUMN, VARIANT_COLUMN, "generated_at")
@@ -39,8 +44,6 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
     error: str | None = None
     try:
         report = store.read_eval()
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read track eval report", exc, log=logger)
         error = "Could not load quality metrics."
@@ -73,11 +76,13 @@ def quality_context(settings: Settings, reader: ManifestReader | None = None) ->
     recent_runs: list[dict[str, Any]] = []
     history_single = False
     if reader is not None:
-        try:
-            history = reader.read_recent(settings.dashboard.history_limit)
-        except Exception:
-            logger.exception("Failed to read manifests for Quality history")
-            history = []
+        history = try_load(
+            "read manifests for Quality history",
+            partial(reader.read_recent, settings.dashboard.history_limit),
+            [],
+            log=logger,
+            errors=OPTIONAL_STORE_READ_ERRORS,
+        )
         recent_runs = _quality_history(history)
         history_single = len(recent_runs) == 1 and settings.output.kind == "dataset"
     current_stamp = _eval_stamp(report.get("generated_at") if isinstance(report, dict) else None)
@@ -419,16 +424,6 @@ def _rank_curve_inverted(track_eval: dict[str, Any] | None, min_impressions: int
     return any(left[1] < right[1] for left, right in zip(points, points[1:], strict=False))
 
 
-def _future_or(future: Future[_T], label: str, default: _T) -> _T:
-    try:
-        return future.result()
-    except LockLostError:
-        raise
-    except OPTIONAL_IO_ERRORS as exc:
-        log_caught(f"Failed to {label}", exc, log=logger)
-        return default
-
-
 def _no_impressions(track_eval: dict[str, Any] | None) -> bool:
     if not track_eval:
         return True
@@ -456,8 +451,6 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
         )
         rows = store.read_rows(since=since)
-    except LockLostError:
-        raise
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read track rows for Quality", exc, log=logger)
         return None
@@ -487,15 +480,21 @@ def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | 
             return store.read_history(generated_ats=wanted)
 
         with ThreadPoolExecutor(max_workers=3) as pool:
-            conv_f = pool.submit(_load_conversions)
-            recs_f = pool.submit(_load_recs)
-            hist_f = pool.submit(_load_history)
-            conversions = _future_or(conv_f, "load conversions for live Quality metrics", pd.DataFrame())
-            current = _future_or(recs_f, "load recommendations for live Quality metrics", None)
-            history = _future_or(hist_f, "read recommendation history for Quality", None)
-            recs = prefer_history(history, current)
-    except LockLostError:
-        raise
+            conv_f = pool.submit(
+                try_load,
+                "load conversions for live Quality metrics",
+                _load_conversions,
+                pd.DataFrame(),
+                log=logger,
+            )
+            recs_f = pool.submit(
+                try_load, "load recommendations for live Quality metrics", _load_recs, None, log=logger
+            )
+            hist_f = pool.submit(
+                try_load, "read recommendation history for Quality", _load_history, None, log=logger
+            )
+            conversions = conv_f.result()
+            recs = prefer_history(hist_f.result(), recs_f.result())
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to load conversions for live Quality metrics", exc, log=logger)
     try:

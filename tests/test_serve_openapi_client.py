@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import socket
 import threading
-import time
 from pathlib import Path
 
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
-from test_serve import _FakeManifest, _FakeReader, _feature_config, _items_df, _recs_df, _settings
+from support.fakes import FakeManifest, FakeReader
+from support.serve import items_df, recs_df, serve_feature_config, serve_settings
+from support.waits import wait_until
 
 from cicerone.export_serve_openapi import build_openapi
 from cicerone.export_serve_openapi import main as export_main
@@ -39,10 +40,10 @@ OPENAPI_PATH = REPO_ROOT / "docs" / "openapi" / "serve.openapi.json"
 
 def _app(**kwargs):
     return create_app(
-        _settings(),
-        _FakeReader(_recs_df(), _items_df()),
-        manifest_reader=_FakeManifest(),
-        feature_config=_feature_config(),
+        serve_settings(),
+        FakeReader(recs_df(), items_df()),
+        manifest_reader=FakeManifest(),
+        feature_config=serve_feature_config(),
         **kwargs,
     )
 
@@ -196,10 +197,7 @@ def live_serve_url():
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    deadline = time.time() + 5
-    while not server.started and time.time() < deadline:
-        time.sleep(0.01)
-    if not server.started:
+    if not wait_until(lambda: server.started):
         raise RuntimeError("uvicorn failed to start for ServeClient test")
     try:
         yield f"http://127.0.0.1:{port}"

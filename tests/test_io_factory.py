@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import pytest
+from support.settings import local_output
 
 from cicerone.config import IOSettings
 from cicerone.io.dataset_catalog import DatasetCatalogStore
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 from cicerone.io.db_catalog import DatabaseCatalogStore
+from cicerone.io.db_recommendation_reader import DbRecommendationReader
 from cicerone.io.db_store import DatabaseInputSource, DatabaseOutputSink
 from cicerone.io.factory import (
     build_catalog_store,
@@ -14,21 +17,20 @@ from cicerone.io.factory import (
     build_output_sink,
     build_recommendation_reader,
     build_surfaces_reader,
-    build_user_history_reader,
 )
 from cicerone.io.manifest_reader import DatasetManifestReader, DbManifestReader
-from cicerone.io.recommendation_reader import DatasetRecommendationReader, DbRecommendationReader
 from cicerone.io.surfaces_reader import DatasetSurfacesReader, DbSurfacesReader, EmptySurfacesReader
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import WriteFence
 
 
 def test_build_input_source_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_input_source(settings), DatasetInputSource)
-    assert isinstance(build_user_history_reader(settings), DatasetInputSource)
 
 
 def test_build_output_sink_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     sink = build_output_sink(settings)
     assert isinstance(sink, DatasetOutputSink)
     assert sink._fence.lock is None
@@ -49,10 +51,7 @@ def test_build_output_sink_dataset(tmp_path):
     lock = _Lock()
     locked = build_output_sink(
         settings,
-        writer_lock=lock,
-        fence_check=lock.owned,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(lock, lock.owned),
     )
     assert isinstance(locked, DatasetOutputSink)
     assert locked._fence.lock is lock
@@ -64,7 +63,6 @@ def test_build_output_sink_dataset(tmp_path):
 def test_build_input_source_db():
     settings = IOSettings(kind="db", options={"database_url": "postgresql+psycopg://u:p@h/d"})
     assert isinstance(build_input_source(settings), DatabaseInputSource)
-    assert isinstance(build_user_history_reader(settings), DatabaseInputSource)
 
 
 def test_build_output_sink_db():
@@ -72,16 +70,14 @@ def test_build_output_sink_db():
     assert isinstance(build_output_sink(settings), DatabaseOutputSink)
     fenced = build_output_sink(
         settings,
-        fence_check=lambda: True,
-        fence_lost="events apply lock lost before write",
-        fence_kind="apply",
+        fence=WriteFence(None, lambda: True, "events apply lock lost before write", "apply"),
     )
     assert isinstance(fenced, DatabaseOutputSink)
     assert fenced._fence.check is not None
     assert fenced._fence.check() is True
     assert fenced._fence.kind == "apply"
     locked = object()
-    with_lock = build_output_sink(settings, writer_lock=locked)
+    with_lock = build_output_sink(settings, fence=WriteFence(locked))
     assert with_lock._fence.lock is locked
     assert callable(with_lock.recommendations_write)
 
@@ -105,7 +101,7 @@ def test_database_write_honors_writer_lock(tmp_path):
     import pandas as pd
 
     url = f"sqlite+pysqlite:///{tmp_path / 'recs.db'}"
-    sink = DatabaseOutputSink({"database_url": url}, writer_lock=_Lost())
+    sink = DatabaseOutputSink({"database_url": url}, fence=WriteFence(_Lost()))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
 
@@ -122,9 +118,7 @@ def test_database_write_manifest_rechecks_fence_before_append(tmp_path):
 
     sink = DatabaseOutputSink(
         {"database_url": url},
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         sink.write_manifest({"n_events": 1, "generated_at": "t"})
@@ -154,9 +148,7 @@ def test_database_write_recommendations_rechecks_fence_after_clear(tmp_path, mon
     monkeypatch.setattr(db_store_mod, "_clear_table_for_replace", _clear)
     sink = DatabaseOutputSink(
         {"database_url": url},
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
@@ -188,9 +180,7 @@ def test_database_write_recommendations_rechecks_fence_after_append(tmp_path, mo
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     sink = DatabaseOutputSink(
         {"database_url": url},
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         sink.write_recommendations(pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1}]))
@@ -223,9 +213,7 @@ def test_database_write_items_rechecks_fence_after_clear(tmp_path, monkeypatch):
     monkeypatch.setattr(db_store_mod, "_clear_table_for_replace", _clear)
     sink = DatabaseOutputSink(
         {"database_url": url},
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1"}]))
@@ -249,7 +237,7 @@ def test_build_output_sink_unknown_kind_raises():
 
 
 def test_build_recommendation_reader_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_recommendation_reader(settings), DatasetRecommendationReader)
 
 
@@ -265,7 +253,7 @@ def test_build_recommendation_reader_unknown_kind_raises():
 
 
 def test_build_manifest_reader_dataset(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert isinstance(build_manifest_reader(settings), DatasetManifestReader)
 
 
@@ -284,9 +272,9 @@ def test_build_output_sink_type_hints_resolve_at_runtime():
     import typing
 
     from cicerone.io.factory import build_output_sink
-    from cicerone.locks import LockBackend
+    from cicerone.locks import WriteFence
 
-    assert typing.get_type_hints(build_output_sink)["writer_lock"] == LockBackend | None
+    assert typing.get_type_hints(build_output_sink)["fence"] == WriteFence | None
 
 
 def test_build_catalog_store_dataset(tmp_path):

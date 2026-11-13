@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from conftest import make_settings
+from support.serve import serve_settings
 
 from cicerone.serve.recommendations import RecommendationService
 
@@ -58,11 +58,11 @@ class _GenreItems:
 
 def _service(reader: _Reader, monkeypatch, variant: str | None, items_cache=None) -> RecommendationService:
     monkeypatch.setattr(
-        "cicerone.serve.recommendations.resolve_assignment",
+        "cicerone.serve.recommendations.assign_user",
         lambda *args, **kwargs: ("exp", variant) if variant else (None, None),
     )
     return RecommendationService(
-        make_settings(mode="serve"),
+        serve_settings(),
         reader,
         items_cache=items_cache or _NoItems(),
         assignment_overlay=lambda: (None, None),

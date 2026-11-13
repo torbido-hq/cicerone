@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 
 import pandas as pd
@@ -7,8 +8,10 @@ import pytest
 from support.events import event_payload
 from support.fake_kafka import FakeProducer, install_fake_kafka
 from support.fake_rabbitmq import FakeChannel, FakeConnection, install_fake_rabbitmq
+from support.fakes import FakePublisher, hide_module, raising
+from support.settings import local_output
 
-from cicerone.config import ConfigError, IOSettings, PublishSettings, make_settings
+from cicerone.config import ConfigError, PublishSettings, make_settings
 from cicerone.events.errors import AMQPError, KafkaException
 from cicerone.events.normalize import normalize_event
 from cicerone.events.store import load_recommendations_frame
@@ -16,7 +19,6 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.publish import PublishError, build_publisher, publish_recommendations, registered_publish_kinds
-from cicerone.publish.factory import build_publisher_from_kind
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
@@ -46,67 +48,14 @@ def test_user_recommendation_messages_one_per_user():
 
 
 def test_user_recommendation_messages_empty():
-    assert user_recommendation_messages(pd.DataFrame()) == []
-    assert user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]})) == []
+    assert list(user_recommendation_messages(pd.DataFrame())) == []
+    assert list(user_recommendation_messages(pd.DataFrame({"item_id": ["i1"]}))) == []
 
 
-def test_publish_recommendations_skips_user_ids_for_legacy_publishers() -> None:
-    seen: list[object] = []
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            seen.append(df)
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2"])
-    assert seen == [frame]
-
-
-def test_publish_recommendations_rejects_legacy_when_tombstones_required() -> None:
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            raise AssertionError("legacy publish must not drop tombstones")
-
-        def close(self) -> None:
-            return None
-
-    with pytest.raises(PublishError, match="user_ids"):
-        publish_recommendations(_Legacy(), pd.DataFrame(), user_ids=["u1"])
-
-
-def test_publish_recommendations_publishes_nonempty_before_legacy_tombstone_error() -> None:
-    seen: list[pd.DataFrame] = []
-
-    class _Legacy:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame) -> None:
-            seen.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    with pytest.raises(PublishError, match="user_ids"):
-        publish_recommendations(_Legacy(), frame, user_ids=["u1", "u2", "u3"])
-    assert len(seen) == 1
-    assert set(seen[0]["user_id"].astype(str)) == {"u1", "u2"}
-
-
-def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypatch) -> None:
+def test_publish_recommendations_wraps_typeerror() -> None:
     calls: list[tuple[pd.DataFrame, object]] = []
 
-    class _Uninspectable:
+    class _RaisingPublisher:
         def connect(self) -> None:
             return None
 
@@ -117,60 +66,14 @@ def test_publish_recommendations_does_not_retry_uninspectable_typeerror(monkeypa
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr("cicerone.publish.base.inspect.signature", lambda _fn: None)
     frame = _recs_frame()
     with pytest.raises(PublishError, match="payload invalid after send") as raised:
-        publish_recommendations(_Uninspectable(), frame, user_ids=["u1", "u2"])
+        publish_recommendations(_RaisingPublisher(), frame, user_ids=["u1", "u2"])
     assert isinstance(raised.value.__cause__, TypeError)
     assert len(calls) == 1
     published, user_ids = calls[0]
     assert published is frame
     assert user_ids == ["u1", "u2"]
-
-
-def test_publish_recommendations_treats_positional_only_user_ids_as_legacy() -> None:
-    seen: list[pd.DataFrame] = []
-
-    class _Positional:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
-            seen.append(df)
-
-        def close(self) -> None:
-            return None
-
-    frame = _recs_frame()
-    publish_recommendations(_Positional(), frame, user_ids=["u1", "u2"])
-    assert seen == [frame]
-
-
-def test_incremental_updater_rejects_positional_only_user_ids(
-    tmp_path, feature_config: FeatureConfig
-) -> None:
-    class _Positional:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, user_ids=None, /) -> None:
-            return None
-
-        def close(self) -> None:
-            return None
-
-    settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
-        top_k=5,
-    )
-    with pytest.raises(TypeError, match="user_ids"):
-        IncrementalUpdater(
-            sink=build_output_sink(settings.output),
-            output_settings=settings.output,
-            feature_config=feature_config,
-            top_k=5,
-            publisher=_Positional(),
-        )
 
 
 def test_user_recommendation_messages_user_ids_emit_empty_lists():
@@ -292,6 +195,14 @@ def test_kafka_publisher_emits_per_user(monkeypatch):
     publisher.close()
 
 
+def test_kafka_publisher_serves_delivery_callbacks_per_message(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
+    publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
+    publisher.connect()
+    publisher.publish(_recs_frame())
+    assert broker.poll_calls == [0, 0]
+
+
 def test_kafka_publisher_uses_timeout_seconds(monkeypatch):
     broker = install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher(
@@ -357,6 +268,18 @@ def test_rabbitmq_publisher_close_runtime_error_still_closes_connection(monkeypa
     assert broker.connection.closed is True
 
 
+def test_rabbitmq_publisher_close_channel_error_wins_over_connection_close_error(monkeypatch, caplog):
+    broker = install_fake_rabbitmq(monkeypatch)
+    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
+    publisher.connect()
+    broker.connection.channel_obj.close = raising(TypeError("channel close bug"))  # type: ignore[method-assign]
+    broker.connection.close = raising(ValueError("connection close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="channel close bug"):
+        publisher.close()
+    assert broker.connection.close.calls == 1
+    assert "Failed to close RabbitMQ connection after a channel close error" in caplog.text
+
+
 def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "q"})
@@ -389,37 +312,46 @@ def test_build_publisher_kafka(monkeypatch):
     )
     publisher = build_publisher(settings)
     assert publisher is not None
+    assert publisher._producer is None
+    publisher.connect()
+    assert publisher._producer is not None
     publisher.close()
 
 
+_PUBLISH_OPTIONS = {
+    "kafka": {"bootstrap_servers": "localhost:9092", "topic": "recs"},
+    "rabbitmq": {"amqp_url": "amqp://localhost/", "queue": "recs"},
+}
+
+
+@pytest.mark.parametrize("kind", registered_publish_kinds())
+def test_every_built_publisher_accepts_user_ids(kind):
+    assert set(_PUBLISH_OPTIONS) == set(registered_publish_kinds())
+    publisher = build_publisher(PublishSettings(enabled=True, kind=kind, options=_PUBLISH_OPTIONS[kind]))
+    assert publisher is not None
+    param = inspect.signature(publisher.publish).parameters["user_ids"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is None
+
+
 def test_missing_kafka_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "confluent_kafka":
-            raise ImportError("no kafka")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "confluent_kafka")
+    publisher = build_publisher(
+        PublishSettings(enabled=True, kind="kafka", options={"bootstrap_servers": "h:9092", "topic": "t"})
+    )
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[kafka\]"):
-        build_publisher_from_kind("kafka", {"bootstrap_servers": "h:9092", "topic": "t"})
+        publisher.connect()
 
 
 def test_missing_rabbitmq_extra(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "pika":
-            raise ImportError("no pika")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "pika")
+    publisher = build_publisher(
+        PublishSettings(
+            enabled=True, kind="rabbitmq", options={"amqp_url": "amqp://localhost/", "queue": "q"}
+        )
+    )
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
-        build_publisher_from_kind("rabbitmq", {"amqp_url": "amqp://localhost/", "queue": "q"})
+        publisher.connect()
 
 
 def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig):
@@ -429,32 +361,21 @@ def test_updater_publishes_after_replace(tmp_path, feature_config: FeatureConfig
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-    captured: list[pd.DataFrame] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            captured.append(df.copy())
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher()
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert len(captured) == 1
-    assert "u1" in set(captured[0]["user_id"].astype(str))
+    assert len(publisher.published) == 1
+    assert "u1" in set(publisher.published[0]["user_id"].astype(str))
 
 
 def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config: FeatureConfig):
@@ -464,7 +385,7 @@ def test_updater_does_not_nack_after_publish_typeerror(tmp_path, feature_config:
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
     calls: list[object] = []
@@ -501,31 +422,20 @@ def test_updater_does_not_nack_after_sidecar_connect_type_error(tmp_path, featur
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-    calls: list[object] = []
-
-    class _Pub:
-        def connect(self) -> None:
-            raise TypeError("connect bug")
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            calls.append(user_ids)
-
-        def close(self) -> None:
-            return None
-
+    publisher = FakePublisher(connect_error=TypeError("connect bug"))
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Pub(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert calls == []
+    assert publisher.published == []
     written = load_recommendations_frame(settings.output)
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
@@ -681,8 +591,6 @@ def test_rabbitmq_publisher_connect_close_failure_keeps_original_error(monkeypat
 
 def test_build_publisher_unknown_kind():
     with pytest.raises(ConfigError, match="publish.kind"):
-        build_publisher_from_kind("sns", {})
-    with pytest.raises(ConfigError, match="publish.kind"):
         build_publisher(PublishSettings(enabled=True, kind="sns"))
 
 
@@ -712,7 +620,7 @@ def test_kafka_publisher_close_wraps_client_error(monkeypatch):
         publisher.close()
 
 
-def test_kafka_publisher_close_wraps_os_error(monkeypatch):
+def test_kafka_publisher_close_os_error_propagates(monkeypatch):
     install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "t"})
     publisher.connect()
@@ -721,8 +629,9 @@ def test_kafka_publisher_close_wraps_os_error(monkeypatch):
         raise OSError("flush fail")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    with pytest.raises(PublishError, match="flush fail"):
+    with pytest.raises(OSError, match="flush fail") as caught:
         publisher.close()
+    assert not isinstance(caught.value, PublishError)
 
 
 def test_kafka_publisher_close_reraises_runtime_error_subclass(monkeypatch):
@@ -771,27 +680,24 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
         [{"user_id": "u1", "item_id": "old", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
     settings = make_settings(
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         top_k=5,
     )
-
-    class _Boom:
-        def connect(self) -> None:
-            return None
-
-        def publish(self, df: pd.DataFrame, *, user_ids=None) -> None:
-            raise PublishError("broker down")
-
+    publisher = FakePublisher(
+        publish_error=PublishError("broker down"),
+        close_error=AssertionError("close should not run"),
+    )
     updater = IncrementalUpdater(
         sink=build_output_sink(settings.output),
         output_settings=settings.output,
         feature_config=feature_config,
         top_k=5,
-        publisher=_Boom(),
+        publisher=publisher,
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
     assert updater.events_applied == 1
+    assert publisher.publish_attempts == 1
 
 
 def test_kafka_publisher_fails_on_delivery_error(monkeypatch):
@@ -833,8 +739,8 @@ def test_kafka_publisher_flush_error_is_publish_error(monkeypatch):
         publisher.close()
 
 
-def test_kafka_publisher_flush_after_produce_is_publish_error(monkeypatch):
-    install_fake_kafka(monkeypatch)
+def test_kafka_publisher_flush_bug_after_produce_propagates(monkeypatch):
+    broker = install_fake_kafka(monkeypatch)
     publisher = KafkaPublisher({"bootstrap_servers": "localhost:9092", "topic": "cicerone.recs"})
     publisher.connect()
 
@@ -842,8 +748,10 @@ def test_kafka_publisher_flush_after_produce_is_publish_error(monkeypatch):
         raise RuntimeError("flush bug")
 
     publisher._producer.flush = _boom  # type: ignore[method-assign]
-    with pytest.raises(PublishError, match="flush bug"):
+    with pytest.raises(RuntimeError, match="flush bug") as caught:
         publisher.publish(_recs_frame())
+    assert not isinstance(caught.value, PublishError)
+    assert len(broker.produced) == 2
 
 
 def test_kafka_publisher_produce_unexpected_error_propagates(monkeypatch):
@@ -979,7 +887,7 @@ def test_rabbitmq_publisher_publish_unexpected_error_propagates(monkeypatch):
     assert publisher._channel is channel
 
 
-def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkeypatch):
+def test_rabbitmq_publisher_type_error_after_partial_send_propagates_without_retry(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -991,35 +899,19 @@ def test_rabbitmq_publisher_unexpected_error_after_confirm_retries_unsent(monkey
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise RuntimeError("publish bug")
+            raise TypeError("publish bug")
         return original(*args, **kwargs)
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
-    users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
-    assert users == ["u1", "u2"]
-
-
-def test_rabbitmq_publisher_failure_after_confirm_is_not_raised(monkeypatch):
-    broker = install_fake_rabbitmq(monkeypatch)
-    publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
-    publisher.connect()
-    calls = {"n": 0}
-    original = FakeChannel.basic_publish
-
-    def boom(self, *args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return original(self, *args, **kwargs)
-        raise RuntimeError("publish bug")
-
-    monkeypatch.setattr(FakeChannel, "basic_publish", boom)
-    publisher.publish(_recs_frame())
+    with pytest.raises(TypeError, match="publish bug"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
+    assert calls["n"] == 2
+    assert publisher._channel is channel
 
 
-def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_recover_failure_after_confirm_raises_publish_error(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -1036,13 +928,14 @@ def test_rabbitmq_publisher_recover_failure_after_confirm_is_not_raised(monkeypa
         raise AMQPError("channel closed")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(PublishError, match="unreachable or setup failed"):
+        publisher.publish(_recs_frame())
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert publisher._channel is None
 
 
-def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_raised(monkeypatch):
+def test_rabbitmq_publisher_unexpected_recover_failure_after_partial_send_propagates(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     publisher = RabbitMQPublisher({"amqp_url": "amqp://localhost/", "queue": "recs"})
     publisher.connect()
@@ -1055,14 +948,16 @@ def test_rabbitmq_publisher_unexpected_recover_failure_after_confirm_is_not_rais
         calls["n"] += 1
         if calls["n"] == 1:
             return original(*args, **kwargs)
-        raise RuntimeError("publish bug")
+        raise AMQPError("channel closed")
 
     def boom_close() -> None:
         raise RuntimeError("close bug")
 
     channel.basic_publish = boom  # type: ignore[method-assign]
     channel.close = boom_close  # type: ignore[method-assign]
-    publisher.publish(_recs_frame())
+    with pytest.raises(RuntimeError, match="close bug") as caught:
+        publisher.publish(_recs_frame())
+    assert not isinstance(caught.value, PublishError)
     users = [json.loads(body)["user_id"] for _exchange, _key, body in broker.published]
     assert users == ["u1"]
     assert broker.connection.closed is True
@@ -1103,26 +998,26 @@ def test_rabbitmq_publisher_close_propagates_unexpected_error(monkeypatch):
 def test_sidecar_generation_current_matches_latest_manifest(tmp_path):
     generated_at = "2026-09-17T12:00:00+00:00"
     (tmp_path / "manifest.json").write_text(json.dumps({"generated_at": generated_at}))
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert sidecar_generation_current(settings, generated_at) is True
     assert sidecar_generation_current(settings, "2099-01-01T00:00:00+00:00") is False
 
 
 def test_sidecar_generation_current_none_when_manifest_missing(tmp_path):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
 
 
 def test_sidecar_generation_current_none_when_manifest_unreadable(tmp_path, caplog):
     (tmp_path / "manifest.json").write_text("not-json")
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
     with caplog.at_level("ERROR", logger="cicerone.publish.sidecar"):
         assert sidecar_generation_current(settings, "2026-09-17T12:00:00+00:00") is None
     assert any(record.name == "cicerone.publish.sidecar" for record in caplog.records)
 
 
 def test_sidecar_generation_current_reraises_unexpected_error(tmp_path, monkeypatch):
-    settings = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    settings = local_output(tmp_path)
 
     class _Reader:
         def read_latest(self):

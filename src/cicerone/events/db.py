@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from time import monotonic
+from typing import Any, Literal, TypeVar
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSource, EventSourceError, EventSourceHealth, NormalizedEvent
 from cicerone.events.db_identity import (
+    ID_WHITESPACE,
+    ROW_IDENTITY_KEYS,
     cursor_key,
     cursor_key_from_payload,
     cursor_tuple,
@@ -24,12 +28,15 @@ from cicerone.events.db_identity import (
     identity_bind_sort_key,
     identity_sql_sort_expr,
     occurred_at_predicates,
+    payload_cursor,
     row_to_event,
 )
+from cicerone.events.normalize import EventNormalizeError
+from cicerone.events.state_file import read_json_object_file, write_json_object_file
 from cicerone.io.db_errors import SQL_READ_ERRORS
 from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-from cicerone.io.engines import engine_for, release_engine
-from cicerone.io.options import readonly_select, require_option, sql_identifier
+from cicerone.io.engines import engine_for, quote_identifier, release_engine, sql_source
+from cicerone.io.options import readonly_select, require_option, table_option
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +44,9 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _EVENTS_QUERY_ALIAS = "cicerone_events_src"
 # Bound for health lag when SQL COUNT is unavailable; None means unknown/too large.
 _LAG_SCAN_LIMIT = 10_000
-# Columns consumed by row_to_event / normalize_event (optional ones omitted if absent).
+# Columns an invalid row is reported by; user and item ids stay out of the log.
+_ROW_LOG_KEYS = ("event_id", "idempotency_key", *ROW_IDENTITY_KEYS, "occurred_at")
+# Columns consumed by _row_to_event / normalize_event (optional ones omitted if absent).
 _FETCH_COLUMNS = (
     "user_id",
     "item_id",
@@ -50,8 +59,58 @@ _FETCH_COLUMNS = (
 )
 
 
+_T = TypeVar("_T")
+
+
 def _validate_events_query(query: str) -> str:
     return readonly_select(query, option="events.options.events_query")
+
+
+def _parsed_rows(
+    rows: Sequence[dict[str, Any]],
+    parse: Callable[[dict[str, Any]], _T],
+    on_invalid: Callable[[dict[str, Any], EventNormalizeError], None],
+) -> Iterator[_T]:
+    for payload in rows:
+        try:
+            yield parse(payload)
+        except EventNormalizeError as exc:
+            on_invalid(payload, exc)
+
+
+def _rejection(payload: dict[str, Any], exc: EventNormalizeError) -> str:
+    identity = {name: payload[name] for name in _ROW_LOG_KEYS if payload.get(name) is not None}
+    return f"({exc}): {json.dumps(identity, default=str):.200}"
+
+
+def _row_event(payload: dict[str, Any]) -> NormalizedEvent:
+    try:
+        return row_to_event(payload)
+    except EventNormalizeError as exc:
+        reason = _rejection(payload, exc)
+    # Placed on the cursor so the worker acks it in order; raises when occurred_at is unusable.
+    occurred_at, event_id = payload_cursor(payload)
+    return NormalizedEvent("", "", "", 0, occurred_at, event_id, rejected=reason)
+
+
+@contextmanager
+def _utc_connection(engine: Engine) -> Iterator[Connection]:
+    with engine.connect() as conn:
+        if engine.dialect.name == "postgresql":
+            # Naive occurred_at values are UTC (db_occurred_at), so compare them in UTC, not the session zone.
+            conn.execute(text("SET LOCAL TIME ZONE 'UTC'"))
+        yield conn
+
+
+def _log_unplaceable_row(payload: dict[str, Any], exc: EventNormalizeError) -> None:
+    logger.warning("Skipping invalid event row %s", _rejection(payload, exc))
+
+
+@dataclass(slots=True)
+class _Delivery:
+    event: NormalizedEvent
+    state: Literal["pending", "acked", "nacked"]
+    polled_at: float
 
 
 class DbEventSource(EventSource):
@@ -64,10 +123,7 @@ class DbEventSource(EventSource):
     def __init__(self, options: dict[str, Any] | None = None):
         options = dict(options or {})
         self._database_url = require_option(options, "database_url", "db")
-        self._events_table = sql_identifier(
-            options.get("events_table", DEFAULT_EVENTS_TABLE),
-            option="events_table",
-        )
+        self._events_table = table_option(options, "events_table", DEFAULT_EVENTS_TABLE)
         self._events_query = options.get("events_query")
         if self._events_query is not None:
             if not isinstance(self._events_query, str):
@@ -79,7 +135,8 @@ class DbEventSource(EventSource):
         self._watermark_event_id = str(options.get("initial_watermark_event_id") or "")
         self._engine: Engine | None = None
         self._lock = threading.Lock()
-        self._in_flight: OrderedDict[str, NormalizedEvent] = OrderedDict()
+        # Polled events in cursor order; the watermark advances over the leading acked run.
+        self._in_flight: OrderedDict[str, _Delivery] = OrderedDict()
         self._connected = False
         self._last_event_at: datetime | None = None
         self._source_columns: frozenset[str] | None = None
@@ -115,6 +172,7 @@ class DbEventSource(EventSource):
         if held:
             release_engine(self._database_url)
 
+    # Polls never overlap: the worker is the only caller, from tick() under _tick_guard.
     def poll(self, max_events: int = 100) -> Sequence[NormalizedEvent]:
         if max_events < 1:
             return []
@@ -123,59 +181,90 @@ class DbEventSource(EventSource):
                 raise EventSourceError("DbEventSource.connect() required before poll")
             watermark_at = self._watermark_at
             watermark_event_id = self._watermark_event_id
-            in_flight_count = len(self._in_flight)
+            limit = max_events + len(self._in_flight) + 8
             engine = self._engine
-        rows = self._fetch_rows(
-            engine,
-            watermark_at,
-            watermark_event_id,
-            limit=max_events + in_flight_count + 8,
-        )
-        candidates = sorted((row_to_event(payload) for payload in rows), key=cursor_key)
+        rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=limit)
+        candidates = sorted(_parsed_rows(rows, _row_event, _log_unplaceable_row), key=cursor_key)
 
         out: list[NormalizedEvent] = []
         with self._lock:
+            self._drop_vanished_heads_unlocked(candidates, complete=len(rows) < limit)
             cursor = cursor_tuple(self._watermark_at, self._watermark_event_id)
             for event in candidates:
                 if len(out) >= max_events:
                     break
                 if cursor_key(event) <= cursor:
                     continue
-                if event.event_id in self._in_flight:
+                delivery = self._in_flight.get(event.event_id)
+                if delivery is None:
+                    self._in_flight[event.event_id] = _Delivery(event, "pending", monotonic())
+                elif delivery.state == "nacked":
+                    delivery.event, delivery.state = event, "pending"
+                else:
                     continue
-                self._in_flight[event.event_id] = event
                 self._last_event_at = event.occurred_at
                 out.append(event)
+            if out:
+                ordered = sorted(self._in_flight.items(), key=lambda item: cursor_key(item[1].event))
+                self._in_flight = OrderedDict(ordered)
         return out
 
     def nack(self, events: Sequence[NormalizedEvent]) -> Sequence[NormalizedEvent]:
         with self._lock:
             for event in events:
-                self._in_flight.pop(event.event_id, None)
+                delivery = self._in_flight.get(event.event_id)
+                if delivery is not None and delivery.state == "pending":
+                    delivery.state = "nacked"
         return ()
 
     def ack(self, event_ids: Sequence[str]) -> Sequence[str]:
         confirmed: list[str] = []
         with self._lock:
-            advanced = False
             for event_id in event_ids:
                 eid = str(event_id)
-                event = self._in_flight.pop(eid, None)
-                if event is None:
+                delivery = self._in_flight.get(eid)
+                if delivery is None or delivery.state != "pending":
                     continue
+                delivery.state = "acked"
                 confirmed.append(eid)
-                key = cursor_key(event)
-                if key > cursor_tuple(self._watermark_at, self._watermark_event_id):
-                    self._watermark_at = event.occurred_at
-                    self._watermark_event_id = event.event_id
-                    advanced = True
-            if advanced:
-                self._persist_watermark_unlocked()
+            self._advance_unlocked()
         return tuple(confirmed)
+
+    def _advance_unlocked(self) -> None:
+        advanced = False
+        while self._in_flight and next(iter(self._in_flight.values())).state == "acked":
+            _eid, delivery = self._in_flight.popitem(last=False)
+            self._watermark_at = delivery.event.occurred_at
+            self._watermark_event_id = delivery.event.event_id
+            advanced = True
+        if advanced:
+            self._persist_watermark_unlocked()
+
+    def _drop_vanished_heads_unlocked(self, candidates: Sequence[NormalizedEvent], *, complete: bool) -> None:
+        # A page cut short before the head's timestamp says nothing about the head's row.
+        returned = {(event.event_id, cursor_key(event)) for event in candidates}
+        reached = candidates[-1].occurred_at if candidates else None
+        while self._in_flight:
+            head = next(iter(self._in_flight.values())).event
+            if (head.event_id, cursor_key(head)) in returned:
+                return
+            if not complete and (reached is None or reached <= head.occurred_at):
+                return
+            logger.warning(
+                "Dropping in-flight event %s at %s: its row is no longer returned after the watermark",
+                head.event_id,
+                head.occurred_at.isoformat(),
+            )
+            del self._in_flight[head.event_id]
+            self._advance_unlocked()
 
     def health(self) -> EventSourceHealth:
         with self._lock:
             detail = f"db watermark={self._watermark_at.isoformat()}"
+            if self._in_flight:
+                head = next(iter(self._in_flight.values()))
+                acked = sum(1 for delivery in self._in_flight.values() if delivery.state == "acked")
+                detail += f" acked_behind_head={acked} head_wait={monotonic() - head.polled_at:.0f}s"
             connected = self._connected
             last_event_at = self._last_event_at
             engine = self._engine
@@ -196,25 +285,23 @@ class DbEventSource(EventSource):
             detail=detail,
         )
 
-    def _from_clause(self) -> str:
-        if self._events_query:
-            return f"({self._events_query}) AS {_EVENTS_QUERY_ALIAS}"
-        return self._events_table
+    def _from_clause(self, engine: Engine) -> str:
+        return sql_source(engine, self._events_query, self._events_table, _EVENTS_QUERY_ALIAS)
 
     def _ensure_source_schema(self, engine: Engine) -> tuple[str, bool]:
         with self._lock:
             if self._select_clause is not None and self._has_event_id_column is not None:
                 return self._select_clause, self._has_event_id_column
         with engine.connect() as conn:
-            result = conn.execute(text(f"SELECT * FROM {self._from_clause()} LIMIT 0"))
-            columns = frozenset(map(str, result.keys()))  # noqa: SIM118 — Result.keys(), not dict
+            result = conn.execute(text(f"SELECT * FROM {self._from_clause(engine)} LIMIT 0"))
+            columns = frozenset(map(str, result.keys()))
         by_lower = {name.lower(): name for name in columns}
         if "occurred_at" not in by_lower:
             raise ConfigError(
                 "events DB source must expose an occurred_at column for watermark polling "
-                f"(from {self._from_clause()})"
+                f"(from {self._from_clause(engine)})"
             )
-        selected = [by_lower[name] for name in _FETCH_COLUMNS if name in by_lower]
+        selected = [name for name in _FETCH_COLUMNS if name in by_lower]
         has_event_id = "event_id" in by_lower
         if not has_event_id and not self._events_query:
             dialect = engine.dialect.name
@@ -225,7 +312,13 @@ class DbEventSource(EventSource):
                 extra = "ctid"
             if extra is not None:
                 selected.append(extra)
-        select_clause = ", ".join(f'"{name}"' for name in selected)
+        # Alias mixed-case source columns to the lowercase names events are normalised from.
+        select_clause = ", ".join(
+            quote_identifier(engine, name)
+            if by_lower.get(name, name) == name
+            else f"{quote_identifier(engine, by_lower[name])} AS {quote_identifier(engine, name)}"
+            for name in selected
+        )
         with self._lock:
             if self._select_clause is None or self._has_event_id_column is None:
                 self._source_columns = columns
@@ -234,6 +327,42 @@ class DbEventSource(EventSource):
             cached_select = self._select_clause
             cached_has_event_id = self._has_event_id_column
         return cached_select, cached_has_event_id
+
+    def _source_column(self, engine: Engine, name: str) -> str:
+        """``name`` as the source spells it, quoted (Postgres keeps mixed case only when quoted)."""
+        by_lower = {column.lower(): column for column in self._source_columns or ()}
+        return quote_identifier(engine, by_lower.get(name, name))
+
+    def _after_watermark(
+        self, engine: Engine, watermark_at: datetime, watermark_event_id: str
+    ) -> tuple[str, str, dict[str, Any]]:
+        """WHERE and ORDER BY for rows after the (occurred_at, event_id) cursor, and their params."""
+        occurred_at = self._source_column(engine, "occurred_at")
+        event_id = self._source_column(engine, "event_id")
+        present = {column.lower() for column in self._source_columns or ()}
+        idempotency_key, row_id = (
+            self._source_column(engine, name) if name in present else None
+            for name in ("idempotency_key", "id")
+        )
+        identity_sort = identity_sql_sort_expr(engine.dialect.name, event_id, idempotency_key, row_id)
+        if identity_sort is not None:
+            later, same, occurred_order = occurred_at_predicates(engine.dialect.name, occurred_at)
+            return (
+                f"{later} OR ({same} AND ({identity_sort}) > :watermark_sort)",
+                f"{occurred_order}, ({identity_sort}) ASC",
+                {
+                    "watermark_at": watermark_at,
+                    "watermark_sort": identity_bind_sort_key(watermark_event_id),
+                    "id_whitespace": ID_WHITESPACE,
+                },
+            )
+        # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
+        return (
+            f"{occurred_at} > :watermark_at OR "
+            f"({occurred_at} = :watermark_at AND {event_id} > :watermark_event_id)",
+            f"{occurred_at} ASC, {event_id} ASC",
+            {"watermark_at": watermark_at, "watermark_event_id": watermark_event_id},
+        )
 
     def _fetch_rows(
         self,
@@ -244,46 +373,18 @@ class DbEventSource(EventSource):
         limit: int,
     ) -> list[dict[str, Any]]:
         select_clause, has_event_id = self._ensure_source_schema(engine)
-        dialect = engine.dialect.name
-        identity_sort = identity_sql_sort_expr(dialect) if has_event_id else None
-        if identity_sort is not None:
-            later, same, occurred_order = occurred_at_predicates(dialect)
-            sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
-                f"{later} OR "
-                f"({same} AND ({identity_sort}) > :watermark_sort) "
-                f"ORDER BY {occurred_order}, ({identity_sort}) ASC "
-                "LIMIT :limit"
-            )
-            params: dict[str, Any] = {
-                "watermark_at": watermark_at,
-                "watermark_sort": identity_bind_sort_key(watermark_event_id),
-                "limit": max(limit, 1),
-            }
-        elif has_event_id:
-            # Match ack cursor (occurred_at, event_id) so same-timestamp pages cannot skip rows.
-            sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} WHERE "
-                "occurred_at > :watermark_at OR "
-                "(occurred_at = :watermark_at AND event_id > :watermark_event_id) "
-                "ORDER BY occurred_at ASC, event_id ASC "
-                "LIMIT :limit"
-            )
-            params = {
-                "watermark_at": watermark_at,
-                "watermark_event_id": watermark_event_id,
-                "limit": max(limit, 1),
-            }
+        if has_event_id:
+            where, order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
         else:
-            sql = text(
-                f"SELECT {select_clause} FROM {self._from_clause()} "
-                "WHERE occurred_at >= :watermark "
-                "ORDER BY occurred_at ASC "
-                "LIMIT :limit"
-            )
-            params = {"watermark": watermark_at, "limit": max(limit, 1)}
-        with engine.connect() as conn:
-            result = conn.execute(sql, params)
+            occurred_at = self._source_column(engine, "occurred_at")
+            where, order = f"{occurred_at} >= :watermark", f"{occurred_at} ASC"
+            params = {"watermark": watermark_at}
+        sql = text(
+            f"SELECT {select_clause} FROM {self._from_clause(engine)} "
+            f"WHERE {where} ORDER BY {order} LIMIT :limit"
+        )
+        with _utc_connection(engine) as conn:
+            result = conn.execute(sql, {**params, "limit": max(limit, 1)})
             return [dict(row) for row in result.mappings()]
 
     def _count_after(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int | None:
@@ -299,26 +400,9 @@ class DbEventSource(EventSource):
 
     def _count_after_sql(self, engine: Engine, watermark_at: datetime, watermark_event_id: str) -> int:
         # Match poll cursor (occurred_at, event_id), including empty event_id watermark.
-        identity_sort = identity_sql_sort_expr(engine.dialect.name)
-        if identity_sort is not None:
-            later, same, _occurred_order = occurred_at_predicates(engine.dialect.name)
-            sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
-                f"{later} OR "
-                f"({same} AND ({identity_sort}) > :watermark_sort)"
-            )
-            params: dict[str, Any] = {
-                "watermark_at": watermark_at,
-                "watermark_sort": identity_bind_sort_key(watermark_event_id),
-            }
-        else:
-            sql = text(
-                f"SELECT COUNT(*) AS n FROM {self._from_clause()} WHERE "
-                "occurred_at > :watermark_at OR "
-                "(occurred_at = :watermark_at AND event_id > :watermark_event_id)"
-            )
-            params = {"watermark_at": watermark_at, "watermark_event_id": watermark_event_id}
-        with engine.connect() as conn:
+        where, _order, params = self._after_watermark(engine, watermark_at, watermark_event_id)
+        sql = text(f"SELECT COUNT(*) AS n FROM {self._from_clause(engine)} WHERE {where}")
+        with _utc_connection(engine) as conn:
             return int(conn.execute(sql, params).scalar() or 0)
 
     def _count_after_rows(
@@ -327,18 +411,19 @@ class DbEventSource(EventSource):
         # Same synthetic-id path as poll. Cap the scan; None = unknown / too large.
         cursor = cursor_tuple(watermark_at, watermark_event_id)
         rows = self._fetch_rows(engine, watermark_at, watermark_event_id, limit=_LAG_SCAN_LIMIT)
-        count = sum(1 for payload in rows if cursor_key_from_payload(payload) > cursor)
+        keys = _parsed_rows(rows, cursor_key_from_payload, lambda _payload, _exc: None)
+        count = sum(1 for key in keys if key > cursor)
         if len(rows) >= _LAG_SCAN_LIMIT:
             return None
         return count
 
     def _load_watermark_unlocked(self) -> None:
-        if self._watermark_path is None or not self._watermark_path.is_file():
+        if self._watermark_path is None:
             return
         try:
-            raw = json.loads(self._watermark_path.read_text())
-            if not isinstance(raw, dict):
-                raise ValueError("watermark root must be an object")
+            raw = read_json_object_file(self._watermark_path)
+            if raw is None:
+                return
             watermark_at = self._watermark_at
             occurred_at = raw.get("occurred_at")
             if occurred_at:
@@ -357,23 +442,7 @@ class DbEventSource(EventSource):
     def _persist_watermark_unlocked(self) -> None:
         if self._watermark_path is None:
             return
-        self._watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "occurred_at": self._watermark_at.isoformat(),
-            "event_id": self._watermark_event_id,
-        }
-        tmp = self._watermark_path.with_name(f".{self._watermark_path.name}.tmp")
-        with tmp.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            dir_fd = os.open(str(tmp.parent), os.O_RDONLY)
-        except OSError:
-            dir_fd = None
-        if dir_fd is not None:
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        tmp.replace(self._watermark_path)
+        write_json_object_file(
+            self._watermark_path,
+            {"occurred_at": self._watermark_at.isoformat(), "event_id": self._watermark_event_id},
+        )

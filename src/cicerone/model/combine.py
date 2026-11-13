@@ -5,24 +5,15 @@ from __future__ import annotations
 import pandas as pd
 from rectools import Columns
 
-from cicerone.model.constants import SOURCE_COLUMN, WEIGHT_COLUMN
-from cicerone.reasons import SOURCE_CONTRIBS_COLUMN
+from cicerone.model.constants import SOURCE_COLUMN
+from cicerone.ranking import WEIGHT_COLUMN, fuse_weighted_rrf, keep_top_k, renumber_ranks
+from cicerone.reasons import PRIORITY_BLOCK_COLUMN, SOURCE_CONTRIBS_COLUMN
 
 
 def _as_rank(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
     if isinstance(value, (int, float)):
         return int(value)
     return int(float(str(value)))
-
-
-def _as_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    return float(str(value))
 
 
 def _priority_contrib(label: object, rank: object) -> list[dict[str, object]]:
@@ -41,19 +32,17 @@ def combine_by_priority(frames: list[pd.DataFrame], top_k: int) -> pd.DataFrame:
     tagged = []
     for priority, frame in enumerate(frames):
         part = frame.copy()
-        part["_priority"] = priority
+        part[PRIORITY_BLOCK_COLUMN] = priority
         tagged.append(part)
     combined = pd.concat(tagged, ignore_index=True)
     combined = combined.drop_duplicates(subset=[Columns.User, Columns.Item], keep="first")
-    combined = combined.sort_values([Columns.User, "_priority", Columns.Rank], kind="mergesort")
-    combined = combined.groupby(Columns.User, as_index=False).head(top_k)
+    combined = combined.sort_values([Columns.User, PRIORITY_BLOCK_COLUMN, Columns.Rank], kind="mergesort")
+    combined = keep_top_k(combined, top_k)
     combined[SOURCE_CONTRIBS_COLUMN] = [
         _priority_contrib(label, rank)
         for label, rank in zip(combined[SOURCE_COLUMN], combined[Columns.Rank], strict=True)
     ]
-    combined[Columns.Rank] = combined.groupby(Columns.User).cumcount() + 1
-    drop = [column for column in (WEIGHT_COLUMN, "_priority") if column in combined.columns]
-    return combined.drop(columns=drop)
+    return renumber_ranks(combined).drop(columns=[WEIGHT_COLUMN], errors="ignore")
 
 
 def combine_by_weighted_fusion(
@@ -61,51 +50,15 @@ def combine_by_weighted_fusion(
 ) -> pd.DataFrame:
     """Weighted RRF: ``weight / (rrf_k + rank)``, sources joined in order."""
     combined = pd.concat(frames, ignore_index=True)
-    combined["contribution"] = combined[WEIGHT_COLUMN] / (rrf_k + combined[Columns.Rank])
-    combined[Columns.Score] = combined["contribution"]
-    combined["_contrib"] = [
-        {
-            "label": str(label),
-            "rank": _as_rank(rank),
-            "weight": _as_float(weight),
-            "contribution": _as_float(contribution),
-        }
-        for label, rank, weight, contribution in zip(
-            combined[SOURCE_COLUMN],
-            combined[Columns.Rank],
-            combined[WEIGHT_COLUMN],
-            combined["contribution"],
-            strict=True,
-        )
-    ]
 
-    # O(groups) Python agg; label order is source_label_order, not group appearance.
     def _join_labels_in_order(labels: pd.Series) -> str:
         present = set(labels)
         return "+".join(label for label in source_label_order if label in present)
 
-    order = {label: index for index, label in enumerate(source_label_order)}
-
-    def _sort_contribs(items: object) -> list[dict[str, object]]:
-        contribs = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
-        contribs.sort(key=lambda item: order.get(str(item.get("label")), len(order)))
-        return contribs
-
-    fused = combined.groupby([Columns.User, Columns.Item], as_index=False).agg(
-        **{
-            Columns.Score: (Columns.Score, "sum"),
-            SOURCE_COLUMN: (SOURCE_COLUMN, _join_labels_in_order),
-            SOURCE_CONTRIBS_COLUMN: ("_contrib", list),
-        }
+    return fuse_weighted_rrf(
+        combined,
+        rrf_k=rrf_k,
+        top_k=top_k,
+        source_label=_join_labels_in_order,
+        source_order=source_label_order,
     )
-    fused[SOURCE_CONTRIBS_COLUMN] = fused[SOURCE_CONTRIBS_COLUMN].map(_sort_contribs)
-    fused = fused.sort_values(
-        [Columns.User, Columns.Score, Columns.Item],
-        ascending=[True, False, True],
-        kind="mergesort",
-    )
-    fused[Columns.Rank] = fused.groupby(Columns.User).cumcount() + 1
-    fused = fused.groupby(Columns.User, as_index=False).head(top_k)
-    return fused[
-        [Columns.User, Columns.Item, Columns.Rank, Columns.Score, SOURCE_COLUMN, SOURCE_CONTRIBS_COLUMN]
-    ]

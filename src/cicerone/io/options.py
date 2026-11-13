@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import errno
 import io
+import json
 import logging
 import re
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 try:
     import fcntl
@@ -24,9 +25,14 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 import pandas as pd
-from pyarrow.lib import ArrowException
+from pyarrow.lib import ArrowException, ArrowNotImplementedError, ArrowTypeError
 
-from cicerone.config.constants import DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS, ConfigError
+from cicerone.config.constants import (
+    DEFAULT_LOCK_ACQUIRE_TIMEOUT_SECONDS,
+    STORAGE_BACKENDS,
+    ConfigError,
+    StorageBackend,
+)
 from cicerone.locks import WriterLockBusyError
 
 logger = logging.getLogger(__name__)
@@ -45,7 +51,6 @@ _READONLY_SELECT_FORBIDDEN = re.compile(
 )
 S3_NOT_FOUND_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
 _PYARROW_S3_FALLBACK_ERRORS = (OSError, ArrowException)
-STORAGE_BACKENDS = frozenset({"s3", "local"})
 _PATH_LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 
@@ -133,12 +138,24 @@ def object_key(options: dict[str, Any], filename: str) -> str:
     return f"{prefix}/{filename}" if prefix else filename
 
 
+def local_path(options: dict[str, Any], filename: str) -> Path:
+    return Path(require_option(options, "path", "local")) / filename
+
+
+def s3_location(options: dict[str, Any], filename: str) -> tuple[str, str]:
+    return require_option(options, "bucket", "s3"), object_key(options, filename)
+
+
 def sql_identifier(name: str, *, option: str) -> str:
     if not isinstance(name, str) or not _SQL_IDENTIFIER.fullmatch(name):
         raise ValueError(
             f"{option} must be a simple SQL identifier matching [A-Za-z_][A-Za-z0-9_]*, got {name!r}"
         )
     return name
+
+
+def table_option(options: Mapping[str, Any], key: str, default: str) -> str:
+    return sql_identifier(options.get(key, default), option=key)
 
 
 def readonly_select(query: str, *, option: str) -> str:
@@ -163,20 +180,32 @@ def close_s3_body(body: Any) -> None:
         close()
 
 
+def require_max_bytes(max_bytes: int) -> None:
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be >= 1")
+
+
+def reject_oversize(size: int, max_bytes: int) -> None:
+    if size > max_bytes:
+        raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+
+
+def read_capped(read: Callable[[int], bytes], max_bytes: int) -> bytes:
+    payload = read(max_bytes + 1)
+    reject_oversize(len(payload), max_bytes)
+    return payload
+
+
 def read_s3_body(response: dict[str, Any], *, max_bytes: int | None = None) -> bytes:
     body = response["Body"]
     try:
         if max_bytes is None:
             return body.read()
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be >= 1")
+        require_max_bytes(max_bytes)
         known = response.get("ContentLength")
-        if isinstance(known, int) and known > max_bytes:
-            raise ValueError(f"Stored object is {known} bytes; max is {max_bytes}")
-        payload = body.read(max_bytes + 1)
-        if len(payload) > max_bytes:
-            raise ValueError(f"Stored object is {len(payload)} bytes; max is {max_bytes}")
-        return payload
+        if isinstance(known, int):
+            reject_oversize(known, max_bytes)
+        return read_capped(body.read, max_bytes)
     finally:
         close_s3_body(body)
 
@@ -204,25 +233,19 @@ def build_s3_client(options: dict[str, Any]):
     )
 
 
-def storage_backend(options: dict[str, Any]) -> str:
+def storage_backend(options: dict[str, Any]) -> StorageBackend:
     backend = options.get("storage_backend", "local")
     if backend not in STORAGE_BACKENDS:
         raise ConfigError(f"Unknown storage_backend: {backend!r} (expected 's3' or 'local')")
-    return str(backend)
+    return cast(StorageBackend, str(backend))
 
 
-def validate_storage_options(options: dict[str, Any], backend: str | None = None) -> str:
+def validate_storage_options(options: dict[str, Any]) -> StorageBackend:
     """Validate ``storage_backend`` and required options; return the resolved backend.
 
-    Always resolves from ``options``. If ``backend`` is passed, it must match
-    ``options['storage_backend']`` (or the default ``local``).
-
-    Raises ``ConfigError`` for unknown backends, backend mismatches, or missing
-    required options.
+    Raises ``ConfigError`` for unknown backends or missing required options.
     """
     resolved = storage_backend(options)
-    if backend is not None and str(backend) != resolved:
-        raise ConfigError(f"explicit backend {backend!r} does not match options storage_backend {resolved!r}")
     if resolved == "local":
         require_option(options, "path", "local")
     else:
@@ -236,7 +259,6 @@ def read_parquet(
     options: dict[str, Any],
     filename: str,
     *,
-    s3_client: Any | None = None,
     columns: Sequence[str] | None = None,
     filters: Sequence[Any] | None = None,
 ) -> pd.DataFrame:
@@ -253,22 +275,85 @@ def read_parquet(
     if filters is not None:
         read_kwargs["filters"] = list(filters)
     if backend == "local":
-        path = Path(require_option(options, "path", "local")) / filename
+        path = local_path(options, filename)
         logger.info("Reading %s", path)
         return pd.read_parquet(path, **read_kwargs)
 
-    bucket = require_option(options, "bucket", "s3")
-    key = object_key(options, filename)
+    bucket, key = s3_location(options, filename)
     logger.info("Reading s3://%s/%s", bucket, key)
-    if s3_client is not None:
-        obj = s3_client.get_object(Bucket=bucket, Key=key)
-        return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
     try:
         return _read_s3_parquet_pyarrow(options, bucket, key, columns=columns, filters=filters)
     except _PYARROW_S3_FALLBACK_ERRORS:
         logger.debug("pyarrow S3 parquet read failed; falling back to GetObject", exc_info=True)
-    obj = build_s3_client(options).get_object(Bucket=bucket, Key=key)
+    return read_s3_parquet(build_s3_client(options), bucket, key, **read_kwargs)
+
+
+def read_s3_parquet(client: Any, bucket: str, key: str, **read_kwargs: Any) -> pd.DataFrame:
+    obj = client.get_object(Bucket=bucket, Key=key)
     return pd.read_parquet(io.BytesIO(read_s3_body(obj)), **read_kwargs)
+
+
+PARQUET_PUSHDOWN_ERRORS: tuple[type[BaseException], ...] = (
+    ValueError,
+    ArrowTypeError,
+    ArrowNotImplementedError,
+)
+_PUSHDOWN_ERROR_TOKENS = ("fieldref", "filter", "column", "projection")
+
+
+def _rejects_pushdown(exc: BaseException, names: Sequence[str]) -> bool:
+    if isinstance(exc, (ArrowTypeError, ArrowNotImplementedError)):
+        return True
+    message = str(exc).lower()
+    return any(token in message for token in (*(name.lower() for name in names), *_PUSHDOWN_ERROR_TOKENS))
+
+
+def read_parquet_pushdown(
+    options: dict[str, Any],
+    filename: str,
+    *,
+    columns: Sequence[str] | None = None,
+    filters: Sequence[tuple[str, str, Any]] | None = None,
+) -> pd.DataFrame:
+    """``read_parquet`` that falls back to a full read when the engine rejects the pushdown.
+
+    The fallback returns every row and column: callers filter and project it themselves.
+    """
+    try:
+        return read_parquet(options, filename, columns=columns, filters=filters)
+    except PARQUET_PUSHDOWN_ERRORS as exc:
+        if not _rejects_pushdown(exc, [*(columns or ()), *(name for name, _op, _value in filters or ())]):
+            raise
+        logger.warning("Pushdown read of %s failed; falling back to full-file load: %s", filename, exc)
+        return read_parquet(options, filename)
+
+
+def read_parquet_attrs(options: dict[str, Any], filename: str) -> dict[str, Any]:
+    """``DataFrame.attrs`` pandas stored in a parquet footer, read without loading any column."""
+    import pyarrow.parquet as pq
+
+    backend = validate_storage_options(options)
+    if backend == "local":
+        schema = pq.read_schema(local_path(options, filename))
+    else:
+        bucket, key = s3_location(options, filename)
+        try:
+            schema = pq.read_schema(f"{bucket}/{key}", filesystem=_s3_filesystem(options))
+        except _PYARROW_S3_FALLBACK_ERRORS:
+            logger.debug("pyarrow S3 schema read failed; falling back to ranged GetObject", exc_info=True)
+            schema = _s3_parquet_footer_schema(build_s3_client(options), bucket, key)
+    raw = (schema.metadata or {}).get(b"PANDAS_ATTRS")
+    return json.loads(raw) if raw else {}
+
+
+def _s3_parquet_footer_schema(client: Any, bucket: str, key: str):
+    import pyarrow.parquet as pq
+
+    # Parquet ends with <footer><4-byte footer length>PAR1; fetch only that tail, never the row groups.
+    tail = read_s3_body(client.get_object(Bucket=bucket, Key=key, Range="bytes=-8"))
+    footer_length = int.from_bytes(tail[:4], "little")
+    footer = read_s3_body(client.get_object(Bucket=bucket, Key=key, Range=f"bytes=-{footer_length + 8}"))
+    return pq.read_schema(io.BytesIO(b"PAR1" + footer))
 
 
 def _s3_filesystem(options: dict[str, Any]):
@@ -300,12 +385,11 @@ def _read_s3_parquet_pyarrow(
     *,
     columns: Sequence[str] | None,
     filters: Sequence[Any] | None,
-    filesystem: Any | None = None,
 ) -> pd.DataFrame:
     import pyarrow.parquet as pq
 
     read_kwargs: dict[str, Any] = {
-        "filesystem": filesystem if filesystem is not None else _s3_filesystem(options),
+        "filesystem": _s3_filesystem(options),
         "use_pandas_metadata": True,
     }
     if columns is not None:

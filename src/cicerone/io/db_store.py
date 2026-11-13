@@ -11,9 +11,9 @@ not add the column. Experiments similarly need ``ALTER TABLE … ADD COLUMN vari
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -27,24 +27,39 @@ from sqlalchemy import (
     DateTime,
     Engine,
     Float,
+    Index,
     LargeBinary,
     MetaData,
+    String,
     Table,
+    Text,
     bindparam,
-    create_engine,
+    delete,
     insert,
     inspect,
     select,
     text,
 )
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.dialects.mysql import DATETIME, LONGBLOB
+from sqlalchemy.exc import SQLAlchemyError
 
 from cicerone.config.constants import DEFAULT_MAX_ARTIFACT_BYTES
-from cicerone.io.db_errors import is_missing_column_error
-from cicerone.io.engines import engine_for
-from cicerone.io.options import readonly_select, require_option, sql_identifier
+from cicerone.io.applied_events import DEFAULT_APPLIED_EVENTS_TABLE, applied_cutoff, chunked
+from cicerone.io.base import manifest_newer
+from cicerone.io.db_errors import MISSING_TABLE_ERRORS, is_missing_column_error
+from cicerone.io.engines import (
+    create_db_engine,
+    is_mysql_family,
+    quote_identifier,
+    sql_source,
+)
+from cicerone.io.options import (
+    readonly_select,
+    reject_oversize,
+    require_option,
+    sql_identifier,
+    table_option,
+)
 from cicerone.io.recommendation_schema import (
     REASONS_COLUMN,
     VARIANT_COLUMN,
@@ -62,11 +77,7 @@ from cicerone.locks.hold import WriteFence
 
 logger = logging.getLogger(__name__)
 
-_MISSING_TABLE_ERRORS = (ProgrammingError, OperationalError)
 _SQL_HISTORY_OVERFETCH = 8
-
-# Prefer the public alias used by readers and writers.
-MISSING_TABLE_ERRORS = _MISSING_TABLE_ERRORS
 
 
 DEFAULT_EVENTS_TABLE = "events"
@@ -88,45 +99,6 @@ DEFAULT_LATEST_TABLE = "recommendation_latest"
 DEFAULT_NEIGHBORS_TABLE = "item_neighbors"
 
 
-_MEMORY_ENGINES: dict[int, tuple[dict[str, Any], Engine]] = {}
-_MEMORY_ENGINES_LOCK = threading.Lock()
-
-
-def _is_memory_sqlite(database_url: str) -> bool:
-    parsed = make_url(database_url)
-    return parsed.get_backend_name() == "sqlite" and parsed.database in (None, "", ":memory:")
-
-
-def _new_db_engine(database_url: str) -> Engine:
-    if not _is_memory_sqlite(database_url):
-        return engine_for(database_url)
-    return create_engine(
-        database_url,
-        pool_pre_ping=True,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-
-
-def create_db_engine(database_url: str, *, options: dict[str, Any] | None = None) -> Engine:
-    if options is not None and _is_memory_sqlite(database_url):
-        key = id(options)
-        with _MEMORY_ENGINES_LOCK:
-            cached = _MEMORY_ENGINES.get(key)
-            if cached is not None:
-                cached_options, engine = cached
-                if cached_options is options:
-                    return engine
-            engine = _new_db_engine(database_url)
-            _MEMORY_ENGINES[key] = (options, engine)
-            return engine
-    return _new_db_engine(database_url)
-
-
-def _create_engine(database_url: str) -> Engine:
-    return create_db_engine(database_url)
-
-
 DEFAULT_DB_TABLES = frozenset(
     {
         DEFAULT_EVENTS_TABLE,
@@ -145,8 +117,13 @@ DEFAULT_DB_TABLES = frozenset(
         DEFAULT_POPULAR_TABLE,
         DEFAULT_LATEST_TABLE,
         DEFAULT_NEIGHBORS_TABLE,
+        DEFAULT_APPLIED_EVENTS_TABLE,
     }
 )
+
+
+def _sql_stamp(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
 def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
@@ -161,37 +138,94 @@ def _db_manifest_newer(conn, table: str, started_at: str) -> bool:
     row = conn.execute(select(*columns).order_by(runs.c.generated_at.desc()).limit(1)).mappings().first()
     if not row:
         return False
-    for key in ("generated_at", "last_incremental_at"):
-        value = row.get(key)
-        if value is None:
-            continue
-        stamp = value.isoformat() if hasattr(value, "isoformat") else str(value)
-        if stamp > started_at:
-            return True
-    return False
+    stamps = {key: _sql_stamp(value) for key, value in row.items() if value is not None}
+    return manifest_newer(stamps, started_at)
 
 
-def _clear_table_for_replace(conn, table: str) -> None:
-    """Empty ``table`` before a full rewrite; prefer TRUNCATE, fall back to DELETE.
-
-    Some backends (e.g. SQLite) lack TRUNCATE. Rolling back only the TRUNCATE
-    savepoint and then appending would duplicate rows, so DELETE is tried next.
-    If the table does not exist yet, both fail and ``to_sql`` creates it.
-    """
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'TRUNCATE TABLE "{table}"'))
-        savepoint.commit()
+def _add_missing_manifest_columns(engine: Any, table: str, manifest: dict) -> None:
+    # The table takes its columns from the first manifest; an incremental one adds keys a job manifest lacks.
+    # Each ALTER runs in its own transaction, before the insert: DDL commits implicitly on MySQL.
+    inspector = inspect(engine)
+    if not inspector.has_table(table):
         return
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    for key, value in manifest.items():
+        if key in existing:
+            continue
+        column = sql_identifier(key, option="manifest key")
+        column_type = _manifest_column_type(key, value).compile(dialect=engine.dialect)
+        logger.info("Adding column %r to manifest table %r", column, table)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {quote_identifier(engine, table)} "
+                        f"ADD COLUMN {quote_identifier(engine, column)} {column_type}"
+                    )
+                )
+        except MISSING_TABLE_ERRORS:
+            # A concurrent writer may have added the same column first.
+            if column not in {column_info["name"] for column_info in inspect(engine).get_columns(table)}:
+                raise
 
-    savepoint = conn.begin_nested()
-    try:
-        conn.execute(text(f'DELETE FROM "{table}"'))
-        savepoint.commit()
-    except _MISSING_TABLE_ERRORS:
-        savepoint.rollback()
+
+# Typed by name, so a manifest holding None for one still creates a numeric column.
+_MANIFEST_COLUMN_TYPES: dict[str, type[BigInteger | Float | Boolean]] = {
+    "n_events": BigInteger,
+    "n_target_users": BigInteger,
+    "n_users_with_recommendations": BigInteger,
+    "n_items": BigInteger,
+    "n_item_scores": BigInteger,
+    "top_k": BigInteger,
+    "rrf_k": Float,
+    "artifact_written": Boolean,
+    "artifact_schema_version": BigInteger,
+    "partial_outputs": Boolean,
+    "automl_enabled": Boolean,
+}
+
+
+def _manifest_column_type(key: str, value: Any) -> Any:
+    known = _MANIFEST_COLUMN_TYPES.get(key)
+    if known is not None:
+        return known()
+    if isinstance(value, bool):
+        return Boolean()
+    if isinstance(value, int):
+        return BigInteger()
+    if isinstance(value, float):
+        return Float()
+    return Text()
+
+
+def _clear_table_for_replace(conn: Connection, table: str) -> None:
+    """Empty ``table`` before a full rewrite: TRUNCATE then DELETE, or DELETE only on MySQL/MariaDB.
+
+    Some backends lack TRUNCATE (SQLite) or refuse it (Postgres foreign keys), so DELETE is tried next;
+    rolling back only the TRUNCATE savepoint and then appending would duplicate rows.
+    MySQL/MariaDB TRUNCATE commits implicitly, so a failed rewrite could not roll back.
+    A missing table is left to ``to_sql`` to create; a DELETE error raises.
+    """
+    if not inspect(conn).has_table(table):
+        return
+    quoted = quote_identifier(conn, table)
+    if not is_mysql_family(conn):
+        savepoint = conn.begin_nested()
+        try:
+            conn.execute(text(f"TRUNCATE TABLE {quoted}"))
+            savepoint.commit()
+            return
+        except SQLAlchemyError:
+            savepoint.rollback()
+    conn.execute(text(f"DELETE FROM {quoted}"))
+
+
+def _missing_item_scores_columns(conn: Connection, table: str) -> list[str]:
+    inspector = inspect(conn)
+    if not inspector.has_table(table):
+        return []
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    return [column for column in ITEM_SCORES_COLUMNS if column not in existing]
 
 
 def _missing_optional_recommendation_columns(engine: Engine, table: str, frame: pd.DataFrame) -> list[str]:
@@ -215,91 +249,6 @@ def _require_optional_recommendation_columns(engine: Engine, table: str, frame: 
     )
 
 
-_MANIFEST_COLUMN_SQL_TYPES: dict[str, str] = {
-    "n_events": "BIGINT",
-    "n_target_users": "BIGINT",
-    "n_users_with_recommendations": "BIGINT",
-    "n_items": "BIGINT",
-    "n_item_scores": "BIGINT",
-    "top_k": "BIGINT",
-    "rrf_k": "FLOAT",
-    "artifact_written": "BOOLEAN",
-    "artifact_schema_version": "BIGINT",
-    "partial_outputs": "BOOLEAN",
-    "automl_enabled": "BOOLEAN",
-}
-
-
-def _manifest_column_sql_type(series: pd.Series) -> str:
-    known = _MANIFEST_COLUMN_SQL_TYPES.get(str(series.name) if series.name is not None else "")
-    if known is not None:
-        return known
-    if pd.api.types.is_bool_dtype(series.dtype):
-        return "BOOLEAN"
-    if pd.api.types.is_integer_dtype(series.dtype):
-        return "BIGINT"
-    if pd.api.types.is_float_dtype(series.dtype):
-        return "FLOAT"
-    return "TEXT"
-
-
-def _manifest_to_sql_dtypes(frame: pd.DataFrame) -> dict[str, Any]:
-    mapping = {"BIGINT": BigInteger(), "FLOAT": Float(), "BOOLEAN": Boolean()}
-    return {
-        column: mapping[sql_type]
-        for column, sql_type in _MANIFEST_COLUMN_SQL_TYPES.items()
-        if column in frame.columns
-    }
-
-
-def _add_missing_manifest_columns(
-    engine: Engine,
-    table: str,
-    frame: pd.DataFrame,
-    *,
-    conn: Connection | None = None,
-) -> None:
-    inspector = inspect(conn) if conn is not None else inspect(engine)
-    if not inspector.has_table(table):
-        return
-    existing = {column["name"] for column in inspector.get_columns(table)}
-    missing = [column for column in frame.columns if column not in existing]
-    if not missing:
-        return
-
-    def _alter(target: Connection) -> None:
-        for column in missing:
-            ident = sql_identifier(str(column), option="manifest_table column")
-            target.execute(
-                text(f'ALTER TABLE "{table}" ADD COLUMN "{ident}" {_manifest_column_sql_type(frame[column])}')
-            )
-
-    if conn is not None:
-        _alter(conn)
-        return
-    with engine.begin() as opened:
-        _alter(opened)
-
-
-def _missing_item_scores_columns(
-    engine: Engine,
-    table: str,
-    *,
-    conn: Connection | None = None,
-) -> list[str]:
-    inspector = inspect(conn) if conn is not None else inspect(engine)
-    if not inspector.has_table(table):
-        return []
-    existing = {column["name"] for column in inspector.get_columns(table)}
-    return [column for column in ITEM_SCORES_COLUMNS if column not in existing]
-
-
-def _sql_user_source(query: str | None, table: str) -> str:
-    if not query:
-        return f'"{table}"'
-    return f"({query.strip().rstrip(';').strip()}) AS _cicerone_user_rows"
-
-
 class DatabaseInputSource:
     def __init__(self, options: dict[str, Any]):
         self._options = options
@@ -312,14 +261,14 @@ class DatabaseInputSource:
         return readonly_select(query, option=f"input.options.{key}")
 
     def _read(self, query: str | None, table: str) -> pd.DataFrame:
-        sql = query or f'SELECT * FROM "{table}"'
+        sql = query or f"SELECT * FROM {quote_identifier(self._engine, table)}"
         logger.info("Reading from database: %s", "configured query" if query else f'table "{table}"')
         return pd.read_sql(text(sql), self._engine)
 
     def read_events(self) -> pd.DataFrame:
         return self._read(
             self._configured_query("events_query"),
-            sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table"),
+            table_option(self._options, "events_table", DEFAULT_EVENTS_TABLE),
         )
 
     def _read_optional(self, query: str | None, table: str, label: str) -> pd.DataFrame | None:
@@ -333,21 +282,21 @@ class DatabaseInputSource:
             return None
         try:
             return self._read(query, table)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             logger.warning("Optional %s source unavailable — continuing without %s features.", label, label)
             return None
 
     def read_users(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._configured_query("users_query"),
-            sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table"),
+            table_option(self._options, "users_table", DEFAULT_USERS_TABLE),
             "users",
         )
 
     def read_items(self) -> pd.DataFrame | None:
         return self._read_optional(
             self._configured_query("items_query"),
-            sql_identifier(self._options.get("items_table", DEFAULT_ITEMS_TABLE), option="items_table"),
+            table_option(self._options, "items_table", DEFAULT_ITEMS_TABLE),
             "items",
         )
 
@@ -360,11 +309,11 @@ class DatabaseInputSource:
         limit: int | None = None,
         order_occurred_at: bool = False,
     ) -> pd.DataFrame:
-        source = _sql_user_source(query, table)
-        sql = f'SELECT * FROM {source} WHERE "user_id" = :user_id'
+        source = sql_source(self._engine, query, table, "_cicerone_user_rows")
+        sql = f"SELECT * FROM {source} WHERE {quote_identifier(self._engine, 'user_id')} = :user_id"
         params: dict[str, Any] = {"user_id": user_id}
         if order_occurred_at:
-            sql += f' ORDER BY "{OCCURRED_AT_COLUMN}" DESC NULLS LAST'
+            sql += f" ORDER BY {quote_identifier(self._engine, OCCURRED_AT_COLUMN)} DESC NULLS LAST"
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = int(limit)
@@ -375,12 +324,12 @@ class DatabaseInputSource:
         return pd.read_sql(text(sql), self._engine, params=params)
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
-        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
+        table = table_option(self._options, "events_table", DEFAULT_EVENTS_TABLE)
         query = self._configured_query("events_query")
         sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
         try:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit, order_occurred_at=True)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             frame = self._select_user_rows(query, table, user_id, limit=sql_limit)
         return newest_events(filter_rows_for_user(frame, user_id), limit)
 
@@ -390,37 +339,41 @@ class DatabaseInputSource:
             return {}
         if limit < 1:
             return {user_id: pd.DataFrame() for user_id in ids}
-        table = sql_identifier(self._options.get("events_table", DEFAULT_EVENTS_TABLE), option="events_table")
         query = self._configured_query("events_query")
         if query is not None:
             out: dict[str, pd.DataFrame] = {}
             for user_id in ids:
                 try:
                     out[user_id] = self.get_events_for_user(user_id, limit)
-                except _MISSING_TABLE_ERRORS:
+                except MISSING_TABLE_ERRORS:
                     out[user_id] = pd.DataFrame()
             return out
+        table = quote_identifier(
+            self._engine, table_option(self._options, "events_table", DEFAULT_EVENTS_TABLE)
+        )
+        user = quote_identifier(self._engine, "user_id")
+        occurred = quote_identifier(self._engine, OCCURRED_AT_COLUMN)
+        rn = quote_identifier(self._engine, "_cicerone_rn")
         sql_limit = max(int(limit) * _SQL_HISTORY_OVERFETCH, int(limit))
         windowed = text(
             f"SELECT * FROM ("
-            f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "user_id" '
-            f'ORDER BY CASE WHEN "{OCCURRED_AT_COLUMN}" IS NULL THEN 1 ELSE 0 END, '
-            f'"{OCCURRED_AT_COLUMN}" DESC) AS "_cicerone_rn" '
-            f'FROM "{table}" WHERE "user_id" IN :user_ids'
-            f') AS ranked WHERE "_cicerone_rn" <= :limit'
+            f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {user} "
+            f"ORDER BY CASE WHEN {occurred} IS NULL THEN 1 ELSE 0 END, {occurred} DESC) AS {rn} "
+            f"FROM {table} WHERE {user} IN :user_ids"
+            f") AS ranked WHERE {rn} <= :limit"
         ).bindparams(bindparam("user_ids", expanding=True))
         bounded = text(
             f"SELECT * FROM ("
-            f'SELECT *, ROW_NUMBER() OVER (PARTITION BY "user_id") AS "_cicerone_rn" '
-            f'FROM "{table}" WHERE "user_id" IN :user_ids'
-            f') AS ranked WHERE "_cicerone_rn" <= :limit'
+            f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {user}) AS {rn} "
+            f"FROM {table} WHERE {user} IN :user_ids"
+            f") AS ranked WHERE {rn} <= :limit"
         ).bindparams(bindparam("user_ids", expanding=True))
         try:
             frame = pd.read_sql(windowed, self._engine, params={"user_ids": ids, "limit": sql_limit})
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             try:
                 frame = pd.read_sql(bounded, self._engine, params={"user_ids": ids, "limit": sql_limit})
-            except _MISSING_TABLE_ERRORS:
+            except MISSING_TABLE_ERRORS:
                 return {user_id: pd.DataFrame() for user_id in ids}
         if "_cicerone_rn" in frame.columns:
             frame = frame.drop(columns=["_cicerone_rn"])
@@ -428,12 +381,12 @@ class DatabaseInputSource:
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         query = self._configured_query("users_query")
-        table = sql_identifier(self._options.get("users_table", DEFAULT_USERS_TABLE), option="users_table")
+        table = table_option(self._options, "users_table", DEFAULT_USERS_TABLE)
         if query is None and not inspect(self._engine).has_table(table):
             return None
         try:
             frame = self._select_user_rows(query, table, user_id)
-        except _MISSING_TABLE_ERRORS:
+        except MISSING_TABLE_ERRORS:
             return None
         matched = filter_rows_for_user(frame, user_id)
         if matched.empty:
@@ -441,26 +394,23 @@ class DatabaseInputSource:
         return matched.iloc[0].to_dict()
 
 
+def _artifact_fingerprint(written: datetime | None) -> str | None:
+    return None if written is None else f"db:{written.isoformat()}"
+
+
 class DatabaseOutputSink:
     def __init__(
         self,
         options: dict[str, Any],
         *,
-        writer_lock: Any = None,
-        fence_check: Callable[[], bool] | None = None,
-        fence_lost: str = "lock lost before write",
-        fence_kind: str = "lock",
         fence: WriteFence | None = None,
     ):
         self._options = options
         self._engine = create_db_engine(require_option(options, "database_url", "db"), options=options)
-        self._fence = WriteFence.resolve(
-            fence,
-            writer_lock=writer_lock,
-            fence_check=fence_check,
-            fence_lost=fence_lost,
-            fence_kind=fence_kind,
-        )
+        self._fence = fence or WriteFence()
+        self._applied_table_seen = False
+        self._lower_case_table_names: int | None = None
+        self._check_applied_events_table_name()
 
     @contextmanager
     def recommendations_write(self) -> Iterator[None]:
@@ -468,9 +418,6 @@ class DatabaseOutputSink:
             yield
 
     def ensure_writer_held(self) -> None:
-        self._ensure_fence()
-
-    def _ensure_fence(self) -> None:
         self._fence.ensure()
 
     def write_recommendations(self, df: pd.DataFrame) -> None:
@@ -481,20 +428,172 @@ class DatabaseOutputSink:
             logger.info("Writing %d rows to database table %r", len(df), table)
             _require_optional_recommendation_columns(self._engine, table, df)
             with self._engine.begin() as conn:
-                self._ensure_fence()
-                _clear_table_for_replace(conn, table)
-                self._ensure_fence()
-                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-                self._ensure_fence()
+                self._fence.ensure()
+                self._clear_applied_keys(conn, table)
+                self._replace_frame(conn, table, df)
 
-    def replace_recommendations_for_users(self, df: pd.DataFrame, *, user_ids: Sequence[str]) -> int:
+    def _replace_frame(self, conn: Connection, table: str, df: pd.DataFrame) -> None:
+        _clear_table_for_replace(conn, table)
+        self._append_frame(conn, table, df)
+        self._fence.ensure()
+
+    def _append_frame(self, conn: Connection, table: str, df: pd.DataFrame) -> None:
+        # Checks the fence before the write only; the caller checks again before committing.
+        self._fence.ensure()
+        df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+
+    def replace_recommendations_for_users(
+        self, df: pd.DataFrame, *, user_ids: Sequence[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         ids = normalize_replace_user_ids(df, user_ids)
         if not ids:
             return 0
         with self.recommendations_write():
-            return self._replace_recommendations_for_users_unlocked(df, ids)
+            return self._replace_recommendations_for_users_unlocked(df, ids, applied_keys)
 
-    def _replace_recommendations_for_users_unlocked(self, df: pd.DataFrame, ids: list[str]) -> int:
+    def _applied_events_table(self) -> Table:
+        name = table_option(self._options, "applied_events_table", DEFAULT_APPLIED_EVENTS_TABLE)
+        # Keys are scoped to the recommendations table (see _applied_scope), so outputs sharing a database
+        # don't see each other's.
+        return Table(
+            name,
+            MetaData(),
+            # 64 chars: a SQL identifier and a sha256 hex key; the composite key fits a 767-byte index.
+            Column("recommendations_table", String(64), primary_key=True),
+            Column("event_key", String(64), primary_key=True),
+            Column("applied_at", String(64), nullable=False),
+            # Hashed so a long table name still gives an index name within MySQL's 64 characters.
+            Index(f"ix_applied_at_{hashlib.sha256(name.encode()).hexdigest()[:16]}", "applied_at"),
+        )
+
+    def _create_applied_events_table(self) -> None:
+        table = self._applied_events_table()
+        # CREATE TABLE commits implicitly on MySQL, so never inside the rows' transaction.
+        try:
+            with self._engine.begin() as ddl:
+                table.create(ddl, checkfirst=True)
+        except MISSING_TABLE_ERRORS:
+            # Another output sharing the database may have created it first.
+            if not inspect(self._engine).has_table(table.name):
+                raise
+        self._applied_table_seen = True
+
+    def _check_applied_events_table_name(self) -> None:
+        name = self._applied_events_table().name
+        others = {
+            str(value)
+            for key, value in self._options.items()
+            if key.endswith("_table") and key != "applied_events_table"
+        }
+        others |= DEFAULT_DB_TABLES - {DEFAULT_APPLIED_EVENTS_TABLE}
+        if name.lower() in {other.lower() for other in others}:
+            raise ValueError(f"applied_events_table {name!r} is already used by another output table")
+
+    def _recommendations_table_name(self) -> str:
+        table, _columns, _user_col = recommendations_sql_names(
+            self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
+        )
+        return table
+
+    def _applied_scope(self, conn: Connection, recommendations_table: str) -> str:
+        # Unquoted names ignore case on SQLite and Postgres; MySQL keeps it if lower_case_table_names=0.
+        keeps_case = is_mysql_family(conn) and self._mysql_lower_case_table_names(conn) == 0
+        name = recommendations_table if keeps_case else recommendations_table.lower()
+        # Hashed so a case-insensitive collation cannot merge two case-distinct table names.
+        return hashlib.sha256(name.encode()).hexdigest()
+
+    def _mysql_lower_case_table_names(self, conn: Connection) -> int:
+        if self._lower_case_table_names is None:
+            self._lower_case_table_names = int(
+                conn.execute(text("SELECT @@lower_case_table_names")).scalar_one()
+            )
+        return self._lower_case_table_names
+
+    def applied_event_keys(self, keys: Sequence[str]) -> set[str]:
+        wanted = sorted({str(key) for key in keys})
+        table = self._applied_events_table()
+        if not wanted:
+            return set()
+        cutoff = applied_cutoff(datetime.now(UTC))
+        found: dict[str, str] = {}
+        try:
+            with self._engine.connect() as conn:
+                if not self._applied_events_table_exists(conn):
+                    return set()
+                scope = self._applied_scope(conn, self._recommendations_table_name())
+                for part in chunked(wanted):
+                    query = select(table.c.event_key, table.c.applied_at).where(
+                        table.c.recommendations_table == scope,
+                        table.c.event_key.in_(part),
+                        table.c.applied_at >= cutoff,
+                    )
+                    found.update((str(key), str(applied_at)) for key, applied_at in conn.execute(query))
+        except MISSING_TABLE_ERRORS:
+            # The table may have been dropped; check again on the next lookup.
+            self._applied_table_seen = False
+            raise
+        if not found:
+            return set()
+        # A full write by a version without the key table leaves keys behind; its manifest supersedes them.
+        # Checked only when keys match, which is rare (a redelivery), so most flushes skip the manifest query.
+        full_write_at = self._latest_full_write_at()
+        if full_write_at is None:
+            return set(found)
+        return {key for key, applied_at in found.items() if applied_at >= full_write_at}
+
+    def _latest_full_write_at(self) -> str | None:
+        table = table_option(self._options, "manifest_table", DEFAULT_MANIFEST_TABLE)
+        generated_at = quote_identifier(self._engine, "generated_at")
+        triggered_by = quote_identifier(self._engine, "triggered_by")
+        query = text(
+            f"SELECT MAX({generated_at}) FROM {quote_identifier(self._engine, table)} "
+            f"WHERE {triggered_by} IS NULL OR {triggered_by} <> 'incremental'"
+        )
+        try:
+            with self._engine.connect() as conn:
+                value = conn.execute(query).scalar()
+        except MISSING_TABLE_ERRORS:
+            # No manifest table (or no such columns) yet: no full write to supersede the keys.
+            return None
+        return None if value is None else _sql_stamp(value)
+
+    def _applied_events_table_exists(self, conn: Connection) -> bool:
+        # Only "exists" is cached: another output sharing the database may create the table later.
+        if not self._applied_table_seen:
+            self._applied_table_seen = inspect(conn).has_table(self._applied_events_table().name)
+        return self._applied_table_seen
+
+    def _prune_applied_keys(self, conn: Any, now: datetime) -> None:
+        table = self._applied_events_table()
+        conn.execute(delete(table).where(table.c.applied_at < applied_cutoff(now)))
+
+    def _record_applied_keys(self, conn: Any, keys: Sequence[str]) -> None:
+        wanted = sorted({str(key) for key in keys})
+        now = datetime.now(UTC)
+        table = self._applied_events_table()
+        scope = self._applied_scope(conn, self._recommendations_table_name())
+        self._prune_applied_keys(conn, now)
+        for part in chunked(wanted):
+            conn.execute(
+                delete(table).where(table.c.recommendations_table == scope, table.c.event_key.in_(part))
+            )
+        stamp = now.isoformat()
+        # executemany: SQLAlchemy batches these within the dialect's parameter limit.
+        conn.execute(
+            insert(table),
+            [{"recommendations_table": scope, "event_key": key, "applied_at": stamp} for key in wanted],
+        )
+
+    def _clear_applied_keys(self, conn: Any, recommendations_table: str) -> None:
+        # A full write replaces every row, so earlier incremental keys no longer apply (as on dataset output).
+        table = self._applied_events_table()
+        if inspect(conn).has_table(table.name):
+            scope = self._applied_scope(conn, recommendations_table)
+            conn.execute(delete(table).where(table.c.recommendations_table == scope))
+
+    def _replace_recommendations_for_users_unlocked(
+        self, df: pd.DataFrame, ids: list[str], applied_keys: Sequence[str] = ()
+    ) -> int:
         table, _columns, user_col = recommendations_sql_names(
             self._options, default_table=DEFAULT_RECOMMENDATIONS_TABLE
         )
@@ -505,18 +604,22 @@ class DatabaseOutputSink:
             table,
         )
         _require_optional_recommendation_columns(self._engine, table, df)
-        # Identifiers are sql_identifier-validated; match events.store SELECT quoting.
-        delete_sql = text(f"DELETE FROM {table} WHERE {user_col} IN :user_ids").bindparams(
+        # Quoted like to_sql creates the table, so an uppercase name hits the same table.
+        quoted_table = quote_identifier(self._engine, table)
+        quoted_user = quote_identifier(self._engine, user_col)
+        delete_sql = text(f"DELETE FROM {quoted_table} WHERE {quoted_user} IN :user_ids").bindparams(
             bindparam("user_ids", expanding=True)
         )
-        count_sql = text(f"SELECT COUNT(DISTINCT {user_col}) FROM {table}")
+        count_sql = text(f"SELECT COUNT(DISTINCT {quoted_user}) FROM {quoted_table}")
+        if applied_keys:
+            self._create_applied_events_table()
         with self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             savepoint = conn.begin_nested()
             try:
                 conn.execute(delete_sql, {"user_ids": ids})
                 savepoint.commit()
-            except _MISSING_TABLE_ERRORS as exc:
+            except MISSING_TABLE_ERRORS as exc:
                 savepoint.rollback()
                 logger.warning(
                     "Recommendations delete skipped for table %r (missing table or schema issue): %s",
@@ -529,14 +632,28 @@ class DatabaseOutputSink:
                         f"Recommendations schema mismatch for table {table!r}; refusing replace"
                     ) from exc
             if not df.empty:
-                self._ensure_fence()
-                df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-            self._ensure_fence()
+                self._append_frame(conn, table, df)
+            if applied_keys:
+                # Same transaction as the rows: a replay after a crash finds the keys only if the rows landed.
+                self._fence.ensure()
+                self._record_applied_keys(conn, applied_keys)
+            elif self._applied_events_table_exists(conn):
+                # Batches without durable keys still prune, so expired rows never pile up.
+                self._fence.ensure()
+                prune = conn.begin_nested()
+                try:
+                    self._prune_applied_keys(conn, datetime.now(UTC))
+                    prune.commit()
+                except MISSING_TABLE_ERRORS:
+                    # The table was dropped: skip pruning, never the rows write; check again later.
+                    prune.rollback()
+                    self._applied_table_seen = False
+            self._fence.ensure()
             count_savepoint = conn.begin_nested()
             try:
                 value = conn.execute(count_sql).scalar()
                 count_savepoint.commit()
-            except _MISSING_TABLE_ERRORS as exc:
+            except MISSING_TABLE_ERRORS as exc:
                 count_savepoint.rollback()
                 logger.warning(
                     "Recommendations count skipped for table %r (missing table or schema issue): %s",
@@ -547,152 +664,122 @@ class DatabaseOutputSink:
         return int(value or 0)
 
     def write_manifest(self, manifest: dict, *, skip_if_newer_than: str | None = None) -> bool:
-        table = sql_identifier(
-            self._options.get("manifest_table", DEFAULT_MANIFEST_TABLE),
-            option="manifest_table",
-        )
-        frame = pd.DataFrame([manifest])
+        table = table_option(self._options, "manifest_table", DEFAULT_MANIFEST_TABLE)
         logger.info("Appending run manifest to database table %r", table)
-        with self.recommendations_write(), self._engine.begin() as conn:
-            _add_missing_manifest_columns(self._engine, table, frame, conn=conn)
-            if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
-                return False
-            self._ensure_fence()
-            frame.to_sql(table, conn, if_exists="append", index=False, dtype=_manifest_to_sql_dtypes(frame))
-            self._ensure_fence()
+        with self.recommendations_write():
+            self._fence.ensure()
+            _add_missing_manifest_columns(self._engine, table, manifest)
+            with self._engine.begin() as conn:
+                if skip_if_newer_than is not None and _db_manifest_newer(conn, table, skip_if_newer_than):
+                    return False
+                self._fence.ensure()
+                pd.DataFrame([manifest]).to_sql(
+                    table,
+                    conn,
+                    if_exists="append",
+                    index=False,
+                    dtype={key: known() for key, known in _MANIFEST_COLUMN_TYPES.items() if key in manifest},
+                )
+                self._fence.ensure()
         return True
 
     def write_model_artifact(self, payload: bytes) -> None:
         """Replace the single-row model_artifacts table with the latest blob."""
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), table_name)
-        metadata = MetaData()
-        artifacts = Table(
-            table_name,
-            metadata,
-            Column("payload", LargeBinary, nullable=False),
-            Column("written_at", DateTime(timezone=True), nullable=False),
-        )
+        artifacts = self._model_artifacts_table()
+        logger.info("Writing model artifact (%d bytes) to database table %r", len(payload), artifacts.name)
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             artifacts.create(conn, checkfirst=True)
-            self._ensure_fence()
+            self._fence.ensure()
             conn.execute(artifacts.delete())
-            self._ensure_fence()
-            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._ensure_fence()
+            self._insert_artifact(conn, artifacts, payload)
+
+    def _insert_artifact(self, conn: Connection, artifacts: Table, payload: bytes) -> None:
+        self._fence.ensure()
+        # Typed bind, unlike replace_rows_fenced: replace_model_artifact_if matches written_at as stored here.
+        conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
+        self._fence.ensure()
+
+    def _model_artifacts_table(self) -> Table:
+        return Table(
+            table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
+            MetaData(),
+            # Plain LargeBinary is a 64 KB BLOB on MySQL and MariaDB.
+            Column("payload", LargeBinary().with_variant(LONGBLOB(), "mysql", "mariadb"), nullable=False),
+            # Plain DATETIME keeps whole seconds, too coarse for the compare-and-swap token.
+            Column(
+                "written_at",
+                DateTime(timezone=True).with_variant(DATETIME(fsp=6), "mysql", "mariadb"),
+                nullable=False,
+            ),
+        )
 
     def replace_model_artifact_if(self, payload: bytes, expected_fingerprint: str) -> bool:
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        metadata = MetaData()
-        artifacts = Table(
-            table_name,
-            metadata,
-            Column("payload", LargeBinary, nullable=False),
-            Column("written_at", DateTime(timezone=True), nullable=False),
-        )
+        artifacts = self._model_artifacts_table()
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
+            self._fence.ensure()
             artifacts.create(conn, checkfirst=True)
             row = conn.execute(select(artifacts.c.written_at).limit(1).with_for_update()).first()
-            if row is None or row[0] is None:
+            if row is None or _artifact_fingerprint(row[0]) != expected_fingerprint:
                 return False
             written = row[0]
-            stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
-            if f"db:{stamp}" != expected_fingerprint:
-                return False
-            self._ensure_fence()
+            self._fence.ensure()
             deleted = conn.execute(artifacts.delete().where(artifacts.c.written_at == written))
             if deleted.rowcount < 1:
                 return False
-            self._ensure_fence()
-            conn.execute(insert(artifacts).values(payload=payload, written_at=datetime.now(UTC)))
-            self._ensure_fence()
+            self._insert_artifact(conn, artifacts, payload)
         return True
 
-    def read_model_artifact(self, *, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> bytes | None:
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be >= 1")
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
+    def read_model_artifact(self) -> bytes | None:
+        table_name = table_option(self._options, "model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE)
         if not inspect(self._engine).has_table(table_name):
             return None
+        quoted_table, payload = (
+            quote_identifier(self._engine, table_name),
+            quote_identifier(self._engine, "payload"),
+        )
         if self._engine.dialect.name == "sqlite":
-            sql = f'SELECT substr(payload, 1, :cap), length(payload) FROM "{table_name}" LIMIT 1'
+            sql = f"SELECT substr({payload}, 1, :cap), length({payload}) FROM {quoted_table} LIMIT 1"
         else:
             sql = (
-                f"SELECT substring(payload from 1 for :cap), octet_length(payload) "
-                f'FROM "{table_name}" LIMIT 1'
+                f"SELECT substring({payload} from 1 for :cap), octet_length({payload}) "
+                f"FROM {quoted_table} LIMIT 1"
             )
         with self._engine.connect() as conn:
-            row = conn.execute(text(sql), {"cap": max_bytes + 1}).first()
+            row = conn.execute(text(sql), {"cap": DEFAULT_MAX_ARTIFACT_BYTES + 1}).first()
         if row is None or row[1] is None:
             return None
-        size = int(row[1])
-        if size > max_bytes:
-            raise ValueError(f"Stored object is {size} bytes; max is {max_bytes}")
+        reject_oversize(int(row[1]), DEFAULT_MAX_ARTIFACT_BYTES)
         if row[0] is None:
             return None
         return bytes(row[0])
 
     def model_artifact_fingerprint(self) -> str | None:
-        table_name = sql_identifier(
-            self._options.get("model_artifact_table", DEFAULT_MODEL_ARTIFACT_TABLE),
-            option="model_artifact_table",
-        )
-        if not inspect(self._engine).has_table(table_name):
+        artifacts = self._model_artifacts_table()
+        if not inspect(self._engine).has_table(artifacts.name):
             return None
         with self._engine.connect() as conn:
-            row = conn.execute(text(f'SELECT written_at FROM "{table_name}" LIMIT 1')).first()
-        if row is None or row[0] is None:
-            return None
-        written = row[0]
-        stamp = written.isoformat() if hasattr(written, "isoformat") else str(written)
-        return f"db:{stamp}"
+            row = conn.execute(select(artifacts.c.written_at).limit(1)).first()
+        return None if row is None else _artifact_fingerprint(row[0])
 
     def write_items_snapshot(self, df: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE),
-            option="recommendation_items_table",
-        )
+        table = table_option(self._options, "recommendation_items_table", DEFAULT_RECOMMENDATION_ITEMS_TABLE)
         logger.info("Writing %d item snapshot rows to database table %r", len(df), table)
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
-            _clear_table_for_replace(conn, table)
-            self._ensure_fence()
-            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-            self._ensure_fence()
+            self._fence.ensure()
+            self._replace_frame(conn, table, df)
 
     def write_item_scores(self, df: pd.DataFrame) -> None:
-        table = sql_identifier(
-            self._options.get("item_scores_table", DEFAULT_ITEM_SCORES_TABLE),
-            option="item_scores_table",
-        )
+        table = table_option(self._options, "item_scores_table", DEFAULT_ITEM_SCORES_TABLE)
         df = normalize_item_scores(df)
         logger.info("Writing %d item score rows to database table %r", len(df), table)
         with self.recommendations_write(), self._engine.begin() as conn:
-            self._ensure_fence()
-            missing = _missing_item_scores_columns(self._engine, table, conn=conn)
+            self._fence.ensure()
+            missing = _missing_item_scores_columns(conn, table)
             if missing:
-                logger.warning(
-                    "Replacing legacy item_scores table %r missing column(s) %s",
-                    table,
-                    missing,
-                )
-                conn.execute(text(f'DROP TABLE "{table}"'))
-            else:
-                _clear_table_for_replace(conn, table)
-            self._ensure_fence()
-            df.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
-            self._ensure_fence()
+                logger.warning("Replacing legacy item_scores table %r missing column(s) %s", table, missing)
+                conn.execute(text(f"DROP TABLE {quote_identifier(conn, table)}"))
+            self._replace_frame(conn, table, df)
 
     def write_surfaces(
         self,
@@ -701,40 +788,26 @@ class DatabaseOutputSink:
         latest: pd.DataFrame,
         neighbors: pd.DataFrame,
     ) -> None:
+        neighbors_table = table_option(self._options, "neighbors_table", DEFAULT_NEIGHBORS_TABLE)
         tables = (
-            (
-                sql_identifier(
-                    self._options.get("popular_table", DEFAULT_POPULAR_TABLE), option="popular_table"
-                ),
-                popular,
-            ),
-            (
-                sql_identifier(
-                    self._options.get("latest_table", DEFAULT_LATEST_TABLE), option="latest_table"
-                ),
-                latest,
-            ),
-            (
-                sql_identifier(
-                    self._options.get("neighbors_table", DEFAULT_NEIGHBORS_TABLE), option="neighbors_table"
-                ),
-                neighbors,
-            ),
+            (table_option(self._options, "popular_table", DEFAULT_POPULAR_TABLE), popular),
+            (table_option(self._options, "latest_table", DEFAULT_LATEST_TABLE), latest),
+            (neighbors_table, neighbors),
         )
-        neighbors_table = tables[2][0]
         with self.recommendations_write(), self._engine.begin() as conn:
             for table, frame in tables:
                 logger.info("Writing %d surface rows to database table %r", len(frame), table)
-                self._ensure_fence()
+                self._fence.ensure()
                 _clear_table_for_replace(conn, table)
                 if not frame.empty:
-                    self._ensure_fence()
-                    frame.to_sql(table, conn, if_exists="append", index=False, method="multi", chunksize=1000)
+                    self._append_frame(conn, table, frame)
                     if table == neighbors_table:
+                        index = quote_identifier(conn, f"{table}_item_rank_idx")
                         conn.execute(
                             text(
-                                f'CREATE INDEX IF NOT EXISTS "{table}_item_rank_idx" '
-                                f'ON "{table}" ("item_id", "rank")'
+                                f"CREATE INDEX IF NOT EXISTS {index} "
+                                f"ON {quote_identifier(conn, table)} "
+                                f"({quote_identifier(conn, 'item_id')}, {quote_identifier(conn, 'rank')})"
                             )
                         )
-                self._ensure_fence()
+                self._fence.ensure()

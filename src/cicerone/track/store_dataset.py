@@ -2,39 +2,59 @@
 
 from __future__ import annotations
 
-import json
+import logging
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import partial
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from botocore.exceptions import BotoCoreError, ClientError
 
-from cicerone.io.blob import append_storage_bytes, read_storage_bytes, write_storage_bytes
+from cicerone.config.settings import IOSettings
+from cicerone.io.blob import (
+    S3_READ_ERRORS,
+    append_storage_bytes,
+    encode_jsonl,
+    iter_jsonl_objects,
+    json_file_writer,
+    read_json_object,
+    read_parquet_if_exists,
+    read_storage_bytes,
+    require_db_or_local_dataset,
+    write_storage_bytes,
+)
 from cicerone.io.options import (
     build_s3_client,
     exclusive_file_lock,
     is_s3_not_found,
-    object_key,
-    read_s3_body,
-    require_option,
+    local_path,
+    read_s3_parquet,
+    s3_location,
     validate_storage_options,
 )
+from cicerone.locks import WriteFence
 from cicerone.track.store_common import (
+    EVAL_FILENAME,
     HISTORY_DIR,
     HISTORY_FILENAME,
     TRACK_FILENAME,
+    TRACK_LOG_BACKEND_ERROR,
+    empty_history_frame,
+    filter_history,
     history_part_matches,
     history_stem_before,
     row_matches,
+    unique_event_rows,
+    unique_matching_rows,
 )
 
+logger = logging.getLogger(__name__)
+
 _HISTORY_READ_WORKERS = 8
-_S3_READ_ERRORS = (BotoCoreError, ClientError)
 
 
 def _collect_frames(loaders: list[Callable[[], pd.DataFrame | None]]) -> list[pd.DataFrame]:
@@ -50,23 +70,67 @@ def _collect_frames(loaders: list[Callable[[], pd.DataFrame | None]]) -> list[pd
 
 
 class TrackDatasetBackend:
-    _options: dict[str, Any]
-    _known_ids: set[str] | None
-    _track_size: int | None
-    _append_lock: threading.Lock
+    """``track.jsonl``, ``track_eval.json`` and history parquet parts on the dataset store."""
+
+    def __init__(self, output: IOSettings, fence: WriteFence):
+        self._output = output
+        self._options = output.options
+        self._fence = fence
+        self._known_ids: set[str] | None = None
+        self._track_size: int | None = None
+        self._append_lock = threading.Lock()
+
+    def append_accepted(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        require_db_or_local_dataset(self._output, TRACK_LOG_BACKEND_ERROR)
+        with self._dataset_append_lock(), self._fence.lease():
+            known = self._refresh_known_ids()
+            fresh = unique_event_rows(rows, known)
+            if not fresh:
+                return []
+            encoded = encode_jsonl(fresh)
+            self._fence.ensure()
+            append_storage_bytes(self._options, TRACK_FILENAME, encoded)
+            known.update(event_id for row in fresh if (event_id := str(row.get("event_id") or "")))
+            self._track_size = (self._track_size or 0) + len(encoded)
+            return fresh
+
+    def read_rows(
+        self, *, kind: str | None, experiment_id: str | None, since: str | None
+    ) -> list[dict[str, Any]]:
+        # ``since`` is applied while reading the file.
+        raw = read_storage_bytes(self._options, TRACK_FILENAME)
+        rows = self._read_rows_dataset(BytesIO(raw or b""), since=since)
+        return unique_matching_rows(rows, kind=kind, experiment_id=experiment_id, since=None)
+
+    def eval_writer(self, payload: dict[str, Any]) -> Callable[[], None]:
+        return json_file_writer(self._options, EVAL_FILENAME, payload)
+
+    def read_eval(self) -> dict[str, Any] | None:
+        try:
+            return read_json_object(self._options, EVAL_FILENAME)
+        except ValueError:
+            logger.warning("Invalid track_eval.json; ignoring")
+            return None
+
+    def history_writer(self, frame: pd.DataFrame, generated_at: str) -> Callable[[], None]:
+        buf = BytesIO()
+        frame.to_parquet(buf, index=False)
+        part = f"{HISTORY_DIR}/{history_part_name(generated_at)}"
+        payload = buf.getvalue()
+        return lambda: write_storage_bytes(self._options, part, payload, "application/octet-stream")
+
+    def read_history(self, *, generated_ats: set[str] | None, since: str | None) -> pd.DataFrame:
+        frames = []
+        if generated_ats is None and since is None:
+            frames.extend(self._read_legacy_history())
+        frames.extend(self._read_history_parts(generated_ats=generated_ats, since=since))
+        if not frames:
+            return empty_history_frame()
+        return filter_history(pd.concat(frames, ignore_index=True), generated_ats=generated_ats, since=since)
 
     def _read_legacy_history(self) -> list[pd.DataFrame]:
-        from cicerone.io.options import read_parquet
-
-        try:
-            frame = read_parquet(self._options, HISTORY_FILENAME)
-        except FileNotFoundError:
-            return []
-        except _S3_READ_ERRORS as exc:
-            if is_s3_not_found(exc):
-                return []
-            raise
-        return [] if frame.empty else [frame]
+        frame = read_parquet_if_exists(self._options, HISTORY_FILENAME)
+        return [] if frame is None or frame.empty else [frame]
 
     def _read_history_parts(
         self,
@@ -76,7 +140,7 @@ class TrackDatasetBackend:
     ) -> list[pd.DataFrame]:
         backend = validate_storage_options(self._options)
         if backend == "local":
-            root = Path(require_option(self._options, "path", "local")) / HISTORY_DIR
+            root = local_path(self._options, HISTORY_DIR)
             if not root.is_dir():
                 return []
             if generated_ats is not None:
@@ -85,49 +149,33 @@ class TrackDatasetBackend:
                 paths = sorted(root.glob("*.parquet"))
                 if since:
                     paths = [path for path in paths if not history_stem_before(path.stem, since)]
-            return _collect_frames([_bind_local_frame(path) for path in paths])
-        bucket = require_option(self._options, "bucket", "s3")
-        prefix = object_key(self._options, f"{HISTORY_DIR}/")
+            return _collect_frames([partial(pd.read_parquet, path) for path in paths])
+        bucket, prefix = s3_location(self._options, f"{HISTORY_DIR}/")
         client = build_s3_client(self._options)
         if generated_ats is not None:
-            return _s3_history_frames(client, bucket, prefix, self._options, generated_ats)
+            return _s3_history_frames(client, bucket, prefix, generated_ats)
         try:
             keys = _list_s3_parquet_keys(client, bucket, prefix)
-        except _S3_READ_ERRORS as exc:
+        except S3_READ_ERRORS as exc:
             if is_s3_not_found(exc):
                 return []
             raise
         if since:
             keys = [key for key in keys if not history_stem_before(Path(key).stem, since)]
-        return _collect_frames([_bind_s3_frame(client, bucket, key) for key in sorted(keys)])
+        return _collect_frames([partial(_s3_parquet_frame, client, bucket, key) for key in sorted(keys)])
 
     def _iter_track_lines(self) -> Iterator[bytes]:
-        backend = validate_storage_options(self._options)
-        if backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
-            if not path.exists():
-                return
-            with path.open("rb") as handle:
-                yield from handle
+        # Appends are local-only; stream so the id refresh has no size cap.
+        path = local_path(self._options, TRACK_FILENAME)
+        if not path.exists():
             return
-        raw = self._read_bytes(TRACK_FILENAME)
-        if raw is None:
-            return
-        yield from raw.splitlines()
+        with path.open("rb") as handle:
+            yield from handle
 
-    def _read_rows_dataset(self, *, since: str | None = None) -> list[dict[str, Any]]:
+    def _read_rows_dataset(self, lines: Iterable[bytes], *, since: str | None = None) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         known: set[str] | None = set() if self._known_ids is None else None
-        for raw_line in self._iter_track_lines():
-            line = raw_line.decode("utf-8").strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
+        for parsed in iter_jsonl_objects(lines):
             if known is not None:
                 event_id = str(parsed.get("event_id") or "")
                 if event_id:
@@ -140,7 +188,7 @@ class TrackDatasetBackend:
         return rows
 
     def _track_file_size(self) -> int:
-        path = Path(require_option(self._options, "path", "local")) / TRACK_FILENAME
+        path = local_path(self._options, TRACK_FILENAME)
         if not path.exists():
             return 0
         return path.stat().st_size
@@ -150,25 +198,16 @@ class TrackDatasetBackend:
         if self._known_ids is not None and self._track_size == size:
             return self._known_ids
         self._known_ids = None
-        self._read_rows_dataset()
+        self._read_rows_dataset(self._iter_track_lines())
         assert self._known_ids is not None
         self._track_size = size
         return self._known_ids
 
     @contextmanager
     def _dataset_append_lock(self) -> Iterator[None]:
-        path = Path(require_option(self._options, "path", "local")) / ".track.jsonl.lock"
+        path = local_path(self._options, ".track.jsonl.lock")
         with self._append_lock, exclusive_file_lock(path):
             yield
-
-    def _read_bytes(self, filename: str) -> bytes | None:
-        return read_storage_bytes(self._options, filename)
-
-    def _write_bytes(self, filename: str, payload: bytes, content_type: str) -> None:
-        write_storage_bytes(self._options, filename, payload, content_type)
-
-    def _append_bytes(self, filename: str, payload: bytes) -> None:
-        append_storage_bytes(self._options, filename, payload)
 
 
 def history_part_name(generated_at: str) -> str:
@@ -189,48 +228,25 @@ def _local_history_paths(root: Path, generated_ats: set[str]) -> list[Path]:
     ]
 
 
-def _bind_local_frame(path: Path) -> Callable[[], pd.DataFrame | None]:
-    def _load() -> pd.DataFrame | None:
-        return _local_parquet_frame(path)
-
-    return _load
-
-
-def _bind_s3_frame(client: Any, bucket: str, key: str) -> Callable[[], pd.DataFrame | None]:
-    def _load() -> pd.DataFrame | None:
-        return _s3_parquet_frame(client, bucket, key)
-
-    return _load
-
-
-def _local_parquet_frame(path: Path) -> pd.DataFrame | None:
-    frame = pd.read_parquet(path)
-    return None if frame.empty else frame
-
-
 def _s3_parquet_frame(client: Any, bucket: str, key: str) -> pd.DataFrame | None:
     try:
-        obj = client.get_object(Bucket=bucket, Key=key)
-    except _S3_READ_ERRORS as exc:
+        return read_s3_parquet(client, bucket, key)
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return None
         raise
-    return pd.read_parquet(BytesIO(read_s3_body(obj)))
 
 
 def _s3_history_frames(
     client: Any,
     bucket: str,
     prefix: str,
-    options: dict[str, Any],
     generated_ats: set[str],
 ) -> list[pd.DataFrame]:
     frames: list[pd.DataFrame] = []
     loaded: set[str] = set()
     missing: set[str] = set()
-    exact = [
-        (stamp, object_key(options, f"{HISTORY_DIR}/{history_part_name(stamp)}")) for stamp in generated_ats
-    ]
+    exact = [(stamp, f"{prefix}{history_part_name(stamp)}") for stamp in generated_ats]
 
     def _one(item: tuple[str, str]) -> tuple[str, str, pd.DataFrame | None]:
         stamp, key = item
@@ -251,7 +267,7 @@ def _s3_history_frames(
         return frames
     try:
         keys = _list_s3_parquet_keys(client, bucket, prefix)
-    except _S3_READ_ERRORS as exc:
+    except S3_READ_ERRORS as exc:
         if is_s3_not_found(exc):
             return frames
         raise
@@ -262,7 +278,7 @@ def _s3_history_frames(
         if key not in loaded
         and (Path(key).name in missing_names or history_part_matches(Path(key).stem, missing))
     ]
-    frames.extend(_collect_frames([_bind_s3_frame(client, bucket, key) for key in extra]))
+    frames.extend(_collect_frames([partial(_s3_parquet_frame, client, bucket, key) for key in extra]))
     return frames
 
 

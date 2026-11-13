@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from sqlalchemy import create_engine
+from support.fakes import FakeLock, FakeManifest, raising
+from support.settings import local_output, make_settings
+from support.system_spec import dashboard_users
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.config.settings import ExperimentSettings, VariantSettings
@@ -42,8 +44,8 @@ def _settings(tmp_path, **experiment_overrides):
     experiment = ExperimentSettings(**params)
     return make_settings(
         feature_config_path=str(REPO_FEATURES),
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(inp)}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        input=local_output(inp),
+        output=local_output(out),
         experiment=experiment,
     )
 
@@ -59,7 +61,7 @@ def _write_frames(settings, *, events, recs, exposures=None) -> None:
 
 def test_experiment_context_disabled(tmp_path):
     settings = make_settings(feature_config_path=str(REPO_FEATURES))
-    context = experiment_context(settings)
+    context = experiment_context(settings, None)
     assert context["enabled"] is False
     assert context["report"] is None
 
@@ -104,7 +106,7 @@ def test_experiment_context_includes_intersection(tmp_path):
             },
         ],
     )
-    report = experiment_context(settings)["report"]
+    report = experiment_context(settings, ExperimentStore(settings.output))["report"]
     assert report is not None
     assert len(report.intersections) == 1
     assert report.intersections[0].name == "Intersection@2"
@@ -112,7 +114,6 @@ def test_experiment_context_includes_intersection(tmp_path):
 
 
 def test_experiments_page_shows_list_overlap(tmp_path):
-    import bcrypt
     from fastapi.testclient import TestClient
 
     from cicerone.dashboard import create_app
@@ -163,16 +164,7 @@ def test_experiments_page_shows_list_overlap(tmp_path):
             },
         ],
     )
-    users = {"alice": bcrypt.hashpw(b"s3cret", bcrypt.gensalt()).decode("ascii")}
-
-    class _FakeReader:
-        def read_latest(self):
-            return None
-
-        def read_recent(self, limit: int):
-            return []
-
-    app = create_app(settings, _FakeReader(), users)
+    app = create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/experiments", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Variant list overlap" in response.text
@@ -204,8 +196,8 @@ def test_promote_winner_when_undecided(tmp_path):
             },
         ],
     )
-    assert promote_winner(settings, "ghost") == "Unknown variant 'ghost'"
-    error = promote_winner(settings, "treatment")
+    assert promote_winner(settings, ExperimentStore(settings.output), "ghost") == "Unknown variant 'ghost'"
+    error = promote_winner(settings, ExperimentStore(settings.output), "treatment")
     assert error is not None
     assert "not ready" in error
 
@@ -274,18 +266,21 @@ def test_promote_winner_when_treatment_wins(tmp_path):
             )
         )
     _write_frames(settings, events=events, recs=recs, exposures=exposures)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     report = context["report"]
     assert report is not None
     assert report.can_promote is True
     assert report.winner == "treatment"
-    assert promote_winner(settings, "control") == "Winner is 'treatment', not 'control'"
-    assert promote_winner(settings, "treatment") is None
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "control")
+        == "Winner is 'treatment', not 'control'"
+    )
+    assert promote_winner(settings, ExperimentStore(settings.output), "treatment") is None
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] == "treatment"
-    assert experiment_context(settings)["promoted_variant"] == "treatment"
-    assert clear_promotion(settings) is None
+    assert experiment_context(settings, ExperimentStore(settings.output))["promoted_variant"] == "treatment"
+    assert clear_promotion(settings, ExperimentStore(settings.output)) is None
     cleared = ExperimentStore(settings.output).read_state()
     assert cleared is not None
     assert cleared["promoted_variant"] is None
@@ -318,7 +313,7 @@ def test_experiment_context_coverage_uses_items_snapshot(tmp_path):
         Path(settings.output.options["path"]) / "items_snapshot.parquet",
         index=False,
     )
-    report = experiment_context(settings)["report"]
+    report = experiment_context(settings, ExperimentStore(settings.output))["report"]
     assert report is not None
     assert "guardrails" in report.promote_blocked_by
     assert any("coverage" in item.failures for item in report.guardrails)
@@ -326,7 +321,7 @@ def test_experiment_context_coverage_uses_items_snapshot(tmp_path):
 
 def test_clear_promotion_requires_enabled_experiment():
     settings = make_settings(feature_config_path=str(REPO_FEATURES))
-    assert clear_promotion(settings) == "No experiment is enabled"
+    assert clear_promotion(settings, None) == "No experiment is enabled"
 
 
 def test_experiment_context_missing_feature_config(tmp_path):
@@ -337,9 +332,12 @@ def test_experiment_context_missing_feature_config(tmp_path):
         output=settings.output,
         experiment=settings.experiment,
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
-    assert promote_winner(settings, "control") == "Experiment report is not available"
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "control")
+        == "Experiment report is not available"
+    )
 
 
 def test_experiment_context_surfaces_live_policy_config_error(tmp_path, monkeypatch):
@@ -349,7 +347,7 @@ def test_experiment_context_surfaces_live_policy_config_error(tmp_path, monkeypa
         raise ConfigError("experiment.variants[treatment].boosts duplicate rule name 'featured'")
 
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", _boom)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert "duplicate rule name" in (context["error"] or "")
 
 
@@ -363,7 +361,7 @@ def test_experiment_context_invalid_feature_config(tmp_path):
         output=settings.output,
         experiment=settings.experiment,
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
 
@@ -381,7 +379,7 @@ def test_experiment_context_missing_events_file(tmp_path):
             }
         ]
     ).to_parquet(Path(settings.output.options["path"]) / "recommendations.parquet", index=False)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
 
 
@@ -396,7 +394,7 @@ def test_experiment_context_db_events(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -420,7 +418,7 @@ def test_experiment_context_db_events(tmp_path):
             }
         ]
     ).to_parquet(out / "recommendations.parquet", index=False)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
 
 
@@ -433,7 +431,7 @@ def test_experiment_context_db_events_missing_table(tmp_path):
     settings = make_settings(
         feature_config_path=str(REPO_FEATURES),
         input=IOSettings(kind="db", options={"database_url": url}),
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
         experiment=ExperimentSettings(
             enabled=True,
             id="exp-1",
@@ -444,7 +442,7 @@ def test_experiment_context_db_events_missing_table(tmp_path):
             ),
         ),
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None or context["error"]
 
 
@@ -459,7 +457,7 @@ def test_experiment_context_propagates_unexpected_state_errors(tmp_path, monkeyp
         lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
-        experiment_context(settings)
+        experiment_context(settings, ExperimentStore(settings.output))
 
 
 def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
@@ -487,7 +485,7 @@ def test_experiment_context_tolerates_load_failures(tmp_path, monkeypatch):
     monkeypatch.setattr("cicerone.dashboard_experiments.load_recommendation_guardrail_rows", _boom)
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_exposures", _boom)
     monkeypatch.setattr("cicerone.dashboard_experiments.load_items_catalog_size", _boom)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
 
 
@@ -507,14 +505,16 @@ def test_experiment_context_reuses_cached_promote_state_on_read_failure(tmp_path
             }
         ],
     )
+    store = ExperimentStore(settings.output)
     ExperimentStore(settings.output).write_state(experiment_state("exp-cache", promoted_variant="treatment"))
-    assert experiment_context(settings)["promoted_variant"] == "treatment"
+    assert experiment_context(settings, store)["promoted_variant"] == "treatment"
 
     def _boom(*_args, **_kwargs):
         raise OSError("store down")
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
-    assert experiment_context(settings)["promoted_variant"] == "treatment"
+    assert experiment_context(settings, store)["promoted_variant"] == "treatment"
+    assert experiment_context(settings, ExperimentStore(settings.output))["promoted_variant"] is None
 
 
 def test_experiment_context_clears_promote_cache_when_store_returns_other_experiment(tmp_path, monkeypatch):
@@ -533,24 +533,25 @@ def test_experiment_context_clears_promote_cache_when_store_returns_other_experi
             }
         ],
     )
+    store = ExperimentStore(settings.output)
     ExperimentStore(settings.output).write_state(experiment_state("exp-cache", promoted_variant="treatment"))
-    assert experiment_context(settings)["promoted_variant"] == "treatment"
+    assert experiment_context(settings, store)["promoted_variant"] == "treatment"
 
-    def _other(_self):
+    def _other():
         return {
             "experiment_id": "other-exp",
             "promoted_variant": "control",
             "promoted_at": "2026-09-02T00:00:00Z",
         }
 
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _other)
-    assert experiment_context(settings)["promoted_variant"] is None
+    monkeypatch.setattr(store.backend, "read_state", _other)
+    assert experiment_context(settings, store)["promoted_variant"] is None
 
     def _boom(*_args, **_kwargs):
         raise OSError("store down")
 
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
-    assert experiment_context(settings)["promoted_variant"] is None
+    monkeypatch.setattr(store.backend, "read_state", _boom)
+    assert experiment_context(settings, store)["promoted_variant"] is None
 
 
 def test_experiment_context_promoted_variant_when_state_experiment_id_is_int(tmp_path, monkeypatch):
@@ -578,7 +579,7 @@ def test_experiment_context_promoted_variant_when_state_experiment_id_is_int(tmp
         }
 
     monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _state)
-    assert experiment_context(settings)["promoted_variant"] == "treatment"
+    assert experiment_context(settings, ExperimentStore(settings.output))["promoted_variant"] == "treatment"
 
 
 def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
@@ -599,19 +600,19 @@ def test_experiment_context_recipes_from_manifest(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] is None
     assert [recipe.name for recipe in context["recipes"]] == ["control", "treatment"]
     assert context["recipes"][0].merge_item_availability is True
@@ -625,33 +626,31 @@ def test_experiment_context_manifest_restores_eligibility_merge_flag(tmp_path, m
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {
-                            "name": "control",
-                            "traffic": 0.5,
-                            "models": ["popular"],
-                            "eligibility": [],
-                            "merge_item_availability": False,
-                        },
-                        {
-                            "name": "treatment",
-                            "traffic": 0.5,
-                            "models": ["collaborative"],
-                            "eligibility": [
-                                {"name": "published", "op": "item_true", "item_column": "published"}
-                            ],
-                            "merge_item_availability": False,
-                        },
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {
+                        "name": "control",
+                        "traffic": 0.5,
+                        "models": ["popular"],
+                        "eligibility": [],
+                        "merge_item_availability": False,
+                    },
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "models": ["collaborative"],
+                        "eligibility": [{"name": "published", "op": "item_true", "item_column": "published"}],
+                        "merge_item_availability": False,
+                    },
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     features = load_feature_config(REPO_FEATURES)
     control = apply_recipe(features, context["recipes"][0])
     treatment = apply_recipe(features, context["recipes"][1])
@@ -663,24 +662,24 @@ def test_experiment_context_manifest_policy_error_names_variant(tmp_path, monkey
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {
-                            "name": "treatment",
-                            "traffic": 0.5,
-                            "models": ["collaborative"],
-                            "eligibility": [1],
-                        },
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {
+                        "name": "treatment",
+                        "traffic": 0.5,
+                        "models": ["collaborative"],
+                        "eligibility": [1],
+                    },
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert "experiment_variants[treatment].eligibility" in (context["error"] or "")
 
 
@@ -688,12 +687,10 @@ def test_experiment_context_manifest_recipes_malformed_item(tmp_path, monkeypatc
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {"experiment_variants": json.dumps([{"traffic": 0.5}])}
+    reader = FakeManifest({"experiment_variants": json.dumps([{"traffic": 0.5}])})
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
 
@@ -704,19 +701,19 @@ def test_experiment_context_manifest_recipes_skips_malformed_keeps_good(tmp_path
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {
-                "experiment_variants": json.dumps(
-                    [
-                        {"name": "control", "traffic": 0.5, "models": ["popular"]},
-                        {"traffic": 0.5},
-                        {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
-                    ]
-                )
-            }
+    reader = FakeManifest(
+        {
+            "experiment_variants": json.dumps(
+                [
+                    {"name": "control", "traffic": 0.5, "models": ["popular"]},
+                    {"traffic": 0.5},
+                    {"name": "treatment", "traffic": 0.5, "models": ["collaborative"]},
+                ]
+            )
+        }
+    )
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
     recipes = _recipes(settings, load_feature_config(REPO_FEATURES))
     assert [recipe.name for recipe in recipes] == ["control", "treatment"]
 
@@ -725,12 +722,10 @@ def test_experiment_context_manifest_recipes_invalid_json(tmp_path, monkeypatch)
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr("cicerone.dashboard_experiments.resolve_recipes", lambda *args, **kwargs: ())
 
-    class _Reader:
-        def read_latest(self):
-            return {"experiment_variants": "{not-json"}
+    reader = FakeManifest({"experiment_variants": "{not-json"})
 
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: _Reader())
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.dashboard_experiments.build_manifest_reader", lambda _output: reader)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
 
@@ -746,7 +741,7 @@ def test_experiment_context_manifest_read_and_resolve_errors(tmp_path, monkeypat
         "cicerone.dashboard_experiments.resolve_recipes",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("recipes")),
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["error"] == "No experiment variants to evaluate."
 
 
@@ -771,7 +766,7 @@ def test_experiment_context_passes_since_to_metric_events(tmp_path, monkeypatch)
         return pd.DataFrame()
 
     monkeypatch.setattr("cicerone.dashboard_experiments._load_metric_events", _load)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert isinstance(seen.get("since"), str) and seen["since"]
 
@@ -793,7 +788,7 @@ def test_experiment_context_events_query_falls_back(tmp_path, monkeypatch):
             return pd.DataFrame([{"user_id": "u1", "event_type": "purchase", "quantity": 1}])
 
     monkeypatch.setattr("cicerone.evaluation.context.build_input_source", lambda _inp: _Source())
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
 
 
@@ -807,8 +802,8 @@ def test_experiment_context_events_s3_missing(tmp_path, monkeypatch):
         raise _S3Missing("missing")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _raise)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: True)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
 
 
@@ -890,7 +885,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
         ),
         track={"enabled": True},
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert context["report"].primary_metric == "ctr"
     assert context["lift_label"] == "CTR lift"
@@ -982,7 +977,7 @@ def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
             ).as_row()
         ]
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert context["report"].n_assigned == 1
 
@@ -1048,7 +1043,7 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
         return {}
 
     monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _capture)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     ids = {str(row.get("experiment_id") or "") for row in captured["rows"]}
     assert "exp-old" not in ids
     assert ids == {"exp-1"}
@@ -1092,7 +1087,7 @@ def test_experiment_context_track_read_error(tmp_path, monkeypatch):
         "cicerone.track.store.TrackStore.read_rows",
         lambda self, **_kwargs: (_ for _ in ()).throw(OSError("track")),
     )
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert context["report"].n_assigned == 1
 
@@ -1127,7 +1122,7 @@ def test_experiment_context_user_attribution_skips_track_outcomes(tmp_path, monk
         return {}
 
     monkeypatch.setattr("cicerone.dashboard_experiments.user_track_outcomes", _boom)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert called["n"] == 0
 
@@ -1155,8 +1150,8 @@ def test_experiment_context_events_full_parquet_fallback(tmp_path, monkeypatch):
         raise OSError("parquet")
 
     monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _boom)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: False)
-    context = experiment_context(settings)
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: False)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["report"] is not None
     assert calls["n"] >= 2
 
@@ -1232,7 +1227,7 @@ def test_experiment_context_thompson_view(tmp_path):
         {"user_id": f"u{i}", "item_id": f"i{i % 10}", "event_type": "view", "quantity": 1} for i in range(12)
     ]
     _write_frames(settings, events=events, recs=recs)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     thompson = context["thompson"]
     assert thompson is not None
     assert thompson["champion"] == "control"
@@ -1344,13 +1339,13 @@ def test_promote_and_resume_keep_thompson_fields(tmp_path):
         experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
     )
     _write_frames(settings, events=events, recs=recs, exposures=exposures)
-    assert promote_winner(settings, "treatment") is None
+    assert promote_winner(settings, ExperimentStore(settings.output), "treatment") is None
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] == "treatment"
     assert state["champion"] == "control"
     assert state["challenger"] == "treatment"
-    assert clear_promotion(settings) is None
+    assert clear_promotion(settings, ExperimentStore(settings.output)) is None
     cleared = ExperimentStore(settings.output).read_state()
     assert cleared is not None
     assert cleared["promoted_variant"] is None
@@ -1380,11 +1375,11 @@ def test_thompson_ship_ignores_undecided(tmp_path):
         experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
     )
     _write_frames(settings, events=events, recs=recs)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert "undecided" in context["report"].promote_blocked_by
     assert context["can_ship"] is True
     assert context["ship_variant"] == "control"
-    assert promote_winner(settings, "control") is None
+    assert promote_winner(settings, ExperimentStore(settings.output), "control") is None
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] == "control"
@@ -1447,12 +1442,15 @@ def test_thompson_ship_ignores_parked_empty_lists(tmp_path):
         experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
     )
     _write_frames(settings, events=events, recs=recs)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert "guardrails" not in context["ship_blocked"]
     assert {item.variant for item in context["report"].guardrails} == {"control", "treatment"}
     assert context["can_ship"] is True
     assert context["ship_variant"] == "control"
-    assert promote_winner(settings, "blend") == "Winner is 'control', not 'blend'"
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "blend")
+        == "Winner is 'control', not 'blend'"
+    )
 
 
 def _thompson_three_variants(tmp_path):
@@ -1491,7 +1489,7 @@ def test_thompson_context_without_pair_does_not_ship(tmp_path):
     ]
     ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
     _write_frames(settings, events=events, recs=recs)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["ship_variant"] is None
     assert context["can_ship"] is False
 
@@ -1529,7 +1527,7 @@ def test_thompson_stale_pair_is_not_shippable(tmp_path):
         experiment_state("exp-1", promoted_variant=None, champion="control", challenger="treatment")
     )
     _write_frames(settings, events=events, recs=recs)
-    context = experiment_context(settings)
+    context = experiment_context(settings, ExperimentStore(settings.output))
     assert context["ship_variant"] is None
     assert context["can_ship"] is False
 
@@ -1553,7 +1551,7 @@ def test_thompson_promote_rejects_stale_pair_missing_recipe(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="control",
@@ -1564,7 +1562,10 @@ def test_thompson_promote_rejects_stale_pair_missing_recipe(tmp_path, monkeypatc
             "ship_variant": "control",
         },
     )
-    assert promote_winner(settings, "control") == "No active champion/challenger pair is available"
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "control")
+        == "No active champion/challenger pair is available"
+    )
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] is None
@@ -1577,7 +1578,7 @@ def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, mo
     ExperimentStore(settings.output).write_state(experiment_state("exp-1", promoted_variant=None))
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="blend",
@@ -1587,7 +1588,10 @@ def test_thompson_promote_rejects_parked_report_winner_without_pair(tmp_path, mo
             "ship_variant": "blend",
         },
     )
-    assert promote_winner(settings, "blend") == "No active champion/challenger pair is available"
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "blend")
+        == "No active champion/challenger pair is available"
+    )
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] is None
@@ -1602,7 +1606,7 @@ def test_thompson_promote_rechecks_pair_under_writer_lock(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="control",
@@ -1612,7 +1616,10 @@ def test_thompson_promote_rechecks_pair_under_writer_lock(tmp_path, monkeypatch)
             "ship_variant": "control",
         },
     )
-    assert promote_winner(settings, "treatment") == "Winner is 'control', not 'treatment'"
+    assert (
+        promote_winner(settings, ExperimentStore(settings.output), "treatment")
+        == "Winner is 'control', not 'treatment'"
+    )
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
     assert state["promoted_variant"] is None
@@ -1632,7 +1639,7 @@ def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypat
     assert store.last_state("exp-1") is not None
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="control",
@@ -1648,7 +1655,7 @@ def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypat
         raise OSError("store down")
 
     monkeypatch.setattr(ExperimentStore, "read_state", _boom)
-    assert promote_winner(settings, "treatment") == "Experiment state could not be read"
+    assert promote_winner(settings, store, "treatment") == "Experiment state could not be read"
     monkeypatch.setattr(ExperimentStore, "read_state", original)
     state = ExperimentStore(settings.output).read_state()
     assert state is not None
@@ -1657,37 +1664,33 @@ def test_thompson_promote_fails_closed_when_state_read_fails(tmp_path, monkeypat
     assert state["challenger"] == "treatment"
 
 
-def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
+def test_thompson_unpromote_keeps_state_when_state_read_fails(tmp_path, monkeypatch):
+    settings = _thompson_three_variants(tmp_path)
+    store = ExperimentStore(settings.output)
+    store.write_state(
+        experiment_state("exp-1", promoted_variant="treatment", champion="control", challenger="treatment")
+    )
+    original = ExperimentStore.read_state
+    monkeypatch.setattr(ExperimentStore, "read_state", raising(OSError("store down")))
+    assert clear_promotion(settings, store) == "Experiment state could not be read"
+    monkeypatch.setattr(ExperimentStore, "read_state", original)
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
+    assert state["champion"] == "control"
+    assert state["challenger"] == "treatment"
+
+
+def test_fixed_promote_and_unpromote_refuse_when_state_read_fails(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from cicerone.locks import writer_lock_held_here
-
     settings = _settings(tmp_path, log_exposures=False)
-    seen = {"held": False}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    lock = _Lock()
-    original = ExperimentStore.read_state
-
-    def _read(self):
-        seen["held"] = writer_lock_held_here(self._fence.lock)
-        return original(self)
-
+    store = ExperimentStore(settings.output)
+    store.write_state(experiment_state("exp-1", promoted_variant="control"))
+    assert store.last_state("exp-1") is not None
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="treatment",
@@ -1695,9 +1698,42 @@ def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
             )
         },
     )
-    monkeypatch.setattr("cicerone.dashboard_experiments.build_output_writer_lock", lambda _settings: lock)
+    monkeypatch.setattr(store.backend, "read_state", raising(OSError("store down")))
+    assert promote_winner(settings, store, "treatment") == "Experiment state could not be read"
+    assert clear_promotion(settings, store) == "Experiment state could not be read"
+    state = ExperimentStore(settings.output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from cicerone.locks import WriteFence, writer_lock_held_here
+
+    settings = _settings(tmp_path, log_exposures=False)
+    seen = {"held": False}
+
+    lock = FakeLock()
+    original = ExperimentStore.read_state
+
+    def _read(self):
+        seen["held"] = writer_lock_held_here(self.fence.lock)
+        return original(self)
+
+    monkeypatch.setattr(
+        "cicerone.dashboard_experiments.experiment_context",
+        lambda _settings, _store: {
+            "report": SimpleNamespace(
+                comparisons=(),
+                winner="treatment",
+                promote_blocked_by=(),
+            )
+        },
+    )
     monkeypatch.setattr(ExperimentStore, "read_state", _read)
-    assert promote_winner(settings, "treatment") is None
+    store = ExperimentStore(settings.output, fence=WriteFence(lock))
+    assert promote_winner(settings, store, "treatment") is None
     assert seen["held"] is True
 
 
@@ -1709,7 +1745,7 @@ def test_promote_winner_maps_writer_lock_errors(tmp_path, monkeypatch):
     settings = _settings(tmp_path, log_exposures=False)
     monkeypatch.setattr(
         "cicerone.dashboard_experiments.experiment_context",
-        lambda _settings: {
+        lambda _settings, _store: {
             "report": SimpleNamespace(
                 comparisons=(),
                 winner="treatment",
@@ -1718,17 +1754,17 @@ def test_promote_winner_maps_writer_lock_errors(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.locks.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
-    assert promote_winner(settings, "treatment") == "Writer lock is busy"
+    assert promote_winner(settings, ExperimentStore(settings.output), "treatment") == "Writer lock is busy"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.locks.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(LockLostError("writer lock lost", kind="writer")),
     )
-    assert promote_winner(settings, "treatment") == "Writer lock was lost"
+    assert promote_winner(settings, ExperimentStore(settings.output), "treatment") == "Writer lock was lost"
     monkeypatch.setattr(
-        "cicerone.dashboard_experiments.held_writer_lock",
+        "cicerone.locks.WriteFence.hold",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WriterLockBusyError("dataset writer lock busy")),
     )
-    assert clear_promotion(settings) == "Writer lock is busy"
+    assert clear_promotion(settings, ExperimentStore(settings.output)) == "Writer lock is busy"

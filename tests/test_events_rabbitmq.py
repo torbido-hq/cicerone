@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from typing import Any
 
 import pytest
-from support.events import event_payload
+from support.events import UNPARSABLE_JSON_BODIES, event_payload
 from support.fake_rabbitmq import install_fake_rabbitmq
+from support.fakes import hide_module, raising
+from support.waits import UNREACHED_SECONDS, WAIT_SECONDS, call_in_thread, wait_until
 
 from cicerone.config import ConfigError
 from cicerone.events.base import EventSourceError
@@ -81,9 +82,7 @@ def test_pika_io_skips_job_queued_during_timed_out_pump():
         with pytest.raises(TimeoutError, match="timed out"):
             io.submit(executed.set)
         released.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io.failed is True
         assert io._thread.is_alive() is False
         assert executed.is_set() is False
@@ -104,12 +103,9 @@ def test_pika_io_marks_failed_when_pump_raises():
     io._connection = _Conn()
     io.start()
     try:
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not io.failed:
-            time.sleep(0.01)
+        assert wait_until(lambda: io.failed)
         assert io.failed is True
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io._thread.is_alive() is False
     finally:
         io.stop()
@@ -187,9 +183,7 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
         assert err and isinstance(err[0], TimeoutError)
         assert held and held[0].state == _JOB_ABANDONED
         release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io.failed is True
         assert executed.is_set() is False
     finally:
@@ -197,72 +191,33 @@ def test_pika_io_timeout_does_not_run_unclaimed_job():
         io.stop()
 
 
-def test_pika_io_timeout_does_not_run_claimed_job():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, _JOB_CLAIMED, PikaIo
-
-    io = PikaIo(timeout_seconds=0.05)
-    original_take = io._take_job
-    claimed = threading.Event()
-    release = threading.Event()
-    executed = threading.Event()
-    held: list[Any] = []
-
-    def _hold_after_claim(job: Any) -> bool:
-        taken = original_take(job)
-        if taken:
-            held.append(job)
-            claimed.set()
-            release.wait(timeout=2)
-        return taken
-
-    io._take_job = _hold_after_claim  # type: ignore[method-assign]
-    io.start()
-    err: list[BaseException] = []
-
-    def _caller() -> None:
-        try:
-            io.submit(executed.set)
-        except BaseException as exc:
-            err.append(exc)
-
-    waiter = threading.Thread(target=_caller)
-    waiter.start()
-    try:
-        assert claimed.wait(timeout=2)
-        waiter.join(timeout=2)
-        assert err and isinstance(err[0], TimeoutError)
-        assert held and held[0].state == _JOB_ABANDONED
-        assert held[0].state != _JOB_CLAIMED
-        release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
-        assert io.failed is True
-        assert executed.is_set() is False
-    finally:
-        release.set()
-        io.stop()
-
-
-def test_pika_io_timeout_does_not_run_after_started_when_failed():
+@pytest.mark.parametrize(
+    ("step", "hold_after"),
+    [("queued", True), ("claimed", True), ("running", False), ("running", True)],
+)
+def test_pika_io_timeout_does_not_run_job_held_at_a_step(step: str, hold_after: bool):
     from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
 
     io = PikaIo(timeout_seconds=0.05)
-    original_should_run = io._should_run
+    original_advance = io._advance
     entered = threading.Event()
     release = threading.Event()
     executed = threading.Event()
     held: list[Any] = []
 
-    def _hold_after_started(job: Any) -> bool:
-        taken = original_should_run(job)
-        if taken:
+    def _hold(job: Any, expected: str, state: str) -> bool:
+        if expected == step and not hold_after:
+            held.append(job)
+            entered.set()
+            release.wait(timeout=2)
+        taken = original_advance(job, expected, state)
+        if expected == step and hold_after and taken:
             held.append(job)
             entered.set()
             release.wait(timeout=2)
         return taken
 
-    io._should_run = _hold_after_started  # type: ignore[method-assign]
+    io._advance = _hold  # type: ignore[method-assign]
     io.start()
     err: list[BaseException] = []
 
@@ -278,57 +233,12 @@ def test_pika_io_timeout_does_not_run_after_started_when_failed():
         assert entered.wait(timeout=2)
         waiter.join(timeout=2)
         assert err and isinstance(err[0], TimeoutError)
+        assert held and held[0].state == _JOB_ABANDONED
         release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io.failed is True
         assert executed.is_set() is False
-        assert held and held[0].state == _JOB_ABANDONED
-    finally:
-        release.set()
-        io.stop()
-
-
-def test_pika_io_timeout_does_not_run_after_running_when_failed():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
-
-    io = PikaIo(timeout_seconds=0.05)
-    original_should_run = io._should_run
-    entered = threading.Event()
-    release = threading.Event()
-    executed = threading.Event()
-    held: list[Any] = []
-
-    def _hold_before_dispatch(job: Any) -> bool:
-        held.append(job)
-        entered.set()
-        release.wait(timeout=2)
-        return original_should_run(job)
-
-    io._should_run = _hold_before_dispatch  # type: ignore[method-assign]
-    io.start()
-    err: list[BaseException] = []
-
-    def _caller() -> None:
-        try:
-            io.submit(executed.set)
-        except BaseException as exc:
-            err.append(exc)
-
-    waiter = threading.Thread(target=_caller)
-    waiter.start()
-    try:
-        assert entered.wait(timeout=2)
-        waiter.join(timeout=2)
-        assert err and isinstance(err[0], TimeoutError)
-        release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
-        assert io.failed is True
-        assert executed.is_set() is False
-        assert held and held[0].state == _JOB_ABANDONED
+        assert held[0].state == _JOB_ABANDONED
     finally:
         release.set()
         io.stop()
@@ -380,9 +290,7 @@ def test_pika_io_timeout_does_not_run_after_invoking_when_failed():
         waiter.join(timeout=2)
         assert err and isinstance(err[0], TimeoutError)
         release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io.failed is True
         assert executed.is_set() is False
         assert held and held[0].state == _JOB_ABANDONED
@@ -442,9 +350,7 @@ def test_pika_io_timeout_does_not_run_dispatched_job():
         waiter.join(timeout=2)
         assert err and isinstance(err[0], TimeoutError)
         release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io.failed is True
         assert executed.is_set() is False
     finally:
@@ -488,9 +394,7 @@ def test_pika_io_timeout_detaches_channel_so_late_ack_cannot_run():
         assert io.failed is True
         assert io._channel is None
         release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert acks == []
         with pytest.raises(RuntimeError, match="abandoned"):
             io.broker_channel()
@@ -546,30 +450,42 @@ def test_bind_handles_does_not_reborn_abandoned_io():
     assert io._channel is None
 
 
-def test_close_handles_closes_connection_when_channel_close_fails():
-    from cicerone.events.rabbitmq_io import close_handles
+def test_close_amqp_handles_returns_the_first_broker_error_and_raises_others():
+    from cicerone.amqp_options import close_amqp_handles
+
+    closes: list[str] = []
 
     class _Handle:
-        def __init__(self, error: BaseException | None = None) -> None:
+        def __init__(self, name: str, error: BaseException | None = None) -> None:
+            self.name = name
             self.error = error
             self.closed = False
 
         def close(self) -> None:
+            closes.append(self.name)
             self.closed = True
             if self.error is not None:
                 raise self.error
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle()
-    close_handles(channel, connection)
-    assert channel.closed is True
-    assert connection.closed is True
+    channel_error = AMQPError("channel")
+    channel, connection = _Handle("channel", channel_error), _Handle("connection", AMQPError("connection"))
+    assert close_amqp_handles(channel, connection) is channel_error
+    assert closes == ["channel", "connection"]
 
-    channel = _Handle(RuntimeError("channel"))
-    connection = _Handle(RuntimeError("connection"))
-    close_handles(channel, connection)
+    closes.clear()
+    channel, connection = _Handle("channel", AMQPError("channel")), _Handle("connection", TypeError("bug"))
+    with pytest.raises(TypeError, match="bug"):
+        close_amqp_handles(channel, connection)
+    assert closes == ["channel", "connection"]
     assert channel.closed is True
-    assert connection.closed is True
+
+    closes.clear()
+    channel = _Handle("channel", RuntimeError("channel bug"))
+    connection = _Handle("connection", RuntimeError("connection bug"))
+    with pytest.raises(RuntimeError, match="channel bug"):
+        close_amqp_handles(channel, connection)
+    assert closes == ["channel", "connection"]
+    assert close_amqp_handles(None, None) is None
 
 
 def test_cleanup_abandoned_closes_abandon_handles_and_leftover_live():
@@ -632,56 +548,10 @@ def test_cleanup_abandoned_closes_connection_when_channel_close_fails():
     assert connection.closed is True
 
 
-def test_pika_io_timeout_does_not_run_after_enter_when_failed():
-    from cicerone.events.rabbitmq_io import _JOB_ABANDONED, PikaIo
-
-    io = PikaIo(timeout_seconds=0.05)
-    original_enter = io._enter_job
-    entered = threading.Event()
-    release = threading.Event()
-    executed = threading.Event()
-    held: list[Any] = []
-
-    def _hold_after_enter(job: Any) -> bool:
-        taken = original_enter(job)
-        if taken:
-            held.append(job)
-            entered.set()
-            release.wait(timeout=2)
-        return taken
-
-    io._enter_job = _hold_after_enter  # type: ignore[method-assign]
-    io.start()
-    err: list[BaseException] = []
-
-    def _caller() -> None:
-        try:
-            io.submit(executed.set)
-        except BaseException as exc:
-            err.append(exc)
-
-    waiter = threading.Thread(target=_caller)
-    waiter.start()
-    try:
-        assert entered.wait(timeout=2)
-        waiter.join(timeout=2)
-        assert err and isinstance(err[0], TimeoutError)
-        release.set()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
-        assert io.failed is True
-        assert executed.is_set() is False
-        assert held and held[0].state == _JOB_ABANDONED
-    finally:
-        release.set()
-        io.stop()
-
-
 def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
     from cicerone.events.rabbitmq_io import _IO_STOP, PikaIo
 
-    io = PikaIo(timeout_seconds=5)
+    io = PikaIo(timeout_seconds=UNREACHED_SECONDS)
     original_get = io._jobs.get
 
     def _fail_after_dequeue(*args: Any, **kwargs: Any) -> object:
@@ -693,10 +563,14 @@ def test_pika_io_replies_abandoned_for_job_dequeued_after_fail():
     io._jobs.get = _fail_after_dequeue  # type: ignore[method-assign]
     io.start()
     try:
-        began = time.monotonic()
-        with pytest.raises(RuntimeError, match="abandoned"):
-            io.submit(lambda: "should-not-run")
-        assert time.monotonic() - began < 1.0
+
+        def _submit() -> None:
+            with pytest.raises(RuntimeError, match="abandoned"):
+                io.submit(lambda: "should-not-run")
+
+        # Rejected at once, not after the submit timeout.
+        rejected, _ = call_in_thread(_submit)
+        assert rejected.wait(WAIT_SECONDS)
     finally:
         io.stop()
 
@@ -716,22 +590,22 @@ def test_pika_io_cleans_up_when_idle_pump_raises_unexpected():
             self.closed = True
 
     connection = _Conn()
-    io = PikaIo(timeout_seconds=1)
+    io = PikaIo(timeout_seconds=UNREACHED_SECONDS)
     io._connection = connection
     io.start()
     try:
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not io.failed:
-            time.sleep(0.01)
+        assert wait_until(lambda: io.failed)
         assert io.failed is True
-        while time.monotonic() < deadline and io._thread.is_alive():
-            time.sleep(0.01)
+        assert wait_until(lambda: not io._thread.is_alive())
         assert io._thread.is_alive() is False
         assert connection.closed is True
-        began = time.monotonic()
-        with pytest.raises(RuntimeError, match="abandoned|not running"):
-            io.submit(lambda: "late")
-        assert time.monotonic() - began < 1.0
+
+        def _submit() -> None:
+            with pytest.raises(RuntimeError, match="abandoned|not running"):
+                io.submit(lambda: "late")
+
+        rejected, _ = call_in_thread(_submit)
+        assert rejected.wait(WAIT_SECONDS)
     finally:
         io.stop()
 
@@ -745,18 +619,22 @@ def test_pika_io_wakes_queued_submit_when_pump_fails():
         def process_data_events(self, time_limit: float | int = 0) -> None:
             del time_limit
             entered.set()
-            time.sleep(0.05)
+            # Fail only once the submit below is queued behind this pump.
+            wait_until(lambda: io._jobs.qsize() > 0)
             raise ConnectionError("socket closed")
 
-    io = PikaIo(timeout_seconds=5)
+    io = PikaIo(timeout_seconds=UNREACHED_SECONDS)
     io._connection = _Conn()
     io.start()
     try:
-        assert entered.wait(timeout=2)
-        began = time.monotonic()
-        with pytest.raises(RuntimeError, match="abandoned|not running"):
-            io.submit(lambda: "late")
-        assert time.monotonic() - began < 1.0
+        assert entered.wait(WAIT_SECONDS)
+
+        def _submit() -> None:
+            with pytest.raises(RuntimeError, match="abandoned|not running"):
+                io.submit(lambda: "late")
+
+        woken, _ = call_in_thread(_submit)
+        assert woken.wait(WAIT_SECONDS)
     finally:
         io.stop()
 
@@ -779,23 +657,25 @@ def test_pika_io_submit_times_out():
     from cicerone.events.rabbitmq_io import PikaIo
 
     io = PikaIo(timeout_seconds=0.05)
+    release = threading.Event()
     io.start()
     try:
         with pytest.raises(TimeoutError, match="timed out"):
-            io.submit(lambda: time.sleep(5))
+            io.submit(release.wait)
         assert io.failed is True
-        started = time.monotonic()
-        io.stop()
-        assert time.monotonic() - started < 1.0
+        # stop must not wait for the job that is still hung.
+        stopped, _ = call_in_thread(io.stop)
+        assert stopped.wait(WAIT_SECONDS)
         with pytest.raises(RuntimeError, match="not running"):
             io.submit(lambda: None)
     finally:
+        release.set()
         io.stop()
 
 
 def test_close_abandons_hung_idle_pump(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    source = RabbitMQEventSource(_options())
+    source = RabbitMQEventSource(_options(timeout_seconds=UNREACHED_SECONDS))
     source.connect()
     connection = broker.connection
     channel = connection.channel_obj
@@ -805,17 +685,17 @@ def test_close_abandons_hung_idle_pump(monkeypatch):
     def _hang_pump(time_limit: float | int = 0) -> None:
         del time_limit
         entered.set()
-        released.wait(timeout=2)
+        released.wait()
 
     connection.process_data_events = _hang_pump  # type: ignore[method-assign]
-    assert entered.wait(timeout=2)
-    began = time.monotonic()
-    source.close()
-    assert time.monotonic() - began < 1.0
-    released.set()
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not (channel.closed and connection.closed):
-        time.sleep(0.01)
+    try:
+        assert entered.wait(WAIT_SECONDS)
+        closed, _ = call_in_thread(source.close)
+        # close must return while the pump is still hung.
+        assert closed.wait(WAIT_SECONDS)
+    finally:
+        released.set()
+    assert wait_until(lambda: channel.closed and connection.closed)
     assert channel.closed is True
     assert connection.closed is True
 
@@ -847,19 +727,14 @@ def test_pika_io_busy_survives_overlapping_pump():
 
         waiter = threading.Thread(target=lambda: io.submit(_job))
         waiter.start()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and io._busy < 2:
-            time.sleep(0.01)
-        assert io._busy >= 2
+        assert wait_until(lambda: io._busy >= 2)
         released.set()
         assert job_started.wait(timeout=2)
         assert io.busy is True
         hold_job.set()
         waiter.join(timeout=2)
         io._connection = None
-        idle_deadline = time.monotonic() + 2.0
-        while time.monotonic() < idle_deadline and io.busy:
-            time.sleep(0.01)
+        assert wait_until(lambda: not io.busy)
         assert io.busy is False
     finally:
         released.set()
@@ -869,46 +744,42 @@ def test_pika_io_busy_survives_overlapping_pump():
 
 def test_close_abandons_when_submit_overlaps_pump(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source = RabbitMQEventSource(_options(timeout_seconds=UNREACHED_SECONDS))
     source.connect()
     connection = broker.connection
     channel = connection.channel_obj
     pump_entered = threading.Event()
     pump_released = threading.Event()
     get_entered = threading.Event()
+    get_released = threading.Event()
 
     def _hang_pump(time_limit: float | int = 0) -> None:
         del time_limit
         pump_entered.set()
-        pump_released.wait(timeout=2)
+        pump_released.wait()
 
     def _hang_get(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
         get_entered.set()
-        time.sleep(2)
+        get_released.wait()
         return None, None, None
 
     connection.process_data_events = _hang_pump  # type: ignore[method-assign]
-    assert pump_entered.wait(timeout=2)
-    source._basic_get = _hang_get  # type: ignore[method-assign]
-    poller = threading.Thread(target=lambda: list(source.poll(1)))
-    poller.start()
-    queued = time.monotonic() + 2.0
-    io = source._io
-    while time.monotonic() < queued:
-        io = source._io
-        if io is not None and io._busy >= 2:
-            break
-        time.sleep(0.01)
-    assert io is not None and io._busy >= 2
-    pump_released.set()
-    assert get_entered.wait(timeout=2)
-    began = time.monotonic()
-    source.close()
-    assert time.monotonic() - began < 1.0
-    poller.join(timeout=2)
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not (channel.closed and connection.closed):
-        time.sleep(0.01)
+    try:
+        assert pump_entered.wait(WAIT_SECONDS)
+        source._basic_get = _hang_get  # type: ignore[method-assign]
+        poller = threading.Thread(target=lambda: list(source.poll(1)))
+        poller.start()
+        assert wait_until(lambda: source._io is not None and source._io._busy >= 2)
+        pump_released.set()
+        assert get_entered.wait(WAIT_SECONDS)
+        closed, _ = call_in_thread(source.close)
+        # close must return while the get is still hung.
+        assert closed.wait(WAIT_SECONDS)
+    finally:
+        pump_released.set()
+        get_released.set()
+    poller.join(timeout=WAIT_SECONDS)
+    assert wait_until(lambda: channel.closed and connection.closed)
     assert channel.closed is True
     assert connection.closed is True
 
@@ -950,8 +821,10 @@ def test_amqp_callbacks_use_io_handles(monkeypatch):
     io_channel.basic_ack = _ack  # type: ignore[method-assign]
     io_channel.queue_declare = _declare  # type: ignore[method-assign]
     io_connection.process_data_events = _pump  # type: ignore[method-assign]
-    source._channel = SimpleNamespace(basic_get=_fail, basic_ack=_fail, queue_declare=_fail)
-    source._connection = SimpleNamespace(process_data_events=_fail)
+    source._channel = SimpleNamespace(
+        basic_get=_fail, basic_ack=_fail, queue_declare=_fail, close=lambda: None
+    )
+    source._connection = SimpleNamespace(process_data_events=_fail, close=lambda: None)
 
     assert source._basic_get(io) == (None, None, None)
     source._basic_ack(io, 9)
@@ -981,14 +854,7 @@ def test_reconnect_does_not_run_old_callback_on_new_channel(monkeypatch):
     assert pump_entered.wait(timeout=2)
     poller = threading.Thread(target=lambda: list(source.poll(1)))
     poller.start()
-    queued = time.monotonic() + 2.0
-    old_io = source._io
-    while time.monotonic() < queued:
-        old_io = source._io
-        if old_io is not None and old_io._busy >= 2:
-            break
-        time.sleep(0.01)
-    assert old_io is not None and old_io._busy >= 2
+    assert wait_until(lambda: source._io is not None and source._io._busy >= 2)
     source.connect()
     new_channel = broker.connection.channel_obj
     assert new_channel is not old_channel
@@ -1008,28 +874,30 @@ def test_reconnect_does_not_run_old_callback_on_new_channel(monkeypatch):
 
 def test_close_abandons_in_flight_submit(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
-    source = RabbitMQEventSource(_options(timeout_seconds=2))
+    source = RabbitMQEventSource(_options(timeout_seconds=UNREACHED_SECONDS))
     source.connect()
     connection = broker.connection
     channel = connection.channel_obj
     started = threading.Event()
+    released = threading.Event()
 
     def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
         started.set()
-        time.sleep(0.4)
+        released.wait()
         return None, None, None
 
     source._basic_get = _hang  # type: ignore[method-assign]
     poller = threading.Thread(target=lambda: list(source.poll(1)))
     poller.start()
-    assert started.wait(timeout=2)
-    began = time.monotonic()
-    source.close()
-    assert time.monotonic() - began < 1.0
-    poller.join(timeout=2)
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not (channel.closed and connection.closed):
-        time.sleep(0.01)
+    try:
+        assert started.wait(WAIT_SECONDS)
+        closed, _ = call_in_thread(source.close)
+        # close must return while the in-flight get is still hung.
+        assert closed.wait(WAIT_SECONDS)
+    finally:
+        released.set()
+    poller.join(timeout=WAIT_SECONDS)
+    assert wait_until(lambda: channel.closed and connection.closed)
     assert channel.closed is True
     assert connection.closed is True
 
@@ -1039,16 +907,21 @@ def test_close_after_io_timeout_does_not_block(monkeypatch):
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))
     source.connect()
 
+    released = threading.Event()
+
     def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
-        time.sleep(5)
+        released.wait()
         return None, None, None
 
     source._basic_get = _hang  # type: ignore[method-assign]
-    assert list(source.poll(1)) == []
-    assert source.health().connected is False
-    started = time.monotonic()
-    source.close()
-    assert time.monotonic() - started < 1.0
+    try:
+        assert list(source.poll(1)) == []
+        assert source.health().connected is False
+        closed, _ = call_in_thread(source.close)
+        # close must return while the timed-out get is still hung.
+        assert closed.wait(WAIT_SECONDS)
+    finally:
+        released.set()
 
 
 def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
@@ -1057,20 +930,22 @@ def test_close_after_io_timeout_closes_handles_when_call_unwinds(monkeypatch):
     source.connect()
     connection = broker.connection
     channel = connection.channel_obj
+    released = threading.Event()
     done = threading.Event()
 
     def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
-        time.sleep(0.2)
+        released.wait()
         done.set()
         return None, None, None
 
     source._basic_get = _hang  # type: ignore[method-assign]
-    assert list(source.poll(1)) == []
-    source.close()
-    assert done.wait(timeout=2)
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not (channel.closed and connection.closed):
-        time.sleep(0.01)
+    try:
+        assert list(source.poll(1)) == []
+        source.close()
+    finally:
+        released.set()
+    assert done.wait(WAIT_SECONDS)
+    assert wait_until(lambda: channel.closed and connection.closed)
     assert channel.closed is True
     assert connection.closed is True
 
@@ -1084,15 +959,18 @@ def test_close_after_timed_out_worker_exits_closes_channel(monkeypatch):
     io = source._io
     assert io is not None
 
+    released = threading.Event()
+
     def _hang(*_args: Any, **_kwargs: Any) -> tuple[Any, None, Any]:
-        time.sleep(0.15)
+        released.wait()
         return None, None, None
 
     source._basic_get = _hang  # type: ignore[method-assign]
-    assert list(source.poll(1)) == []
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline and io._thread.is_alive():
-        time.sleep(0.01)
+    try:
+        assert list(source.poll(1)) == []
+    finally:
+        released.set()
+    assert wait_until(lambda: not io._thread.is_alive())
     assert io._thread.is_alive() is False
     source.close()
     assert channel.closed is True
@@ -1196,7 +1074,7 @@ def test_nack_marks_io_failed_when_basic_nack_raises(monkeypatch):
 
     def _boom(*, delivery_tag: int, requeue: bool = True) -> None:
         del delivery_tag, requeue
-        raise RuntimeError("nack fail")
+        raise AMQPError("nack fail")
 
     broker.connection.channel_obj.basic_nack = _boom  # type: ignore[method-assign]
     rejected = source.nack(first)
@@ -1314,6 +1192,49 @@ def test_poison_entry_is_acked(monkeypatch):
     assert 1 in broker.connection.channel_obj.acked
 
 
+def test_invalid_json_is_acked_and_logged(monkeypatch, caplog):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", b"not-json")
+    broker.enqueue("cicerone.events", event_payload(event_id="ok"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.rabbitmq"):
+        events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok"]
+    assert 1 in broker.connection.channel_obj.acked
+    assert "Skipping invalid RabbitMQ message 1" in caplog.text
+    source.close()
+
+
+@pytest.mark.usefixtures("default_int_digit_limit")
+@pytest.mark.parametrize("body", UNPARSABLE_JSON_BODIES, ids=("huge_int", "deep_nesting"))
+def test_unparsable_body_is_discarded_like_invalid_json(monkeypatch, caplog, body):
+    broker = install_fake_rabbitmq(monkeypatch)
+    broker.enqueue("cicerone.events", body)
+    broker.enqueue("cicerone.events", event_payload(event_id="ok"))
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    with caplog.at_level("WARNING", logger="cicerone.events.rabbitmq"):
+        events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ok"]
+    assert 1 in broker.connection.channel_obj.acked
+    assert "Skipping invalid RabbitMQ message 1" in caplog.text
+    source.close()
+
+
+def test_idempotency_key_is_the_event_id(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    payload = event_payload(idempotency_key="ik")
+    payload.pop("event_id")
+    broker.enqueue("cicerone.events", payload)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    events = list(source.poll(10))
+    assert [event.event_id for event in events] == ["ik"]
+    assert events[0].generated_event_id is False
+    source.close()
+
+
 def test_ack_discard_tolerates_ack_failure(monkeypatch):
     broker = install_fake_rabbitmq(monkeypatch)
     broker.enqueue("cicerone.events", b"not-json")
@@ -1380,12 +1301,17 @@ def test_heartbeat_reraises_timeout(monkeypatch):
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))
     source.connect()
 
+    released = threading.Event()
+
     def _hang(_io: object) -> None:
-        time.sleep(5)
+        released.wait()
 
     source._pump_connection = _hang  # type: ignore[method-assign]
-    with pytest.raises(TimeoutError, match="timed out"):
-        source.heartbeat([])
+    try:
+        with pytest.raises(TimeoutError, match="timed out"):
+            source.heartbeat([])
+    finally:
+        released.set()
     source.close()
 
 
@@ -1421,16 +1347,7 @@ def test_heartbeat_when_disconnected(monkeypatch):
 
 
 def test_missing_pika_package(monkeypatch):
-    import builtins
-
-    real_import = builtins.__import__
-
-    def _import(name, *args, **kwargs):
-        if name == "pika":
-            raise ImportError("no pika")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _import)
+    hide_module(monkeypatch, "pika")
     source = RabbitMQEventSource(_options())
     with pytest.raises(ConfigError, match=r"cicerone-recommender\[rabbitmq\]"):
         source.connect()
@@ -1508,13 +1425,17 @@ def test_health_disconnected_when_probe_times_out(monkeypatch):
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))
     source.connect()
 
+    released = threading.Event()
+
     def _hang(*_args: Any, **_kwargs: Any) -> Any:
-        time.sleep(5)
+        released.wait()
         raise RuntimeError("unreachable")
 
     source._passive_declare = _hang  # type: ignore[method-assign]
-    health = source.health()
-    assert health.connected is False
+    try:
+        assert source.health().connected is False
+    finally:
+        released.set()
     source.close()
 
 
@@ -1610,13 +1531,10 @@ def test_connect_timeout_during_open_closes_connection(monkeypatch):
     source = RabbitMQEventSource(_options(timeout_seconds=0.05))
     with pytest.raises(EventSourceError, match="unreachable"):
         source.connect()
-    deadline = time.monotonic() + 1.0
-    while time.monotonic() < deadline and not getattr(broker, "connection", None):
-        time.sleep(0.01)
+    assert wait_until(lambda: getattr(broker, "connection", None))
     connection = getattr(broker, "connection", None)
     assert connection is not None
-    while time.monotonic() < deadline and not connection.closed:
-        time.sleep(0.01)
+    assert wait_until(lambda: connection.closed)
     assert connection.closed is True
     assert connection.channel_obj.closed is True
 
@@ -1673,6 +1591,34 @@ def test_heartbeat_runs_on_io_thread(monkeypatch):
     assert io_ident is not None
     assert ids
     assert all(ident == io_ident for ident in ids)
+
+
+def test_close_propagates_an_unexpected_close_error_without_closing_twice(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    connection = broker.connection
+    connection.channel_obj.close = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="close bug"):
+        source.close()
+    assert connection.closed is True
+    assert connection.channel_obj.close.calls == 1
+
+
+def test_reconnect_propagates_an_unexpected_close_of_the_previous_connection(monkeypatch):
+    broker = install_fake_rabbitmq(monkeypatch)
+    source = RabbitMQEventSource(_options())
+    source.connect()
+    first = broker.connection
+    first.channel_obj.close = raising(TypeError("close bug"))  # type: ignore[method-assign]
+    with pytest.raises(TypeError, match="close bug"):
+        source.connect()
+    # The new connection stays in use; the broker redelivers what the old channel held unacked.
+    assert first.closed is True
+    assert broker.connection is not first
+    assert source._connection is broker.connection
+    source.close()
+    assert broker.connection.closed is True
 
 
 def test_reconnect_closes_previous(monkeypatch):

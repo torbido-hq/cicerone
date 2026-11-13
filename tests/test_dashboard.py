@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from conftest import make_settings
 from fastapi.testclient import TestClient
+from support.fakes import FakeManifest, FakeReader
+from support.settings import local_output, make_settings
+from support.system_spec import dashboard_users
 
 from cicerone.config import Settings
 from cicerone.dashboard import ROBOTS_TAG, ROBOTS_TXT, create_app, main
@@ -22,33 +25,15 @@ def _flash_cookie(response) -> str:
     return (response.cookies.get("cicerone_flash") or "").strip('"')
 
 
-class _FakeReader:
-    def __init__(self, latest: dict | None, history: list[dict] | None = None):
-        self._latest = latest
-        self._history = history if history is not None else ([latest] if latest else [])
-
-    def read_latest(self) -> dict | None:
-        return self._latest
-
-    def read_recent(self, limit: int) -> list[dict]:
-        return self._history[:limit]
-
-
-def _users_with(username: str, password: str) -> dict[str, str]:
-    import bcrypt
-
-    return {username: bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")}
-
-
 def test_health_requires_no_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     assert client.get("/health").status_code == 200
 
 
 def test_robots_txt_disallows_all_without_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/robots.txt")
@@ -60,7 +45,7 @@ def test_robots_txt_disallows_all_without_auth():
 
 
 def test_dashboard_responses_are_not_indexable():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
     auth = ("alice", "s3cret")
 
@@ -91,7 +76,7 @@ def test_dashboard_responses_are_not_indexable():
 
 
 def test_dashboard_openapi_docs_are_disabled():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     assert client.get("/docs").status_code == 404
@@ -100,7 +85,7 @@ def test_dashboard_openapi_docs_are_disabled():
 
 
 def test_dashboard_page_requires_auth():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard")
@@ -110,7 +95,7 @@ def test_dashboard_page_requires_auth():
 
 
 def test_dashboard_page_rejects_wrong_password():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("alice", "wrong"))
@@ -119,7 +104,7 @@ def test_dashboard_page_rejects_wrong_password():
 
 
 def test_dashboard_page_rejects_unknown_username():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("ghost", "s3cret"))
@@ -128,7 +113,7 @@ def test_dashboard_page_rejects_unknown_username():
 
 
 def test_dashboard_page_renders_with_valid_credentials():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/dashboard", auth=("alice", "s3cret"))
@@ -180,7 +165,7 @@ def test_status_partial_renders_latest_manifest():
         "automl_metrics": "MAP@10=0.1200,NDCG@10=0.0900",
         "error": None,
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -231,8 +216,8 @@ def test_status_partial_shows_incremental_panel_when_events_enabled():
     ]
     app = create_app(
         _settings(events=EventsSettings(enabled=True, kind="webhook")),
-        _FakeReader(history[1], history=history),
-        _users_with("alice", "s3cret"),
+        FakeManifest(history[1], history=history),
+        dashboard_users("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
     assert response.status_code == 200
@@ -258,8 +243,8 @@ def test_status_partial_hides_incremental_panel_when_events_disabled():
     ]
     app = create_app(
         _settings(),
-        _FakeReader(history[0], history=history),
-        _users_with("alice", "s3cret"),
+        FakeManifest(history[0], history=history),
+        dashboard_users("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
     assert "Incremental events" not in response.text
@@ -272,7 +257,7 @@ def test_status_partial_renders_failed_run_with_error():
         "triggered_by": "webhook",
         "error": "boom: something broke",
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -284,7 +269,7 @@ def test_status_partial_renders_failed_run_with_error():
 
 def test_status_partial_marks_stale_run_as_stale():
     manifest = {"status": "success", "generated_at": "2020-01-01T00:00:00+00:00"}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -297,7 +282,7 @@ def test_status_partial_marks_stale_run_as_stale():
 
 def test_status_partial_history_limited_to_a_single_run_shows_dataset_backend_note():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     client = TestClient(app)
 
     response = client.get("/partials/status", auth=("alice", "s3cret"))
@@ -311,8 +296,8 @@ def test_status_partial_multiple_history_rows_no_dataset_backend_note():
     older = {"status": "failed", "generated_at": "2026-07-27T00:00:00+00:00", "error": "boom"}
     app = create_app(
         _settings(),
-        _FakeReader(manifest, history=[manifest, older]),
-        _users_with("alice", "s3cret"),
+        FakeManifest(manifest, history=[manifest, older]),
+        dashboard_users("alice", "s3cret"),
     )
     client = TestClient(app)
 
@@ -339,134 +324,130 @@ def test_main_raises_when_no_users_configured(tmp_path, monkeypatch):
         main()
 
 
-def test_main_starts_when_recommendation_reader_fails(monkeypatch):
+def _run_main(monkeypatch, *, settings=None, rec_reader=None, history_reader=object) -> dict[str, object]:
     captured: dict[str, object] = {}
 
     def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
-        captured["rec_reader"] = rec_reader
-        captured["history_reader"] = history_reader
-        captured["config_path"] = kwargs.get("config_path")
+        captured.update(rec_reader=rec_reader, history_reader=history_reader, **kwargs)
         return object()
 
-    def boom(_output):
-        raise RuntimeError("bad store")
-
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
+    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: settings or _settings())
     monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", boom)
+    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: FakeManifest(None))
+    monkeypatch.setattr(
+        "cicerone.dashboard.build_recommendation_reader",
+        rec_reader or (lambda _output: FakeReader(pd.DataFrame())),
+    )
+    monkeypatch.setattr("cicerone.dashboard.build_input_source", lambda _input: history_reader())
     monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
     monkeypatch.setattr(
         "cicerone.dashboard.uvicorn",
         type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
     )
-
     main()
+    return captured
+
+
+def _raise(exc: Exception):
+    def boom(*_args, **_kwargs):
+        raise exc
+
+    return boom
+
+
+def _with_features(tmp_path, text: str) -> Settings:
+    features = tmp_path / "features.toml"
+    features.write_text(text)
+    return dataclasses.replace(_settings(), feature_config_path=str(features))
+
+
+_MALFORMED_FEATURES = '[[item_features]]\ncolumn = "style"\ntype = "bogus"\n'
+
+
+def test_main_starts_when_recommendation_reader_fails(monkeypatch):
+    monkeypatch.setenv("CICERONE_CONFIG_PATH", "/tmp/cicerone.dashboard.toml")
+
+    captured = _run_main(monkeypatch, rec_reader=_raise(OSError("bad store")))
 
     assert captured["rec_reader"] is None
     assert captured["config_path"] == "/tmp/cicerone.dashboard.toml"
 
 
 def test_main_starts_when_history_reader_fails(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
-        captured["history_reader"] = history_reader
-        return object()
-
-    def boom(_input):
-        raise RuntimeError("bad events")
-
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
-    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", boom)
-    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
-    monkeypatch.setattr(
-        "cicerone.dashboard.uvicorn",
-        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
-    )
-
-    main()
+    captured = _run_main(monkeypatch, history_reader=_raise(ValueError("bad events")))
 
     assert captured["history_reader"] is None
 
 
-def test_main_uses_package_default_config_path(monkeypatch):
-    captured: dict[str, object] = {}
+def test_main_propagates_unexpected_store_errors(monkeypatch):
+    with pytest.raises(RuntimeError, match="bug"):
+        _run_main(monkeypatch, rec_reader=_raise(RuntimeError("bug")))
 
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **kwargs):
-        captured["config_path"] = kwargs.get("config_path")
-        return object()
 
-    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
-    monkeypatch.setattr("cicerone.dashboard.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
-    monkeypatch.setattr("cicerone.dashboard.load_settings", lambda: _settings())
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: object())
-    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
-    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
+def test_main_fails_on_a_malformed_feature_config(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="Unknown feature type"):
+        _run_main(monkeypatch, settings=_with_features(tmp_path, _MALFORMED_FEATURES))
+
+
+def test_main_fails_on_a_malformed_feature_config_when_the_store_is_down(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="Unknown feature type"):
+        _run_main(
+            monkeypatch,
+            settings=_with_features(tmp_path, _MALFORMED_FEATURES),
+            rec_reader=_raise(OSError("bad store")),
+        )
+
+
+def test_main_passes_the_feature_config_to_create_app(tmp_path, monkeypatch):
+    configured: list[object] = []
+    rec_reader = FakeReader(pd.DataFrame())
     monkeypatch.setattr(
-        "cicerone.dashboard.uvicorn",
-        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
+        rec_reader, "configure_item_filters", lambda **kw: configured.append(kw["availability_filters"])
     )
 
-    main()
+    captured = _run_main(
+        monkeypatch,
+        settings=_with_features(tmp_path, 'item_availability_filters = ["in_stock"]\n'),
+        rec_reader=lambda _output: rec_reader,
+    )
+
+    assert captured["feature_config"].item_availability_filters == ["in_stock"]
+    assert captured["rec_reader"] is rec_reader
+    assert configured == [["in_stock"]]
+
+
+def test_main_warns_and_continues_without_a_feature_config(tmp_path, monkeypatch, caplog):
+    settings = dataclasses.replace(_settings(), feature_config_path=str(tmp_path / "missing.toml"))
+
+    with caplog.at_level("WARNING", logger="cicerone.serve.item_filters"):
+        captured = _run_main(monkeypatch, settings=settings)
+
+    assert captured["feature_config"] is None
+    assert captured["rec_reader"] is not None
+    assert "feature config missing" in caplog.text
+
+
+def test_main_disables_lookup_when_configuring_item_filters_fails(monkeypatch):
+    rec_reader = FakeReader(pd.DataFrame())
+    monkeypatch.setattr(rec_reader, "configure_item_filters", _raise(OSError("s3 blip")))
+
+    captured = _run_main(monkeypatch, rec_reader=lambda _output: rec_reader)
+
+    assert captured["rec_reader"] is None
+
+
+def test_main_uses_package_default_config_path(monkeypatch):
+    monkeypatch.delenv("CICERONE_CONFIG_PATH", raising=False)
+    monkeypatch.setattr("cicerone.dashboard.DEFAULT_CONFIG_PATH", "/patched/cicerone.toml")
+
+    captured = _run_main(monkeypatch)
 
     assert captured["config_path"] == "/patched/cicerone.toml"
 
 
-def test_main_configures_lookup_availability_filters(tmp_path, monkeypatch):
+def test_lookup_hides_unavailable_items_on_every_request(tmp_path):
     features = tmp_path / "features.toml"
     features.write_text('item_availability_filters = ["published"]\n')
-    rec_reader = type(
-        "_Rec",
-        (),
-        {
-            "configured": None,
-            "configure_item_filters": lambda self, *, category_column=None, availability_filters=(): setattr(
-                self, "configured", (category_column, list(availability_filters))
-            ),
-        },
-    )()
-
-    def fake_create_app(settings, reader, users, rec_reader=None, history_reader=None, **_kwargs):
-        del settings, reader, users, history_reader
-        return object()
-
-    monkeypatch.setattr(
-        "cicerone.dashboard.load_settings",
-        lambda: _settings(feature_config_path=str(features)),
-    )
-    monkeypatch.setattr("cicerone.dashboard.load_users", lambda _path: {"alice": "hash"})
-    monkeypatch.setattr("cicerone.dashboard.build_manifest_reader", lambda _output: _FakeReader(None))
-    monkeypatch.setattr("cicerone.dashboard.build_recommendation_reader", lambda _output: rec_reader)
-    monkeypatch.setattr("cicerone.dashboard.build_user_history_reader", lambda _input: object())
-    monkeypatch.setattr("cicerone.dashboard.create_app", fake_create_app)
-    monkeypatch.setattr(
-        "cicerone.dashboard.uvicorn",
-        type("_Uvicorn", (), {"run": staticmethod(lambda *_a, **_k: None)}),
-    )
-
-    main()
-
-    assert rec_reader.configured == ("category", ["published"])
-
-
-def test_create_app_loads_availability_filters_once(tmp_path, monkeypatch):
-    features = tmp_path / "features.toml"
-    features.write_text('item_availability_filters = ["published"]\n')
-    loads = {"n": 0}
-    real_load = load_feature_config
-
-    def counting_load(path):
-        loads["n"] += 1
-        return real_load(path)
-
-    monkeypatch.setattr("cicerone.dashboard.load_feature_config", counting_load)
     recs = pd.DataFrame(
         [
             {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.9, "source": "personalized"},
@@ -479,16 +460,17 @@ def test_create_app_loads_availability_filters_once(tmp_path, monkeypatch):
             {"item_id": "i2", "published": False},
         ]
     )
-    client = _recs_client(
-        _FakeRecReader(recs, items),
-        feature_config_path=str(features),
-        top_k=2,
-        dashboard_lookup_k=2,
+    app = create_app(
+        _settings(serve_default_k=2),
+        FakeManifest(None),
+        dashboard_users("alice", "s3cret"),
+        FakeReader(recs, items),
+        feature_config=load_feature_config(features),
     )
+    client = TestClient(app)
     first = client.get("/partials/recommendations?user_id=u1", auth=("alice", "s3cret"))
     second = client.get("/partials/recommendations?user_id=u1", auth=("alice", "s3cret"))
 
-    assert loads["n"] == 1
     assert "i1" in first.text
     assert "i2" not in first.text
     assert "i1" in second.text
@@ -500,7 +482,7 @@ def test_require_basic_auth_used_directly_rejects_unknown_user():
     from fastapi import HTTPException
     from fastapi.security import HTTPBasicCredentials
 
-    dependency = require_basic_auth(_users_with("alice", "s3cret"))
+    dependency = require_basic_auth(dashboard_users("alice", "s3cret"))
     with pytest.raises(HTTPException):
         dependency(HTTPBasicCredentials(username="ghost", password="whatever"))
 
@@ -514,7 +496,7 @@ def test_require_basic_auth_rejects_malformed_hash_and_overlong_password():
         malformed(HTTPBasicCredentials(username="alice", password="s3cret"))
     assert bad_hash.value.status_code == 401
 
-    overlong = require_basic_auth(_users_with("alice", "s3cret"))
+    overlong = require_basic_auth(dashboard_users("alice", "s3cret"))
     with pytest.raises(HTTPException) as too_long:
         overlong(HTTPBasicCredentials(username="alice", password="x" * 80))
     assert too_long.value.status_code == 401
@@ -527,7 +509,7 @@ def test_require_basic_auth_propagates_unexpected_check_error(monkeypatch):
         raise RuntimeError("bcrypt bug")
 
     monkeypatch.setattr("cicerone.http_auth.bcrypt.checkpw", _boom)
-    dependency = require_basic_auth(_users_with("alice", "s3cret"))
+    dependency = require_basic_auth(dashboard_users("alice", "s3cret"))
     with pytest.raises(RuntimeError, match="bcrypt bug"):
         dependency(HTTPBasicCredentials(username="alice", password="s3cret"))
 
@@ -594,8 +576,8 @@ def test_status_partial_shows_unknown_staleness_for_invalid_cron_schedule():
     manifest = {"status": "success", "generated_at": "2026-07-28T00:00:00+00:00"}
     app = create_app(
         _settings(cron_schedule="not a cron expression"),
-        _FakeReader(manifest),
-        _users_with("alice", "s3cret"),
+        FakeManifest(manifest),
+        dashboard_users("alice", "s3cret"),
     )
     client = TestClient(app)
 
@@ -622,7 +604,7 @@ def test_page_title_orders_status_then_user():
 
 def test_status_partial_unknown_status_is_not_success_green():
     manifest = {"status": None, "generated_at": datetime.now(UTC).isoformat()}
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
 
     assert response.status_code == 200
@@ -640,7 +622,7 @@ def test_dashboard_page_failed_run_title():
         "generated_at": datetime.now(UTC).isoformat(),
         "error": "boom",
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
 
     assert "<title>failed · Cicerone dashboard</title>" in response.text
@@ -656,8 +638,8 @@ def test_status_partial_history_error_uses_disclosure_not_red_dash():
     }
     app = create_app(
         _settings(),
-        _FakeReader(manifest, history=[manifest, older]),
-        _users_with("alice", "s3cret"),
+        FakeManifest(manifest, history=[manifest, older]),
+        dashboard_users("alice", "s3cret"),
     )
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
 
@@ -666,48 +648,27 @@ def test_status_partial_history_error_uses_disclosure_not_red_dash():
     assert response.text.count('<span class="text-slate-500">—</span>') == 1
 
 
-class _FakeRecReader:
+class _FailingRecReader(FakeReader):
     def __init__(
         self,
         recs: pd.DataFrame,
-        items: pd.DataFrame | None = None,
-        fallback: pd.DataFrame | None = None,
         *,
         refresh_error: Exception | None = None,
         lookup_error: Exception | None = None,
     ):
-        self._recs = recs
-        self._items = items
-        self._fallback = fallback if fallback is not None else pd.DataFrame()
+        super().__init__(recs)
         self._refresh_error = refresh_error
         self._lookup_error = lookup_error
-        self.refresh_calls = 0
-        self._items_version = 0
 
     def refresh(self) -> None:
-        self.refresh_calls += 1
-        self._items_version += 1
+        super().refresh()
         if self._refresh_error is not None:
             raise self._refresh_error
 
     def get_recommendations(self, user_id: str, k: int, *, variant: str | None = None) -> pd.DataFrame:
         if self._lookup_error is not None:
             raise self._lookup_error
-        rows = self._recs[self._recs["user_id"] == user_id]
-        if variant is not None and "variant" in rows.columns:
-            rows = rows[rows["variant"].astype(str) == str(variant)]
-        if "rank" in rows.columns:
-            rows = rows.sort_values("rank")
-        return rows.head(k).reset_index(drop=True)
-
-    def get_items(self) -> pd.DataFrame | None:
-        return self._items
-
-    def items_version(self) -> int:
-        return self._items_version
-
-    def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
-        return self._fallback.head(k).reset_index(drop=True)
+        return super().get_recommendations(user_id, k, variant=variant)
 
 
 def _recs_df() -> pd.DataFrame:
@@ -720,14 +681,14 @@ def _recs_df() -> pd.DataFrame:
 
 
 def _recs_client(
-    rec_reader: _FakeRecReader | None = None,
+    rec_reader: FakeReader | None = None,
     history_reader: object | None = None,
     **settings_overrides: object,
 ) -> TestClient:
     app = create_app(
         _settings(**settings_overrides),
-        _FakeReader(None),
-        _users_with("alice", "s3cret"),
+        FakeManifest(None),
+        dashboard_users("alice", "s3cret"),
         rec_reader,
         history_reader,
     )
@@ -747,22 +708,20 @@ def _same_origin() -> dict[str, str]:
 
 
 def test_recommendations_partial_requires_auth():
-    response = _recs_client(_FakeRecReader(_recs_df())).get("/partials/recommendations")
+    response = _recs_client(FakeReader(_recs_df())).get("/partials/recommendations")
 
     assert response.status_code == 401
 
 
 def test_recommendations_partial_empty_user_id_prompts():
-    response = _recs_client(_FakeRecReader(_recs_df())).get(
-        "/partials/recommendations", auth=("alice", "s3cret")
-    )
+    response = _recs_client(FakeReader(_recs_df())).get("/partials/recommendations", auth=("alice", "s3cret"))
 
     assert response.status_code == 200
     assert "Enter a user id to inspect their recent events and current top-K." in response.text
 
 
 def test_recommendations_partial_whitespace_user_id_prompts():
-    response = _recs_client(_FakeRecReader(_recs_df())).get(
+    response = _recs_client(FakeReader(_recs_df())).get(
         "/partials/recommendations",
         params={"user_id": "  "},
         auth=("alice", "s3cret"),
@@ -772,7 +731,7 @@ def test_recommendations_partial_whitespace_user_id_prompts():
 
 
 def test_recommendations_partial_renders_known_user():
-    rec_reader = _FakeRecReader(_recs_df())
+    rec_reader = FakeReader(_recs_df())
     response = _recs_client(rec_reader).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
@@ -790,7 +749,7 @@ def test_recommendations_partial_renders_known_user():
 
 
 def test_dashboard_page_user_id_query_renders_lookup_results():
-    rec_reader = _FakeRecReader(_recs_df())
+    rec_reader = FakeReader(_recs_df())
     response = _recs_client(rec_reader).get(
         "/dashboard",
         params={"user_id": "u1"},
@@ -818,7 +777,7 @@ def test_recommendations_partial_unknown_user_uses_fallback():
             }
         ]
     )
-    response = _recs_client(_FakeRecReader(_recs_df(), fallback=fallback)).get(
+    response = _recs_client(FakeReader(pd.concat([_recs_df(), fallback], ignore_index=True))).get(
         "/partials/recommendations",
         params={"user_id": "ghost"},
         auth=("alice", "s3cret"),
@@ -832,7 +791,7 @@ def test_recommendations_partial_unknown_user_uses_fallback():
 
 
 def test_recommendations_partial_unknown_user_without_fallback():
-    response = _recs_client(_FakeRecReader(_recs_df())).get(
+    response = _recs_client(FakeReader(_recs_df())).get(
         "/partials/recommendations",
         params={"user_id": "ghost"},
         auth=("alice", "s3cret"),
@@ -844,7 +803,7 @@ def test_recommendations_partial_unknown_user_without_fallback():
 
 def test_recommendations_partial_joins_category_from_items():
     items = pd.DataFrame([{"item_id": "i1", "category": "beer"}, {"item_id": "i2", "category": "wine"}])
-    response = _recs_client(_FakeRecReader(_recs_df(), items=items)).get(
+    response = _recs_client(FakeReader(_recs_df(), items=items)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -868,7 +827,7 @@ def test_recommendations_partial_uses_category_already_on_recs():
             }
         ]
     )
-    response = _recs_client(_FakeRecReader(recs)).get(
+    response = _recs_client(FakeReader(recs)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -880,7 +839,7 @@ def test_recommendations_partial_uses_category_already_on_recs():
 
 def test_recommendations_partial_items_without_category_omits_column():
     items = pd.DataFrame([{"item_id": "i1", "name": "lager"}])
-    response = _recs_client(_FakeRecReader(_recs_df(), items=items)).get(
+    response = _recs_client(FakeReader(_recs_df(), items=items)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -892,7 +851,7 @@ def test_recommendations_partial_items_without_category_omits_column():
 
 def test_recommendations_partial_empty_items_snapshot_omits_category():
     items = pd.DataFrame(columns=["item_id", "category"])
-    response = _recs_client(_FakeRecReader(_recs_df(), items=items)).get(
+    response = _recs_client(FakeReader(_recs_df(), items=items)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -901,7 +860,8 @@ def test_recommendations_partial_empty_items_snapshot_omits_category():
     assert "Category" not in response.text
 
 
-def test_recommendations_partial_caps_k_at_20():
+@pytest.mark.parametrize("overrides", [{"top_k": 50}, {"top_k": 50, "dashboard_lookup_k": 5}])
+def test_recommendations_partial_shows_serve_default_k_rows(overrides):
     recs = pd.DataFrame(
         [
             {
@@ -914,37 +874,14 @@ def test_recommendations_partial_caps_k_at_20():
             for i in range(1, 26)
         ]
     )
-    response = _recs_client(_FakeRecReader(recs), top_k=50).get(
+    response = _recs_client(FakeReader(recs), serve_default_k=7, **overrides).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
     )
 
-    assert ">i20<" in response.text
-    assert ">i21<" not in response.text
-
-
-def test_recommendations_partial_respects_dashboard_lookup_k():
-    recs = pd.DataFrame(
-        [
-            {
-                "user_id": "u1",
-                "item_id": f"i{i}",
-                "rank": i,
-                "score": 1.0,
-                "source": "personalized",
-            }
-            for i in range(1, 26)
-        ]
-    )
-    response = _recs_client(_FakeRecReader(recs), top_k=50, dashboard_lookup_k=5).get(
-        "/partials/recommendations",
-        params={"user_id": "u1"},
-        auth=("alice", "s3cret"),
-    )
-
-    assert ">i5<" in response.text
-    assert ">i6<" not in response.text
+    assert ">i7<" in response.text
+    assert ">i8<" not in response.text
 
 
 def test_recommendations_partial_without_reader_shows_error():
@@ -957,8 +894,29 @@ def test_recommendations_partial_without_reader_shows_error():
     assert "Recommendation store is not available." in response.text
 
 
+def test_recommendations_partial_refreshes_reader_once_per_ttl(refresh_clock):
+    from cicerone.dashboard import _LOOKUP_REFRESH_TTL_SECONDS
+
+    rec_reader = FakeReader(_recs_df())
+    client = _recs_client(rec_reader)
+
+    def lookup(user_id: str) -> None:
+        response = client.get(
+            "/partials/recommendations", params={"user_id": user_id}, auth=("alice", "s3cret")
+        )
+        assert response.status_code == 200
+
+    lookup("u1")
+    lookup("u1")
+    lookup("")
+    assert rec_reader.refresh_calls == 1
+    refresh_clock.now += _LOOKUP_REFRESH_TTL_SECONDS
+    lookup("u1")
+    assert rec_reader.refresh_calls == 2
+
+
 def test_recommendations_partial_refresh_error_still_looks_up():
-    rec_reader = _FakeRecReader(_recs_df(), refresh_error=OSError("cache boom"))
+    rec_reader = _FailingRecReader(_recs_df(), refresh_error=OSError("cache boom"))
     response = _recs_client(rec_reader).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
@@ -970,7 +928,7 @@ def test_recommendations_partial_refresh_error_still_looks_up():
 
 
 def test_recommendations_partial_lookup_error_shows_message():
-    rec_reader = _FakeRecReader(_recs_df(), lookup_error=OSError("store boom"))
+    rec_reader = _FailingRecReader(_recs_df(), lookup_error=OSError("store boom"))
     response = _recs_client(rec_reader).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
@@ -982,16 +940,17 @@ def test_recommendations_partial_lookup_error_shows_message():
     assert ">i1<" not in response.text
 
 
-def test_recommendations_partial_missing_rank_score_source_render_dashes():
+def test_recommendations_partial_missing_score_source_render_dashes():
     recs = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": None, "score": None, "source": None}])
-    response = _recs_client(_FakeRecReader(recs)).get(
+    response = _recs_client(FakeReader(recs)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
     )
 
     assert ">i1<" in response.text
-    assert response.text.count(f">{MISSING}<") == 3
+    # Rank is renumbered like serve; score and source stay missing.
+    assert response.text.count(f">{MISSING}<") == 2
     assert "None" not in response.text
     assert "nan" not in response.text
 
@@ -1033,7 +992,7 @@ def _events_df() -> pd.DataFrame:
 
 
 def test_recommendations_partial_without_history_reader_shows_unavailable():
-    response = _recs_client(_FakeRecReader(_recs_df())).get(
+    response = _recs_client(FakeReader(_recs_df())).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -1045,7 +1004,7 @@ def test_recommendations_partial_without_history_reader_shows_unavailable():
 
 def test_recommendations_partial_renders_events_and_overlap():
     response = _recs_client(
-        _FakeRecReader(_recs_df()),
+        FakeReader(_recs_df()),
         _FakeHistory(_events_df(), {"user_id": "u1", "region_slug": "lazio"}),
         dashboard_lookup_user_attrs=("region_slug",),
     ).get(
@@ -1067,9 +1026,23 @@ def test_recommendations_partial_renders_events_and_overlap():
     assert "Highlighted rows appear in both events and recommendations." in response.text
 
 
+def test_recommendations_partial_answers_200_with_infinite_quantity():
+    response = _recs_client(
+        FakeReader(_recs_df()),
+        _FakeHistory(_events_df().assign(quantity=float("inf"))),
+    ).get(
+        "/partials/recommendations",
+        params={"user_id": "u1"},
+        auth=("alice", "s3cret"),
+    )
+
+    assert response.status_code == 200
+    assert ">i9<" in response.text
+
+
 def test_recommendations_partial_no_events_badge():
     empty = pd.DataFrame(columns=["user_id", "item_id", "event_type", "quantity", "occurred_at"])
-    response = _recs_client(_FakeRecReader(_recs_df()), _FakeHistory(empty)).get(
+    response = _recs_client(FakeReader(_recs_df()), _FakeHistory(empty)).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -1126,7 +1099,7 @@ def test_dashboard_lookup_shows_assigned_variant():
         ),
     )
     assigned = assign_variant("exp-1", "u1", (("control", 0.5), ("treatment", 0.5)))
-    response = _recs_client(_FakeRecReader(recs), experiment=experiment).get(
+    response = _recs_client(FakeReader(recs), experiment=experiment).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -1167,7 +1140,7 @@ def test_dashboard_lookup_omits_variant_without_column():
             VariantSettings(name="treatment", traffic=0.5),
         ),
     )
-    response = _recs_client(_FakeRecReader(recs), experiment=experiment).get(
+    response = _recs_client(FakeReader(recs), experiment=experiment).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
@@ -1176,6 +1149,90 @@ def test_dashboard_lookup_omits_variant_without_column():
     assert "exp-1 /" not in response.text
     assert ">control-item<" in response.text
     assert ">treatment-item<" in response.text
+
+
+def test_dashboard_inspect_matches_serve_response(tmp_path):
+    import re
+
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.experiment.assignment import assign_variant
+    from cicerone.feature_config import FeatureConfig
+    from cicerone.serve import create_app as create_serve_app
+
+    variants = (("control", 0.5), ("treatment", 0.5))
+    user_id = next(f"u{i}" for i in range(100) if assign_variant("exp-1", f"u{i}", variants) == "treatment")
+    recs = pd.DataFrame(
+        [
+            {
+                "user_id": user_id,
+                "item_id": item,
+                "rank": rank,
+                "score": score,
+                "source": "als",
+                "variant": "control",
+            }
+            for item, rank, score in (("i1", 10, 0.9), ("i3", 20, 0.8), ("i2", 30, 0.7))
+        ]
+    )
+    items = pd.DataFrame(
+        [
+            {"item_id": "i1", "category": "beer", "published": True},
+            {"item_id": "i2", "category": "wine", "published": True},
+            {"item_id": "i3", "category": "beer", "published": False},
+        ]
+    )
+    reader = FakeReader(recs, items=items)
+    feature_config = FeatureConfig(
+        event_weights={},
+        quantity_scaled_events=set(),
+        event_caps={},
+        user_features=[],
+        item_features=[],
+        item_availability_filters=["published"],
+    )
+    settings = _settings(
+        mode="serve",
+        serve_auth_token="secret",
+        output=local_output(tmp_path),
+        experiment=ExperimentSettings(
+            enabled=True,
+            id="exp-1",
+            variants=tuple(VariantSettings(name=name, traffic=traffic) for name, traffic in variants),
+        ),
+    )
+    served = TestClient(create_serve_app(settings, reader, feature_config=feature_config)).get(
+        f"/recommendations/{user_id}", headers={"Authorization": "Bearer secret"}
+    )
+    inspect = TestClient(
+        create_app(
+            settings,
+            FakeManifest(None),
+            dashboard_users("alice", "s3cret"),
+            reader,
+            feature_config=feature_config,
+        )
+    ).get("/partials/recommendations", params={"user_id": user_id}, auth=("alice", "s3cret"))
+
+    body = served.json()
+    rows = re.findall(
+        r'<td class="py-2 px-2 text-slate-700">(\S+)</td>\s*<th scope="row"[^>]*>([^<]+)</th>\s*'
+        r'<td class="py-2 px-2 text-slate-700">(\S+)</td>\s*'
+        r'<td class="py-2 px-2 text-slate-700">(\S+)</td>\s*'
+        r'<td class="py-2 px-2 text-slate-700">(\S+)</td>',
+        inspect.text,
+    )
+    assert [(rank, item) for rank, item, _category, _score, _source in rows] == [
+        (str(row["rank"]), row["item_id"]) for row in body["items"]
+    ]
+    assert [(score, source) for _rank, _item, _category, score, source in rows] == [
+        (f"{row['score']:.4f}", row["source"]) for row in body["items"]
+    ]
+    assert [row["item_id"] for row in body["items"]] == ["i1", "i2"]
+    assert [row["rank"] for row in body["items"]] == [1, 2]
+    assert [category for _rank, _item, category, _score, _source in rows] == ["beer", "wine"]
+    assert (body["fallback"], body["experiment_id"], body["variant"]) == (False, "exp-1", "control")
+    assert 'data-fallback="false"' in inspect.text
+    assert "exp-1 / control" in inspect.text
 
 
 def test_dashboard_promote_unknown_variant_redirects():
@@ -1201,6 +1258,40 @@ def test_dashboard_promote_unknown_variant_redirects():
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard/experiments"
     assert _flash_cookie(response).startswith("err:")
+
+
+@pytest.mark.parametrize(
+    ("error", "cookie"),
+    [
+        ("Writer lock is busy", "err:Writer%20lock%20is%20busy"),
+        ("Writer lock was lost", "err:Writer%20lock%20was%20lost"),
+    ],
+)
+def test_dashboard_promote_lock_error_flashes_the_lock_message(monkeypatch, error, cookie):
+    import cicerone.dashboard as dash
+    from cicerone.config.settings import ExperimentSettings, VariantSettings
+
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _store, _variant: error)
+    experiment = ExperimentSettings(
+        enabled=True,
+        id="exp-1",
+        variants=(
+            VariantSettings(name="control", traffic=0.5),
+            VariantSettings(name="treatment", traffic=0.5),
+        ),
+    )
+    client = _recs_client(experiment=experiment)
+    response = client.post(
+        "/dashboard/experiments/promote",
+        data={"variant": "control", "csrf_token": _csrf_token(client)},
+        auth=("alice", "s3cret"),
+        headers=_same_origin(),
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert _flash_cookie(response) == cookie
+    page = client.get("/dashboard/experiments", auth=("alice", "s3cret"))
+    assert error in page.text
 
 
 def test_dashboard_promote_hostile_variant_stays_on_experiments():
@@ -1229,27 +1320,17 @@ def test_dashboard_promote_hostile_variant_stays_on_experiments():
     assert "://" not in location
 
 
-def test_experiments_redirect_stays_on_experiments_path():
-    from cicerone.dashboard import _experiments_redirect
-
-    response = _experiments_redirect(promote_error="x")
-    assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/experiments"
-
-
-def test_experiments_redirect_without_query_stays_on_path():
-    from cicerone.dashboard import _experiments_redirect
-
-    response = _experiments_redirect()
-    assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/experiments"
-
-
 def test_dashboard_promote_success_redirects(monkeypatch):
     import cicerone.dashboard as dash
     from cicerone.config.settings import ExperimentSettings, VariantSettings
+    from cicerone.experiment.store import ExperimentStore
 
-    monkeypatch.setattr(dash, "promote_winner", lambda _settings, _variant: None)
+    stores: list[object] = []
+    original = dash.experiment_context
+    monkeypatch.setattr(
+        dash, "experiment_context", lambda settings, store: stores.append(store) or original(settings, store)
+    )
+    monkeypatch.setattr(dash, "promote_winner", lambda _settings, store, _variant: stores.append(store))
     experiment = ExperimentSettings(
         enabled=True,
         id="exp-1",
@@ -1272,10 +1353,12 @@ def test_dashboard_promote_success_redirects(monkeypatch):
     flash = _flash_cookie(response)
     assert flash.startswith("ok:Promoted")
     assert "control" not in flash
+    assert len(stores) == 2
+    assert isinstance(stores[0], ExperimentStore)
+    assert stores[1] is stores[0]
 
 
 def test_dashboard_unpromote_resumes_split(tmp_path):
-    from cicerone.config import IOSettings
     from cicerone.config.settings import ExperimentSettings, VariantSettings
 
     out = tmp_path / "out"
@@ -1290,7 +1373,7 @@ def test_dashboard_unpromote_resumes_split(tmp_path):
     )
     client = _recs_client(
         experiment=experiment,
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(out)}),
+        output=local_output(out),
     )
     token = _csrf_token(client)
     response = client.post(
@@ -1351,22 +1434,22 @@ def test_dashboard_docs_are_disabled():
 
 
 def test_dashboard_security_headers_on_health():
-    response = TestClient(create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))).get(
-        "/health"
-    )
+    response = TestClient(
+        create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
+    ).get("/health")
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
 
 
 def test_dashboard_malformed_bcrypt_hash_is_unauthorized():
-    app = create_app(_settings(), _FakeReader(None), {"alice": "not-a-valid-bcrypt-hash"})
+    app = create_app(_settings(), FakeManifest(None), {"alice": "not-a-valid-bcrypt-hash"})
     response = TestClient(app).get("/dashboard", auth=("alice", "s3cret"))
     assert response.status_code == 401
 
 
 def test_dashboard_logout_returns_401():
-    app = create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/dashboard/logout")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Basic"
@@ -1406,7 +1489,7 @@ def test_status_partial_omits_coverage_when_manifest_lacks_counts():
         "models": "collaborative,popular",
         "error": None,
     }
-    app = create_app(_settings(), _FakeReader(manifest), _users_with("alice", "s3cret"))
+    app = create_app(_settings(), FakeManifest(manifest), dashboard_users("alice", "s3cret"))
     response = TestClient(app).get("/partials/status", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Target users" not in response.text
@@ -1432,9 +1515,9 @@ def test_as_percent_formats_rates():
 
 
 def test_retrain_button_hidden_without_trigger():
-    response = TestClient(create_app(_settings(), _FakeReader(None), _users_with("alice", "s3cret"))).get(
-        "/dashboard", auth=("alice", "s3cret")
-    )
+    response = TestClient(
+        create_app(_settings(), FakeManifest(None), dashboard_users("alice", "s3cret"))
+    ).get("/dashboard", auth=("alice", "s3cret"))
     assert response.status_code == 200
     assert "Retrain" not in response.text
 
@@ -1444,7 +1527,7 @@ def test_retrain_button_shown_with_a_dashboard_trigger_url():
 
     settings = _settings()
     settings = replace(settings, dashboard=replace(settings.dashboard, trigger_url="http://recommender:8080"))
-    response = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret"))).get(
+    response = TestClient(create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret"))).get(
         "/dashboard", auth=("alice", "s3cret")
     )
     assert response.status_code == 200
@@ -1484,7 +1567,7 @@ def test_retrain_posts_the_trigger_webhook(monkeypatch):
         trigger_port=8080,
         trigger_auth_token="tok",
     )
-    client = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret")))
+    client = TestClient(create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret")))
     token = _csrf_token(client)
     response = client.post(
         "/dashboard/retrain",
@@ -1509,8 +1592,8 @@ def test_retrain_reports_a_busy_trigger(monkeypatch):
         raise urllib.error.HTTPError(request.full_url, 429, "busy", hdrs=None, fp=None)
 
     monkeypatch.setattr("cicerone.dashboard_retrain._OPENER.open", _urlopen)
-    settings = _settings(trigger_enabled=True, trigger_auth_token=None)
-    client = TestClient(create_app(settings, _FakeReader(None), _users_with("alice", "s3cret")))
+    settings = _settings(trigger_enabled=True, trigger_auth_token="tok")
+    client = TestClient(create_app(settings, FakeManifest(None), dashboard_users("alice", "s3cret")))
     token = _csrf_token(client)
     response = client.post(
         "/dashboard/retrain",

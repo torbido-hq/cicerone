@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 
 from cicerone.config.constants import ALLOCATION_THOMPSON
 from cicerone.config.settings import Settings
 from cicerone.experiment.recipes import automl_challenger_pair
+from cicerone.io.base import VariantSnapshotReader
+
+AssignmentOverlay = tuple[str | None, tuple[str, str] | None]
 
 _DIGEST_BYTES = 8
 _DIGEST_SPAN = float(1 << (8 * _DIGEST_BYTES))
@@ -43,6 +46,13 @@ def assign_variant(
     return names[-1]
 
 
+def live_active_pair(pair: tuple[str, str] | None, names: Collection[str]) -> tuple[str, str] | None:
+    """``pair`` while both arms are still among ``names``."""
+    if pair is None or pair[0] not in names or pair[1] not in names:
+        return None
+    return pair
+
+
 def active_pair_traffic(
     champion: str,
     challenger: str,
@@ -55,15 +65,13 @@ def active_pair_traffic(
     return [(champion, max(0.0, 1.0 - share)), (challenger, share)]
 
 
-def resolve_assignment(
+def assign_user(
     settings: Settings,
     user_id: str,
-    *,
-    promoted_variant: str | None = None,
-    active_pair: tuple[str, str] | None = None,
-    snapshot_names: Sequence[str] | None = None,
+    overlay: AssignmentOverlay,
+    snapshot_names: Callable[[], Sequence[str] | None],
 ) -> tuple[str | None, str | None]:
-    """Return ``(experiment_id, variant)`` or ``(None, None)`` when experiments are off."""
+    """Return ``(experiment_id, variant)``; ``snapshot_names`` runs only for Thompson without a live pair."""
     experiment = settings.experiment
     if not experiment.enabled:
         return None, None
@@ -74,19 +82,20 @@ def resolve_assignment(
         variants = [(item.name, item.traffic) for item in experiment.variants]
     if not variants:
         return None, None
+    promoted_variant, active_pair = overlay
     names = {name for name, _traffic in variants}
     if experiment.allocation == ALLOCATION_THOMPSON and promoted_variant is None:
-        if active_pair is not None and active_pair[0] in names and active_pair[1] in names:
-            variants = active_pair_traffic(
-                active_pair[0], active_pair[1], explore_traffic=experiment.explore_traffic
-            )
-        elif snapshot_names is not None:
-            present = {str(name) for name in snapshot_names if name}
+        live_pair = live_active_pair(active_pair, names)
+        if live_pair is not None:
+            variants = active_pair_traffic(*live_pair, explore_traffic=experiment.explore_traffic)
+        else:
+            snapshot = snapshot_names()
+            if snapshot is None:
+                return None, None
+            present = {str(name) for name in snapshot if name}
             variants = [(name, traffic) for name, traffic in variants if name in present]
             if not variants:
                 return None, None
-        else:
-            return None, None
     variant = assign_variant(
         experiment.id,
         str(user_id),
@@ -96,30 +105,10 @@ def resolve_assignment(
     return experiment.id, variant
 
 
-def assignment_needs_snapshot(
-    settings: Settings,
-    *,
-    promoted_variant: str | None = None,
-    active_pair: tuple[str, str] | None = None,
-) -> bool:
-    experiment = settings.experiment
-    if not experiment.enabled or experiment.allocation != ALLOCATION_THOMPSON:
-        return False
-    if promoted_variant is not None:
-        return False
-    if experiment.automl_challenger:
-        control, treatment = automl_challenger_pair(experiment.variants)
-        names = {control.name, treatment.name}
-    else:
-        names = {item.name for item in experiment.variants}
-    return not (active_pair is not None and active_pair[0] in names and active_pair[1] in names)
-
-
 def snapshot_variant_names(reader: object) -> tuple[str, ...] | None:
-    present = getattr(reader, "present_variant_names", None)
-    if not callable(present):
+    if not isinstance(reader, VariantSnapshotReader):
         return None
-    names = present()
+    names = reader.present_variant_names()
     if names is None:
         return None
     return tuple(str(name) for name in names if name)

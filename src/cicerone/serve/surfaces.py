@@ -14,9 +14,9 @@ from cicerone.config.constants import DEFAULT_SERVE_MAX_K
 from cicerone.http_auth import optional_bearer_deps
 from cicerone.io.recommendation_schema import ITEM_COLUMN, RANK_COLUMN, SCORE_COLUMN, SOURCE_COLUMN
 from cicerone.io.surfaces_reader import SurfacesReader, similar_as_surface
+from cicerone.metrics import record_recommendations_served
 from cicerone.serve.consumed import consumed_item_ids, drop_consumed
 from cicerone.serve.item_filters import filter_recommendations
-from cicerone.serve.metrics import record_recommendations_served
 from cicerone.serve_schemas import (
     ErrorDetail,
     SessionRecommendRequest,

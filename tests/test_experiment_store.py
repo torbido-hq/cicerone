@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
+from support.db_tables import assert_mysql_engine_and_charset, stored_column_types
+from support.fakes import FakeLock, FenceCheck, patch_module_ref, raising
+from support.settings import local_output, sqlite_output
 
 from cicerone.config import ConfigError, IOSettings
 from cicerone.experiment.store import ExperimentStore, experiment_state
-from cicerone.locks import LockLostError, WriterLockBusyError, held_writer_lock
+from cicerone.io.engines import quote_identifier
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError
 
 
 def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     assert store.read_state() is None
     assert store.read_exposures() == []
@@ -68,8 +74,7 @@ def test_experiment_store_roundtrip_dataset(tmp_path) -> None:
 
 
 def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     assert store.read_state() is None
     assert store.read_exposures() == []
@@ -89,7 +94,7 @@ def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
         ]
     )
     assert store.read_exposures()[0]["user_id"] == "u1"
-    engine = store._db_engine()
+    engine = store.backend.engine()
     store.read_state()
     store.append_exposures(
         [
@@ -102,17 +107,49 @@ def test_experiment_store_roundtrip_sqlite(tmp_path) -> None:
             }
         ]
     )
-    assert store._db_engine() is engine
+    assert store.backend.engine() is engine
     assert [row["user_id"] for row in store.read_exposures()] == ["u1", "u2"]
 
 
-def test_experiment_store_sqlite_replace_clears_other_experiment_ids(tmp_path) -> None:
+def test_experiment_db_engine_checked_out_once_under_concurrent_first_use(tmp_path, monkeypatch) -> None:
+    import time
+
+    from cicerone.io import engines
+
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
+    calls: list[str] = []
+    real_engine_for = engines.engine_for
+
+    def _slow_engine_for(database_url: str):
+        calls.append(database_url)
+        time.sleep(0.05)
+        return real_engine_for(database_url)
+
+    monkeypatch.setattr(engines, "engine_for", _slow_engine_for)
+    barrier = threading.Barrier(4)
+    seen: list[object] = []
+
+    def _first_use() -> None:
+        barrier.wait()
+        seen.append(store.backend.engine())
+
+    threads = [threading.Thread(target=_first_use) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert calls == [url]
+    assert len(seen) == 4
+    assert len({id(engine) for engine in seen}) == 1
+
+
+def test_experiment_store_sqlite_replace_clears_other_experiment_ids(tmp_path) -> None:
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp-a", promoted_variant="control"))
     store.write_state(experiment_state("exp-b", promoted_variant="treatment"))
-    frame = pd.read_sql(text("SELECT * FROM experiment_state"), store._db_engine())
+    frame = pd.read_sql(text("SELECT * FROM experiment_state"), store.backend.engine())
     assert len(frame) == 1
     state = store.read_state()
     assert state is not None
@@ -121,10 +158,9 @@ def test_experiment_store_sqlite_replace_clears_other_experiment_ids(tmp_path) -
 
 
 def test_experiment_store_reads_legacy_table_without_promoted_at(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
-    engine = store._db_engine()
+    engine = store.backend.engine()
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE experiment_state (experiment_id TEXT, promoted_variant TEXT)"))
         conn.execute(
@@ -137,12 +173,11 @@ def test_experiment_store_reads_legacy_table_without_promoted_at(tmp_path) -> No
 
 
 def test_experiment_store_sqlite_replaces_same_experiment_id(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="control"))
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    frame = pd.read_sql(text("SELECT * FROM experiment_state"), store._db_engine())
+    frame = pd.read_sql(text("SELECT * FROM experiment_state"), store.backend.engine())
     assert len(frame) == 1
     state = store.read_state()
     assert state is not None
@@ -150,7 +185,7 @@ def test_experiment_store_sqlite_replaces_same_experiment_id(tmp_path) -> None:
 
 
 def test_experiment_store_raises_on_invalid_dataset_state(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
     store = ExperimentStore(output)
     with pytest.raises(json.JSONDecodeError):
@@ -160,8 +195,15 @@ def test_experiment_store_raises_on_invalid_dataset_state(tmp_path) -> None:
         store.read_state()
 
 
+def test_experiment_store_warns_on_invalid_dataset_state_json(tmp_path, caplog) -> None:
+    (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING), pytest.raises(json.JSONDecodeError):
+        ExperimentStore(local_output(tmp_path)).read_state()
+    assert "Invalid experiment_state.json" in caplog.text
+
+
 def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
     (tmp_path / "experiment_state.json").write_text("not-json", encoding="utf-8")
@@ -170,43 +212,45 @@ def test_assignment_overlay_keeps_last_on_invalid_json(tmp_path) -> None:
     assert pair == ("control", "blend")
 
 
+def test_read_finishing_after_a_write_keeps_the_written_state_cached(tmp_path, monkeypatch) -> None:
+    store = ExperimentStore(local_output(tmp_path))
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    old = store.backend.read_state()
+
+    def _read_then_lose_race():
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+        return old
+
+    monkeypatch.setattr(store.backend, "read_state", _read_then_lose_race)
+    assert store.read_state() == old
+    cached = store.last_state("exp")
+    assert cached is not None
+    assert cached["promoted_variant"] == "treatment"
+
+
 def test_assignment_overlay_reraises_unexpected_read_error(tmp_path, monkeypatch) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
 
-    def _boom(self):
-        raise RuntimeError("state bug")
-
-    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    monkeypatch.setattr(ExperimentStore, "read_state", raising(RuntimeError("state bug")))
     with pytest.raises(RuntimeError, match="state bug"):
         store.assignment_overlay("exp")
 
 
 def test_assignment_overlay_reraises_type_error(tmp_path, monkeypatch) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant=None, champion="control", challenger="blend"))
     store.assignment_overlay("exp")
 
-    def _boom(self):
-        raise TypeError("state bug")
-
-    monkeypatch.setattr(ExperimentStore, "read_state", _boom)
+    monkeypatch.setattr(ExperimentStore, "read_state", raising(TypeError("state bug")))
     with pytest.raises(TypeError, match="state bug"):
         store.assignment_overlay("exp")
 
 
-def test_append_exposures_rejects_object_store() -> None:
-    output = IOSettings(
-        kind="dataset",
-        options={
-            "storage_backend": "s3",
-            "bucket": "recs",
-            "access_key_id": "id",
-            "secret_access_key": "secret",
-        },
-    )
+def test_append_exposures_rejects_object_store(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
     store = ExperimentStore(output)
     with pytest.raises(ConfigError, match="not atomic"):
         store.append_exposures(
@@ -222,15 +266,6 @@ def test_append_exposures_rejects_object_store() -> None:
         )
 
 
-def test_require_appendable_exposure_log_allows_db_and_local(tmp_path) -> None:
-    from cicerone.experiment.store import require_appendable_exposure_log
-
-    require_appendable_exposure_log(IOSettings(kind="db", options={"database_url": "sqlite://"}))
-    require_appendable_exposure_log(
-        IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    )
-
-
 def _exposure(user_id: str, suffix: str = "00") -> dict[str, str | None]:
     return {
         "user_id": user_id,
@@ -242,7 +277,7 @@ def _exposure(user_id: str, suffix: str = "00") -> dict[str, str | None]:
 
 
 def test_append_exposures_serializes_concurrent_local_writers(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     started = threading.Barrier(2)
 
@@ -261,138 +296,51 @@ def test_append_exposures_serializes_concurrent_local_writers(tmp_path) -> None:
     assert sorted(row["user_id"] for row in store.read_exposures()) == ["u1", "u2"]
 
 
-def test_append_exposures_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Busy())
+def test_append_exposures_writer_lock_busy(tmp_path, no_lock_wait) -> None:
+    output = local_output(tmp_path)
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
 
 
 def test_append_exposures_writer_lock_lost(tmp_path) -> None:
-    class _Lost:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lost())
+    output = local_output(tmp_path)
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(owned=False)))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
 
 
 def test_append_exposures_rechecks_owned_before_write(tmp_path) -> None:
-    calls = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            calls["n"] += 1
-            return calls["n"] < 2
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lock())
+    output = local_output(tmp_path)
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(owned=FenceCheck(2))))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.append_exposures([_exposure("u1")])
     assert store.read_exposures() == []
 
 
 def test_write_state_writer_lock_lost(tmp_path) -> None:
-    class _Lost:
-        def acquire(self) -> bool:
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Lost())
+    output = local_output(tmp_path)
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(owned=False)))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
 
 
 def test_write_state_skips_acquire_when_held_here(tmp_path) -> None:
-    acquires = {"n": 0}
-
-    class _Lock:
-        def acquire(self) -> bool:
-            acquires["n"] += 1
-            return True
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    lock = _Lock()
-    store = ExperimentStore(output, writer_lock=lock)
-    with held_writer_lock(lock):
+    output = local_output(tmp_path)
+    lock = FakeLock()
+    store = ExperimentStore(output, fence=WriteFence(lock))
+    with WriteFence(lock).hold():
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    assert acquires["n"] == 1
+    assert lock.events.count("acquire") == 1
     assert store.read_state() is not None
 
 
-def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
-
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return True
-
-        def is_locked(self) -> bool:
-            return True
-
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    store = ExperimentStore(output, writer_lock=_Busy())
+def test_write_state_other_thread_does_not_skip_acquire(tmp_path, no_lock_wait) -> None:
+    output = local_output(tmp_path)
+    store = ExperimentStore(output, fence=WriteFence(FakeLock(acquires=False)))
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.read_state() is None
@@ -400,12 +348,10 @@ def test_write_state_other_thread_does_not_skip_acquire(tmp_path, monkeypatch) -
 
 def test_write_state_db_honors_fence(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -421,17 +367,11 @@ def test_write_state_db_honors_fence(tmp_path) -> None:
 
 def test_write_state_db_rolls_back_create_when_fence_lost_after_ddl(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 2
+    fence = FenceCheck(2)
 
     store = ExperimentStore(
-        IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        sqlite_output(tmp_path / "exp.db"),
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -446,46 +386,32 @@ def test_write_state_db_rolls_back_create_when_fence_lost_after_ddl(tmp_path) ->
 
 
 def test_write_state_db_rechecks_fence_before_replace(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 3
+    output = sqlite_output(tmp_path / "exp.db")
+    fence = FenceCheck(3)
 
     store = ExperimentStore(
         output,
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert exc.value.kind == "retrain"
-    assert checks["n"] >= 3
+    assert fence.calls >= 3
 
 
 def test_write_state_db_rechecks_fence_after_delete(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 4
+    output = sqlite_output(tmp_path / "exp.db")
+    fence = FenceCheck(4)
 
     store = ExperimentStore(
         output,
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert exc.value.kind == "retrain"
     assert store.read_state() is None
-    assert checks["n"] >= 4
+    assert fence.calls >= 4
 
 
 def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
@@ -501,22 +427,16 @@ def test_write_state_db_rechecks_fence_on_legacy_fallback(tmp_path) -> None:
                 ")"
             )
         )
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 4
+    fence = FenceCheck(4)
 
     store = ExperimentStore(
-        IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        sqlite_output(tmp_path / "exp.db"),
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert exc.value.kind == "retrain"
-    assert checks["n"] >= 4
+    assert fence.calls >= 4
 
 
 def test_write_state_db_legacy_fallback_completes(tmp_path) -> None:
@@ -532,7 +452,7 @@ def test_write_state_db_legacy_fallback_completes(tmp_path) -> None:
                 ")"
             )
         )
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
     payload = experiment_state("exp", promoted_variant="treatment")
     store.write_state(payload)
     assert store.read_state()["promoted_variant"] == "treatment"
@@ -551,17 +471,11 @@ def test_write_state_db_rolls_back_alter_when_fence_lost_after_ddl(tmp_path) -> 
                 ")"
             )
         )
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 5
+    fence = FenceCheck(5)
 
     store = ExperimentStore(
-        IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        sqlite_output(tmp_path / "exp.db"),
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.write_state(experiment_state("exp", promoted_variant="treatment"))
@@ -582,13 +496,11 @@ def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> Non
         fence["ok"] = False
         yield
 
-    monkeypatch.setattr("cicerone.experiment.store.exclusive_file_lock", _lock)
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    monkeypatch.setattr("cicerone.experiment.store_dataset.exclusive_file_lock", _lock)
+    output = local_output(tmp_path)
     store = ExperimentStore(
         output,
-        fence_check=lambda: fence["ok"],
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: fence["ok"]),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -599,12 +511,10 @@ def test_append_exposures_rechecks_after_file_lock(tmp_path, monkeypatch) -> Non
 
 
 def test_append_exposures_honors_fence(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(
         output,
-        fence_check=lambda: False,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(None, lambda: False),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -615,18 +525,11 @@ def test_append_exposures_honors_fence(tmp_path) -> None:
 
 
 def test_append_exposures_db_rechecks_fence_before_insert(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    checks = {"n": 0}
-
-    def fence() -> bool:
-        checks["n"] += 1
-        return checks["n"] < 3
+    fence = FenceCheck(3)
 
     store = ExperimentStore(
-        IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        sqlite_output(tmp_path / "exp.db"),
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -634,11 +537,10 @@ def test_append_exposures_db_rechecks_fence_before_insert(tmp_path) -> None:
         )
     assert exc.value.kind == "retrain"
     assert store.read_exposures() == []
-    assert checks["n"] >= 3
+    assert fence.calls >= 3
 
 
 def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
     held = {"ok": True}
 
     def fence() -> bool:
@@ -652,10 +554,8 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
 
     monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
     store = ExperimentStore(
-        IOSettings(kind="db", options={"database_url": url}),
-        fence_check=fence,
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        sqlite_output(tmp_path / "exp.db"),
+        fence=retrain_fence(None, fence),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as exc:
         store.append_exposures(
@@ -668,21 +568,18 @@ def test_append_exposures_db_rolls_back_when_fence_lost_after_insert(tmp_path, m
 def test_read_state_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
     from pandas.errors import DatabaseError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise DatabaseError("no such table: experiment_state")
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    boom = raising(DatabaseError("no such table: experiment_state"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_state() is None
+    assert boom.calls >= 1
 
 
 def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, monkeypatch) -> None:
     from pandas.errors import DatabaseError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
     calls = {"n": 0}
 
     def _read(*_args, **_kwargs):
@@ -691,7 +588,7 @@ def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, mon
             raise DatabaseError("no such column: promoted_at")
         return pd.DataFrame([{"experiment_id": "exp", "promoted_variant": "treatment", "payload": None}])
 
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=_read)
     state = store.read_state()
     assert state is not None
     assert state["promoted_variant"] == "treatment"
@@ -701,51 +598,47 @@ def test_read_state_db_pandas_database_error_retries_legacy_schema(tmp_path, mon
 def test_read_exposures_db_pandas_database_error_is_empty(tmp_path, monkeypatch) -> None:
     from pandas.errors import DatabaseError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise DatabaseError("no such table: exposures")
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    boom = raising(DatabaseError("no such table: exposures"))
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", read_sql=boom)
     assert store.read_exposures() == []
+    assert boom.calls >= 1
 
 
 def test_read_exposures_db_generic_missing_table_is_empty(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise SQLAlchemyError("no such table: exposures")
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
-    monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(SQLAlchemyError("no such table: exposures")),
+    )
+    monkeypatch.setattr("cicerone.experiment.store_db.is_missing_table_error", lambda _exc: True)
     assert store.read_exposures() == []
 
 
 def test_read_exposures_db_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise RuntimeError("no such table: exposures")
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
-    monkeypatch.setattr("cicerone.experiment.store.is_missing_table_error", lambda _exc: True)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(RuntimeError("no such table: exposures")),
+    )
+    monkeypatch.setattr("cicerone.experiment.store_db.is_missing_table_error", lambda _exc: True)
     with pytest.raises(RuntimeError, match="no such table"):
         store.read_exposures()
 
 
 def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    patch_module_ref(
+        monkeypatch, "cicerone.experiment.store_db.pd", read_sql=raising(RuntimeError("db down"))
+    )
     with pytest.raises(RuntimeError, match="db down"):
         store.read_exposures()
 
@@ -753,71 +646,47 @@ def test_read_exposures_db_unexpected_error_reraises(tmp_path, monkeypatch) -> N
 def test_read_exposures_db_operational_error_reraises(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import OperationalError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
-    def _read(*_args, **_kwargs):
-        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", _read)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
+    )
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_exposures()
 
 
 def test_append_exposures_empty_is_noop(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     ExperimentStore(output).append_exposures([])
     assert not (tmp_path / "exposures.jsonl").exists()
 
 
-def test_experiment_store_state_roundtrip_s3() -> None:
-    import boto3
-    from moto import mock_aws
-
-    with mock_aws():
-        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="recs")
-        output = IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-                "prefix": "out",
-            },
-        )
-        store = ExperimentStore(output)
-        assert store.read_state() is None
-        store.write_state(experiment_state("exp", promoted_variant="treatment"))
-        state = store.read_state()
-        assert state is not None
-        assert state["promoted_variant"] == "treatment"
+def test_experiment_store_state_roundtrip_s3(s3_options) -> None:
+    output = IOSettings(kind="dataset", options=s3_options)
+    store = ExperimentStore(output)
+    assert store.read_state() is None
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "treatment"
 
 
-def test_experiment_store_s3_unexpected_read_reraises(monkeypatch) -> None:
+def test_experiment_store_s3_unexpected_read_reraises(monkeypatch, s3_options) -> None:
     class _Boom:
         def get_object(self, **_kwargs):
             raise RuntimeError("network")
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Boom())
-    store = ExperimentStore(
-        IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-    )
+    store = ExperimentStore(IOSettings(kind="dataset", options=s3_options))
     with pytest.raises(RuntimeError, match="network"):
         store.read_state()
     with pytest.raises(RuntimeError, match="network"):
         store.read_exposures()
 
 
-def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
+def test_experiment_store_s3_access_denied_reraises(monkeypatch, s3_options) -> None:
     from botocore.exceptions import ClientError
 
     class _Denied:
@@ -825,17 +694,7 @@ def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "nope"}}, "GetObject")
 
     monkeypatch.setattr("cicerone.io.blob.build_s3_client", lambda _options: _Denied())
-    store = ExperimentStore(
-        IOSettings(
-            kind="dataset",
-            options={
-                "storage_backend": "s3",
-                "bucket": "recs",
-                "access_key_id": "test",
-                "secret_access_key": "test",
-            },
-        )
-    )
+    store = ExperimentStore(IOSettings(kind="dataset", options=s3_options))
     with pytest.raises(ClientError, match="AccessDenied"):
         store.read_state()
     with pytest.raises(ClientError, match="AccessDenied"):
@@ -843,15 +702,12 @@ def test_experiment_store_s3_access_denied_reraises(monkeypatch) -> None:
 
 
 def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.promoted_variant("exp") == "treatment"
 
-    def boom() -> None:
-        raise OSError("store down")
-
-    monkeypatch.setattr(store, "read_state", boom)
+    monkeypatch.setattr(store, "read_state", raising(OSError("store down")))
     assert store.promoted_variant("exp") == "treatment"
     assert store.promoted_variant("other") is None
 
@@ -859,46 +715,39 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
 def test_assignment_overlay_keeps_last_on_backend_io_error(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(
         experiment_state("exp", promoted_variant="treatment", champion="control", challenger="blend")
     )
     assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
 
-    def boom(self):
-        raise SQLAlchemyError("engine")
-
-    monkeypatch.setattr(ExperimentStore, "read_state", boom)
+    monkeypatch.setattr(ExperimentStore, "read_state", raising(SQLAlchemyError("engine")))
     assert store.assignment_overlay("exp") == ("treatment", ("control", "blend"))
 
 
 def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
     assert store.promoted_variant("exp") == "treatment"
 
-    def boom() -> None:
-        raise OSError("store down")
-
-    monkeypatch.setattr(store, "_read_state_db", boom)
+    monkeypatch.setattr(store.backend, "read_state", raising(OSError("store down")))
     assert store.promoted_variant("exp") == "treatment"
 
 
 def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import OperationalError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
 
-    def boom(*_args, **_kwargs):
-        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(OperationalError("SELECT 1", {}, Exception("connection refused"))),
+    )
     with pytest.raises(OperationalError, match="connection refused"):
         store.read_state()
     assert store.assignment_overlay("exp")[0] == "treatment"
@@ -907,25 +756,24 @@ def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatc
 def test_read_state_db_reraises_unclassified_programming_error(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import ProgrammingError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
 
-    def boom(*_args, **_kwargs):
-        raise ProgrammingError("SELECT 1", {}, Exception("permission denied"))
-
-    monkeypatch.setattr("cicerone.experiment.store.pd.read_sql", boom)
+    patch_module_ref(
+        monkeypatch,
+        "cicerone.experiment.store_db.pd",
+        read_sql=raising(ProgrammingError("SELECT 1", {}, Exception("permission denied"))),
+    )
     with pytest.raises(ProgrammingError, match="permission denied"):
         store.read_state()
 
 
 def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="control"))
-    engine = store._db_engine()
+    engine = store.backend.engine()
     with engine.begin() as conn:
         conn.execute(text("DROP TABLE experiment_state"))
         conn.execute(
@@ -951,7 +799,7 @@ def test_experiment_store_prefers_timestamped_promote_over_null(tmp_path) -> Non
 
 
 def test_experiment_store_last_state_reuses_write_cache(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(
         experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-01T00:00:00Z")
@@ -964,7 +812,7 @@ def test_experiment_store_last_state_reuses_write_cache(tmp_path) -> None:
 
 
 def test_last_state_ignores_cache_when_promoted_variant_queries_other_id(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(
         experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-02T00:00:00Z")
@@ -977,7 +825,7 @@ def test_last_state_ignores_cache_when_promoted_variant_queries_other_id(tmp_pat
 
 
 def test_last_state_matches_non_string_experiment_id(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(
         {
@@ -993,7 +841,7 @@ def test_last_state_matches_non_string_experiment_id(tmp_path) -> None:
 
 def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE recommendation_exposures (user_id TEXT, variant TEXT)"))
@@ -1003,7 +851,7 @@ def test_read_exposures_missing_experiment_id_column_returns_empty(tmp_path) -> 
 
 def test_read_exposures_missing_other_column_returns_rows(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(
@@ -1036,7 +884,7 @@ def test_read_exposures_skips_columns_outside_the_exposure_schema(tmp_path) -> N
             text("CREATE TABLE recommendation_exposures (user_id TEXT, experiment_id TEXT, note TEXT)")
         )
         conn.execute(text("INSERT INTO recommendation_exposures VALUES ('u1', 'exp', 'extra')"))
-    rows = ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures()
+    rows = ExperimentStore(sqlite_output(tmp_path / "exp.db")).read_exposures()
     assert rows == [{"user_id": "u1", "experiment_id": "exp"}]
 
 
@@ -1047,20 +895,18 @@ def test_read_exposures_table_without_exposure_columns_is_empty(tmp_path, caplog
         conn.execute(text("CREATE TABLE recommendation_exposures (note TEXT)"))
         conn.execute(text("INSERT INTO recommendation_exposures VALUES ('extra')"))
     with caplog.at_level("WARNING", logger="cicerone.experiment.store"):
-        assert ExperimentStore(IOSettings(kind="db", options={"database_url": url})).read_exposures() == []
+        assert ExperimentStore(sqlite_output(tmp_path / "exp.db")).read_exposures() == []
     assert "none of the exposure columns" in caplog.text
 
 
 def test_read_exposures_missing_table_with_filter_is_empty(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
     assert store.read_exposures(experiment_id="exp") == []
 
 
 def test_read_exposures_late_table_without_filter_column_is_empty(tmp_path, monkeypatch) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
-    real = store._stored_exposure_columns
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
+    real = store.backend.stored_exposure_columns
 
     def inspect_then_create(engine, table):
         columns = real(engine, table)
@@ -1068,37 +914,26 @@ def test_read_exposures_late_table_without_filter_column_is_empty(tmp_path, monk
             conn.execute(text(f'CREATE TABLE "{table}" (user_id TEXT, variant TEXT)'))
         return columns
 
-    monkeypatch.setattr(store, "_stored_exposure_columns", inspect_then_create)
+    monkeypatch.setattr(store.backend, "stored_exposure_columns", inspect_then_create)
     assert store.read_exposures(experiment_id="exp") == []
 
 
 def test_read_exposures_inspect_error_reraises(tmp_path, monkeypatch) -> None:
     from sqlalchemy.exc import OperationalError
 
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    store = ExperimentStore(IOSettings(kind="db", options={"database_url": url}))
+    store = ExperimentStore(sqlite_output(tmp_path / "exp.db"))
 
     class _Inspector:
         def get_columns(self, _table):
             raise OperationalError("PRAGMA", {}, Exception("disk I/O error"))
 
-    monkeypatch.setattr("cicerone.experiment.store.inspect", lambda _engine: _Inspector())
+    monkeypatch.setattr("cicerone.experiment.store_db.inspect", lambda _engine: _Inspector())
     with pytest.raises(OperationalError, match="disk I/O error"):
         store.read_exposures()
 
 
-def test_jsonish_numpy_scalar_and_na() -> None:
-    import numpy as np
-    import pandas as pd
-
-    from cicerone.experiment.store import jsonish
-
-    assert jsonish(np.int64(3)) == 3
-    assert jsonish(pd.NA) is None
-
-
 def test_experiment_state_extra_keys_roundtrip_dataset(tmp_path) -> None:
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(
         experiment_state(
@@ -1122,8 +957,7 @@ def test_experiment_state_extra_keys_roundtrip_dataset(tmp_path) -> None:
 
 
 def test_experiment_state_payload_roundtrip_sqlite(tmp_path) -> None:
-    url = f"sqlite+pysqlite:///{tmp_path / 'exp.db'}"
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(
         experiment_state("exp", promoted_variant="control", champion="control", challenger="treatment")
@@ -1154,7 +988,7 @@ def test_experiment_state_alters_legacy_sqlite_table(tmp_path) -> None:
                 "VALUES ('exp', 'control', '2026-09-01T00:00:00Z')"
             )
         )
-    output = IOSettings(kind="db", options={"database_url": url})
+    output = sqlite_output(tmp_path / "legacy.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant=None, champion="a", challenger="b"))
     state = store.read_state()
@@ -1164,11 +998,8 @@ def test_experiment_state_alters_legacy_sqlite_table(tmp_path) -> None:
 
 
 def test_hydrate_state_row_ignores_invalid_payload() -> None:
-    from cicerone.experiment.store import (
-        _hydrate_state_row,
-        active_pair_from_state,
-        merge_experiment_state,
-    )
+    from cicerone.experiment.store import active_pair_from_state, merge_experiment_state
+    from cicerone.experiment.store_db import _hydrate_state_row
 
     assert _hydrate_state_row({"experiment_id": "exp", "payload": "{not-json"}) == {"experiment_id": "exp"}
     assert _hydrate_state_row({"experiment_id": "exp", "payload": '["list"]'}) == {"experiment_id": "exp"}
@@ -1188,3 +1019,313 @@ def test_hydrate_state_row_ignores_invalid_payload() -> None:
     assert merged["champion"] == "old"
     assert merged["challenger"] == "new"
     assert merged["extra"] == 1
+
+
+def test_build_experiment_backend_picks_the_output_kind(tmp_path) -> None:
+    from cicerone.experiment.store import build_experiment_backend
+    from cicerone.experiment.store_dataset import ExperimentDatasetBackend
+    from cicerone.experiment.store_db import ExperimentDbBackend
+
+    fence = WriteFence()
+    db = sqlite_output(tmp_path / "exp.db")
+    dataset = IOSettings(kind="dataset", options={"path": str(tmp_path)})
+    assert isinstance(build_experiment_backend(db, fence), ExperimentDbBackend)
+    assert isinstance(build_experiment_backend(dataset, fence), ExperimentDatasetBackend)
+    assert isinstance(ExperimentStore(db).backend, ExperimentDbBackend)
+    assert isinstance(ExperimentStore(dataset).backend, ExperimentDatasetBackend)
+
+
+def test_object_store_exposures_are_rejected_before_taking_the_writer_lock() -> None:
+    output = IOSettings(kind="dataset", options={"storage_backend": "s3", "bucket": "b", "prefix": "p"})
+    store = ExperimentStore(
+        output,
+        fence=WriteFence(
+            FakeLock(
+                acquires=raising(
+                    AssertionError("the writer lock must not be taken for a rejected exposure log")
+                ),
+                owned=False,
+            )
+        ),
+    )
+    with pytest.raises(ConfigError, match="not atomic"):
+        store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": "control"}])
+
+
+def test_dataset_writes_encode_before_taking_the_writer_lock(tmp_path) -> None:
+    output = local_output(tmp_path)
+    store = ExperimentStore(
+        output,
+        fence=WriteFence(
+            FakeLock(
+                acquires=raising(AssertionError("encoding must fail before the writer lock is taken")),
+                owned=False,
+            )
+        ),
+    )
+    with pytest.raises(TypeError):
+        store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": object()}])
+    with pytest.raises(TypeError):
+        store.write_state(experiment_state("exp", promoted_variant="control", extra=object()))
+    assert not (tmp_path / "exposures.jsonl").exists()
+    assert not (tmp_path / "experiment_state.json").exists()
+
+
+def test_db_writes_prepare_before_taking_the_writer_lock(tmp_path, monkeypatch) -> None:
+
+    output = sqlite_output(tmp_path / "exp.db")
+    store = ExperimentStore(
+        output,
+        fence=WriteFence(
+            FakeLock(
+                acquires=raising(
+                    AssertionError("preparing the write must fail before the writer lock is taken")
+                ),
+                owned=False,
+            )
+        ),
+    )
+    with pytest.raises(TypeError):
+        store.write_state(experiment_state("exp", promoted_variant="control", extra=object()))
+
+    def _bad_frame(_rows):
+        raise ValueError("bad exposure rows")
+
+    patch_module_ref(monkeypatch, "cicerone.experiment.store_db.pd", DataFrame=_bad_frame)
+    with pytest.raises(ValueError, match="bad exposure rows"):
+        store.append_exposures([{"experiment_id": "exp", "user_id": "u1", "variant": "control"}])
+
+
+def test_dataset_backend_filters_exposures_by_experiment(tmp_path) -> None:
+    from cicerone.experiment.store import build_experiment_backend
+
+    output = local_output(tmp_path)
+    backend = build_experiment_backend(output, WriteFence())
+    backend.exposure_writer(
+        [
+            {"experiment_id": "exp-a", "user_id": "u1", "variant": "control"},
+            {"experiment_id": "exp-b", "user_id": "u2", "variant": "treatment"},
+        ]
+    )()
+    assert [row["user_id"] for row in backend.read_exposures(experiment_id="exp-a")] == ["u1"]
+    assert [row["user_id"] for row in backend.read_exposures()] == ["u1", "u2"]
+
+
+_STATE_COLUMNS = [
+    ("experiment_id", "TEXT", False),
+    ("promoted_variant", "TEXT", True),
+    ("promoted_at", "TEXT", True),
+    ("payload", "TEXT", True),
+]
+_EXPOSURE_COLUMNS = [
+    (name, "TEXT", True) for name in ("user_id", "experiment_id", "variant", "generated_at", "exposed_at")
+]
+
+
+def _state_primary_key(engine, options) -> list[str]:
+    return inspect(engine).get_pk_constraint(options["experiment_state_table"])["constrained_columns"]
+
+
+def _write_state_and_exposure(store: ExperimentStore) -> None:
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    store.append_exposures([_exposure("u1")])
+
+
+def test_experiment_tables_keep_column_types_and_order(non_mysql_track_output) -> None:
+    store = ExperimentStore(non_mysql_track_output)
+    _write_state_and_exposure(store)
+    engine = store.backend.engine()
+    options = non_mysql_track_output.options
+    assert stored_column_types(engine, options["experiment_state_table"]) == _STATE_COLUMNS
+    assert _state_primary_key(engine, options) == ["experiment_id"]
+    assert stored_column_types(engine, options["exposures_table"]) == _EXPOSURE_COLUMNS
+
+
+def test_experiment_tables_on_mysql_bound_the_key_and_widen_the_payload(mysql_track_output) -> None:
+    store = ExperimentStore(mysql_track_output)
+    _write_state_and_exposure(store)
+    engine = store.backend.engine()
+    options = mysql_track_output.options
+    assert stored_column_types(engine, options["experiment_state_table"]) == [
+        ("experiment_id", "VARCHAR", False),
+        *_STATE_COLUMNS[1:3],
+        ("payload", "MEDIUMTEXT", True),
+    ]
+    assert stored_column_types(engine, options["exposures_table"]) == _EXPOSURE_COLUMNS
+    assert _state_primary_key(engine, options) == ["experiment_id"]
+    key = inspect(engine).get_columns(options["experiment_state_table"])[0]
+    assert key["type"].length == 255
+    assert key["type"].collation == "utf8mb4_0900_bin"
+
+
+def test_experiment_tables_set_engine_and_charset_for_mysql(tmp_path) -> None:
+    backend = ExperimentStore(sqlite_output(tmp_path / "exp.db")).backend
+    assert_mysql_engine_and_charset(backend._state_table, backend._exposures_table)
+
+
+def test_state_roundtrip_replaces_the_row_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    assert store.read_state() is None
+    store.write_state(experiment_state("old", promoted_variant=None))
+    longest_id = "é" * 255
+    note = "🍺" + "x" * 70_000
+    store.write_state(experiment_state(longest_id, promoted_variant="treatment", note=note))
+    state = store.read_state()
+    assert state is not None
+    assert state["experiment_id"] == longest_id
+    assert state["promoted_variant"] == "treatment"
+    assert state["note"] == note
+    engine = store.backend.engine()
+    with engine.connect() as conn:
+        table = quote_identifier(conn, track_db_output.options["experiment_state_table"])
+        assert conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == 1
+
+
+def test_state_keeps_the_previous_row_when_the_fence_is_lost(track_db_output, monkeypatch) -> None:
+    from cicerone.io.sql_rows import insert_sql
+
+    held = {"ok": True}
+
+    def _insert_sql(*args):
+        held["ok"] = False
+        return insert_sql(*args)
+
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, lambda: held["ok"]))
+    store.write_state(experiment_state("exp", promoted_variant="control"))
+    monkeypatch.setattr("cicerone.io.sql_rows.insert_sql", _insert_sql)
+    with pytest.raises(LockLostError):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    held["ok"] = True
+    state = ExperimentStore(track_db_output).read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_state_adds_the_payload_column_to_an_older_table_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+    note = "x" * 70_000
+    store.write_state(experiment_state("exp", promoted_variant="treatment", note=note))
+    state = store.read_state()
+    assert state is not None
+    assert state["note"] == note
+    assert "payload" in {column["name"] for column in inspect(engine).get_columns(name)}
+
+
+def test_state_on_mysql_adds_a_missing_payload_as_mediumtext(mysql_track_output) -> None:
+    store = ExperimentStore(mysql_track_output)
+    engine = store.backend.engine()
+    name = mysql_track_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, promoted_at TEXT)"
+            )
+        )
+    store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert stored_column_types(engine, name)[-1] == ("payload", "MEDIUMTEXT", True)
+
+
+def test_state_write_on_a_table_missing_another_column_reports_that_column(track_db_output) -> None:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["experiment_state_table"]
+    with engine.begin() as conn:
+        table = quote_identifier(conn, name)
+        conn.execute(
+            text(
+                f"CREATE TABLE {table} (experiment_id VARCHAR(64) PRIMARY KEY, "
+                "promoted_variant TEXT, payload TEXT)"
+            )
+        )
+    with pytest.raises(SQLAlchemyError, match="promoted_at"):
+        store.write_state(experiment_state("exp", promoted_variant="treatment"))
+    assert [column["name"] for column in inspect(engine).get_columns(name)] == [
+        "experiment_id",
+        "promoted_variant",
+        "payload",
+    ]
+
+
+def test_read_state_without_promoted_at_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    with engine.begin() as conn:
+        table = quote_identifier(conn, track_db_output.options["experiment_state_table"])
+        conn.execute(text(f"CREATE TABLE {table} (experiment_id VARCHAR(64), promoted_variant TEXT)"))
+        conn.execute(text(f"INSERT INTO {table} (experiment_id, promoted_variant) VALUES ('exp', 'control')"))
+    state = store.read_state()
+    assert state is not None
+    assert state["promoted_variant"] == "control"
+
+
+def test_exposures_roundtrip_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    assert store.read_exposures() == []
+    store.append_exposures([_exposure("🍺"), {**_exposure("u2"), "experiment_id": "other"}])
+    store.append_exposures([_exposure("u3")])
+    assert len(store.read_exposures()) == 3
+    rows = store.read_exposures(experiment_id="exp")
+    assert sorted(row["user_id"] for row in rows) == sorted(["🍺", "u3"])
+    assert all(row["generated_at"] is None for row in rows)
+
+
+def test_exposures_filter_matches_the_experiment_id_exactly_on_every_backend(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    store.append_exposures(
+        [
+            _exposure("exact"),
+            {**_exposure("upper"), "experiment_id": "EXP"},
+            {**_exposure("accent"), "experiment_id": "éxp"},
+        ]
+    )
+    assert [row["user_id"] for row in store.read_exposures(experiment_id="exp")] == ["exact"]
+
+
+def test_exposures_roll_back_when_the_fence_is_lost(track_db_output, monkeypatch) -> None:
+    held = {"ok": True}
+    original = pd.DataFrame.to_sql
+
+    def _to_sql(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        held["ok"] = False
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _to_sql)
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, lambda: held["ok"]))
+    with pytest.raises(LockLostError):
+        store.append_exposures([_exposure("u1")])
+    assert store.read_exposures() == []
+
+
+def test_exposures_append_to_a_previously_created_table(track_db_output) -> None:
+    store = ExperimentStore(track_db_output)
+    engine = store.backend.engine()
+    name = track_db_output.options["exposures_table"]
+    frame = pd.DataFrame([_exposure("u1")])
+    with engine.begin() as conn:
+        frame.to_sql(name, conn, index=False)
+    before = stored_column_types(engine, name)
+    store.append_exposures([_exposure("u2")])
+    assert stored_column_types(engine, name) == before
+    assert len(store.read_exposures()) == 2
+
+
+def test_exposure_writer_that_lost_the_fence_creates_no_table_on_every_backend(track_db_output) -> None:
+    # The first check is the lease; the second is the one before the DDL.
+    store = ExperimentStore(track_db_output, fence=retrain_fence(None, FenceCheck(2)))
+    with pytest.raises(LockLostError):
+        store.append_exposures([_exposure("u1")])
+    assert not inspect(store.backend.engine()).has_table(track_db_output.options["exposures_table"])

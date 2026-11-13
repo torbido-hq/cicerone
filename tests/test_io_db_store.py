@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import Table, create_engine, text
+from sqlalchemy.dialects import mysql, postgresql, sqlite
+from sqlalchemy.dialects.mysql import mariadb
+from sqlalchemy.exc import NotSupportedError, OperationalError
+from sqlalchemy.schema import CreateTable
+from support.fakes import FakeInspector, RecordingConnection
 from support.postgres_defaults import resolve_test_database_url
 
 from cicerone.config import ConfigError
@@ -43,6 +50,7 @@ def _clean_tables():
             "custom_recommendations",
             "custom_manifest_runs",
             "custom_model_artifacts",
+            "Mixed_Case_Recs",
         ):
             conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
     yield
@@ -152,6 +160,30 @@ def test_database_output_replace_recommendations_for_users():
     assert sink.replace_recommendations_for_users(pd.DataFrame(), user_ids=["u1"]) == 1
     stored = pd.read_sql('SELECT * FROM "recommendations"', engine)
     assert list(stored["user_id"]) == ["u2"]
+
+
+def test_database_output_replace_recommendations_for_users_on_a_mixed_case_table():
+    # to_sql creates "Mixed_Case_Recs" quoted; an unquoted DELETE hit mixed_case_recs and left old rows.
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL, "recommendations_table": "Mixed_Case_Recs"})
+    sink.write_recommendations(
+        pd.DataFrame(
+            [
+                {"user_id": "u1", "item_id": "old", "rank": 1, "score": 0.9, "source": "personalized"},
+                {"user_id": "u2", "item_id": "keep", "rank": 1, "score": 0.8, "source": "personalized"},
+            ]
+        )
+    )
+
+    replaced = sink.replace_recommendations_for_users(
+        pd.DataFrame([{"user_id": "u1", "item_id": "new", "rank": 1, "score": 1.0, "source": "incremental"}]),
+        user_ids=["u1"],
+    )
+
+    assert replaced == 2
+    stored = pd.read_sql(
+        'SELECT user_id, item_id FROM "Mixed_Case_Recs" ORDER BY user_id', create_engine(TEST_DATABASE_URL)
+    )
+    assert stored.values.tolist() == [["u1", "new"], ["u2", "keep"]]
 
 
 def test_database_output_replace_recommendations_rejects_extra_users():
@@ -267,6 +299,29 @@ def test_database_output_writes_manifest_appends():
     assert list(stored["n_events"]) == [1, 2]
 
 
+def test_database_output_manifest_adds_columns_a_later_manifest_brings():
+    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
+
+    sink.write_manifest({"triggered_by": "job", "n_events": 10})
+    sink.write_manifest(
+        {
+            "triggered_by": "incremental",
+            "n_events": 1,
+            "incremental_events_applied": 1,
+            "last_incremental_at": "2026-10-21T00:00:00+00:00",
+            "partial_outputs": True,
+            "online_fit_partial_epochs": 0.5,
+        }
+    )
+
+    engine = create_engine(TEST_DATABASE_URL)
+    stored = pd.read_sql('SELECT * FROM "recommendation_runs"', engine)
+    assert list(stored["triggered_by"]) == ["job", "incremental"]
+    assert stored["incremental_events_applied"].iloc[1] == 1
+    assert stored["last_incremental_at"].iloc[1] == "2026-10-21T00:00:00+00:00"
+    assert stored["online_fit_partial_epochs"].iloc[1] == 0.5
+
+
 def test_database_output_writes_and_replaces_model_artifact():
     sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
 
@@ -328,13 +383,6 @@ def test_database_output_read_model_artifact_missing_returns_none():
     )
     assert sink.read_model_artifact() is None
     assert sink.model_artifact_fingerprint() is None
-
-
-def test_database_output_read_model_artifact_rejects_oversize():
-    sink = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})
-    sink.write_model_artifact(b"123456")
-    with pytest.raises(ValueError, match="max is 4"):
-        sink.read_model_artifact(max_bytes=4)
 
 
 def test_database_output_model_artifact_custom_table_name():
@@ -440,3 +488,248 @@ def test_database_get_user_from_table():
 
     assert source.get_user("u1")["region_slug"] == "lazio"
     assert source.get_user("ghost") is None
+
+
+def test_applied_events_table_compiles_for_mysql(tmp_path) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    ddl = str(CreateTable(sink._applied_events_table()).compile(dialect=mysql.dialect()))
+    assert "event_key VARCHAR(64)" in ddl
+
+
+def test_applied_events_index_name_fits_mysql_for_a_long_table_name(tmp_path) -> None:
+    sink = DatabaseOutputSink(
+        {"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", "applied_events_table": "t" * 64}
+    )
+    [index] = sink._applied_events_table().indexes
+    assert [column.name for column in index.columns] == ["applied_at"]
+    assert len(str(index.name)) <= 64
+
+
+def test_manifest_columns_are_added_with_dialect_quoting(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    engine = RecordingConnection(mysql.dialect())
+    monkeypatch.setattr(db_store, "inspect", lambda _engine: FakeInspector(columns=("generated_at",)))
+    db_store._add_missing_manifest_columns(engine, "cicerone_manifests", {"generated_at": "x", "n_events": 1})
+    assert engine.sql == ["ALTER TABLE cicerone_manifests ADD COLUMN n_events BIGINT"]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "statement"),
+    [
+        (mysql.dialect(), "DELETE FROM recommendations"),
+        (mariadb.MariaDBDialect(), "DELETE FROM recommendations"),
+        (postgresql.dialect(), "TRUNCATE TABLE recommendations"),
+    ],
+)
+def test_full_write_empties_the_table_with_delete_only_on_mysql(dialect, statement, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(dialect)
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == [statement]
+
+
+def test_full_write_clear_falls_back_to_delete_and_raises_its_error(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(postgresql.dialect())
+    errors = {
+        "TRUNCATE TABLE recommendations": NotSupportedError(
+            "TRUNCATE", {}, Exception("cannot truncate a table referenced in a foreign key constraint")
+        ),
+        "DELETE FROM recommendations": OperationalError("DELETE", {}, Exception("lock wait timeout")),
+    }
+
+    def _fail(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        raise errors[str(statement)]
+
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector())
+    monkeypatch.setattr(conn, "execute", _fail)
+    with pytest.raises(OperationalError, match="lock wait timeout"):
+        db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == ["TRUNCATE TABLE recommendations", "DELETE FROM recommendations"]
+
+
+def test_full_write_clear_skips_a_missing_table(monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    conn = RecordingConnection(postgresql.dialect())
+    monkeypatch.setattr(db_store, "inspect", lambda _conn: FakeInspector(has_table=False))
+    db_store._clear_table_for_replace(conn, "recommendations")
+    assert conn.sql == []
+
+
+@pytest.mark.parametrize("dialect", [sqlite.dialect(), postgresql.dialect()])
+def test_applied_event_scope_ignores_the_table_name_case(tmp_path, dialect) -> None:  # type: ignore[no-untyped-def]
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    conn = RecordingConnection(dialect)
+    assert sink._applied_scope(conn, "Recs") == sink._applied_scope(conn, "recs")
+    assert conn.sql == []
+
+
+@pytest.mark.parametrize("dialect", [mysql.dialect(), mariadb.MariaDBDialect()])
+@pytest.mark.parametrize(("lower_case_table_names", "keeps_case"), [(0, True), (1, False), (2, False)])
+def test_applied_event_scope_follows_mysql_lower_case_table_names(  # type: ignore[no-untyped-def]
+    tmp_path, monkeypatch, dialect, lower_case_table_names, keeps_case
+) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    conn = RecordingConnection(dialect)
+
+    def _server_setting(statement):  # type: ignore[no-untyped-def]
+        conn.sql.append(str(statement))
+        return SimpleNamespace(scalar_one=lambda: lower_case_table_names)
+
+    monkeypatch.setattr(conn, "execute", _server_setting)
+    assert (sink._applied_scope(conn, "Recs") != sink._applied_scope(conn, "recs")) is keeps_case
+    assert conn.sql == ["SELECT @@lower_case_table_names"]
+
+
+def test_applied_event_lookup_inspects_the_schema_once(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+    real_inspect = db_store.inspect
+    calls: list[object] = []
+
+    def _counting_inspect(target):  # type: ignore[no-untyped-def]
+        calls.append(target)
+        return real_inspect(target)
+
+    monkeypatch.setattr(db_store, "inspect", _counting_inspect)
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+    assert len(calls) <= 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"applied_events_table": "recommendations"},
+        {"recommendations_table": "custom_recs", "applied_events_table": "Custom_Recs"},
+    ],
+)
+def test_applied_events_table_must_not_reuse_another_output_table(tmp_path, options) -> None:
+    with pytest.raises(ValueError, match="already used by another output table"):
+        DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}", **options})
+
+
+def test_a_manifest_column_added_concurrently_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    from cicerone.io import db_store
+
+    url = f"sqlite+pysqlite:///{tmp_path / 'out.db'}"
+    sink = DatabaseOutputSink({"database_url": url})
+    sink.write_manifest({"generated_at": "2026-01-01T00:00:00+00:00"})
+    with create_engine(url).begin() as conn:
+        conn.execute(text("ALTER TABLE recommendation_runs ADD COLUMN n_events BIGINT"))
+    real_inspect = db_store.inspect
+    calls = {"n": 0}
+
+    class _StaleInspector:
+        def __init__(self, inner) -> None:  # type: ignore[no-untyped-def]
+            self._inner = inner
+
+        def has_table(self, table):  # type: ignore[no-untyped-def]
+            return self._inner.has_table(table)
+
+        def get_columns(self, table):  # type: ignore[no-untyped-def]
+            return [column for column in self._inner.get_columns(table) if column["name"] != "n_events"]
+
+    def _inspect(target):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        inner = real_inspect(target)
+        return _StaleInspector(inner) if calls["n"] == 1 else inner
+
+    monkeypatch.setattr(db_store, "inspect", _inspect)
+    db_store._add_missing_manifest_columns(
+        sink._engine, "recommendation_runs", {"generated_at": "x", "n_events": 1}
+    )
+    assert calls["n"] == 2
+
+
+def test_a_concurrently_created_applied_events_table_does_not_fail_the_write(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    real_create = Table.create
+
+    applied_name = sink._applied_events_table().name
+
+    def _create_then_lose_the_race(table, bind=None, checkfirst=False):  # type: ignore[no-untyped-def]
+        real_create(table, bind, checkfirst=checkfirst)
+        if table.name == applied_name:
+            raise OperationalError("CREATE TABLE", {}, Exception("table already exists"))
+
+    monkeypatch.setattr(Table, "create", _create_then_lose_the_race)
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    assert sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"]) == 1
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+
+
+def test_a_failed_full_write_keeps_the_rows_and_the_replay_keys(tmp_path, monkeypatch) -> None:
+    sink = DatabaseOutputSink({"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
+    rows = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "popular"}])
+    sink.replace_recommendations_for_users(rows, user_ids=["u1"], applied_keys=["k1"])
+
+    def _insert_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("insert failed")
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", _insert_fails)
+    with pytest.raises(OSError, match="insert failed"):
+        sink.write_recommendations(rows)
+    monkeypatch.undo()
+    assert sink.applied_event_keys(["k1"]) == {"k1"}
+    with sink._engine.connect() as conn:
+        assert conn.execute(text("SELECT user_id, item_id FROM recommendations")).all() == [("u1", "i1")]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "kind"),
+    [
+        (mysql.dialect(), "LONGBLOB"),
+        (mariadb.MariaDBDialect(), "LONGBLOB"),
+        (postgresql.dialect(), "BYTEA"),
+        (sqlite.dialect(), "BLOB"),
+    ],
+)
+def test_model_artifact_payload_type_by_dialect(dialect, kind) -> None:
+    table = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})._model_artifacts_table()
+    assert f"payload {kind} NOT NULL" in str(CreateTable(table).compile(dialect=dialect))
+
+
+def test_model_artifact_over_64_kb_roundtrips_on_every_backend(track_db_output) -> None:
+    sink = DatabaseOutputSink(track_db_output.options)
+    payload = bytes(range(256)) * 1024
+    sink.write_model_artifact(payload)
+    assert sink.read_model_artifact() == payload
+    token = sink.model_artifact_fingerprint()
+    assert sink.replace_model_artifact_if(payload * 2, token) is True
+    assert sink.read_model_artifact() == payload * 2
+
+
+def test_model_artifact_written_at_keeps_microseconds_on_mysql_and_mariadb() -> None:
+    table = DatabaseOutputSink({"database_url": TEST_DATABASE_URL})._model_artifacts_table()
+    for dialect in (mysql.dialect(), mariadb.MariaDBDialect()):
+        assert "written_at DATETIME(6) NOT NULL" in str(CreateTable(table).compile(dialect=dialect))
+
+
+def test_model_artifact_writes_in_the_same_second_are_distinguished_on_every_backend(
+    track_db_output, monkeypatch
+) -> None:
+    stamps = iter(datetime(2026, 8, 28, 3, 0, 0, microsecond, UTC) for microsecond in (100_000, 200_000))
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(stamps)
+
+    monkeypatch.setattr("cicerone.io.db_store.datetime", _Clock)
+    sink = DatabaseOutputSink(track_db_output.options)
+    sink.write_model_artifact(b"first")
+    token = sink.model_artifact_fingerprint()
+    sink.write_model_artifact(b"second")
+    assert sink.model_artifact_fingerprint() != token
+    assert sink.replace_model_artifact_if(b"stale", token) is False
+    assert sink.read_model_artifact() == b"second"

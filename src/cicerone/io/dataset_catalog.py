@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import io
-import logging
 import threading
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from cicerone.io.blob import (
+    STORAGE_READ_ERRORS,
+    is_storage_not_found,
+    read_parquet_if_exists,
+    write_storage_bytes,
+)
 from cicerone.io.catalog import (
     EVENT_ID_COLUMN,
     dedupe_event_rows,
@@ -21,17 +25,11 @@ from cicerone.io.catalog import (
     user_row_or_none,
 )
 from cicerone.io.options import (
-    build_s3_client,
-    is_s3_not_found,
-    object_key,
-    read_parquet,
-    require_option,
+    read_parquet_pushdown,
     validate_storage_options,
 )
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 from cicerone.io.user_lookup import filter_rows_for_user, newest_events
-
-logger = logging.getLogger(__name__)
 
 _USERS = "users.parquet"
 _ITEMS = "items.parquet"
@@ -41,7 +39,7 @@ _EVENTS = "events.parquet"
 class DatasetCatalogStore:
     def __init__(self, options: dict[str, Any]):
         self._options = options
-        self._backend = validate_storage_options(options)
+        validate_storage_options(options)
         self._locks = {
             _USERS: threading.Lock(),
             _ITEMS: threading.Lock(),
@@ -49,30 +47,13 @@ class DatasetCatalogStore:
         }
 
     def _read(self, filename: str) -> pd.DataFrame:
-        try:
-            return read_parquet(self._options, filename)
-        except FileNotFoundError:
-            return pd.DataFrame()
-        except Exception as exc:
-            if is_s3_not_found(exc):
-                return pd.DataFrame()
-            raise
+        frame = read_parquet_if_exists(self._options, filename)
+        return pd.DataFrame() if frame is None else frame
 
     def _write(self, filename: str, frame: pd.DataFrame) -> None:
         buffer = io.BytesIO()
         frame.to_parquet(buffer, index=False)
-        payload = buffer.getvalue()
-        if self._backend == "local":
-            path = Path(require_option(self._options, "path", "local")) / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(f".{path.name}.tmp")
-            tmp.write_bytes(payload)
-            tmp.replace(path)
-            return
-        bucket = require_option(self._options, "bucket", "s3")
-        key = object_key(self._options, filename)
-        client = build_s3_client(self._options)
-        client.put_object(Bucket=bucket, Key=key, Body=payload, ContentType="application/octet-stream")
+        write_storage_bytes(self._options, filename, buffer.getvalue(), "application/octet-stream")
 
     def _replace_row(self, filename: str, key: str, value: str, row: dict[str, Any]) -> None:
         with self._locks[filename]:
@@ -174,18 +155,11 @@ class DatasetCatalogStore:
 
     def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
         try:
-            frame = read_parquet(self._options, filename, filters=[(USER_COLUMN, "==", user_id)])
-        except FileNotFoundError:
-            return pd.DataFrame()
-        except Exception as exc:
-            if is_s3_not_found(exc):
+            frame = read_parquet_pushdown(self._options, filename, filters=[(USER_COLUMN, "==", user_id)])
+        except STORAGE_READ_ERRORS as exc:
+            if is_storage_not_found(exc):
                 return pd.DataFrame()
-            message = str(exc).lower()
-            if "user_id" in message or "fieldref" in message or "filter" in message:
-                logger.warning("Filtered %s read failed; falling back to full-file load: %s", filename, exc)
-                frame = self._read(filename)
-            else:
-                raise
+            raise
         if USER_COLUMN not in frame.columns:
             frame = self._read(filename)
         return filter_rows_for_user(frame, user_id)

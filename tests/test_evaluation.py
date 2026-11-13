@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 import pytest
 from pyarrow.lib import ArrowNotImplementedError, ArrowTypeError
+from sqlalchemy.dialects import postgresql
+from support.fakes import patch_module_ref, raising
+from support.settings import local_output, make_settings
 
 from cicerone.blending import COLD_START_USER_ID
+from cicerone.config import IOSettings
 from cicerone.evaluation import (
     DEFAULT_CONVERSION_TYPE,
     OCCURRED_AT,
@@ -27,6 +33,22 @@ from cicerone.evaluation.context import (
     prefer_history,
     stamp_recommendations,
 )
+
+
+class _FakeEngine:
+    dialect = postgresql.dialect()
+
+    def dispose(self) -> None:
+        return None
+
+
+class Boom(Exception):
+    pass
+
+
+def _patch_metric_sql(monkeypatch: pytest.MonkeyPatch, read_sql) -> None:
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _FakeEngine())
+    patch_module_ref(monkeypatch, "cicerone.evaluation.context.pd", read_sql=read_sql)
 
 
 def test_evaluation_package_reexports_prior_constants() -> None:
@@ -693,13 +715,12 @@ def test_evaluate_served_history_without_generated_at() -> None:
 
 
 def test_score_previous_run_fail_open(tmp_path) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
     settings = make_settings(
         track={"enabled": True},
         eval={"enabled": True},
-        output=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        output=local_output(tmp_path),
     )
     track, served = _score_previous_run(settings, pd.DataFrame(), None)
     assert track is not None
@@ -708,10 +729,9 @@ def test_score_previous_run_fail_open(tmp_path) -> None:
 
 
 def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, monkeypatch) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     settings = make_settings(eval={"enabled": True}, output=output)
     recs = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"], "variant": ["a"]})
     assigned_seen: list[object] = []
@@ -722,10 +742,7 @@ def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, m
 
     monkeypatch.setattr("cicerone.job_eval.evaluate_served", _served)
 
-    def _fail(*_args, **_kwargs):
-        raise ValueError("replay")
-
-    monkeypatch.setattr("cicerone.job_eval.replay_assignments", _fail)
+    monkeypatch.setattr("cicerone.job_eval.replay_assignments", raising(ValueError("replay")))
     _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
     assert assigned_seen == []
 
@@ -735,18 +752,17 @@ def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, m
 
 
 def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.load_recommendations_frame",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("recs")),
+        raising(OSError("recs")),
     )
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+        raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
@@ -759,17 +775,16 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
 
 
 def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, caplog) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(tmp_path / "recommendations.parquet", index=False)
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_tracking",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("track")),
+        raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
         track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
@@ -823,12 +838,11 @@ def test_evaluate_served_empty_and_as_dict() -> None:
 
 
 def test_score_previous_run_served_eval(tmp_path) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [
             {"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"},
@@ -873,13 +887,12 @@ def test_score_previous_run_served_eval(tmp_path) -> None:
 def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkeypatch) -> None:
     import threading
 
-    from cicerone.config import IOSettings, make_settings
     from cicerone.config.settings import ExperimentSettings, VariantSettings
     from cicerone.job import _score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [
             {
@@ -956,13 +969,12 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
 
 
 def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypatch) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.config.settings import ExperimentSettings, VariantSettings
     from cicerone.job import _score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [
             {
@@ -1001,10 +1013,9 @@ def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypa
         ]
     )
 
-    def _boom(self):
-        raise RuntimeError("state bug")
-
-    monkeypatch.setattr("cicerone.experiment.store.ExperimentStore.read_state", _boom)
+    monkeypatch.setattr(
+        "cicerone.experiment.store.ExperimentStore.read_state", raising(RuntimeError("state bug"))
+    )
     settings = make_settings(
         track={"enabled": True},
         eval={"enabled": True},
@@ -1033,10 +1044,9 @@ def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypa
 
 
 def test_score_previous_run_empty_history(tmp_path) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"}]
     )
@@ -1058,10 +1068,9 @@ def test_score_previous_run_empty_history(tmp_path) -> None:
 
 
 def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job import _score_previous_run
 
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "rank": 1, "score": 1.0, "source": "personalized"}]
     )
@@ -1079,21 +1088,21 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
     )
     monkeypatch.setattr(
         "cicerone.track.store.TrackStore.read_history",
-        lambda self, **_kwargs: (_ for _ in ()).throw(OSError("history")),
+        raising(OSError("history")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_served",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("served")),
+        raising(ValueError("served")),
     )
     track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is None
 
 
-def test_evaluation_remaining_branches(monkeypatch) -> None:
+def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
     from datetime import timedelta
 
     from cicerone.evaluation import annotate_impression_source, merge_asof_events, recs_from_history
@@ -1281,33 +1290,35 @@ def test_evaluation_remaining_branches(monkeypatch) -> None:
     assert recs_from_history(hist, events).empty
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("x")),
+        raising(ValueError("x")),
     )
-    failed = evaluate_served(
-        pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
-        pd.DataFrame(
-            [
-                {
-                    "user_id": "alice",
-                    "item_id": "ipa",
-                    "event_type": "purchase",
-                    "occurred_at": "2026-08-28T12:00:00Z",
-                }
-            ]
-        ),
-        generated_at=None,
-        ks=(1,),
-        event_types=("purchase",),
-    )
+    with caplog.at_level("ERROR", logger="cicerone.evaluation.served"):
+        failed = evaluate_served(
+            pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1, "source": "personalized"}]),
+            pd.DataFrame(
+                [
+                    {
+                        "user_id": "alice",
+                        "item_id": "ipa",
+                        "event_type": "purchase",
+                        "occurred_at": "2026-08-28T12:00:00Z",
+                    }
+                ]
+            ),
+            generated_at=None,
+            ks=(1,),
+            event_types=("purchase",),
+        )
     assert failed is not None
-    assert "HitRate@1" in failed.metrics
-
-    class Boom(Exception):
-        pass
+    assert failed.metrics["HitRate@1"] == 1.0
+    assert failed.by_source["personalized"]["HitRate@1"] == 1.0
+    logged = [record.getMessage() for record in caplog.records]
+    assert "RecTools calc_metrics failed for k=1 (ValueError: x)" in logged
+    assert "RecTools HitRate failed for source=personalized k=1 (ValueError: x)" in logged
 
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         evaluate_served(
@@ -1431,6 +1442,94 @@ def test_evaluate_served_uses_assigned_variant_only() -> None:
     )
     assert report is not None
     assert report.metrics["HitRate@1"] == pytest.approx(0.0)
+
+
+def test_evaluate_served_history_recs_respect_assignment() -> None:
+    recs = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "porter", "rank": 1, "variant": "control"},
+            {"user_id": "bob", "item_id": "porter", "rank": 1, "variant": "control"},
+        ]
+    )
+    snapshot = "2026-08-28T01:00:00Z"
+    history = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "lager",
+                "rank": 1,
+                "variant": "control",
+                "generated_at": snapshot,
+            },
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "rank": 1,
+                "variant": "treatment",
+                "generated_at": snapshot,
+            },
+            {"user_id": "bob", "item_id": "stout", "rank": 1, "variant": "control", "generated_at": snapshot},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+            {
+                "user_id": "bob",
+                "item_id": "stout",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:00:00Z",
+            },
+        ]
+    )
+    report = evaluate_served(
+        recs,
+        events,
+        generated_at=None,
+        ks=(1,),
+        event_types=("purchase",),
+        history=history,
+        assigned={"alice": "control"},
+    )
+    assert report is not None
+    assert report.metrics["HitRate@1"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("with_prior", [True, False])
+def test_evaluate_served_popularity_metrics_need_prior_events(with_prior: bool) -> None:
+    rows = [
+        {
+            "user_id": "alice",
+            "item_id": "ipa",
+            "event_type": "purchase",
+            "occurred_at": "2026-08-28T12:00:00Z",
+        }
+    ]
+    if with_prior:
+        rows.append(
+            {
+                "user_id": "bob",
+                "item_id": "ipa",
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T01:00:00Z",
+            }
+        )
+    report = evaluate_served(
+        pd.DataFrame([{"user_id": "alice", "item_id": "ipa", "rank": 1}]),
+        pd.DataFrame(rows),
+        generated_at="2026-08-28T03:00:00+00:00",
+        ks=(1,),
+        event_types=("purchase",),
+    )
+    assert report is not None
+    assert "CatalogCoverage@1" in report.metrics
+    assert ("MeanInvUserFreq@1" in report.metrics) is with_prior
+    assert ("AvgRecPopularity@1" in report.metrics) is with_prior
 
 
 def test_evaluate_tracking_orphan_click_does_not_count_click_through() -> None:
@@ -1642,6 +1741,56 @@ def test_evaluate_tracking_counts_unique_clicked_impressions() -> None:
     assert outcomes["alice"] == pytest.approx(0.5)
 
 
+# A second click before the later conversion: one impression, two converting clicks.
+@pytest.mark.parametrize("click_times", [("12:01",), ("12:01", "12:15")])
+def test_evaluate_tracking_counts_unique_converted_impressions(click_times) -> None:
+    rows = _track(
+        *(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": item,
+                "variant": "control",
+                "rank": rank,
+                "occurred_at": "2026-08-28T12:00:00Z",
+                "event_id": f"imp-{rank}",
+            }
+            for rank, item in ((1, "ipa"), (2, "stout"))
+        ),
+        *(
+            {
+                "kind": "click",
+                "user_id": "alice",
+                "item_id": "ipa",
+                "occurred_at": f"2026-08-28T{at}:00Z",
+                "event_id": f"clk-{at}",
+            }
+            for at in click_times
+        ),
+    )
+    conversions = pd.DataFrame(
+        [
+            {"user_id": "alice", "item_id": "ipa", "event_type": "purchase", "occurred_at": at}
+            for at in ("2026-08-28T12:10:00Z", "2026-08-28T12:20:00Z")
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    for metrics in (report.overall, report.by_variant["control"]):
+        assert metrics.n_impressions == 2
+        assert metrics.n_conversions_view == 1
+        assert metrics.n_conversions_click == 1
+        assert metrics.cvr_view == pytest.approx(0.5)
+    for attribution in ("impression", "click"):
+        outcomes = user_track_outcomes(
+            track_rows=rows,
+            conversions=conversions,
+            primary_metric="conversion",
+            attribution=attribution,
+            window_hours=24.0,
+        )
+        assert outcomes["alice"] == pytest.approx(0.5)
+
+
 def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
     rows = _track(
         {
@@ -1686,6 +1835,58 @@ def test_evaluate_tracking_blank_event_ids_count_separately() -> None:
         window_hours=24.0,
     )
     assert outcomes["alice"] == pytest.approx(1.0)
+
+
+def test_evaluate_tracking_leaves_out_future_events() -> None:
+    future = (pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=1)).isoformat()
+    rows = _track(
+        {"kind": "impression", "user_id": "alice", "item_id": "ipa", "occurred_at": "2026-08-28T12:00:00Z"},
+        {"kind": "impression", "user_id": "bob", "item_id": "ipa", "occurred_at": future},
+    )
+    conversions = pd.DataFrame(
+        [{"user_id": "alice", "item_id": "ipa", "event_type": "purchase", "occurred_at": future}]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24 * 365 * 10)
+    assert report.overall.n_impressions == 1
+    assert report.overall.n_conversions_view == 0
+
+
+def test_evaluate_tracking_blank_event_id_cannot_collide_with_explicit_id() -> None:
+    rows = _track(
+        *(
+            {
+                "kind": "impression",
+                "user_id": "alice",
+                "item_id": item,
+                "rank": rank,
+                "variant": "control",
+                "occurred_at": "2026-08-28T12:00:00Z",
+                "event_id": event_id,
+            }
+            for item, rank, event_id in (("ipa", 1, "imp-1"), ("stout", 2, ""))
+        ),
+    )
+    conversions = pd.DataFrame(
+        [
+            {
+                "user_id": "alice",
+                "item_id": item,
+                "event_type": "purchase",
+                "occurred_at": "2026-08-28T12:10:00Z",
+            }
+            for item in ("ipa", "stout")
+        ]
+    )
+    report = evaluate_tracking(track_rows=rows, conversions=conversions, window_hours=24.0)
+    for metrics in (report.overall, report.by_variant["control"]):
+        assert metrics.n_conversions_view == 2
+
+
+def test_distinct_priors_by_group_without_prior_key_is_empty() -> None:
+    from cicerone.evaluation.metrics import _distinct_priors_by_group
+
+    frame = pd.DataFrame({"__dimension": ["variant"], "__dimension_value": ["control"]})
+    assert _distinct_priors_by_group(frame).empty
 
 
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
@@ -1904,12 +2105,8 @@ def test_filter_events_since_without_occurred_at_is_empty() -> None:
 
 
 def test_load_metric_events_invalid_since_is_empty(tmp_path) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     frame = load_metric_events(settings, since="not-a-date")
     assert frame.empty
@@ -1917,12 +2114,8 @@ def test_load_metric_events_invalid_since_is_empty(tmp_path) -> None:
 
 
 def test_load_metric_events_dataset_pushes_since_filter(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     seen: dict[str, object] = {}
 
@@ -1951,12 +2144,8 @@ def test_load_metric_events_dataset_pushes_since_filter(tmp_path, monkeypatch) -
 
 
 def test_load_metric_events_dataset_retries_string_since_filter(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     calls: list[object] = []
 
@@ -1989,12 +2178,8 @@ def test_load_metric_events_dataset_retries_string_since_filter(tmp_path, monkey
 
 
 def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     calls = {"n": 0}
 
@@ -2009,30 +2194,19 @@ def test_load_metric_events_dataset_filter_failure_is_empty(tmp_path, monkeypatc
 
 
 def test_load_metric_events_dataset_s3_missing_is_empty(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise OSError("NoSuchKey")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
-    monkeypatch.setattr("cicerone.evaluation.context.is_s3_not_found", lambda _exc: True)
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", raising(OSError("NoSuchKey")))
+    monkeypatch.setattr("cicerone.evaluation.context.is_storage_not_found", lambda _exc: True)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
 
 def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     calls: list[object] = []
 
@@ -2060,37 +2234,24 @@ def test_load_metric_events_dataset_unbounded_retries(tmp_path, monkeypatch) -> 
 
 
 def test_load_metric_events_db_pushes_since_predicate(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
     captured: dict[str, object] = {}
-
-    class _Engine:
-        def dispose(self) -> None:
-            return None
 
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         captured["params"] = params
         return pd.DataFrame(columns=["user_id", "item_id", "event_type", "occurred_at"])
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
-    assert '"occurred_at" >= :since' in str(captured["sql"])
-    assert '"quantity"' in str(captured["sql"])
+    assert "occurred_at >= :since" in str(captured["sql"])
+    assert re.search(r"\bquantity\b", str(captured["sql"]))
     assert captured["params"]["since"] == "2026-08-28"
     assert captured["params"]["types"] == ["purchase"]
     assert frame.empty
 
 
 def test_load_metric_events_query_pushes_since_predicate(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2102,30 +2263,21 @@ def test_load_metric_events_query_pushes_since_predicate(monkeypatch) -> None:
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
-    assert '"occurred_at" >= :since' in str(captured["sql"])
+    assert "occurred_at >= :since" in str(captured["sql"])
     assert captured["params"]["since"] == "2026-08-28"
     assert captured["params"]["types"] == ["purchase"]
     assert frame.empty
 
 
 def test_load_metric_events_query_keeps_limit(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2140,27 +2292,18 @@ def test_load_metric_events_query_keeps_limit(monkeypatch) -> None:
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" not in str(captured["sql"])
     assert "LIMIT 100" in str(captured["sql"])
 
 
 def test_load_metric_events_query_quoted_offset_still_wraps(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2174,25 +2317,16 @@ def test_load_metric_events_query_quoted_offset_still_wraps(monkeypatch) -> None
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
 
 
 def test_load_metric_events_query_comment_limit_still_wraps(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2206,28 +2340,19 @@ def test_load_metric_events_query_comment_limit_still_wraps(monkeypatch) -> None
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         captured["params"] = params
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
-    assert '"occurred_at" >= :since' in str(captured["sql"])
+    assert "occurred_at >= :since" in str(captured["sql"])
     assert captured["params"]["since"] == "2026-08-28"
 
 
 def test_load_metric_events_query_block_comment_offset_still_wraps(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2241,25 +2366,16 @@ def test_load_metric_events_query_block_comment_offset_still_wraps(monkeypatch) 
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
 
 
 def test_load_metric_events_query_subquery_limit_still_wraps(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2274,133 +2390,85 @@ def test_load_metric_events_query_subquery_limit_still_wraps(monkeypatch) -> Non
     )
     captured: dict[str, object] = {}
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         captured["sql"] = str(stmt)
         return pd.DataFrame(columns=list(EVENT_METRIC_COLUMNS))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert "_cicerone_metric_events" in str(captured["sql"])
 
 
 def test_load_metric_events_db_bound_failure_is_empty(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
+    _patch_metric_sql(monkeypatch, raising(OSError("sql down")))
 
-    def _boom(*_args, **_kwargs):
-        raise OSError("sql down")
-
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _boom)
-
-    def _source(_inp):
-        raise AssertionError("unbounded fallback")
-
-    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.build_input_source", raising(AssertionError("unbounded fallback"))
+    )
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
 
 def test_load_metric_events_db_engine_failure_is_empty(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
 
-    def _boom(*_args, **_kwargs):
-        raise OSError("engine down")
+    monkeypatch.setattr("cicerone.evaluation.context.engine_for", raising(OSError("engine down")))
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", _boom)
-
-    def _source(_inp):
-        raise AssertionError("unbounded fallback")
-
-    monkeypatch.setattr("cicerone.evaluation.context.build_input_source", _source)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.build_input_source", raising(AssertionError("unbounded fallback"))
+    )
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
 
 def test_load_metric_events_dataset_propagates_unexpected_errors(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
-
-    class Boom(Exception):
-        pass
 
     monkeypatch.setattr(
         "cicerone.evaluation.context.read_parquet",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
 
 def test_load_metric_events_dataset_arrow_invalid_is_empty(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
     from pyarrow.lib import ArrowInvalid
 
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise ArrowInvalid("filter type mismatch")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.read_parquet", raising(ArrowInvalid("filter type mismatch"))
+    )
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
 
 def test_load_metric_events_dataset_arrow_type_error_is_empty(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
     from pyarrow.lib import ArrowTypeError
 
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise ArrowTypeError("filter type mismatch")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.read_parquet", raising(ArrowTypeError("filter type mismatch"))
+    )
     assert load_metric_events(settings, since="2026-08-29T05:00:00+00:00").empty
 
 
 def test_load_metric_events_dataset_propagates_type_error(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise TypeError("bug")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", raising(TypeError("bug")))
     with pytest.raises(TypeError, match="bug"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
@@ -2408,7 +2476,7 @@ def test_load_metric_events_dataset_propagates_type_error(tmp_path, monkeypatch)
 def test_evaluate_served_propagates_rectools_type_error(monkeypatch) -> None:
     monkeypatch.setattr(
         "cicerone.evaluation.served.calc_metrics",
-        lambda *args, **kwargs: (_ for _ in ()).throw(TypeError("bug")),
+        raising(TypeError("bug")),
     )
     with pytest.raises(TypeError, match="bug"):
         evaluate_served(
@@ -2430,66 +2498,45 @@ def test_evaluate_served_propagates_rectools_type_error(monkeypatch) -> None:
 
 
 def test_load_metric_events_dataset_arrow_io_is_empty(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
     from pyarrow.lib import ArrowIOError
 
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise ArrowIOError("parquet read failed")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr(
+        "cicerone.evaluation.context.read_parquet", raising(ArrowIOError("parquet read failed"))
+    )
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.empty
 
 
 def test_load_metric_events_dataset_arrow_memory_propagates(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
     from pyarrow.lib import ArrowMemoryError
 
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
 
-    def _read(*_args, **_kwargs):
-        raise ArrowMemoryError("oom")
-
-    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", _read)
+    monkeypatch.setattr("cicerone.evaluation.context.read_parquet", raising(ArrowMemoryError("oom")))
     with pytest.raises(ArrowMemoryError, match="oom"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
 
 def test_load_metric_events_db_propagates_unexpected_errors(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
-
-    class Boom(Exception):
-        pass
 
     monkeypatch.setattr(
         "cicerone.evaluation.context.engine_for",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(Boom("bug")),
+        raising(Boom("bug")),
     )
     with pytest.raises(Boom, match="bug"):
         load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
 
 
 def test_load_metric_events_dataset_keeps_quantity(tmp_path, monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
-        input=IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)}),
+        input=local_output(tmp_path),
     )
     seen: dict[str, object] = {}
 
@@ -2514,22 +2561,15 @@ def test_load_metric_events_dataset_keeps_quantity(tmp_path, monkeypatch) -> Non
 
 
 def test_load_metric_events_db_retries_without_quantity(monkeypatch) -> None:
-    from conftest import make_settings
     from sqlalchemy.exc import ProgrammingError
-
-    from cicerone.config import IOSettings
 
     settings = make_settings(input=IOSettings(kind="db", options={"database_url": "sqlite+pysqlite://"}))
     calls: list[str] = []
 
-    class _Engine:
-        def dispose(self) -> None:
-            return None
-
     def _read_sql(stmt, _engine, params=None):
         sql = str(stmt)
         calls.append(sql)
-        if '"quantity"' in sql:
+        if re.search(r"\bquantity\b", sql):
             raise ProgrammingError("SELECT", {}, Exception('column "quantity" does not exist'))
         return pd.DataFrame(
             [
@@ -2542,20 +2582,15 @@ def test_load_metric_events_db_retries_without_quantity(monkeypatch) -> None:
             ]
         )
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     frame = load_metric_events(settings, event_types=("purchase",), since="2026-08-29T05:00:00+00:00")
     assert len(calls) == 2
-    assert '"quantity"' in calls[0]
-    assert '"quantity"' not in calls[1]
+    assert re.search(r"\bquantity\b", calls[0])
+    assert not re.search(r"\bquantity\b", calls[1])
     assert frame.iloc[0]["quantity"] == 1
 
 
 def test_load_metric_events_query_limit_defaults_quantity(monkeypatch) -> None:
-    from conftest import make_settings
-
-    from cicerone.config import IOSettings
-
     settings = make_settings(
         input=IOSettings(
             kind="db",
@@ -2565,10 +2600,6 @@ def test_load_metric_events_query_limit_defaults_quantity(monkeypatch) -> None:
             },
         )
     )
-
-    class _Engine:
-        def dispose(self) -> None:
-            return None
 
     def _read_sql(stmt, _engine, params=None):
         return pd.DataFrame(
@@ -2582,8 +2613,7 @@ def test_load_metric_events_query_limit_defaults_quantity(monkeypatch) -> None:
             ]
         )
 
-    monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _Engine())
-    monkeypatch.setattr("cicerone.evaluation.context.pd.read_sql", _read_sql)
+    _patch_metric_sql(monkeypatch, _read_sql)
     frame = load_metric_events(settings, since="2026-08-29T05:00:00+00:00")
     assert frame.iloc[0]["quantity"] == 1
 
@@ -2724,7 +2754,7 @@ def test_evaluate_served_swallows_ild_and_serendipity_errors(monkeypatch) -> Non
         if any(str(name).startswith("Serendipity") for name in names):
             raise ValueError("serendipity")
         if any(str(name).startswith("IntraListDiversity") for name in names):
-            raise TypeError("ild")
+            raise KeyError("ild")
         return real(metrics, *args, **kwargs)
 
     monkeypatch.setattr(served_mod, "calc_metrics", _calc)
@@ -2888,7 +2918,6 @@ def test_evaluate_served_swallows_ild_calculator_errors(monkeypatch) -> None:
 
 
 def test_item_feature_specs_from_features_toml(tmp_path) -> None:
-    from cicerone.config import IOSettings, make_settings
     from cicerone.job_eval import _item_feature_specs
 
     path = tmp_path / "features.toml"
@@ -2896,7 +2925,7 @@ def test_item_feature_specs_from_features_toml(tmp_path) -> None:
         '[event_weights]\npurchase = 1.0\n\n[[item_features]]\ncolumn = "category"\ntype = "categorical"\n',
         encoding="utf-8",
     )
-    output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
+    output = local_output(tmp_path)
     settings = make_settings(output=output, feature_config_path=str(path))
     assert _item_feature_specs(settings) == (("category", "categorical"),)
     settings = make_settings(output=output, feature_config_path=str(tmp_path / "missing.toml"))

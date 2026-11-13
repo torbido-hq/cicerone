@@ -7,12 +7,14 @@ import boto3
 import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
-from moto import mock_aws
 from pyarrow.lib import ArrowTypeError
+from support.fakes import FakeLock, patch_parquet_reads
 
 from cicerone.config import ConfigError
 from cicerone.io.dataset_store import DatasetInputSource, DatasetOutputSink
 from cicerone.io.replace_users import RecommendationSchemaError
+from cicerone.job_eval import retrain_fence
+from cicerone.locks import WriteFence
 
 # --- local backend -----------------------------------------------------------
 
@@ -225,24 +227,10 @@ def test_local_write_and_replace_recommendations_share_lock(tmp_path):
     assert by_user["u1"] in (["job1"], ["new1"])
 
 
-def test_write_recommendations_writer_lock_busy(tmp_path, monkeypatch) -> None:
-    class _Busy:
-        def acquire(self) -> bool:
-            return False
-
-        def release(self) -> None:
-            return None
-
-        def owned(self) -> bool:
-            return False
-
-        def is_locked(self) -> bool:
-            return True
-
-    monkeypatch.setattr("cicerone.locks.acquire_blocking", lambda _lock, **_kwargs: False)
+def test_write_recommendations_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Busy(),
+        fence=WriteFence(FakeLock(acquires=False, owned=False)),
     )
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
         sink.write_recommendations(
@@ -272,7 +260,7 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     started = threading.Event()
     release = threading.Event()
@@ -301,7 +289,7 @@ def test_recommendations_write_reentry_is_per_thread(tmp_path) -> None:
 
 
 def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> None:
-    from cicerone.locks import held_writer_lock
+    from cicerone.locks import WriteFence
 
     acquires = {"n": 0}
 
@@ -322,12 +310,12 @@ def test_recommendations_write_skips_acquire_when_lock_held_here(tmp_path) -> No
     lock = _Lock()
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=lock,
+        fence=WriteFence(lock),
     )
     frame = pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"}]
     )
-    with held_writer_lock(lock):
+    with WriteFence(lock).hold():
         sink.write_recommendations(frame)
         sink.write_model_artifact(b"artifact")
         sink.write_items_snapshot(frame)
@@ -354,7 +342,7 @@ def test_nested_replace_rechecks_owned_before_unlocked_write(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -396,7 +384,7 @@ def test_write_recommendations_rechecks_owned_after_serialize(tmp_path, monkeypa
     monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         sink.write_recommendations(
@@ -435,7 +423,7 @@ def test_write_items_snapshot_rechecks_owned_after_serialize(tmp_path, monkeypat
     monkeypatch.setattr(pd.DataFrame, "to_parquet", _to_parquet)
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
         sink.write_items_snapshot(pd.DataFrame([{"item_id": "i1", "category": "beer"}]))
@@ -462,7 +450,7 @@ def test_write_model_artifact_rechecks_owned_when_nested(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -477,6 +465,22 @@ def test_write_manifest_skips_newer_under_lock(tmp_path) -> None:
     (tmp_path / "manifest.json").write_text(json.dumps(newer))
     assert sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is False
     assert json.loads((tmp_path / "manifest.json").read_text()) == newer
+
+
+@pytest.mark.parametrize(
+    ("stored", "written"),
+    [
+        ({"generated_at": "2020-01-01T00:00:00+00:00", "last_incremental_at": "2099-01-01"}, False),
+        ({"generated_at": "2020-01-01T00:00:00+00:00", "last_incremental_at": "2021-01-01"}, True),
+        ({"generated_at": 2099, "last_incremental_at": None}, True),
+    ],
+)
+def test_write_manifest_skips_only_on_a_newer_string_stamp(tmp_path, stored, written) -> None:
+    sink = DatasetOutputSink({"storage_backend": "local", "path": str(tmp_path)})
+    (tmp_path / "manifest.json").write_text(json.dumps(stored))
+    assert (
+        sink.write_manifest({"status": "failed"}, skip_if_newer_than="2026-01-01T00:00:00+00:00") is written
+    )
 
 
 def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
@@ -499,7 +503,7 @@ def test_write_manifest_rechecks_owned_when_nested(tmp_path) -> None:
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
+        fence=WriteFence(_Lock()),
     )
     with sink.recommendations_write():
         held["v"] = False
@@ -529,10 +533,7 @@ def test_write_recommendations_rechecks_fence_after_writer_lock(tmp_path) -> Non
 
     sink = DatasetOutputSink(
         {"storage_backend": "local", "path": str(tmp_path)},
-        writer_lock=_Lock(),
-        fence_check=lambda: held["v"],
-        fence_lost="retrain lock lost before write",
-        fence_kind="retrain",
+        fence=retrain_fence(_Lock(), lambda: held["v"]),
     )
     with pytest.raises(LockLostError, match="retrain lock lost before write") as captured:
         sink.write_recommendations(
@@ -625,6 +626,17 @@ def test_local_backend_get_events_for_user_filters_and_limits(tmp_path):
     assert list(source.get_events_for_user("ghost", limit=5)["item_id"]) == []
 
 
+def test_local_backend_user_lookups_match_a_numeric_user_id_column(tmp_path):
+    pd.DataFrame(
+        [{"user_id": 1, "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"}]
+    ).to_parquet(tmp_path / "events.parquet", index=False)
+    pd.DataFrame([{"user_id": 1, "region_slug": "lazio"}]).to_parquet(tmp_path / "users.parquet", index=False)
+    source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
+    assert list(source.get_events_for_user("1", limit=5)["item_id"]) == ["i1"]
+    assert source.get_user("1")["region_slug"] == "lazio"
+    assert source.get_user("2") is None
+
+
 def test_local_backend_get_user_returns_row_or_none(tmp_path):
     options = {"storage_backend": "local", "path": str(tmp_path)}
     source = DatasetInputSource(options)
@@ -641,19 +653,10 @@ def test_local_backend_get_user_returns_row_or_none(tmp_path):
     "exc", [TypeError("bad user_id filter arg"), ArrowTypeError("user_id: type mismatch")]
 )
 def test_local_backend_get_events_for_user_only_falls_back_on_arrow_errors(tmp_path, monkeypatch, exc):
-    import cicerone.io.dataset_store as dataset_store
-
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i1", "event_type": "view", "occurred_at": "2026-08-21T00:00:00Z"}]
     ).to_parquet(tmp_path / "events.parquet", index=False)
-    real_read = dataset_store.read_parquet
-
-    def read(options, filename, **kwargs):
-        if kwargs.get("filters"):
-            raise exc
-        return real_read(options, filename, **kwargs)
-
-    monkeypatch.setattr(dataset_store, "read_parquet", read)
+    patch_parquet_reads(monkeypatch, pushdown_error=exc)
     source = DatasetInputSource({"storage_backend": "local", "path": str(tmp_path)})
     if isinstance(exc, ArrowTypeError):
         assert list(source.get_events_for_user("u1", limit=5)["item_id"]) == ["i1"]
@@ -709,35 +712,36 @@ def test_s3_backend_missing_required_option_raises(missing_key):
 # --- s3 backend (mocked) ------------------------------------------------------
 
 
-@pytest.fixture
-def s3_options():
-    with mock_aws():
-        client = boto3.client("s3", region_name="us-east-1")
-        client.create_bucket(Bucket="test-bucket")
-        yield {
-            "storage_backend": "s3",
-            "access_key_id": "test",
-            "secret_access_key": "test",
-            "bucket": "test-bucket",
-            "prefix": "datasets/latest",
-        }
-
-
 def test_s3_backend_round_trip(s3_options):
     sink = DatasetOutputSink(s3_options)
     df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5, "source": "personalized"}])
     sink.write_recommendations(df)
     sink.write_manifest({"n_events": 1})
 
-    # Re-read sink output as if it were events.parquet.
-    source = DatasetInputSource(s3_options)
+    events = pd.DataFrame([{"user_id": "u2", "item_id": "i9", "event_type": "view"}])
     client = boto3.client("s3", region_name="us-east-1")
-    bucket = s3_options["bucket"]
-    body = client.get_object(Bucket=bucket, Key="datasets/latest/recommendations.parquet")["Body"].read()
-    client.put_object(Bucket=bucket, Key="datasets/latest/events.parquet", Body=body)
+    client.put_object(
+        Bucket=s3_options["bucket"],
+        Key=f"{s3_options['prefix']}/events.parquet",
+        Body=events.to_parquet(index=False),
+    )
 
-    events = source.read_events()
-    assert list(events["user_id"]) == ["u1"]
+    read = DatasetInputSource(s3_options).read_events()
+    assert read.to_dict("records") == events.to_dict("records")
+
+
+def test_s3_applied_event_keys_read_from_the_parquet_footer(s3_options, monkeypatch):
+    sink = DatasetOutputSink(s3_options)
+    assert sink.applied_event_keys(["k1"]) == set()
+    df = pd.DataFrame([{"user_id": "u1", "item_id": "i1", "rank": 1, "score": 0.5, "source": "personalized"}])
+    sink.replace_recommendations_for_users(df, user_ids=["u1"], applied_keys=["k1"])
+
+    def _rows_read(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("applied_event_keys read the recommendation rows")
+
+    monkeypatch.setattr("cicerone.io.dataset_store.read_parquet", _rows_read)
+    monkeypatch.setattr("cicerone.io.blob.read_parquet", _rows_read)
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
 
 
 def test_s3_read_model_artifact_round_trip_and_missing(s3_options):
@@ -782,7 +786,7 @@ def test_s3_backend_optional_users_not_found_logs_warning_and_returns_none(s3_op
         {"Error": {"Code": "NoSuchKey", "Message": "Object not found"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
         result = source.read_users()
@@ -797,7 +801,7 @@ def test_s3_backend_optional_users_client_error_is_propagated_for_non_not_found_
         {"Error": {"Code": "AccessDenied", "Message": "Access denied"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with pytest.raises(ClientError):
         source.read_users()
@@ -809,7 +813,7 @@ def test_s3_backend_optional_items_not_found_logs_warning_and_returns_none(s3_op
         {"Error": {"Code": "404", "Message": "Not Found"}},
         "GetObject",
     )
-    mocker.patch.object(source, "_read", side_effect=client_error)
+    mocker.patch("cicerone.io.blob.read_parquet", side_effect=client_error)
 
     with caplog.at_level("WARNING", logger="cicerone.io.dataset_store"):
         result = source.read_items()
@@ -832,3 +836,34 @@ def test_s3_backend_no_prefix_writes_flat_key(s3_options):
     client = boto3.client("s3", region_name="us-east-1")
     body = client.get_object(Bucket=flat_options["bucket"], Key="manifest.json")["Body"].read()
     assert json.loads(body) == {"ok": True}
+
+
+def test_s3_applied_event_keys_fallback_reads_only_the_footer(s3_options, monkeypatch):
+    from cicerone.io import options as io_options
+
+    sink = DatasetOutputSink(s3_options)
+    df = pd.DataFrame({"user_id": [f"u{i}" for i in range(5000)], "item_id": "i1", "rank": 1, "score": 0.5})
+    df["source"] = "personalized"
+    sink.replace_recommendations_for_users(df, user_ids=list(df["user_id"]), applied_keys=["k1"])
+
+    def _pyarrow_fails(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("pyarrow S3 unavailable")
+
+    ranges: list[str] = []
+    real_client = io_options.build_s3_client
+
+    def _client(options):  # type: ignore[no-untyped-def]
+        client = real_client(options)
+        get_object = client.get_object
+
+        def _get_object(**kwargs):  # type: ignore[no-untyped-def]
+            ranges.append(kwargs.get("Range", "full"))
+            return get_object(**kwargs)
+
+        client.get_object = _get_object
+        return client
+
+    monkeypatch.setattr(io_options, "_s3_filesystem", _pyarrow_fails)
+    monkeypatch.setattr(io_options, "build_s3_client", _client)
+    assert sink.applied_event_keys(["k1", "k2"]) == {"k1"}
+    assert ranges and "full" not in ranges
