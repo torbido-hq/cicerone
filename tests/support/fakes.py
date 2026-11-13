@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from cicerone.io.recommendation_reader import select_cold_start_fallback
+from cicerone.io.recommendation_reader_common import select_cold_start_fallback
 from cicerone.io.recommendation_schema import filter_variant_rows
 
 _LATEST_MANIFEST = {"generated_at": "2026-08-04T12:00:00+00:00"}

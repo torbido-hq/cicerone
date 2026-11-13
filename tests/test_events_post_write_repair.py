@@ -14,7 +14,8 @@ from cicerone.events.buffer import MicroBatchBuffer
 from cicerone.events.normalize import normalize_event
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
-from cicerone.events.worker import EventWorker, HeartbeatError
+from cicerone.events.worker import EventWorker
+from cicerone.events.worker_heartbeat import HeartbeatError
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_manifest_reader, build_output_sink
 from cicerone.publish.base import PublishError

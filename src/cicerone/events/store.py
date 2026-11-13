@@ -19,7 +19,7 @@ from cicerone.io.db_store import (
 from cicerone.io.engines import engine_for, quote_identifier, release_engine
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
 from cicerone.io.options import PARQUET_PUSHDOWN_ERRORS, read_parquet_pushdown, require_option, table_option
-from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
+from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
     RECOMMENDATION_COLUMNS,

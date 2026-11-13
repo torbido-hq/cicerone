@@ -88,11 +88,6 @@ class _RecommendationMessages(Sequence[RecommendationMessage]):
         for index in range(len(self)):
             yield self[index]
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
 
 def user_recommendation_messages(
     df: pd.DataFrame,

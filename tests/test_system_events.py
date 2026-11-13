@@ -62,6 +62,7 @@ def _settings(trained: TrainedEventsSystem):
     return load_settings(str(trained.config_path))
 
 
+@pytest.mark.usefixtures("worker_without_thread")
 def test_system_events_webhook_write_through_serve_and_dashboard(
     trained_system: TrainedEventsSystem,
 ) -> None:
@@ -74,7 +75,7 @@ def test_system_events_webhook_write_through_serve_and_dashboard(
     assert "Source: webhook" in empty.text
     assert "No incremental flushes recorded in recent manifests yet." in empty.text
 
-    app = mount_serve_app(settings, start_events_worker=False)
+    app = mount_serve_app(settings)
     try:
         from fastapi.testclient import TestClient
 
