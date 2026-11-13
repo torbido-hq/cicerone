@@ -2210,7 +2210,7 @@ def test_job_marks_partial_outputs_when_only_items_snapshot_was_written(tmp_path
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
     from cicerone.io.dataset_store import DatasetOutputSink
-    from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
+    from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
     real_snapshot = DatasetOutputSink.write_items_snapshot
     real_fence = job.ensure_publication_fence
@@ -2254,7 +2254,7 @@ def test_job_marks_partial_outputs_when_write_commits_then_raises(tmp_path, monk
     monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=2))
 
     from cicerone.io.dataset_store import DatasetOutputSink
-    from cicerone.io.recommendation_reader import ITEMS_SNAPSHOT_FILENAME
+    from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
     real_write = DatasetOutputSink.write_items_snapshot
 

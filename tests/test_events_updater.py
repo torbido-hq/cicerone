@@ -21,8 +21,7 @@ from cicerone.feature_config import EligibilityRule, FeatureConfig
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
 from cicerone.io.factory import build_output_sink
 from cicerone.io.filenames import MANIFEST_FILENAME
-from cicerone.io.recommendation_reader import RECOMMENDATION_COLUMNS
-from cicerone.io.recommendation_schema import drop_unlabelled_variant_column
+from cicerone.io.recommendation_schema import RECOMMENDATION_COLUMNS, drop_unlabelled_variant_column
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.publish.base import PublishError
 from cicerone.reasons import dump_source_reasons, parse_reasons

@@ -47,6 +47,15 @@ def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def worker_without_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # EventWorker.start connects the source but runs no loop, so the test drives tick().
+    monkeypatch.setattr(
+        "cicerone.events.worker.EventWorker.start",
+        lambda self: self._source.connect(),
+    )
+
+
+@pytest.fixture
 def default_int_digit_limit() -> Iterator[None]:
     """Pin the limit UNPARSABLE_JSON_BODIES relies on; PYTHONINTMAXSTRDIGITS can change it."""
     previous = sys.get_int_max_str_digits()

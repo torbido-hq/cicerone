@@ -21,6 +21,7 @@ from cicerone.events.online_result import OnlineRefreshResult, empty_online_rows
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.events.worker import EventWorker
+from cicerone.events.worker_heartbeat import HeartbeatError, inflight_heartbeat
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, events_apply_lock_key
@@ -832,8 +833,6 @@ def test_ha_worker_acks_a_written_batch_when_a_later_heartbeat_has_a_bug(
 
 
 def test_inflight_heartbeat_preserves_apply_error():
-    from cicerone.events.worker import inflight_heartbeat
-
     source = BeatingSource(RuntimeError("lost visibility"))
     with pytest.raises(ValueError, match="apply boom"), inflight_heartbeat(source, [], 0.02):
         assert source.second_beat.wait(WAIT_SECONDS)
@@ -841,8 +840,6 @@ def test_inflight_heartbeat_preserves_apply_error():
 
 
 def test_inflight_heartbeat_propagates_unexpected_error():
-    from cicerone.events.worker import inflight_heartbeat
-
     class _Src:
         def heartbeat(self, events):  # type: ignore[no-untyped-def]
             del events
@@ -854,8 +851,6 @@ def test_inflight_heartbeat_propagates_unexpected_error():
 
 
 def test_later_unexpected_heartbeat_propagates():
-    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
-
     source = BeatingSource(RuntimeError("beat bug"))
     with pytest.raises(RuntimeError, match="beat bug") as captured, inflight_heartbeat(source, [], 0.02):
         assert source.second_beat.wait(WAIT_SECONDS)
@@ -863,8 +858,6 @@ def test_later_unexpected_heartbeat_propagates():
 
 
 def test_later_source_heartbeat_error_is_heartbeat_error():
-    from cicerone.events.worker import HeartbeatError, inflight_heartbeat
-
     source = BeatingSource(EventSourceError("lost visibility"))
     with pytest.raises(HeartbeatError, match="heartbeat failed"), inflight_heartbeat(source, [], 0.02):
         assert source.second_beat.wait(WAIT_SECONDS)

@@ -35,9 +35,9 @@ from cicerone.artifact import (
     recommend_from_artifact,
 )
 from cicerone.config import load_settings
+from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
 from cicerone.io.factory import build_manifest_reader, build_output_sink, build_recommendation_reader
 from cicerone.io.manifest_reader import DatasetManifestReader
-from cicerone.io.recommendation_reader import DatasetRecommendationReader
 from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 
 
