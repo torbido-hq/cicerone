@@ -39,7 +39,8 @@ from cicerone.locks import (
     events_apply_lock_key,
     has_distributed_lock,
 )
-from cicerone.publish import RecommendationPublisher, build_publisher
+from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.factory import build_publisher
 from cicerone.refreshed_value import RefreshedValue
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ def start_events_runtime(
             "apply",
         ),
     )
-    publisher = build_publisher(settings)
+    publisher = build_publisher(settings.publish)
     worker: EventWorker | None = None
     ready = False
     try:
@@ -214,7 +215,7 @@ def start_events_runtime(
             publisher=publisher,
             consumed=consumed,
             catalog=catalog,
-            items_provider=getattr(reader, "get_items", None),
+            items_provider=reader.get_items,
             users_provider=users_provider,
             variant_feature_configs=variant_feature_configs,
         )

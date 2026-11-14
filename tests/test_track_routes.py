@@ -558,7 +558,7 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
             raise WriterLockBusyError("dataset writer lock busy")
         return 1
 
-    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", flaky)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", flaky)
     patch_module_ref(monkeypatch, "cicerone.serve.app.time", sleep=lambda _s: None)
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     with TestClient(app) as client:
@@ -569,7 +569,7 @@ def test_get_log_impressions_retries_writer_lock_busy(tmp_path, monkeypatch):
 
 def test_get_log_impressions_swallows_store_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "cicerone.track.store.TrackStore.append_rows",
+        "cicerone.track.store.TrackStore.append_accepted_rows",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("store")),
     )
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
@@ -588,7 +588,7 @@ def test_get_log_impressions_append_runs_on_dedicated_thread_and_drains(tmp_path
         appended.append(threading.current_thread().name)
         return 1
 
-    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", slow_append)
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))
     with TestClient(app) as client:
         response = client.get("/recommendations/u1", headers={"Authorization": "Bearer secret"})
@@ -620,7 +620,7 @@ def test_get_log_impressions_drops_the_append_when_the_queue_is_full(tmp_path, m
         serve_app, "threading", SimpleNamespace(**{**vars(threading), "BoundedSemaphore": _RecordingSlots})
     )
     monkeypatch.setattr("cicerone.serve.app._MAX_PENDING_APPENDS", 1)
-    monkeypatch.setattr("cicerone.track.store.TrackStore.append_rows", slow_append)
+    monkeypatch.setattr("cicerone.track.store.TrackStore.append_accepted_rows", slow_append)
     dropped_metric = ("cicerone_serve_appends_dropped_total", {"kind": "impression"})
     dropped = registry_metric_value(*dropped_metric)
     app = create_app(_settings(tmp_path, serve_log_impressions=True), FakeReader(recs_df()))

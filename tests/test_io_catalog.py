@@ -94,7 +94,7 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     assert store.get_user("u1") is None
     assert store.get_item("i1") is None
     assert store.get_events_for_user("u1", 5).empty
-    assert store.upsert_events([]) == 0
+    assert store.replace_events([]) == (0, [], [])
     assert store.delete_item("missing") == 0
     assert store.delete_user("missing") == 0
 
@@ -105,7 +105,7 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
     store.upsert_item({"item_id": "i1", "comment": "sku"})
     assert store.get_item("i1")["item_id"] == "i1"
 
-    first = store.upsert_events(
+    first, _, _ = store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -116,7 +116,7 @@ def test_dataset_catalog_round_trip_and_empty_paths(tmp_path):
             }
         ]
     )
-    again = store.upsert_events(
+    again, _, _ = store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -151,7 +151,7 @@ def test_dataset_catalog_events_keep_empty_schema_columns(tmp_path):
     pd.DataFrame(columns=["user_id", "item_id", "event_type", "occurred_at", "channel"]).to_parquet(
         tmp_path / "events.parquet", index=False
     )
-    store.upsert_events(
+    store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -178,7 +178,7 @@ def test_dataset_catalog_put_keeps_empty_schema_columns(tmp_path):
 def test_dataset_catalog_delete_item_removes_events(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     store.upsert_item({"item_id": "i1", "comment": "sku"})
-    store.upsert_events(
+    store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -222,7 +222,7 @@ def test_dataset_catalog_delete_events_without_item_id_column(tmp_path):
 
 def test_dataset_catalog_get_events_uses_user_filter(tmp_path, monkeypatch):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    store.upsert_events(
+    store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -247,7 +247,7 @@ def test_dataset_catalog_get_events_uses_user_filter(tmp_path, monkeypatch):
 
 def test_dataset_catalog_get_events_falls_back_when_filter_unsupported(tmp_path, monkeypatch):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    store.upsert_events(
+    store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -278,7 +278,7 @@ def test_dataset_catalog_delete_user_without_user_id_column(tmp_path):
 def test_dataset_catalog_delete_user_blocks_concurrent_event_write(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     store.upsert_user({"user_id": "u1"})
-    store.upsert_events(
+    store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -342,7 +342,7 @@ def test_dedupe_event_rows_last_wins():
 
 def test_dataset_catalog_dedupes_incoming_event_ids(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
-    accepted = store.upsert_events(
+    accepted, _, _ = store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -401,7 +401,7 @@ def test_database_catalog_dedupes_and_adds_event_id():
                 "user_id TEXT, item_id TEXT, event_type TEXT, occurred_at TEXT, quantity INTEGER)"
             )
         )
-    accepted = store.upsert_events(
+    accepted, _, _ = store.replace_events(
         [
             {
                 "user_id": "u1",
@@ -424,7 +424,7 @@ def test_database_catalog_dedupes_and_adds_event_id():
     assert list(events["item_id"]) == ["i2"]
     assert list(events["event_id"]) == ["e1"]
     assert (
-        store.upsert_events(
+        store.replace_events(
             [
                 {
                     "user_id": "u1",
@@ -434,7 +434,7 @@ def test_database_catalog_dedupes_and_adds_event_id():
                     "event_id": "e1",
                 }
             ]
-        )
+        )[0]
         == 1
     )
     assert len(store.get_events_for_user("u1", 10)) == 1
@@ -504,7 +504,8 @@ def test_database_catalog_replace_events_discards_only_unmatched_pairs():
     only, gone, _ = store.replace_events([{**sibling, "item_id": "i3", "event_id": "e2"}])
     assert only == 1
     assert ("u1", "i1") in gone
-    assert store.get_event("e1")["item_id"] == "i2"
+    events = store.get_events_for_user("u1", 10)
+    assert events.loc[events["event_id"] == "e1", "item_id"].tolist() == ["i2"]
 
 
 def test_database_catalog_unique_index_fallback_after_duplicates():

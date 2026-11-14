@@ -23,12 +23,9 @@ from cicerone.config.constants import (
     ConfigError,
 )
 from cicerone.errors import OPTIONAL_IO_ERRORS, log_caught, try_load
-from cicerone.evaluation import (
-    conversion_event_types,
-    conversion_events_for_settings,
-    user_track_outcomes,
-)
+from cicerone.evaluation.context import conversion_events_for_settings
 from cicerone.evaluation.context import load_metric_events as _load_metric_events
+from cicerone.evaluation.tracking import conversion_event_types, user_track_outcomes
 from cicerone.events.store import load_items_catalog_size, load_recommendation_guardrail_rows
 from cicerone.experiment.assignment import live_active_pair
 from cicerone.experiment.evaluate import evaluate_experiment
@@ -44,7 +41,7 @@ from cicerone.feature_config import FeatureConfig, load_feature_config
 from cicerone.io.factory import build_manifest_reader
 from cicerone.locks import LockLostError, WriterLockBusyError
 from cicerone.track.store import open_track_store
-from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
+from cicerone.track.store_common import lookback_since
 
 logger = logging.getLogger(__name__)
 
@@ -241,10 +238,7 @@ def experiment_context(settings: Settings, store: ExperimentStore | None) -> dic
             "ship_blocked": (),
         }
     event_types = _metric_event_types(settings, experiment)
-    since = lookback_since(
-        window_hours=settings.track.attribution_window_hours,
-        floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
-    )
+    since = lookback_since(settings.track.attribution_window_hours)
     with ThreadPoolExecutor(max_workers=5) as pool:
         events_f = pool.submit(
             try_load,

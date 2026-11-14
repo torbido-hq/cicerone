@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cicerone.config.constants import ConfigError
-from cicerone.config.settings import PublishSettings, Settings
+from cicerone.config.settings import PublishSettings
 from cicerone.publish.base import RecommendationPublisher
 from cicerone.publish.kafka import KafkaPublisher
 from cicerone.publish.rabbitmq import RabbitMQPublisher
@@ -19,15 +19,10 @@ _PUBLISHERS: dict[str, _PublisherFactory] = {
 }
 
 
-def build_publisher(settings: Settings | PublishSettings) -> RecommendationPublisher | None:
-    publish = settings.publish if isinstance(settings, Settings) else settings
+def build_publisher(publish: PublishSettings) -> RecommendationPublisher | None:
     if not publish.enabled:
         return None
     factory = _PUBLISHERS.get(publish.kind)
     if factory is None:
         raise ConfigError(f"publish.kind must be one of {sorted(_PUBLISHERS)}, got {publish.kind!r}")
     return factory(dict(publish.options))
-
-
-def registered_publish_kinds() -> tuple[str, ...]:
-    return tuple(sorted(_PUBLISHERS))

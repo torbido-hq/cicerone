@@ -319,11 +319,10 @@ def test_artifact_schema_version_is_v3():
 
 def test_item_based_and_latest_defaults_use_canonical_constants():
     from cicerone.config import DEFAULT_ITEM_BASED_K_NEIGHBORS
-    from cicerone.model import LATEST_WINDOW_DAYS as MODEL_LATEST
     from cicerone.model_config import LATEST_WINDOW_DAYS as CONFIG_LATEST
 
     assert DEFAULT_ITEM_BASED_CONFIG["model"]["K"] == DEFAULT_ITEM_BASED_K_NEIGHBORS
-    assert DEFAULT_LATEST_CONFIG["period"]["days"] == CONFIG_LATEST == MODEL_LATEST
+    assert DEFAULT_LATEST_CONFIG["period"]["days"] == CONFIG_LATEST
 
 
 def test_deep_merge_replaces_non_dict_leaves():

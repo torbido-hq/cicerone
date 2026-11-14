@@ -21,6 +21,11 @@ class _DummyDataset:
     pass
 
 
+@pytest.fixture
+def threaded_recommend(monkeypatch):
+    monkeypatch.setattr("cicerone.content_fallback._RECOMMEND_THREAD_MIN_USERS", 1)
+
+
 def test_feature_dict_handles_list_features_and_nans():
     items = pd.DataFrame(
         [
@@ -210,7 +215,7 @@ def test_fit_caps_user_history_by_datetime_not_frame_order():
     assert history == newest[-_MAX_HISTORY_ITEMS:]
 
 
-def test_recommend_from_worker_thread_matches_main_thread():
+def test_recommend_from_worker_thread_matches_main_thread(threaded_recommend):
     items = pd.DataFrame(
         [
             {"item_id": "i1", "category": "beer"},
@@ -229,7 +234,6 @@ def test_recommend_from_worker_thread_matches_main_thread():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     kwargs = dict(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
@@ -365,8 +369,8 @@ def test_fit_raises_clear_error_when_items_missing_id_column():
         model.fit(_DummyDataset())
 
 
-def test_feature_dict_parses_list_like_strings():
-    from cicerone.content_fallback import _feature_dict
+def test_item_feature_tokens_parses_list_like_strings():
+    from cicerone.content_fallback import item_feature_tokens
 
     row = pd.Series(
         {
@@ -376,7 +380,7 @@ def test_feature_dict_parses_list_like_strings():
             "solo": "single",
         }
     )
-    tokens = _feature_dict(
+    tokens = item_feature_tokens(
         row,
         [
             FeatureColumn(column="tags", type="list"),
@@ -391,7 +395,7 @@ def test_feature_dict_parses_list_like_strings():
     assert tokens["solo=single"] == 1.0
 
 
-def test_recommend_thread_pool_path_returns_rows_for_each_user():
+def test_recommend_thread_pool_path_returns_rows_for_each_user(threaded_recommend):
     items = pd.DataFrame(
         [
             {"item_id": "i1", "category": "beer"},
@@ -410,7 +414,6 @@ def test_recommend_thread_pool_path_returns_rows_for_each_user():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     recs = model.recommend(
@@ -422,7 +425,8 @@ def test_recommend_thread_pool_path_returns_rows_for_each_user():
     assert set(recs[Columns.User].astype(str)) == {"u1", "u2"}
 
 
-def test_recommend_thread_pool_matches_serial_user_rank_order():
+def test_recommend_thread_pool_matches_serial_user_rank_order(monkeypatch):
+    monkeypatch.setattr("cicerone.content_fallback._RECOMMEND_THREAD_MIN_USERS", 100)
     items = pd.DataFrame(
         [
             {"item_id": "i1", "category": "beer"},
@@ -441,17 +445,16 @@ def test_recommend_thread_pool_matches_serial_user_rank_order():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=100,
     )
     model.fit(_DummyDataset())
     serial = model.recommend(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
-    model.recommend_thread_min_users = 1
+    monkeypatch.setattr("cicerone.content_fallback._RECOMMEND_THREAD_MIN_USERS", 1)
     threaded = model.recommend(users=["u2", "u1"], dataset=_DummyDataset(), k=5, filter_viewed=True)
     pd.testing.assert_frame_equal(serial.reset_index(drop=True), threaded.reset_index(drop=True))
     assert list(serial[Columns.User].astype(str).drop_duplicates()) == ["u1", "u2"]
 
 
-def test_recommend_handles_mixed_non_string_ids():
+def test_recommend_handles_mixed_non_string_ids(threaded_recommend):
     items = pd.DataFrame(
         [
             {"item_id": 1, "category": "beer"},
@@ -471,7 +474,6 @@ def test_recommend_handles_mixed_non_string_ids():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     recs = model.recommend(
@@ -485,7 +487,7 @@ def test_recommend_handles_mixed_non_string_ids():
     assert set(map(str, recs[Columns.Item])) <= {"1", "2", "3"}
 
 
-def test_recommend_matches_int_and_str_user_ids():
+def test_recommend_matches_int_and_str_user_ids(threaded_recommend):
     items = pd.DataFrame(
         [
             {"item_id": 1, "category": "beer"},
@@ -504,7 +506,6 @@ def test_recommend_matches_int_and_str_user_ids():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     recs = model.recommend(
@@ -554,7 +555,7 @@ def test_recommend_thread_workers_is_serial_off_main_thread():
     seen: list[int] = []
 
     def run() -> None:
-        seen.append(_recommend_thread_workers(20, min_users=8, max_workers=8))
+        seen.append(_recommend_thread_workers(20))
 
     worker = threading.Thread(target=run)
     worker.start()
@@ -562,7 +563,8 @@ def test_recommend_thread_workers_is_serial_off_main_thread():
     assert seen == [1]
 
 
-def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
+def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch, threaded_recommend):
+
     class _ThreadPoolSpy:
         def __init__(self, *_, **__):
             raise AssertionError("ThreadPoolExecutor should not start from a worker thread")
@@ -586,7 +588,6 @@ def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     recs: list[pd.DataFrame] = []
@@ -612,7 +613,7 @@ def test_recommend_from_worker_thread_does_not_use_thread_pool(monkeypatch):
     assert not recs[0].empty
 
 
-def test_recommend_skips_historyless_user_without_affecting_others():
+def test_recommend_skips_historyless_user_without_affecting_others(threaded_recommend):
     items = pd.DataFrame(
         [
             {"item_id": "i1", "category": "beer"},
@@ -631,7 +632,6 @@ def test_recommend_skips_historyless_user_without_affecting_others():
         feature_columns=[FeatureColumn(column="category", type="categorical")],
         items=items,
         interactions=interactions,
-        recommend_thread_min_users=1,
     )
     model.fit(_DummyDataset())
     recs = model.recommend(users=["u1", "u2"], dataset=_DummyDataset(), k=5, filter_viewed=True)

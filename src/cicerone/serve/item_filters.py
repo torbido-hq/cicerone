@@ -149,8 +149,8 @@ def filter_recommendations(
     category: str | None,
     category_column: str,
     exclude_unavailable: bool,
-    ids_by_category: dict[str, frozenset[str]] | None = None,
-    on_missing_category_column: Callable[[], None] | None = None,
+    ids_by_category: dict[str, frozenset[str]],
+    on_missing_category_column: Callable[[], None],
 ) -> pd.DataFrame:
     if recs.empty:
         return recs
@@ -162,14 +162,9 @@ def filter_recommendations(
 
     if category is not None:
         if category_column not in items.columns:
-            if on_missing_category_column is not None:
-                on_missing_category_column()
+            on_missing_category_column()
             return out.iloc[0:0].reset_index(drop=True)
-        if ids_by_category is not None:
-            allowed: set[str] | frozenset[str] = ids_by_category.get(str(category), frozenset())
-        else:
-            allowed = set(items.loc[items[category_column] == str(category), ITEM_COLUMN].astype(str))
-        out = out[item_ids.isin(allowed)]
+        out = out[item_ids.isin(ids_by_category.get(str(category), frozenset()))]
         item_ids = out[ITEM_COLUMN].astype(str)
 
     if exclude_unavailable and available_ids is not None:

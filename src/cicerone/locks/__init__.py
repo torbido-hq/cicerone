@@ -15,11 +15,8 @@ from cicerone.locks.hold import (
     WriteFence,
     WriterLockBusyError,
     acquire_until,
-    writer_lock_held_here,
 )
 from cicerone.locks.keys import (
-    REDIS_LOCK_TTL_MS,
-    advisory_keys_from_lock_key,
     dataset_append_lock_key,
     events_apply_lock_key,
 )
@@ -31,18 +28,12 @@ __all__ = [
     "LockLostError",
     "WriteFence",
     "WriterLockBusyError",
-    "PostgresAdvisoryLock",
-    "REDIS_LOCK_TTL_MS",
-    "RedisLock",
     "acquire_until",
-    "advisory_keys_from_lock_key",
     "build_dataset_writer_lock",
     "build_output_writer_lock",
     "build_lock_backend",
-    "dataset_append_lock_key",
     "events_apply_lock_key",
     "has_distributed_lock",
-    "writer_lock_held_here",
 ]
 
 

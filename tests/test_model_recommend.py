@@ -7,10 +7,11 @@ from support.model_events import synthetic_events
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import ConfigError
+from cicerone.config.constants import DEFAULT_MODELS
 from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import build_dataset
-from cicerone.model import DEFAULT_MODELS, train_and_recommend
-from cicerone.model.recommend_cache import dataset_fingerprint, items_fingerprint, recommend_cache_key
+from cicerone.model import FitOptions, train_and_recommend
+from cicerone.model.recommend_cache import items_fingerprint, recommend_cache_key
 from cicerone.policy import allowed_items_for_cohort, resolve_eligibility
 from cicerone.reasons import PRIORITY_BLOCK_COLUMN, parse_reasons
 
@@ -30,7 +31,7 @@ def test_train_and_recommend_respects_top_k_and_availability_filter(sample_items
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2
+        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, fit=FitOptions()
     )
 
     assert set(recommendations[Columns.User]) == {"u1", "u2", "u3", COLD_START_USER_ID}
@@ -48,7 +49,9 @@ def test_train_and_recommend_falls_back_to_popularity_for_cold_users(
     # u4: features only (hybrid cold-start via rectools).
     built = build_dataset(events, sample_users, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(built, target_users=["u1", "u4"], config=feature_config, top_k=2)
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "u4"], config=feature_config, top_k=2, fit=FitOptions()
+    )
 
     warm_via_features = recommendations[recommendations[Columns.User] == "u4"]
     assert not warm_via_features.empty
@@ -59,7 +62,9 @@ def test_train_and_recommend_falls_back_to_popularity_for_fully_unknown_users(sa
     # ghost: no interactions/features → popularity fallback.
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    recommendations = train_and_recommend(built, target_users=["u1", "ghost"], config=feature_config, top_k=2)
+    recommendations = train_and_recommend(
+        built, target_users=["u1", "ghost"], config=feature_config, top_k=2, fit=FitOptions()
+    )
 
     cold_user_recos = recommendations[recommendations[Columns.User] == "ghost"]
     assert not cold_user_recos.empty
@@ -72,7 +77,12 @@ def test_train_and_recommend_rejects_unknown_model(sample_items, feature_config)
 
     with pytest.raises(ValueError, match="not_a_real_model"):
         train_and_recommend(
-            built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=["not_a_real_model"]
+            built,
+            target_users=["u1"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["not_a_real_model"],
+            fit=FitOptions(),
         )
 
 
@@ -82,7 +92,9 @@ def test_train_and_recommend_rejects_empty_enabled_models(sample_items, feature_
 
     # Empty list ≠ omit; must raise, not succeed empty.
     with pytest.raises(ValueError, match="enabled_models is empty"):
-        train_and_recommend(built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=[])
+        train_and_recommend(
+            built, target_users=["u1"], config=feature_config, top_k=2, enabled_models=[], fit=FitOptions()
+        )
 
 
 def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
@@ -90,7 +102,12 @@ def test_train_and_recommend_item_based_strategy(sample_items, feature_config):
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["item_based"]
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["item_based"],
+        fit=FitOptions(),
     )
 
     assert set(recommendations["source"]) == {"item_based"}
@@ -101,7 +118,12 @@ def test_train_and_recommend_latest_strategy(sample_items, feature_config):
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
     recommendations = train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["latest"]
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["latest"],
+        fit=FitOptions(),
     )
 
     assert set(recommendations[Columns.User]) == {"u1", "u2", "u3"}
@@ -118,6 +140,7 @@ def test_train_and_recommend_writes_cold_start_sentinel_under_priority(sample_it
         config=feature_config,
         top_k=2,
         enabled_models=["collaborative", "popular"],
+        fit=FitOptions(),
     )
 
     cold = recommendations[recommendations[Columns.User] == COLD_START_USER_ID]
@@ -143,6 +166,7 @@ def test_train_and_recommend_writes_cold_start_sentinel_under_rrf(sample_items, 
         top_k=2,
         enabled_models=["collaborative", "popular"],
         weights={"collaborative": 1.0, "popular": 1.0},
+        fit=FitOptions(),
     )
 
     cold = recommendations[recommendations[Columns.User] == COLD_START_USER_ID]
@@ -192,7 +216,9 @@ def test_recommend_with_models_does_not_write_sentinel_when_popular_not_in_run(s
         built,
         ["u1", "u2"],
         enabled_models=list(union_plan.recommend_models),
-        max_workers=1,
+        fit=FitOptions(max_workers=1),
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
     )
     variant_plan = plan_model_run(
         ["collaborative"],
@@ -221,6 +247,7 @@ def test_train_and_recommend_ignores_cold_start_in_target_users(sample_items, fe
         config=feature_config,
         top_k=2,
         enabled_models=["popular"],
+        fit=FitOptions(),
     )
 
     users = recommendations[Columns.User].astype(str)
@@ -241,6 +268,7 @@ def test_train_and_recommend_combines_multiple_personalized_strategies(sample_it
         config=feature_config,
         top_k=3,
         enabled_models=["collaborative", "item_based", "popular"],
+        fit=FitOptions(),
     )
 
     assert set(recommendations["source"]) <= {"personalized", "item_based", "popular_fallback"}
@@ -264,7 +292,12 @@ def test_train_and_recommend_no_warm_users_and_only_personalized_strategies_retu
 
     with caplog.at_level("INFO"):
         recommendations = train_and_recommend(
-            built, target_users=["ghost"], config=feature_config, top_k=2, enabled_models=["item_based"]
+            built,
+            target_users=["ghost"],
+            config=feature_config,
+            top_k=2,
+            enabled_models=["item_based"],
+            fit=FitOptions(),
         )
 
     assert recommendations.empty
@@ -292,6 +325,7 @@ def test_train_and_recommend_rejects_unknown_weight_key(sample_items, feature_co
             top_k=2,
             enabled_models=["popular"],
             weights={"not_enabled": 1.0},
+            fit=FitOptions(),
         )
 
 
@@ -307,6 +341,7 @@ def test_train_and_recommend_rejects_negative_weight(sample_items, feature_confi
             top_k=2,
             enabled_models=["popular"],
             weights={"popular": -1.0},
+            fit=FitOptions(),
         )
 
 
@@ -323,6 +358,7 @@ def test_train_and_recommend_rejects_non_positive_rrf_k(sample_items, feature_co
             enabled_models=["popular"],
             weights={"popular": 1.0},
             rrf_k=0,
+            fit=FitOptions(),
         )
 
 
@@ -336,6 +372,7 @@ def test_train_and_recommend_skips_reasons_when_disabled(sample_items, feature_c
         top_k=2,
         enabled_models=["popular"],
         explain=ExplainSettings(enabled=False),
+        fit=FitOptions(),
     )
     assert not recommendations.empty
     assert "reasons" not in recommendations.columns
@@ -356,6 +393,7 @@ def test_train_and_recommend_rejects_weights_for_models_dropped_from_recommend(s
             enabled_models=["collaborative", "content_fallback", "popular"],
             weights={"collaborative": 1.0, "content_fallback": 0.5, "popular": 0.3},
             content_fallback_enabled=False,
+            fit=FitOptions(),
         )
 
 
@@ -371,6 +409,7 @@ def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, f
         config=feature_config,
         top_k=5,
         weights=weights,
+        fit=FitOptions(),
     )
     from_explicit = train_and_recommend(
         built,
@@ -379,6 +418,7 @@ def test_train_and_recommend_weighted_fusion_with_default_models(sample_items, f
         top_k=5,
         enabled_models=DEFAULT_MODELS,
         weights=weights,
+        fit=FitOptions(),
     )
 
     fused_labels = {
@@ -405,6 +445,7 @@ def test_train_and_recommend_weighted_fusion_respects_top_k_and_ranks_by_score(s
         top_k=2,
         enabled_models=["collaborative", "item_based", "popular"],
         weights={"collaborative": 1.0, "item_based": 0.5, "popular": 0.2},
+        fit=FitOptions(),
     )
 
     assert (recommendations.groupby(Columns.User).size() <= 2).all()
@@ -424,6 +465,7 @@ def test_train_and_recommend_weighted_fusion_merges_sources_for_shared_items(sam
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={"popular": 1.0, "latest": 1.0},
+        fit=FitOptions(),
     )
 
     assert set(_without_cold_start(recommendations)["source"]) == {"popular_fallback+latest"}
@@ -443,6 +485,7 @@ def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_orde
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={"popular": 1.0, "latest": 1.0},
+        fit=FitOptions(),
     )
     latest_first = train_and_recommend(
         built,
@@ -451,6 +494,7 @@ def test_train_and_recommend_weighted_fusion_joins_labels_in_enabled_models_orde
         top_k=5,
         enabled_models=["latest", "popular"],
         weights={"popular": 1.0, "latest": 1.0},
+        fit=FitOptions(),
     )
 
     assert set(_without_cold_start(popular_first)["source"]) == {"popular_fallback+latest"}
@@ -469,6 +513,7 @@ def test_train_and_recommend_empty_weights_dict_enables_fusion(sample_items, fea
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={},
+        fit=FitOptions(),
     )
 
     assert set(_without_cold_start(recommendations)["source"]) == {"popular_fallback+latest"}
@@ -486,6 +531,7 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={"latest": 0.5},
+        fit=FitOptions(),
     )
     explicit_default = train_and_recommend(
         built,
@@ -494,6 +540,7 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={"popular": 1.0, "latest": 0.5},
+        fit=FitOptions(),
     )
     explicit_changed = train_and_recommend(
         built,
@@ -502,6 +549,7 @@ def test_train_and_recommend_weighted_fusion_defaults_missing_weight_to_one(samp
         top_k=5,
         enabled_models=["popular", "latest"],
         weights={"popular": 0.3, "latest": 0.5},
+        fit=FitOptions(),
     )
 
     assert set(_without_cold_start(partial)["source"]) == {"popular_fallback+latest"}
@@ -535,6 +583,7 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
         enabled_models=["popular", "latest"],
         weights={"popular": 1.0, "latest": 1.0},
         rrf_k=1,
+        fit=FitOptions(),
     )
     large_k = train_and_recommend(
         built,
@@ -544,6 +593,7 @@ def test_train_and_recommend_custom_rrf_k_changes_fused_scores(sample_items, fea
         enabled_models=["popular", "latest"],
         weights={"popular": 1.0, "latest": 1.0},
         rrf_k=1000,
+        fit=FitOptions(),
     )
 
     # Larger rrf_k strictly lowers weight/(rrf_k+rank) for same pairs.
@@ -609,11 +659,7 @@ def test_train_and_recommend_respects_per_user_eligibility(feature_config):
     )
     built = build_dataset(events, users, items, config, half_life_days=90)
     recommendations = train_and_recommend(
-        built,
-        target_users=["u1", "u2"],
-        config=config,
-        top_k=2,
-        enabled_models=["popular"],
+        built, target_users=["u1", "u2"], config=config, top_k=2, enabled_models=["popular"], fit=FitOptions()
     )
 
     u1_items = set(recommendations.loc[recommendations[Columns.User] == "u1", Columns.Item])
@@ -675,11 +721,7 @@ def test_train_and_recommend_empty_users_frame_skips_user_scoped_rules(feature_c
     built = replace(built, users=pd.DataFrame(columns=["user_id", "nationality"]))
 
     recommendations = train_and_recommend(
-        built,
-        target_users=["u1", "u2"],
-        config=config,
-        top_k=2,
-        enabled_models=["popular"],
+        built, target_users=["u1", "u2"], config=config, top_k=2, enabled_models=["popular"], fit=FitOptions()
     )
 
     assert "no users frame is available" in caplog.text
@@ -738,11 +780,7 @@ def test_train_and_recommend_paying_producer_boost_reorders(feature_config):
     )
     built = build_dataset(events, None, items, config, half_life_days=90)
     recommendations = train_and_recommend(
-        built,
-        target_users=["ghost"],
-        config=config,
-        top_k=2,
-        enabled_models=["popular"],
+        built, target_users=["ghost"], config=config, top_k=2, enabled_models=["popular"], fit=FitOptions()
     )
     ghost = recommendations[recommendations[Columns.User] == "ghost"].sort_values(Columns.Rank)
     assert list(ghost[Columns.Item])[0] == "i2"
@@ -890,6 +928,7 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
         config=baseline_config,
         top_k=2,
         enabled_models=["popular"],
+        fit=FitOptions(),
     )
     baseline_items = list(
         baseline.loc[baseline[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
@@ -903,6 +942,7 @@ def test_train_and_recommend_paying_producer_boost_overfetch(feature_config):
         config=boosted_config,
         top_k=2,
         enabled_models=["popular"],
+        fit=FitOptions(),
     )
     boosted_items = list(
         boosted.loc[boosted[Columns.User] == "ghost"].sort_values(Columns.Rank)[Columns.Item]
@@ -968,6 +1008,7 @@ def test_topk_extraction_preserves_external_ids_no_duplicates_or_seen_items(feat
         config=feature_config,
         top_k=3,
         enabled_models=["collaborative", "popular"],
+        fit=FitOptions(),
     )
 
     assert not recommendations.empty
@@ -1020,6 +1061,7 @@ def test_content_fallback_surfaces_cold_item_for_matching_user(feature_config):
         top_k=5,
         enabled_models=["content_fallback"],
         content_fallback_enabled=True,
+        fit=FitOptions(),
     )
 
     u1 = recommendations[recommendations[Columns.User] == "u1"]
@@ -1059,6 +1101,7 @@ def test_content_fallback_disabled_emits_no_content_source(feature_config):
         top_k=5,
         enabled_models=["content_fallback", "popular"],
         content_fallback_enabled=False,
+        fit=FitOptions(),
     )
 
     assert "content_fallback" not in set(recommendations["source"])
@@ -1100,6 +1143,7 @@ def test_content_fallback_respects_availability_filters(feature_config):
         top_k=5,
         enabled_models=["content_fallback"],
         content_fallback_enabled=True,
+        fit=FitOptions(),
     )
 
     recommended_items = set(recommendations[Columns.Item])
@@ -1131,38 +1175,15 @@ def test_recommend_cache_key_includes_allowlist_filter_and_dataset():
     assert items != items_fingerprint(["i1"])
     assert items_fingerprint([]) is None
 
-    class _Dataset:
-        def __init__(self, fingerprint: object | None = None, version: object | None = None) -> None:
-            self.fingerprint = fingerprint
-            self.version = version
-
-    left = _Dataset()
-    right = _Dataset()
-    assert dataset_fingerprint(left) != dataset_fingerprint(right)
-
-    class _Fingerprinted:
-        def fingerprint(self) -> str:
-            return "snap"
-
-    assert dataset_fingerprint(_Fingerprinted()) == "snap"
-    assert dataset_fingerprint(_Dataset(fingerprint="snap-a")) == dataset_fingerprint(
-        _Dataset(fingerprint="snap-a")
-    )
-    assert dataset_fingerprint(_Dataset(version=3)) == dataset_fingerprint(_Dataset(version=3))
-
     ds = object()
-    same = recommend_cache_key("strategy", "als", None, 10, items, True, dataset_fingerprint(ds))
+    same = recommend_cache_key("strategy", "als", None, 10, items, True, id(ds))
     assert same == recommend_cache_key(
-        "strategy", "als", None, 10, items_fingerprint(["i1", "i2"]), True, dataset_fingerprint(ds)
+        "strategy", "als", None, 10, items_fingerprint(["i1", "i2"]), True, id(ds)
     )
-    assert same != recommend_cache_key(
-        "strategy", "als", None, 10, items_fingerprint(["i1"]), True, dataset_fingerprint(ds)
-    )
-    assert same != recommend_cache_key("strategy", "als", None, 10, items, False, dataset_fingerprint(ds))
+    assert same != recommend_cache_key("strategy", "als", None, 10, items_fingerprint(["i1"]), True, id(ds))
+    assert same != recommend_cache_key("strategy", "als", None, 10, items, False, id(ds))
     other_ds = object()
-    assert same != recommend_cache_key(
-        "strategy", "als", None, 10, items, True, dataset_fingerprint(other_ds)
-    )
+    assert same != recommend_cache_key("strategy", "als", None, 10, items, True, id(other_ds))
 
 
 def test_recommend_cache_key_includes_user_set():
@@ -1170,7 +1191,7 @@ def test_recommend_cache_key_includes_user_set():
     users_ab = items_fingerprint(["u1", "u2"])
     users_a = items_fingerprint(["u1"])
     ds = object()
-    fingerprint = dataset_fingerprint(ds)
+    fingerprint = id(ds)
     same = recommend_cache_key("strategy", "als", None, 10, items, users_ab, True, fingerprint)
     assert same == recommend_cache_key(
         "strategy", "als", None, 10, items, items_fingerprint(["u2", "u1"]), True, fingerprint
@@ -1194,7 +1215,9 @@ def test_recommend_with_models_thread_pool_matches_serial(sample_items, feature_
         built,
         target_users,
         enabled_models=list(plan.recommend_models),
-        max_workers=1,
+        fit=FitOptions(max_workers=1),
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
     )
     serial = recommend_with_models(
         fitted,

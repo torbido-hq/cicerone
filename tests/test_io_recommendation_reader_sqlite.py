@@ -871,7 +871,7 @@ def test_sqlite_db_reader_bulk_keeps_rank_order(tmp_path, monkeypatch):
 def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
     url = _sqlite_url(tmp_path)
     reader = DbRecommendationReader({"database_url": url})
-    assert reader.get_item_scores().empty
+    assert reader.get_item_scores_snapshot()[0].empty
 
     sink = DatabaseOutputSink({"database_url": url})
     sink.write_recommendations(
@@ -887,7 +887,6 @@ def test_sqlite_db_reader_item_scores_write_replace_and_missing(tmp_path):
     scores, ids = reader.get_item_scores_snapshot()
     assert list(ids) == ["i2"]
     assert list(scores["item_id"]) == ["i2"]
-    assert list(reader.get_item_score_ids()) == ["i2"]
     assert float(scores.iloc[0]["popular_score"]) == 4.0
     assert int(scores.iloc[0]["n_users"]) == 5
 
@@ -902,7 +901,7 @@ def test_sqlite_db_reader_item_scores_missing_columns(tmp_path):
         "item_scores", engine, index=False, if_exists="replace"
     )
     reader = DbRecommendationReader({"database_url": url})
-    assert reader.get_item_scores().empty
+    assert reader.get_item_scores_snapshot()[0].empty
 
 
 def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
@@ -915,14 +914,14 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
         pd.DataFrame([{"item_id": "i1", "popular_score": 2.5, "latest_score": 1.0, "n_users": 4}])
     )
     reader = DbRecommendationReader({"database_url": url})
-    assert list(reader.get_item_scores()["item_id"]) == ["i1"]
+    assert list(reader.get_item_scores_snapshot()[0]["item_id"]) == ["i1"]
 
     engine = create_engine(url)
     pd.DataFrame([{"item_id": "i1", "popular_score": 1.0}]).to_sql(
         "item_scores", engine, index=False, if_exists="replace"
     )
     reader.refresh()
-    kept = reader.get_item_scores()
+    kept = reader.get_item_scores_snapshot()[0]
     assert list(kept["item_id"]) == ["i1"]
     assert float(kept.iloc[0]["popular_score"]) == 2.5
 
@@ -931,18 +930,18 @@ def test_sqlite_db_reader_item_scores_keeps_cache_on_bad_schema(tmp_path):
         "item_scores", engine, index=False, if_exists="replace"
     )
     reader.refresh()
-    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+    assert float(reader.get_item_scores_snapshot()[0].iloc[0]["popular_score"]) == 2.5
 
     pd.DataFrame([{"item_id": "i1", "popular_score": 1.0, "latest_score": 0.0, "n_users": -1}]).to_sql(
         "item_scores", engine, index=False, if_exists="replace"
     )
     reader.refresh()
-    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+    assert float(reader.get_item_scores_snapshot()[0].iloc[0]["popular_score"]) == 2.5
 
     with engine.begin() as conn:
         conn.execute(text('DROP TABLE IF EXISTS "item_scores"'))
     reader.refresh()
-    assert float(reader.get_item_scores().iloc[0]["popular_score"]) == 2.5
+    assert float(reader.get_item_scores_snapshot()[0].iloc[0]["popular_score"]) == 2.5
 
 
 def test_manifest_column_type_uses_the_known_name_then_the_value():

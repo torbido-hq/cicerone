@@ -38,17 +38,7 @@ def kafka_timeout_seconds(options: dict[str, Any], *, prefix: str) -> float:
 
 
 def kafka_timeout_ms(options: dict[str, Any], *, prefix: str) -> int:
-    seconds = kafka_timeout_seconds(options, prefix=prefix)
-    try:
-        timeout_ms = int(round(seconds * 1000))
-    except (OverflowError, ValueError) as exc:
-        raise ConfigError(f"{prefix}.timeout_seconds must be a number, got {seconds!r}") from exc
-    if timeout_ms < MIN_TIMEOUT_MS or timeout_ms > MAX_TIMEOUT_MS:
-        raise ConfigError(
-            f"{prefix}.timeout_seconds must be >= {MIN_TIMEOUT_SECONDS} "
-            f"and <= {MAX_BROKER_TIMEOUT_SECONDS}, got {seconds!r}"
-        )
-    return timeout_ms
+    return int(round(kafka_timeout_seconds(options, prefix=prefix) * 1000))
 
 
 def kafka_client_config(options: dict[str, Any], *, prefix: str) -> dict[str, Any]:
@@ -111,13 +101,7 @@ def kafka_consumer_config(options: dict[str, Any], *, prefix: str) -> dict[str, 
 
 
 def _heartbeat_interval_ms(session: int) -> int:
-    heartbeat = max(1, min(session - 1, session // 3))
-    if heartbeat >= session:
-        raise ConfigError(
-            f"session_timeout_ms must be >= {MIN_SESSION_TIMEOUT_MS} so "
-            f"heartbeat.interval.ms stays below session.timeout.ms, got {session}"
-        )
-    return heartbeat
+    return max(1, min(session - 1, session // 3))
 
 
 def _optional_timeout_ms(

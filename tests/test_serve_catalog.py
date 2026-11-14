@@ -252,14 +252,14 @@ def test_catalog_events_keep_hidden_item_when_sibling_event_still_consumes_it(tm
 def test_catalog_delete_clears_consumed_overlay(tmp_path):
     store = DatasetCatalogStore({"storage_backend": "local", "path": str(tmp_path)})
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i9")
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i9")])
+    overlay.add_many([("u1", "i2")])
     app = create_app(serve_settings(), FakeReader(recs_df()), catalog=store, consumed=overlay)
     client = TestClient(app)
     headers = {"Authorization": "Bearer secret"}
     client.delete("/catalog/events/u1?item_id=i9", headers=headers)
     assert overlay.item_ids("u1") == {"i2"}
-    overlay.add("u2", "i2")
+    overlay.add_many([("u2", "i2")])
     client.delete("/items/i2", headers=headers)
     assert overlay.item_ids("u1") == set()
     assert overlay.item_ids("u2") == set()

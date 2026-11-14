@@ -51,14 +51,6 @@ _EVENT_SOURCES: dict[str, _EventSourceFactory] = {
 }
 
 
-def register_event_source(kind: str, factory: _EventSourceFactory) -> None:
-    """Register a built-in backend (tests / future kinds). Rejects duplicates."""
-    key = kind.lower()
-    if key in _EVENT_SOURCES:
-        raise ValueError(f"Event source kind already registered: {key!r}")
-    _EVENT_SOURCES[key] = factory
-
-
 def registered_event_source_kinds() -> tuple[str, ...]:
     return tuple(sorted(_EVENT_SOURCES))
 
@@ -68,6 +60,6 @@ def build_event_source(kind: str, options: dict[str, Any] | None = None) -> Even
     try:
         factory = _EVENT_SOURCES[key]
     except KeyError as exc:
-        known = ", ".join(registered_event_source_kinds()) or "(none)"
+        known = ", ".join(registered_event_source_kinds())
         raise ValueError(f"Unknown events kind: {kind!r}; registered: {known}") from exc
     return factory(dict(options or {}))

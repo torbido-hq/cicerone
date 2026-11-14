@@ -38,7 +38,7 @@ def test_database_catalog_crud_round_trip():
     assert item["item_id"] == "i1"
 
     assert (
-        store.upsert_events(
+        store.replace_events(
             [
                 {
                     "user_id": "u1",
@@ -48,7 +48,7 @@ def test_database_catalog_crud_round_trip():
                     "event_id": "e1",
                 }
             ]
-        )
+        )[0]
         == 1
     )
     events = store.get_events_for_user("u1", 10)
@@ -74,7 +74,7 @@ def test_database_catalog_projects_to_existing_event_columns():
     engine.dispose()
     store = DatabaseCatalogStore({"database_url": TEST_DATABASE_URL})
     assert (
-        store.upsert_events(
+        store.replace_events(
             [
                 {
                     "user_id": "u1",
@@ -85,14 +85,14 @@ def test_database_catalog_projects_to_existing_event_columns():
                     "idempotency_key": "e1",
                 }
             ]
-        )
+        )[0]
         == 1
     )
     events = store.get_events_for_user("u1", 10)
     assert list(events["item_id"]) == ["i1"]
     assert list(events["event_id"]) == ["e1"]
     assert (
-        store.upsert_events(
+        store.replace_events(
             [
                 {
                     "user_id": "u1",
@@ -103,7 +103,7 @@ def test_database_catalog_projects_to_existing_event_columns():
                     "idempotency_key": "e1",
                 }
             ]
-        )
+        )[0]
         == 1
     )
     replay = store.get_events_for_user("u1", 10)
@@ -149,7 +149,7 @@ def test_database_catalog_delete_item_removes_events():
     store.upsert_item({"item_id": "i1", "comment": "sku"})
     store.upsert_user({"user_id": "u1"})
     assert (
-        store.upsert_events(
+        store.replace_events(
             [
                 {
                     "user_id": "u1",
@@ -166,7 +166,7 @@ def test_database_catalog_delete_item_removes_events():
                     "event_id": "e2",
                 },
             ]
-        )
+        )[0]
         == 2
     )
     assert store.delete_item("i1") >= 2

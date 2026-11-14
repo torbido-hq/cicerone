@@ -11,7 +11,7 @@ from sqlalchemy import Connection, Engine, Table, TextClause, text
 
 from cicerone.io.db_errors import SQL_READ_ERRORS, is_missing_table_error
 from cicerone.io.engines import insert_sql, quote_identifier
-from cicerone.locks.hold import WriteFence
+from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
 

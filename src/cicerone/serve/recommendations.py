@@ -76,8 +76,8 @@ class RecommendationService:
         *,
         category: str | None,
         exclude_unavailable: bool,
-        consumed_ids: set[str] | None = None,
-        items_snapshot: ItemsSnapshot | None = None,
+        consumed_ids: set[str],
+        items_snapshot: ItemsSnapshot,
         recs: pd.DataFrame | None = None,
         fallback_recs: pd.DataFrame | None = None,
         assignment: tuple[str | None, str | None] | None = None,
@@ -87,8 +87,7 @@ class RecommendationService:
         Batch callers pass prefetched ``recs`` / ``fallback_recs``, the ``assignment`` and one
         ``items_snapshot`` so every user in a request sees the same data.
         """
-        items, available_ids, ids_by_category = items_snapshot or self._items_cache.get()
-        consumed_ids = consumed_ids or set()
+        items, available_ids, ids_by_category = items_snapshot
         can_filter = bool(
             (
                 items is not None

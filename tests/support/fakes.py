@@ -10,11 +10,13 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from cicerone.io.recommendation_reader_common import select_cold_start_fallback
-from cicerone.io.recommendation_schema import filter_variant_rows
+from cicerone.io.recommendation_schema import ITEM_COLUMN, filter_variant_rows
+from cicerone.item_scores import empty_item_scores, normalize_item_scores
 
 _LATEST_MANIFEST = {"generated_at": "2026-08-04T12:00:00+00:00"}
 
@@ -147,7 +149,7 @@ class FakeReader:
     ):
         self._recs = recs
         self._items = items
-        self._item_scores = item_scores if item_scores is not None else pd.DataFrame()
+        self._item_scores = empty_item_scores() if item_scores is None else normalize_item_scores(item_scores)
         self._items_version = 0
         self.refresh_calls = 0
         self.get_items_calls = 0
@@ -165,8 +167,8 @@ class FakeReader:
         self.get_items_calls += 1
         return self._items
 
-    def get_item_scores(self) -> pd.DataFrame:
-        return self._item_scores
+    def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray]:
+        return self._item_scores, self._item_scores[ITEM_COLUMN].to_numpy(dtype=str)
 
     def items_version(self) -> int:
         return self._items_version

@@ -88,7 +88,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Job neighbor snapshots keep at least `serve.default_k * 5` rows per item so session over-fetch still has candidates.
 - Dataset surface refresh applies a new popular/latest/neighbors snapshot only when all three files match the job stamp; a missing stamp or unreadable parquet keeps the last consistent trio.
 - Dataset `write_surfaces` rechecks the writer lease before each surface file.
-- Job builds popular/latest/neighbor frames only when the sink can write surfaces.
 - `ServeClient` popular/latest/similar send `exclude_unavailable` and `user_id`.
 - Popular snapshots break distinct-user ties by event count, then `item_id`.
 - Job marks `partial_outputs` before the multi-file surface write so a mid-write failure is not reported as clean.
@@ -103,18 +102,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB manifest ALTER uses a fixed type map so a failed first post-upgrade run cannot create `n_item_scores` as TEXT.
 - Job uses one weighting timestamp for training interactions and `latest_score`.
 - Item-score build strips item IDs before grouping so padded IDs do not crash the catalog write.
-- Job skips `write_item_scores` when the sink does not implement it and records `n_item_scores` as null.
 - New DB `recommendation_runs` tables get typed columns on first create, not TEXT from a null first write.
 - Job builds `item_scores` before taking the recommendations writer lock.
 - README says incremental write-through updates recommendations, not catalog `item_scores`.
-- `OutputSink` no longer requires `write_item_scores`; that method lives on optional `ItemScoresWriter`.
-- Job builds catalog `item_scores` only when the sink can write them.
 - Serve reuses a cached sorted `item_id` index for `GET /item-scores` pagination.
 - Serve snapshots the `item_scores` frame and id index under one lock so a refresh cannot pair a new index with an old page.
 - DB `item_scores` schema inspect and legacy-table replace run under the writer lock.
-- Search-weights docs say catalog writes apply to sinks that implement `ItemScoresWriter`.
 - Job sets `partial_outputs` only after a snapshot, score, or recommendation write succeeds.
-- Serve sorts and validates `item_scores` from readers that do not snapshot a cached id index.
 - In-memory SQLite `[input]` history is readable from serve worker threads, so default consumed hide still applies.
 - Catalog writes share the in-memory SQLite `[input]` engine, keep a writable `event_id`, and return 400 for blank path IDs. Query-backed db `[input]` stays 501.
 - Dataset `DELETE /users/{id}` ignores a nonempty `users.parquet` that has no `user_id` column instead of raising.
@@ -133,6 +127,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - DB catalog PUT→GET keeps extra user/item fields and returns structured values as objects, not JSON strings.
 - The input poller retries a change on the next poll when its trigger is
   rejected (run in progress, debounce), instead of dropping it until cron.
+
+### Removed
+
+- `cicerone.artifact.save_artifact`, `load_artifact` and
+  `recommend_from_artifact`. The model artifact is still written and is read
+  by the `[events.online]` worker.
 
 ## [0.8.6] - 2026-11-13
 

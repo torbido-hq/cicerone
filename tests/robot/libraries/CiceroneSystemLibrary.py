@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from robot.api import SkipExecution
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from support.artifact import recommend_from_loaded
 from support.postgres_defaults import resolve_test_database_url
 from support.system_db import OUTPUT_DB_TABLES, reset_schema, seed_catalog
 from support.system_spec import (
@@ -45,7 +46,6 @@ from cicerone.artifact import (
     ARTIFACT_FILENAME,
     ARTIFACT_SCHEMA_VERSION,
     loads_artifact,
-    recommend_from_artifact,
 )
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import load_settings
@@ -227,7 +227,7 @@ class CiceroneSystemLibrary:
 
     # -- job / reader assertions -------------------------------------------
     def recommendation_reader_should_cover_catalog_items(self) -> None:
-        scores = self._rec_reader().get_item_scores()
+        scores = self._rec_reader().get_item_scores_snapshot()[0]
         assert not scores.empty
         assert set(scores.columns) >= {"item_id", "popular_score", "latest_score", "n_users"}
         assert set(self.items["item_id"]) <= set(scores["item_id"])
@@ -263,7 +263,7 @@ class CiceroneSystemLibrary:
         loaded = loads_artifact(payload)
         assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
         assert "collaborative" in loaded.models or "popular" in loaded.models
-        from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
+        from_artifact = recommend_from_loaded(loaded, ["u1", "u2"], top_k=3)
         assert not from_artifact.empty
         artifact_users = set(from_artifact["user_id"].astype(str))
         assert {"u1", "u2"} <= artifact_users
@@ -548,7 +548,7 @@ class CiceroneSystemLibrary:
         payload = build_output_sink(self.settings.output).read_model_artifact()
         assert payload is not None
         assert (self.output_path / ARTIFACT_FILENAME).read_bytes() == payload
-        assert not recommend_from_artifact(loads_artifact(payload), ["u1"], top_k=3).empty
+        assert not recommend_from_loaded(loads_artifact(payload), ["u1"], top_k=3).empty
 
     def serve_should_match_output_files_for_user(self, user_id: str) -> None:
         expected = available_ids_from_files(self.output_path, user_id, settings=self.settings)

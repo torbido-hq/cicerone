@@ -8,9 +8,13 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from cicerone import __version__
 from cicerone.config.constants import DEFAULT_LOG_FORMAT
+
+if TYPE_CHECKING:
+    from cicerone.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -142,16 +146,9 @@ def _cmd_start() -> int:
     return _cmd_scheduler([])
 
 
-def _users_config_error(
-    config_path: str | None,
-    dashboard: object | None,
-    enabled: bool,
-    users_path: object | None,
-) -> str:
+def _users_config_error(config_path: str | None, enabled: bool, users_path: str) -> str:
     loaded = config_path or os.environ.get("CICERONE_CONFIG_PATH") or "the default config path"
-    if dashboard is None:
-        detail = "no [dashboard] section"
-    elif not enabled:
+    if not enabled:
         detail = f"dashboard.enabled = false (users_path = {users_path!r})"
     else:
         detail = f"dashboard.users_path is missing or empty ({users_path!r})"
@@ -161,13 +158,11 @@ def _users_config_error(
     )
 
 
-def dashboard_users_path(settings: object, *, config_path: str | None = None) -> str:
-    dashboard = getattr(settings, "dashboard", None)
-    users_path = getattr(dashboard, "users_path", None)
-    enabled = bool(getattr(dashboard, "enabled", False))
-    if dashboard is None or not enabled or not users_path:
-        raise SystemExit(_users_config_error(config_path, dashboard, enabled, users_path))
-    return str(users_path)
+def dashboard_users_path(settings: Settings, *, config_path: str | None = None) -> str:
+    dashboard = settings.dashboard
+    if not dashboard.enabled or not dashboard.users_path:
+        raise SystemExit(_users_config_error(config_path, dashboard.enabled, dashboard.users_path))
+    return str(dashboard.users_path)
 
 
 def _cmd_users(argv: list[str]) -> int:
@@ -188,7 +183,6 @@ def _cmd_forget_user(argv: list[str]) -> int:
     from sqlalchemy.exc import SQLAlchemyError
 
     from cicerone.config import load_settings
-    from cicerone.config.constants import ConfigError
     from cicerone.events.errors import RedisError
     from cicerone.forget import forget_user
     from cicerone.locks import LockLostError, WriteFence, WriterLockBusyError, build_output_writer_lock
@@ -205,7 +199,7 @@ def _cmd_forget_user(argv: list[str]) -> int:
         redis = {"redis_url": settings.track.redis_url, "redis_key_prefix": settings.track.redis_key_prefix}
         with fence.hold():
             result = forget_user(settings.output, args.user_id, fence=fence, **redis)
-    except (ConfigError, ValueError, WriterLockBusyError, LockLostError) as exc:
+    except (ValueError, WriterLockBusyError, LockLostError) as exc:
         print(str(exc), file=sys.stderr)
         _print_notes(exc)
         return 2

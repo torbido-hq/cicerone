@@ -36,10 +36,6 @@ class ConsumedOverlay:
         with self._lock:
             yield
 
-    def add(self, user_id: str, item_id: str) -> None:
-        with self._lock:
-            self._remember(str(user_id), str(item_id))
-
     def add_many(self, pairs: list[tuple[str, str]]) -> None:
         self.replace_pairs([], pairs)
 

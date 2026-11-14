@@ -149,7 +149,7 @@ def evaluate_experiment(
     else:
         metric_events = _restrict_events(events, starts=starts, until=until)
     if attribution == ATTRIBUTION_RECOMMENDED and recommendations is not None:
-        from cicerone.evaluation import filter_events_to_recommended
+        from cicerone.evaluation.served import filter_events_to_recommended
 
         metric_events = filter_events_to_recommended(metric_events, recommendations, assigned=assigned)
     if rec_metric and attribution in {ATTRIBUTION_CLICK, ATTRIBUTION_IMPRESSION} and track_outcomes:

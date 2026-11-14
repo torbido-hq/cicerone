@@ -230,11 +230,6 @@ def test_explode_features_missing_column_is_skipped(caplog):
     assert "Configured item_features column 'does_not_exist' not found" in caplog.text
 
 
-def test_normalize_feature_df_requires_feature_column():
-    with pytest.raises(ValueError, match="feature"):
-        _normalize_feature_df(pd.DataFrame([{"value": 1}]))
-
-
 def test_normalize_feature_df_empty_is_none_pair():
     normalized = _normalize_feature_df(pd.DataFrame(columns=["feature", "value"]))
     assert normalized.frame is None

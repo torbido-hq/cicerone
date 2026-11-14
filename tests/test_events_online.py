@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from support.events import FakeOnline, event_payload
-from support.fakes import raising
+from support.fakes import FakeReader, raising
 from support.settings import local_output
 
 from cicerone.artifact import ARTIFACT_FILENAME, build_artifact, dumps_artifact, loads_artifact
@@ -23,7 +23,7 @@ from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
 from cicerone.locks import LockLostError, WriterLockBusyError
-from cicerone.model import train_and_recommend
+from cicerone.model import FitOptions, train_and_recommend
 from cicerone.serve.bootstrap_events import start_events_runtime
 
 
@@ -72,6 +72,7 @@ def _write_artifact(
             top_k=3,
             enabled_models=train_models,
             strategy_cache=fitted,
+            fit=FitOptions(),
         )
     if extra_fitted:
         fitted.update(extra_fitted)
@@ -607,10 +608,6 @@ def test_start_events_runtime_online_requires_artifact(tmp_path, feature_config:
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     with pytest.raises(OnlineArtifactError, match="save_model_artifact"):
         start_events_runtime(
             make_settings(
@@ -629,7 +626,7 @@ def test_start_events_runtime_online_requires_artifact(tmp_path, feature_config:
                 ),
             ),
             feature_config=feature_config,
-            reader=_Reader(),  # type: ignore[arg-type]
+            reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
         )
 
 
@@ -643,10 +640,6 @@ def test_start_events_runtime_online_skipped_during_experiment(
     pd.DataFrame(
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     with caplog.at_level("WARNING"):
         runtime = start_events_runtime(
@@ -671,7 +664,7 @@ def test_start_events_runtime_online_skipped_during_experiment(
                 ),
             ),
             feature_config=feature_config,
-            reader=_Reader(),  # type: ignore[arg-type]
+            reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
         )
     assert runtime.worker is not None
     assert runtime.worker._updater._online is None
@@ -688,10 +681,6 @@ def test_start_events_runtime_challenger_variant_names(tmp_path, feature_config:
         [{"user_id": "u1", "item_id": "i0", "rank": 1, "score": 1.0, "source": "personalized"}]
     ).to_parquet(out / "recommendations.parquet", index=False)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=local_output(out),
@@ -705,7 +694,7 @@ def test_start_events_runtime_challenger_variant_names(tmp_path, feature_config:
             experiment=ExperimentSettings(enabled=True, id="auto", automl_challenger=True),
         ),
         feature_config=feature_config,
-        reader=_Reader(),  # type: ignore[arg-type]
+        reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
     )
     assert runtime.worker is not None
     assert runtime.worker._updater._variant_names == ("control", "treatment")
@@ -720,10 +709,6 @@ def test_start_events_runtime_online_loads_artifact(
         tmp_path, feature_config, sample_events, sample_users, sample_items, hmac_key=key
     )
     del sink
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     runtime = start_events_runtime(
         make_settings(
@@ -742,7 +727,7 @@ def test_start_events_runtime_online_loads_artifact(
             ),
         ),
         feature_config=feature_config,
-        reader=_Reader(),  # type: ignore[arg-type]
+        reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
     )
     assert runtime.worker is not None
     assert runtime.worker._updater._online is not None
@@ -760,10 +745,6 @@ def test_start_events_runtime_online_rejects_wrong_hmac(
         sample_items,
         hmac_key="0123456789abcdef",
     )
-
-    class _Reader:
-        def refresh(self) -> None:
-            return None
 
     with pytest.raises(ValueError, match="HMAC"):
         start_events_runtime(
@@ -783,7 +764,7 @@ def test_start_events_runtime_online_rejects_wrong_hmac(
                 ),
             ),
             feature_config=feature_config,
-            reader=_Reader(),  # type: ignore[arg-type]
+            reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
         )
 
 

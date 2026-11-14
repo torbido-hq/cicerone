@@ -170,15 +170,15 @@ def test_users_disabled_dashboard_still_accepts_users_path_flag(tmp_path, monkey
     assert seen == [["--users-path=/explicit", "list"]]
 
 
-def test_dashboard_users_path_rejects_missing_settings():
+def test_dashboard_users_path_rejects_unusable_settings():
     from types import SimpleNamespace
 
     from cicerone.cli import dashboard_users_path
 
-    with pytest.raises(SystemExit, match=r"from /cfg.toml: no \[dashboard\] section"):
-        dashboard_users_path(SimpleNamespace(), config_path="/cfg.toml")
-    with pytest.raises(SystemExit, match=r"users_path is missing or empty"):
-        dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="")))
+    with pytest.raises(SystemExit, match=r"from /cfg.toml: dashboard.users_path is missing or empty"):
+        dashboard_users_path(
+            SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="")), config_path="/cfg.toml"
+        )
     with pytest.raises(SystemExit, match=r"dashboard.enabled = false \(users_path = '/x'\)"):
         dashboard_users_path(SimpleNamespace(dashboard=SimpleNamespace(enabled=False, users_path="/x")))
     enabled = SimpleNamespace(dashboard=SimpleNamespace(enabled=True, users_path="/x"))

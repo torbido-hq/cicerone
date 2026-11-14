@@ -119,20 +119,6 @@ def _identity_sort_key(event_id: str) -> tuple[str, tuple[str, ...]]:
     return ("", (event_id,))
 
 
-def _is_numeric_identity(event_id: str) -> bool:
-    """True when SQL text order would disagree with `_identity_sort_key`."""
-    prefix, _parts = _identity_sort_key(event_id)
-    if prefix in ("id:", "rowid:"):
-        try:
-            int(event_id[len(prefix) :])
-        except ValueError:
-            return False
-        return True
-    if prefix == "ctid:":
-        return _CTID_TUPLE.fullmatch(event_id[5:].replace(" ", "")) is not None
-    return False
-
-
 def identity_bind_sort_key(event_id: str) -> str:
     prefix, parts = _identity_sort_key(event_id)
     return prefix + _IDENTITY_SORT_SEP + _IDENTITY_SORT_SEP.join(parts)

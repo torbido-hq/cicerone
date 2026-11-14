@@ -11,13 +11,11 @@ import hashlib
 import hmac
 import io
 import json
-import logging
 import pickle
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, TypeGuard
 
 import pandas as pd
@@ -26,15 +24,9 @@ from rectools.models import load_model
 from rectools.models.base import ModelBase
 
 from cicerone.config.constants import ARTIFACT_HMAC_KEY_MIN_BYTES, DEFAULT_MAX_ARTIFACT_BYTES
-from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import (
-    RecommenderModel,
-    recommend_with_models,
-)
-
-logger = logging.getLogger(__name__)
+from cicerone.model import RecommenderModel
 
 ARTIFACT_SCHEMA_VERSION = 3
 ARTIFACT_FILENAME = "model.artifact"
@@ -311,63 +303,3 @@ def loads_artifact(
             )
     except zipfile.BadZipFile as exc:
         raise TypeError("Artifact payload is not a v3 zip") from exc
-
-
-def save_artifact(path: Path | str, artifact: ModelArtifact, *, hmac_key: str | None = None) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(dumps_artifact(artifact, hmac_key=hmac_key))
-    logger.info("Wrote model artifact to %s (schema_version=%d)", path, artifact.schema_version)
-
-
-def load_artifact(
-    path: Path | str,
-    *,
-    hmac_key: str | None = None,
-) -> ModelArtifact:
-    path = Path(path)
-    logger.info("Loading model artifact from %s", path)
-    with path.open("rb") as handle:
-        payload = handle.read(DEFAULT_MAX_ARTIFACT_BYTES + 1)
-    return loads_artifact(payload, hmac_key=hmac_key)
-
-
-def _interactions_from_dataset(dataset: Dataset) -> pd.DataFrame:
-    """External-id interaction table already stored inside the RecTools Dataset."""
-    frame = dataset.get_raw_interactions()
-    if frame is None or frame.empty:
-        return pd.DataFrame()
-    return frame
-
-
-def recommend_from_artifact(
-    artifact: ModelArtifact,
-    target_users: list[str],
-    top_k: int,
-    *,
-    explain: ExplainSettings | None = None,
-) -> pd.DataFrame:
-    interactions = _interactions_from_dataset(artifact.dataset)
-    built = BuiltDataset(
-        dataset=artifact.dataset,
-        interactions=interactions,
-        items=artifact.items,
-        users=artifact.users,
-    )
-    if artifact.feature_config.blending.enabled and interactions.empty:
-        logger.warning(
-            "recommend_from_artifact with blending.enabled: stored Dataset has no "
-            "interactions, so the blend curve sees n_interactions=0 for every user"
-        )
-    weights = dict(artifact.model_weights) if artifact.model_weights is not None else None
-    return recommend_with_models(
-        dict(artifact.fitted),
-        built,
-        target_users,
-        artifact.feature_config,
-        top_k=top_k,
-        enabled_models=list(artifact.models),
-        weights=weights,
-        rrf_k=artifact.rrf_k,
-        explain=explain,
-    )

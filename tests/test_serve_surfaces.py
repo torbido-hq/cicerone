@@ -8,11 +8,11 @@ from support.prometheus_metrics import metric_value
 from support.serve import items_df, recs_df, serve_feature_config, serve_settings
 
 from cicerone.config.constants import DEFAULT_SERVE_MAX_K
-from cicerone.io.surfaces_reader import EmptySurfacesReader
+from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
 from cicerone.serve import create_app
 
 
-class _Surfaces:
+class _Surfaces(SurfacesReader):
     def __init__(self) -> None:
         self.popular = pd.DataFrame(
             [

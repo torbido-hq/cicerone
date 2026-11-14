@@ -69,9 +69,20 @@ def _service(reader: _Reader, monkeypatch, variant: str | None, items_cache=None
     )
 
 
+def _get(service: RecommendationService, user_id: str, top_k: int, *, category: str | None = None):
+    return service.get(
+        user_id,
+        top_k,
+        category=category,
+        exclude_unavailable=True,
+        consumed_ids=set(),
+        items_snapshot=service.items_cache.get(),
+    )
+
+
 def test_assigned_variant_rows_are_ranked_and_truncated(monkeypatch) -> None:
     reader = _Reader({"treatment": _rows(["a", "b", "c"], "treatment")}, {})
-    served = _service(reader, monkeypatch, "treatment").get("u1", 2, category=None, exclude_unavailable=True)
+    served = _get(_service(reader, monkeypatch, "treatment"), "u1", 2)
     assert served is not None
     assert served.recs["item_id"].tolist() == ["a", "b"]
     assert served.recs["rank"].tolist() == [1, 2]
@@ -82,7 +93,7 @@ def test_assigned_variant_rows_are_ranked_and_truncated(monkeypatch) -> None:
 def test_missing_variant_falls_back_to_leftover_rows_and_picks_control(monkeypatch) -> None:
     leftover = pd.concat([_rows(["a"], "zeta"), _rows(["b"], "control")], ignore_index=True)
     reader = _Reader({None: leftover}, {})
-    served = _service(reader, monkeypatch, "treatment").get("u1", 5, category=None, exclude_unavailable=True)
+    served = _get(_service(reader, monkeypatch, "treatment"), "u1", 5)
     assert served is not None
     assert served.recs["item_id"].tolist() == ["a", "b"]
     assert served.variant == "control"
@@ -92,7 +103,7 @@ def test_missing_variant_falls_back_to_leftover_rows_and_picks_control(monkeypat
 
 def test_cold_start_retries_without_variant(monkeypatch) -> None:
     reader = _Reader({}, {None: _rows(["x"], "control")})
-    served = _service(reader, monkeypatch, "treatment").get("u1", 5, category=None, exclude_unavailable=True)
+    served = _get(_service(reader, monkeypatch, "treatment"), "u1", 5)
     assert served is not None
     assert served.recs["item_id"].tolist() == ["x"]
     assert served.used_fallback
@@ -107,7 +118,7 @@ def test_cold_start_retries_without_variant(monkeypatch) -> None:
 
 def test_rows_without_variant_column_clear_assignment(monkeypatch) -> None:
     reader = _Reader({"treatment": _rows(["a"])}, {})
-    served = _service(reader, monkeypatch, "treatment").get("u1", 5, category=None, exclude_unavailable=True)
+    served = _get(_service(reader, monkeypatch, "treatment"), "u1", 5)
     assert served is not None
     assert (served.experiment_id, served.variant) == (None, None)
 
@@ -115,21 +126,19 @@ def test_rows_without_variant_column_clear_assignment(monkeypatch) -> None:
 @pytest.mark.parametrize("variant", [None, "treatment"])
 def test_no_rows_and_no_cold_start_returns_none(monkeypatch, variant) -> None:
     reader = _Reader({}, {})
-    assert (
-        _service(reader, monkeypatch, variant).get("u1", 5, category=None, exclude_unavailable=True) is None
-    )
+    assert _get(_service(reader, monkeypatch, variant), "u1", 5) is None
 
 
 def test_filter_config_comes_from_items_cache(monkeypatch) -> None:
     reader = _Reader({None: _rows(list("abcdef"))}, {})
     service = _service(reader, monkeypatch, None, items_cache=_GenreItems())
 
-    served = service.get("u1", 2, category="pop", exclude_unavailable=True)
+    served = _get(service, "u1", 2, category="pop")
     assert served is not None
     assert served.recs["item_id"].tolist() == ["a", "c"]
     assert served.recs["rank"].tolist() == [1, 2]
 
-    served = service.get("u1", 1, category=None, exclude_unavailable=True)
+    served = _get(service, "u1", 1)
     assert served is not None
     assert served.recs["item_id"].tolist() == ["a"]
     assert reader.fetch_ks == [10, 5]

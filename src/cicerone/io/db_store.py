@@ -73,7 +73,7 @@ from cicerone.io.user_lookup import (
     newest_events_by_user,
 )
 from cicerone.item_scores import ITEM_SCORES_COLUMNS, normalize_item_scores
-from cicerone.locks.hold import WriteFence
+from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
 

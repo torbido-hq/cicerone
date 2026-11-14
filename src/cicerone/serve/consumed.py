@@ -13,15 +13,6 @@ from cicerone.events.consumed import ConsumedOverlay
 from cicerone.io.base import UserHistoryReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, USER_COLUMN
 
-__all__ = [
-    "ConsumedOverlay",
-    "consumed_item_ids",
-    "consumed_item_ids_for_users",
-    "drop_consumed",
-    "drop_item_ids",
-    "merge_fill",
-]
-
 logger = logging.getLogger(__name__)
 
 _HISTORY_FAIL_LOCK = threading.Lock()
@@ -108,14 +99,12 @@ def _history_frames_for_users(
     user_ids: list[str],
     lookback: int,
 ) -> dict[str, pd.DataFrame]:
-    bulk = getattr(history, "get_events_for_users", None)
-    if callable(bulk):
-        try:
-            return dict(bulk(user_ids, lookback))
-        except OPTIONAL_STORE_READ_ERRORS as exc:
-            if _missing_history(exc):
-                return {}
-            _log_history_failure(user_ids[0])
+    try:
+        return dict(history.get_events_for_users(user_ids, lookback))
+    except OPTIONAL_STORE_READ_ERRORS as exc:
+        if _missing_history(exc):
+            return {}
+        _log_history_failure(user_ids[0])
     frames: dict[str, pd.DataFrame] = {}
     for user_id in user_ids:
         try:
@@ -132,10 +121,6 @@ def drop_consumed(frame: pd.DataFrame, consumed: set[str]) -> pd.DataFrame:
         return frame
     keep = ~frame[ITEM_COLUMN].astype(str).isin(consumed)
     return frame.loc[keep].reset_index(drop=True)
-
-
-def drop_item_ids(frame: pd.DataFrame, item_ids: set[str]) -> pd.DataFrame:
-    return drop_consumed(frame, item_ids)
 
 
 def merge_fill(

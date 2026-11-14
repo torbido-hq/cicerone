@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from rectools.metrics import calc_metrics
+from support.settings import make_settings
 
 from cicerone import automl
 from cicerone.automl import (
@@ -19,7 +20,7 @@ from cicerone.automl import (
 )
 from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset, build_interactions
-from cicerone.model import train_and_recommend
+from cicerone.model import FitOptions, train_and_recommend
 from cicerone.ranking import drop_seen_pairs
 
 
@@ -231,7 +232,11 @@ def test_evaluate_candidates_raises_without_enough_history(sample_items, feature
     )
     with pytest.raises(ValueError, match="Not enough event history"):
         evaluate_candidates(
-            events, None, sample_items, feature_config, top_k=2, half_life_days=90, n_splits=3, test_days=14
+            events,
+            None,
+            sample_items,
+            feature_config,
+            make_settings(top_k=2, half_life_days=90, automl_n_splits=3, automl_test_days=14),
         )
 
 
@@ -247,11 +252,7 @@ def test_evaluate_candidates_raises_without_enough_history_with_max_workers(samp
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            n_splits=3,
-            test_days=14,
-            max_workers=4,
+            make_settings(top_k=2, half_life_days=90, automl_n_splits=3, automl_test_days=14, max_workers=4),
         )
 
 
@@ -280,11 +281,13 @@ def test_evaluate_candidates_excludes_popular_in_category_without_items(feature_
             None,
             None,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[{"models": ["popular_in_category"]}],
-            n_splits=1,
-            test_days=7,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[{"models": ["popular_in_category"]}],
+                automl_n_splits=1,
+                automl_test_days=7,
+            ),
         )
 
 
@@ -308,12 +311,14 @@ def test_evaluate_candidates_excludes_content_fallback_when_disabled(sample_item
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[{"models": ["content_fallback"]}],
-            n_splits=1,
-            test_days=7,
-            content_fallback_enabled=False,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[{"models": ["content_fallback"]}],
+                automl_n_splits=1,
+                automl_test_days=7,
+                content_fallback_enabled=False,
+            ),
         )
 
 
@@ -321,7 +326,11 @@ def test_evaluate_candidates_raises_on_empty_candidates_list(sample_items, featu
     events = _spread_events(n_days=21)
     with pytest.raises(ValueError, match="empty list"):
         evaluate_candidates(
-            events, None, sample_items, feature_config, top_k=2, half_life_days=90, candidates=[]
+            events,
+            None,
+            sample_items,
+            feature_config,
+            make_settings(top_k=2, half_life_days=90, automl_candidates=[]),
         )
 
 
@@ -334,11 +343,13 @@ def test_evaluate_candidates_warns_when_fewer_folds_than_requested(sample_items,
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[{"models": ["popular"]}],
-            n_splits=3,
-            test_days=7,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[{"models": ["popular"]}],
+                automl_n_splits=3,
+                automl_test_days=7,
+            ),
         )
 
     assert results[0].n_folds < 3
@@ -354,11 +365,9 @@ def test_evaluate_candidates_scores_each_candidate(sample_items, feature_config)
         None,
         sample_items,
         feature_config,
-        top_k=2,
-        half_life_days=90,
-        candidates=candidates,
-        n_splits=1,
-        test_days=7,
+        make_settings(
+            top_k=2, half_life_days=90, automl_candidates=candidates, automl_n_splits=1, automl_test_days=7
+        ),
     )
 
     assert len(results) == 2
@@ -386,12 +395,14 @@ def test_evaluate_candidates_passes_content_fallback_flag(sample_items, feature_
         None,
         sample_items,
         feature_config,
-        top_k=2,
-        half_life_days=90,
-        candidates=[{"models": ["popular"]}],
-        n_splits=1,
-        test_days=7,
-        content_fallback_enabled=False,
+        make_settings(
+            top_k=2,
+            half_life_days=90,
+            automl_candidates=[{"models": ["popular"]}],
+            automl_n_splits=1,
+            automl_test_days=7,
+            content_fallback_enabled=False,
+        ),
     )
     assert seen
     assert seen == [False] * len(seen)
@@ -409,21 +420,17 @@ def test_evaluate_candidates_parallel_folds_match_sequential(sample_items, featu
     monkeypatch.setattr(automl, "ProcessPoolExecutor", spy_pool)
     events = _spread_events(n_days=35)
     candidates = [{"models": ["popular"]}, {"models": ["latest"]}]
-    kwargs = dict(
-        events=events,
-        users=None,
-        items=sample_items,
-        config=feature_config,
-        top_k=2,
-        half_life_days=90,
-        candidates=candidates,
-        n_splits=3,
-        test_days=7,
+    options = dict(
+        top_k=2, half_life_days=90, automl_candidates=candidates, automl_n_splits=3, automl_test_days=7
     )
 
-    sequential = evaluate_candidates(**kwargs, max_workers=1)
+    sequential = evaluate_candidates(
+        events, None, sample_items, feature_config, make_settings(**options, max_workers=1)
+    )
     # max_workers > fold count must be capped, not raise.
-    parallel = evaluate_candidates(**kwargs, max_workers=10)
+    parallel = evaluate_candidates(
+        events, None, sample_items, feature_config, make_settings(**options, max_workers=10)
+    )
 
     assert start_methods == ["spawn"]
     assert len(sequential) == len(parallel) == 2
@@ -448,11 +455,13 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
         None,
         sample_items,
         feature_config,
-        top_k=2,
-        half_life_days=90,
-        candidates=[candidate_cfg],
-        n_splits=3,
-        test_days=7,
+        make_settings(
+            top_k=2,
+            half_life_days=90,
+            automl_candidates=[candidate_cfg],
+            automl_n_splits=3,
+            automl_test_days=7,
+        ),
     )
 
     assert len(results) == 1
@@ -486,6 +495,7 @@ def test_evaluate_candidates_handles_weighted_rrf_and_averages_across_folds(samp
                 enabled_models=candidate_cfg["models"],
                 weights=candidate_cfg["weights"],
                 rrf_k=candidate_cfg["rrf_k"],
+                fit=FitOptions(),
             ),
             built.interactions,
             2,
@@ -593,12 +603,14 @@ def test_evaluate_candidates_accepts_debias_flag(sample_items, feature_config):
         None,
         sample_items,
         feature_config,
-        top_k=2,
-        half_life_days=90,
-        candidates=[{"models": ["popular"]}],
-        n_splits=1,
-        test_days=7,
-        debias=True,
+        make_settings(
+            top_k=2,
+            half_life_days=90,
+            automl_candidates=[{"models": ["popular"]}],
+            automl_n_splits=1,
+            automl_test_days=7,
+            automl_debias=True,
+        ),
     )
     assert len(results) == 1
     assert any(key.startswith("MAP") for key in results[0].metrics)

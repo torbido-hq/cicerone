@@ -306,6 +306,7 @@ def test_items_filter_cache_stringifies_non_string_item_ids():
         category_column="category",
         exclude_unavailable=True,
         ids_by_category=by_cat,
+        on_missing_category_column=lambda: None,
     )
     assert list(filtered["item_id"]) == ["10"]
 
@@ -1023,20 +1024,3 @@ def test_item_scores_paginates_and_filters():
     }
     missing = client.get("/item-scores", params={"item_id": "z"}, headers=headers)
     assert missing.json() == {"items": [], "next_cursor": None}
-
-
-def test_item_scores_sorts_unsorted_fallback_reader():
-    unsorted = pd.DataFrame(
-        [
-            {"item_id": "c", "popular_score": 3.0, "latest_score": 0.0, "n_users": 1},
-            {"item_id": "a", "popular_score": 1.0, "latest_score": 0.0, "n_users": 1},
-            {"item_id": "b", "popular_score": 2.0, "latest_score": 1.5, "n_users": 2},
-        ]
-    )
-    app = create_app(serve_settings(), FakeReader(recs_df(), item_scores=unsorted))
-    first = TestClient(app).get(
-        "/item-scores", params={"limit": 2}, headers={"Authorization": "Bearer secret"}
-    )
-    assert first.status_code == 200
-    assert [row["item_id"] for row in first.json()["items"]] == ["a", "b"]
-    assert first.json()["next_cursor"] == "b"

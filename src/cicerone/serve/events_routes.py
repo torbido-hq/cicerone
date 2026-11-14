@@ -147,10 +147,10 @@ def mount_events_routes(
     settings: Settings,
     *,
     event_source: WebhookEventSource | None = None,
-) -> WebhookEventSource | None:
+) -> None:
     """Register webhook ingest when ``[events]`` is enabled with ``kind = "webhook"``."""
     if not (settings.events.enabled and settings.events.kind == "webhook"):
-        return None
+        return
 
     if event_source is None:
         # OpenAPI export / route unit tests; production passes the bootstrap source.
@@ -201,5 +201,3 @@ def mount_events_routes(
             accepted=len(accepted),
             event_ids=[event.event_id for event in accepted],
         )
-
-    return webhook_source

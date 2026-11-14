@@ -32,7 +32,6 @@ from cicerone.artifact import (
     ARTIFACT_FILENAME,
     ARTIFACT_SCHEMA_VERSION,
     loads_artifact,
-    recommend_from_artifact,
 )
 from cicerone.config import load_settings
 from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
@@ -155,9 +154,7 @@ def test_system_job_dataset_round_trip_with_artifact_and_readers(trained_system:
     loaded = loads_artifact(payload)
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert "collaborative" in loaded.models or "popular" in loaded.models
-    from_artifact = recommend_from_artifact(loaded, ["u1", "u2"], top_k=3)
-    assert set(from_artifact["user_id"].astype(str)) <= {"u1", "u2"}
-    assert not from_artifact.empty
+    assert set(loaded.fitted) == set(loaded.models)
 
 
 def test_system_serve_http_reads_job_output(trained_system: TrainedSystem) -> None:
