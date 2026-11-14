@@ -1008,52 +1008,23 @@ def _base_io_toml() -> str:
         """
 
 
-def test_load_settings_dashboard_lookup_k(tmp_path, caplog):
-    config_path = write_toml(
-        tmp_path,
-        f"""
-        [dashboard]
-        enabled = true
-        lookup_k = 8
-        {_base_io_toml()}
-        """,
-    )
-
-    with caplog.at_level("WARNING", logger="cicerone.config.load"):
-        settings = load_settings(config_path)
-
-    assert settings.dashboard.lookup_k == 8
-    assert "dashboard.lookup_k is deprecated" in caplog.text
-
-
-def test_load_settings_dashboard_lookup_k_defaults_to_20(tmp_path, caplog):
-    with caplog.at_level("WARNING", logger="cicerone.config.load"):
-        settings = load_settings(write_toml(tmp_path, _base_io_toml()))
-
-    assert settings.dashboard.lookup_k == 20
-    assert "dashboard.lookup_k" not in caplog.text
-    assert settings.dashboard.host == "127.0.0.1"
-
-
-@pytest.mark.parametrize(("enabled", "warned"), [("true", True), ("false", False)])
-def test_load_settings_accepts_any_dashboard_lookup_k_and_warns_only_when_enabled(
-    tmp_path, caplog, enabled, warned
-):
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_load_settings_dashboard_lookup_k_is_an_unknown_key(tmp_path, caplog, enabled):
     config_path = write_toml(
         tmp_path,
         f"""
         [dashboard]
         enabled = {enabled}
-        lookup_k = 0
+        lookup_k = 8
         {_base_io_toml()}
         """,
     )
 
-    with caplog.at_level("WARNING", logger="cicerone.config.load"):
+    with caplog.at_level("WARNING", logger="cicerone.config.unknown_keys"):
         settings = load_settings(config_path)
 
-    assert settings.dashboard.lookup_k == 0
-    assert ("dashboard.lookup_k is deprecated" in caplog.text) is warned
+    assert not hasattr(settings.dashboard, "lookup_k")
+    assert "Unknown config key 'dashboard.lookup_k' is ignored" in caplog.text
 
 
 def test_load_settings_dashboard_lookup_events(tmp_path):
@@ -1658,7 +1629,8 @@ _PORT_KEYS = [("serve", "serve"), ("trigger", "job.trigger"), ("dashboard", "das
 
 @pytest.mark.parametrize(("section", "name"), _PORT_KEYS)
 @pytest.mark.parametrize(
-    ("port", "message"), [(-1, "must be >= 0, got -1"), (65536, "must be <= 65535, got 65536")]
+    ("port", "message"),
+    [(0, "must be >= 1, got 0"), (-1, "must be >= 1, got -1"), (65536, "must be <= 65535, got 65536")],
 )
 def test_make_settings_rejects_out_of_range_port(section, name, port, message):
     with pytest.raises(ConfigError, match=f"^{re.escape(f'{name}.port {message}')}$"):
@@ -1671,17 +1643,12 @@ def test_make_settings_accepts_port_range_bounds(section, port):
     assert getattr(make_settings(**{section: {"port": port}}), section).port == port
 
 
-@pytest.mark.parametrize(("section", "name"), _PORT_KEYS)
-def test_make_settings_port_zero_loads_with_deprecation_warning(caplog, section, name):
-    with caplog.at_level("WARNING", logger="cicerone.config.load"):
-        settings = make_settings(**{section: {"port": 0}})
-    assert getattr(settings, section).port == 0
-    assert f"{name}.port = 0 (any free port) is deprecated and will be rejected in 0.9.0" in caplog.text
-
-
-def test_load_settings_rejects_out_of_range_serve_port(tmp_path):
-    config_path = write_toml(tmp_path, f"[serve]\nport = 70000\n{MINIMAL_IO_TOML}")
-    with pytest.raises(ConfigError, match=r"^serve\.port must be <= 65535, got 70000$"):
+@pytest.mark.parametrize(
+    ("port", "message"), [(0, "must be >= 1, got 0"), (70000, "must be <= 65535, got 70000")]
+)
+def test_load_settings_rejects_out_of_range_serve_port(tmp_path, port, message):
+    config_path = write_toml(tmp_path, f"[serve]\nport = {port}\n{MINIMAL_IO_TOML}")
+    with pytest.raises(ConfigError, match=f"^{re.escape(f'serve.port {message}')}$"):
         load_settings(config_path)
 
 

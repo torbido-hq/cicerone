@@ -95,12 +95,7 @@ def _optional_token(raw: dict[str, Any], key: str, path: str) -> str | None:
 
 
 def _port(raw: dict[str, Any], name: str, default: int) -> int:
-    port = int_field(raw, name, default, partial(require_int_in_range, minimum=0, maximum=MAX_PORT))
-    if port == 0:
-        logger.warning(
-            "%s = 0 (any free port) is deprecated and will be rejected in 0.9.0; set a fixed port", name
-        )
-    return port
+    return int_field(raw, name, default, partial(require_int_in_range, minimum=1, maximum=MAX_PORT))
 
 
 def _load_serve_settings(serve_raw: dict[str, Any], mode: str) -> ServeSettings:
@@ -239,11 +234,6 @@ def _load_dashboard_trigger_url(raw: object, *, allow_http: bool) -> str | None:
 def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings:
     enabled = bool(dashboard_raw.get("enabled", DashboardSettings.enabled))
     trigger_allow_http = bool(dashboard_raw.get("trigger_allow_http", DashboardSettings.trigger_allow_http))
-    if enabled and "lookup_k" in dashboard_raw:
-        logger.warning(
-            "dashboard.lookup_k is deprecated, has no effect and will be removed in 0.9.0; "
-            "Inspect user shows serve.default_k rows"
-        )
     return DashboardSettings(
         enabled=enabled,
         host=dashboard_raw.get("host", DashboardSettings.host),
@@ -258,7 +248,6 @@ def _load_dashboard_settings(dashboard_raw: dict[str, Any]) -> DashboardSettings
         history_limit=int_field(
             dashboard_raw, "dashboard.history_limit", DashboardSettings.history_limit, require_positive_int
         ),
-        lookup_k=int(dashboard_raw.get("lookup_k", DashboardSettings.lookup_k)),
         lookup_events=int_field(
             dashboard_raw, "dashboard.lookup_events", DashboardSettings.lookup_events, require_positive_int
         ),

@@ -860,8 +860,7 @@ def test_recommendations_partial_empty_items_snapshot_omits_category():
     assert "Category" not in response.text
 
 
-@pytest.mark.parametrize("overrides", [{"top_k": 50}, {"top_k": 50, "dashboard_lookup_k": 5}])
-def test_recommendations_partial_shows_serve_default_k_rows(overrides):
+def test_recommendations_partial_shows_serve_default_k_rows():
     recs = pd.DataFrame(
         [
             {
@@ -874,14 +873,13 @@ def test_recommendations_partial_shows_serve_default_k_rows(overrides):
             for i in range(1, 26)
         ]
     )
-    response = _recs_client(FakeReader(recs), serve_default_k=7, **overrides).get(
+    response = _recs_client(FakeReader(recs), serve_default_k=7, top_k=50).get(
         "/partials/recommendations",
         params={"user_id": "u1"},
         auth=("alice", "s3cret"),
     )
 
-    assert ">i7<" in response.text
-    assert ">i8<" not in response.text
+    assert [f"i{i}" for i in range(1, 26) if f">i{i}<" in response.text] == [f"i{i}" for i in range(1, 8)]
 
 
 def test_recommendations_partial_without_reader_shows_error():
