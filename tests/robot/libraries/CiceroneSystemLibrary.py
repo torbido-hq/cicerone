@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -365,11 +366,6 @@ class CiceroneSystemLibrary:
             "event_ids": event_ids,
         }
 
-    def track_store_should_contain_tracked_events(self, event_ids: list[str]) -> None:
-        store = TrackStore(self.settings.output)
-        rows = store.read_rows()
-        assert {row["event_id"] for row in rows} >= set(event_ids)
-
     def dashboard_quality_page_should_show_tracked_metrics(self, impression_count: int) -> None:
         response = self._dashboard().get("/dashboard/quality", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
@@ -408,18 +404,14 @@ class CiceroneSystemLibrary:
 
     def track_history_should_include(self, user_id: str, item_id: str) -> None:
         history = TrackStore(self.settings.output).read_history()
-        assert not history.empty
-        assert user_id in set(history["user_id"].astype(str))
-        assert item_id in set(history["item_id"].astype(str))
+        assert _has_row(history, user_id=user_id, item_id=item_id)
 
     def dataset_input_events_should_be_catalog_plus(self, *purchase: str) -> None:
         """``purchase`` is the (user_id, item_id) conversion appended after seeding, if any."""
+        added = [_conversion_event(*purchase)] if purchase else []
+        expected = pd.concat([self.events, *added], ignore_index=True)
         on_disk = pd.read_parquet(self.input_path / "events.parquet")
-        expected_added = [(*purchase, "purchase")] if purchase else []
-        assert len(on_disk) == len(self.events) + len(expected_added)
-        assert set(on_disk["user_id"].astype(str)) == set(self.events["user_id"])
-        added = on_disk.iloc[len(self.events) :][["user_id", "item_id", "event_type"]].astype(str)
-        assert list(added.itertuples(index=False, name=None)) == expected_added
+        pd.testing.assert_frame_equal(on_disk, pd.read_parquet(BytesIO(expected.to_parquet(index=False))))
         assert not (self.output_path / "events.parquet").exists()
 
     # -- webhook events write-through ----------------------------------------

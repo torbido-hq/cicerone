@@ -16,7 +16,7 @@ Track Ingest Feeds The Next Run And Quality Page
     ${n_events}=    Catalog Event Count    1
     Run System Job Again    system-spec-eval
     Manifest Should Record Successful Run    system-spec-eval    ${n_events}
-    Track Store Should Contain Tracked Events    ${tracked}[event_ids]
+    Track Store Should Hold Exactly    ${tracked}[event_ids]
     Manifest Track Eval Should Record Ctr    ${tracked}[impression_count]
     Track History Should Include    u1    ${tracked}[first_item]
     Dashboard Quality Page Should Show Tracked Metrics    ${tracked}[impression_count]
