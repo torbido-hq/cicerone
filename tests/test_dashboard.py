@@ -879,8 +879,7 @@ def test_recommendations_partial_shows_serve_default_k_rows():
         auth=("alice", "s3cret"),
     )
 
-    assert ">i7<" in response.text
-    assert ">i8<" not in response.text
+    assert [f"i{i}" for i in range(1, 26) if f">i{i}<" in response.text] == [f"i{i}" for i in range(1, 8)]
 
 
 def test_recommendations_partial_without_reader_shows_error():
