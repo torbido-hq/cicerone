@@ -15,7 +15,7 @@ search weights, see [search-weights.md](search-weights.md).
 
 | Path | Role |
 | --- | --- |
-| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings (+ flat property aliases, deprecated: use `settings.automl` / `.trigger` / `.dashboard` / …); `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
+| `config/` | Load & resolve `config/cicerone.toml` (structural config + `${ENV_VAR}` secrets); package: constants / settings / validation / load / `events` / lock_url; nested Serve/Trigger/Dashboard/AutoML/Events/Experiment settings; `ConfigError` for invalid knobs; `make_settings(**overrides)` for tests / OpenAPI export |
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
@@ -445,7 +445,7 @@ trigger token stays on the dashboard process.
   `GET /recommendations/{user_id}` returns with default parameters:
   `serve.default_k` rows, variant fallback, cold-start fallback (with a badge),
   unavailable items dropped (`features.toml` availability filters) and ranks
-  renumbered. `dashboard.lookup_k` is deprecated and has no effect. Events use
+  renumbered. Events use
   `dashboard.lookup_events` (default 20). User attributes use
   `dashboard.lookup_user_attrs` (default none). `category` is joined from the
   items snapshot when that column exists. When `reasons` is
