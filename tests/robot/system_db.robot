@@ -19,7 +19,9 @@ Job Round-Trips Recommendations Manifest And Artifact
     Recommendation Reader Should Cover Catalog Items
     Recommendations Should Be Served For All Known Users
     User U1 Recommendations Should Respect Requested Count
-    Manifest Should Record Successful Run    system-spec
+    ${n_events}=    Catalog Event Count
+    Manifest Should Record Successful Run    system-spec    ${n_events}
+    Manifest History Should Hold    1
     Artifact Should Be Loadable And Produce Recommendations
 
 Serve Reads Job Output Over HTTP
@@ -35,12 +37,3 @@ Dashboard HTTP Matches Serve
     [Documentation]    Dashboard status page and per-user lookup mirror what serve returns.
     Dashboard Should Show Latest Run Summary    system-spec
     Dashboard Should Show Recommendations For User    u1
-
-*** Keywords ***
-Set Up Postgres System
-    ${available}=    Postgres Test Database Available
-    IF    not ${available}
-        Skip    TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- start compose postgres (docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres) and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml
-    END
-    Reset Postgres Schema
-    Seed And Train Postgres System

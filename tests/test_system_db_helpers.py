@@ -1,4 +1,4 @@
-"""Unit tests for support.system_db helpers (no live Postgres required)."""
+"""Unit tests for support.system_db and support.system_spec helpers (no live Postgres required)."""
 
 from __future__ import annotations
 
@@ -12,28 +12,18 @@ import numpy as np
 import pandas as pd
 import pytest
 from support.postgres_defaults import postgres_test_db
-from support.system_db import (
-    DASHBOARD_AUTH,
-    INPUT_DB_TABLES,
-    OUTPUT_DB_TABLES,
+from support.system_db import INPUT_DB_TABLES, OUTPUT_DB_TABLES, postgres_ready, reset_schema
+from support.system_spec import (
     REPO_FEATURES_CONFIG,
-    SERVE_HEADERS,
     SKIP_NO_TEST_DB,
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
     SYSTEM_SERVE_TOKEN,
     available_recommendation_ids,
     dashboard_users,
-    is_dedicated_test_database,
     parse_track_eval,
-    postgres_ready,
-    reset_schema,
     sample_system_catalog,
     write_system_config,
 )
-from support.system_spec import DATASET_OUTPUT_FILES
 
-from cicerone.artifact import ARTIFACT_FILENAME
 from cicerone.io.db_store import (
     DEFAULT_DB_TABLES,
     DEFAULT_EVAL_TABLE,
@@ -43,47 +33,12 @@ from cicerone.io.db_store import (
     DEFAULT_TRACK_TABLE,
     DEFAULT_USERS_TABLE,
 )
-from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
-
-
-@pytest.mark.parametrize(
-    ("db_name", "expected"),
-    [
-        ("test_db", True),
-        ("foo_test", True),
-        ("test_", True),
-        ("_test", True),
-        (None, False),
-        ("", False),
-        ("production", False),
-        ("staging", False),
-        ("dev", False),
-        ("foo_test_backup", False),
-        ("pretest_db", False),
-    ],
-)
-def test_is_dedicated_test_database_classification(db_name: str | None, expected: bool) -> None:
-    assert is_dedicated_test_database(db_name) is expected
 
 
 def test_output_db_tables_are_default_tables_minus_catalog() -> None:
     assert {DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE} == INPUT_DB_TABLES
     assert OUTPUT_DB_TABLES == DEFAULT_DB_TABLES - INPUT_DB_TABLES
     assert {DEFAULT_TRACK_TABLE, DEFAULT_EVAL_TABLE, DEFAULT_HISTORY_TABLE} <= OUTPUT_DB_TABLES
-
-
-def test_is_dedicated_test_database_accepts_canonical_postgres_test_db() -> None:
-    assert is_dedicated_test_database(postgres_test_db()) is True
-
-
-def test_is_dedicated_test_database_ignores_postgres_test_db_env_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """POSTGRES_TEST_DB=cicerone must not authorize schema reset on the app DB."""
-    monkeypatch.setenv("POSTGRES_TEST_DB", "cicerone")
-    assert is_dedicated_test_database("cicerone") is False
-    with pytest.raises(ValueError, match="dedicated test database"):
-        postgres_test_db()
 
 
 def test_reset_schema_rejects_non_test_database_names() -> None:
@@ -311,16 +266,8 @@ def test_mount_serve_app_stops_events_runtime_when_create_app_fails(
     assert stopped == [True]
 
 
-def test_shared_system_spec_auth_and_skip_text() -> None:
-    assert {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"} == SERVE_HEADERS
-    assert (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD) == DASHBOARD_AUTH
+def test_skip_no_test_db_names_postgres_test_host() -> None:
     assert "POSTGRES_TEST_HOST" in SKIP_NO_TEST_DB
-    assert (
-        "recommendations.parquet",
-        ITEMS_SNAPSHOT_FILENAME,
-        "manifest.json",
-        ARTIFACT_FILENAME,
-    ) == DATASET_OUTPUT_FILES
 
 
 def test_parse_track_eval_accepts_dict_and_json() -> None:

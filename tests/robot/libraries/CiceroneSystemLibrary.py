@@ -2,8 +2,7 @@
 
 Wraps ``tests/support`` helpers (catalog fixtures, TOML config, serve/dashboard
 app mounts) so .robot suites can seed a catalog, run the real batch job, then
-exercise serve/dashboard exactly like production — the Robot replacement for
-the former ``tests/test_system_*.py`` pytest modules.
+exercise serve/dashboard exactly like production.
 """
 
 from __future__ import annotations
@@ -21,22 +20,22 @@ from robot.api import SkipExecution
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from support.postgres_defaults import resolve_test_database_url
-from support.system_db import OUTPUT_DB_TABLES, reset_schema, seed_catalog
+from support.system_db import OUTPUT_DB_TABLES, postgres_ready, reset_schema, seed_catalog
 from support.system_spec import (
+    DASHBOARD_AUTH,
     DATASET_OUTPUT_FILES,
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
+    SERVE_HEADERS,
+    SKIP_NO_TEST_DB,
     append_dataset_events,
     available_ids_from_files,
     available_recommendation_ids,
-    dashboard_users,
-    mount_dashboard_app,
+    dashboard_client,
     mount_serve_app,
     parse_track_eval,
     run_system_job,
     sample_system_catalog,
     seed_dataset_catalog,
+    serve_client,
     stop_serve_events,
     write_system_config,
 )
@@ -57,10 +56,6 @@ from cicerone.io.factory import build_manifest_reader, build_output_sink, build_
 from cicerone.track.store import TrackStore
 from cicerone.track.store_common import EVAL_FILENAME, HISTORY_DIR, TRACK_FILENAME
 
-_SERVE_HEADERS = {"Authorization": f"Bearer {SYSTEM_SERVE_TOKEN}"}
-_DASHBOARD_AUTH = (SYSTEM_DASHBOARD_USER, SYSTEM_DASHBOARD_PASSWORD)
-_OUTPUT_FILES = ("recommendations.parquet", "items_snapshot.parquet", "manifest.json", "model.artifact")
-
 
 def _has_row(frame: pd.DataFrame, **values: str) -> bool:
     """One row carries every value (compared as strings)."""
@@ -68,6 +63,20 @@ def _has_row(frame: pd.DataFrame, **values: str) -> bool:
     for column, value in values.items():
         match &= frame[column].astype(str) == value
     return bool(match.any())
+
+
+def _conversion_event(user_id: str, item_id: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "user_id": user_id,
+                "item_id": item_id,
+                "event_type": "purchase",
+                "quantity": 1,
+                "occurred_at": pd.Timestamp("2026-09-01T14:00:00Z"),
+            }
+        ]
+    )
 
 
 class CiceroneSystemLibrary:
@@ -99,8 +108,12 @@ class CiceroneSystemLibrary:
             self._database_url_resolved = True
         return self.database_url
 
-    def postgres_test_database_available(self) -> bool:
-        return bool(self._resolve_database_url())
+    def _seed_fresh_postgres(self) -> None:
+        if not self._resolve_database_url():
+            raise SkipExecution(SKIP_NO_TEST_DB)
+        self.reset_postgres_schema()
+        self.events, self.users, self.items = sample_system_catalog()
+        seed_catalog(self.engine, self.events, self.users, self.items)
 
     def reset_postgres_schema(self) -> None:
         if self.engine is None:
@@ -111,16 +124,14 @@ class CiceroneSystemLibrary:
         reset_schema(self.engine)
 
     # -- setup -----------------------------------------------------------
-    def seed_and_train_postgres_system(
-        self, triggered_by: str = "system-spec", events_webhook: bool = False
-    ) -> None:
-        self.events, self.users, self.items = sample_system_catalog()
-        seed_catalog(self.engine, self.events, self.users, self.items)
+    def set_up_postgres_system(self, events_webhook: bool = False) -> None:
+        """Fresh schema + Postgres catalog in and out; skips without a test DB."""
+        self._seed_fresh_postgres()
         root = Path(tempfile.mkdtemp(prefix="cicerone-robot-db-"))
         self.config_path = write_system_config(
             root / "cicerone.toml", database_url=self.database_url, events_webhook=events_webhook
         )
-        self.run_system_job_again(triggered_by)
+        self.run_system_job_again("system-spec")
 
     def seed_and_train_dataset_system(
         self, triggered_by: str = "system-spec", events_webhook: bool = False
@@ -142,17 +153,7 @@ class CiceroneSystemLibrary:
 
     def set_up_mixed_system(self) -> None:
         """Fresh schema + Postgres catalog in, local parquet out; skips without a test DB."""
-        if not self.postgres_test_database_available():
-            raise SkipExecution(
-                "TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- run via docker-compose.ci.yml"
-                " (see CONTRIBUTING.md)"
-            )
-        self.reset_postgres_schema()
-        self.seed_and_train_mixed_system()
-
-    def seed_and_train_mixed_system(self, triggered_by: str = "system-spec") -> None:
-        self.events, self.users, self.items = sample_system_catalog()
-        seed_catalog(self.engine, self.events, self.users, self.items)
+        self._seed_fresh_postgres()
         root = Path(tempfile.mkdtemp(prefix="cicerone-robot-mixed-"))
         self.output_path = root / "out"
         self.output_path.mkdir(parents=True)
@@ -163,43 +164,19 @@ class CiceroneSystemLibrary:
             database_url=self.database_url,
             output_path=self.output_path,
         )
-        self.run_system_job_again(triggered_by)
+        self.run_system_job_again("system-spec")
 
     def run_system_job_again(self, triggered_by: str) -> None:
         run_system_job(self.config_path, triggered_by=triggered_by)
         self.settings = load_settings(str(self.config_path))
 
     def append_postgres_conversion_event(self, user_id: str, item_id: str) -> None:
-        from support.system_db import postgres_ready
-
-        conversion = pd.DataFrame(
-            [
-                {
-                    "user_id": user_id,
-                    "item_id": item_id,
-                    "event_type": "purchase",
-                    "quantity": 1,
-                    "occurred_at": pd.Timestamp("2026-09-01T14:00:00Z"),
-                }
-            ]
+        postgres_ready(_conversion_event(user_id, item_id)).to_sql(
+            DEFAULT_EVENTS_TABLE, self.engine, if_exists="append", index=False
         )
-        from cicerone.io.db_store import DEFAULT_EVENTS_TABLE
-
-        postgres_ready(conversion).to_sql(DEFAULT_EVENTS_TABLE, self.engine, if_exists="append", index=False)
 
     def append_dataset_conversion_event(self, user_id: str, item_id: str) -> None:
-        conversion = pd.DataFrame(
-            [
-                {
-                    "user_id": user_id,
-                    "item_id": item_id,
-                    "event_type": "purchase",
-                    "quantity": 1,
-                    "occurred_at": pd.Timestamp("2026-09-01T14:00:00Z"),
-                }
-            ]
-        )
-        append_dataset_events(self.input_path, conversion)
+        append_dataset_events(self.input_path, _conversion_event(user_id, item_id))
 
     # -- readers / clients -------------------------------------------------
     def _rec_reader(self):
@@ -208,11 +185,15 @@ class CiceroneSystemLibrary:
     def _manifest_reader(self):
         return build_manifest_reader(self.settings.output)
 
-    def _serve_client(self) -> TestClient:
-        return TestClient(mount_serve_app(self.settings))
+    def _serve(self) -> TestClient:
+        return serve_client(self.settings)
 
-    def _dashboard_client(self) -> TestClient:
-        return TestClient(mount_dashboard_app(self.settings, dashboard_users(), config_path=self.config_path))
+    def _dashboard(self) -> TestClient:
+        return dashboard_client(self.settings, self.config_path)
+
+    def _available_item_ids(self) -> set[str]:
+        available = self.items["published"].astype(bool) & self.items["in_stock"].astype(bool)
+        return set(self.items.loc[available, "item_id"].astype(str))
 
     def _expected_ids(self, user_id: str, k: int | None = None) -> list[str]:
         feature_config = load_feature_config(self.settings.feature_config_path)
@@ -257,6 +238,9 @@ class CiceroneSystemLibrary:
         assert bool(latest["artifact_written"]) is True
         assert int(latest["artifact_schema_version"]) == ARTIFACT_SCHEMA_VERSION
 
+    def manifest_history_should_hold(self, expected_runs: int) -> None:
+        assert len(self._manifest_reader().read_recent(limit=5)) == int(expected_runs)
+
     def artifact_should_be_loadable_and_produce_recommendations(self) -> None:
         payload = build_output_sink(self.settings.output).read_model_artifact()
         assert payload is not None
@@ -270,26 +254,38 @@ class CiceroneSystemLibrary:
         assert artifact_users <= {"u1", "u2", COLD_START_USER_ID}
 
     # -- serve assertions ----------------------------------------------------
-    def serve_should_return_recommendations_for_user(self, user_id: str) -> None:
-        response = self._serve_client().get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
+    def _serve_should_return(self, user_id: str, expected_ids: list[str], generated_at: str) -> None:
+        response = self._serve().get(f"/recommendations/{user_id}", headers=SERVE_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["user_id"] == user_id
         assert body["fallback"] is False
         assert body["items"]
-        assert [row["item_id"] for row in body["items"]] == self._expected_ids(user_id)
+        assert [row["item_id"] for row in body["items"]] == expected_ids
+        assert body["generated_at"] == generated_at
+        assert response.headers.get("X-Generated-At") == generated_at
 
-    def serve_should_fallback_for_unknown_user(self) -> None:
-        response = self._serve_client().get("/recommendations/u-unknown", headers=_SERVE_HEADERS)
+    def serve_should_return_recommendations_for_user(self, user_id: str) -> None:
+        latest = self._manifest_reader().read_latest()
+        assert latest is not None
+        self._serve_should_return(user_id, self._expected_ids(user_id), str(latest["generated_at"]))
+
+    def serve_should_fallback_for_unknown_user(self) -> list[str]:
+        response = self._serve().get("/recommendations/u-unknown", headers=SERVE_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["fallback"] is True
         assert body["items"]
+        return [row["item_id"] for row in body["items"]]
+
+    def items_should_be_available_and_in_recommendations_file(self, item_ids: list[str]) -> None:
+        rec_ids = set(pd.read_parquet(self.output_path / "recommendations.parquet")["item_id"].astype(str))
+        assert set(item_ids) <= self._available_item_ids() & rec_ids
 
     def serve_should_support_category_filter(self, user_id: str, category: str, *allowed_ids: str) -> None:
         def served(query: str) -> set[str]:
             path = f"/recommendations/{user_id}?exclude_unavailable=false&limit=10{query}"
-            response = self._serve_client().get(path, headers=_SERVE_HEADERS)
+            response = self._serve().get(path, headers=SERVE_HEADERS)
             assert response.status_code == 200
             return {row["item_id"] for row in response.json()["items"]}
 
@@ -301,17 +297,18 @@ class CiceroneSystemLibrary:
         assert served("") and not served("&category=not-in-catalog")
 
     def serve_should_support_exclude_unavailable(self, user_id: str, *excluded_ids: str) -> None:
-        response = self._serve_client().get(
-            f"/recommendations/{user_id}?exclude_unavailable=true&limit=10", headers=_SERVE_HEADERS
+        response = self._serve().get(
+            f"/recommendations/{user_id}?exclude_unavailable=true&limit=10", headers=SERVE_HEADERS
         )
         assert response.status_code == 200
         served_ids = {row["item_id"] for row in response.json()["items"]}
         assert served_ids
         assert served_ids.isdisjoint(excluded_ids)
+        assert served_ids <= self._available_item_ids()
 
     # -- dashboard assertions --------------------------------------------
     def dashboard_should_show_latest_run_summary(self, triggered_by: str) -> None:
-        response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
+        response = self._dashboard().get("/dashboard", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         assert "success" in response.text
         assert triggered_by in response.text
@@ -319,9 +316,7 @@ class CiceroneSystemLibrary:
 
     def dashboard_should_show_recommendations_for_user(self, user_id: str) -> None:
         expected_ids = self._expected_ids(user_id)
-        response = self._dashboard_client().get(
-            "/dashboard", params={"user_id": user_id}, auth=_DASHBOARD_AUTH
-        )
+        response = self._dashboard().get("/dashboard", params={"user_id": user_id}, auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         assert "Recommendations for" in response.text
         assert user_id in response.text
@@ -330,8 +325,8 @@ class CiceroneSystemLibrary:
 
     # -- track / quality -----------------------------------------------------
     def track_impressions_and_click_for_user(self, user_id: str) -> dict[str, Any]:
-        serve = self._serve_client()
-        served = serve.get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
+        serve = self._serve()
+        served = serve.get(f"/recommendations/{user_id}", headers=SERVE_HEADERS)
         assert served.status_code == 200
         body = served.json()
         items = body["items"]
@@ -360,7 +355,7 @@ class CiceroneSystemLibrary:
             "event_id": "sys-clk-1",
             "generated_at": generated_at,
         }
-        tracked = serve.post("/track", headers=_SERVE_HEADERS, json={"events": [*impressions, click]})
+        tracked = serve.post("/track", headers=SERVE_HEADERS, json={"events": [*impressions, click]})
         assert tracked.status_code == 202
         assert tracked.json()["accepted"] == len(impressions) + 1
         event_ids = [event["event_id"] for event in impressions] + ["sys-clk-1"]
@@ -376,10 +371,7 @@ class CiceroneSystemLibrary:
         assert {row["event_id"] for row in rows} >= set(event_ids)
 
     def dashboard_quality_page_should_show_tracked_metrics(self, impression_count: int) -> None:
-        import re
-
-        client = self._dashboard_client()
-        response = client.get("/dashboard/quality", auth=_DASHBOARD_AUTH)
+        response = self._dashboard().get("/dashboard/quality", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         assert "Could not load quality metrics." not in response.text
         assert "No impressions yet." not in response.text
@@ -391,7 +383,7 @@ class CiceroneSystemLibrary:
         for name in ("events.parquet", "users.parquet", "items.parquet"):
             assert (self.input_path / name).is_file()
             assert not (self.output_path / name).exists()
-        for name in _OUTPUT_FILES:
+        for name in DATASET_OUTPUT_FILES:
             assert (self.output_path / name).is_file()
             assert not (self.input_path / name).exists()
 
@@ -414,6 +406,22 @@ class CiceroneSystemLibrary:
         history_parts = list((self.output_path / HISTORY_DIR).glob("*.parquet"))
         assert history_parts
 
+    def track_history_should_include(self, user_id: str, item_id: str) -> None:
+        history = TrackStore(self.settings.output).read_history()
+        assert not history.empty
+        assert user_id in set(history["user_id"].astype(str))
+        assert item_id in set(history["item_id"].astype(str))
+
+    def dataset_input_events_should_be_catalog_plus(self, *purchase: str) -> None:
+        """``purchase`` is the (user_id, item_id) conversion appended after seeding, if any."""
+        on_disk = pd.read_parquet(self.input_path / "events.parquet")
+        expected_added = [(*purchase, "purchase")] if purchase else []
+        assert len(on_disk) == len(self.events) + len(expected_added)
+        assert set(on_disk["user_id"].astype(str)) == set(self.events["user_id"])
+        added = on_disk.iloc[len(self.events) :][["user_id", "item_id", "event_type"]].astype(str)
+        assert list(added.itertuples(index=False, name=None)) == expected_added
+        assert not (self.output_path / "events.parquet").exists()
+
     # -- webhook events write-through ----------------------------------------
     def start_serve_with_events_runtime(self) -> None:
         # No worker thread: start only connects the source, so POST /events cannot race
@@ -430,7 +438,7 @@ class CiceroneSystemLibrary:
 
     def _events_serve_get(self, user_id: str) -> dict[str, Any]:
         assert self.events_serve is not None, "Start Serve With Events Runtime first"
-        response = self.events_serve.get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
+        response = self.events_serve.get(f"/recommendations/{user_id}", headers=SERVE_HEADERS)
         assert response.status_code == 200
         return response.json()
 
@@ -447,7 +455,7 @@ class CiceroneSystemLibrary:
         assert self.events_serve is not None, "Start Serve With Events Runtime first"
         response = self.events_serve.post(
             "/events",
-            headers=_SERVE_HEADERS,
+            headers=SERVE_HEADERS,
             json={
                 "user_id": user_id,
                 "item_id": item_id,
@@ -489,14 +497,14 @@ class CiceroneSystemLibrary:
         assert _has_row(stored, user_id=user_id, item_id=item_id, source=INCREMENTAL_SOURCE)
 
     def dashboard_should_show_no_incremental_flushes(self) -> None:
-        response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
+        response = self._dashboard().get("/dashboard", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         assert "Incremental events" in response.text
         assert "Source: webhook" in response.text
         assert "No incremental flushes recorded in recent manifests yet." in response.text
 
     def dashboard_should_show_incremental_flush(self, applied: int) -> None:
-        response = self._dashboard_client().get("/dashboard", auth=_DASHBOARD_AUTH)
+        response = self._dashboard().get("/dashboard", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         assert "Source: webhook" in response.text
         assert "No incremental flushes recorded in recent manifests yet." not in response.text
@@ -508,11 +516,13 @@ class CiceroneSystemLibrary:
         assert _has_row(on_disk, user_id=user_id, item_id=item_id, source=INCREMENTAL_SOURCE)
 
     # -- mixed I/O (db in, dataset out) ---------------------------------------
-    def settings_should_read_db_and_write_dataset(self) -> None:
-        assert self.settings.input.kind == "db"
-        assert self.settings.output.kind == "dataset"
-        assert self.settings.input.options["database_url"] == self.database_url
-        assert Path(self.settings.output.options["path"]) == self.output_path
+    def settings_should_read_and_write(self, input_kind: str, output_kind: str) -> None:
+        assert (self.settings.input.kind, self.settings.output.kind) == (input_kind, output_kind)
+        for io, path in ((self.settings.input, self.input_path), (self.settings.output, self.output_path)):
+            if io.kind == "db":
+                assert io.options["database_url"] == self.database_url
+            else:
+                assert Path(io.options["path"]) == path
 
     def postgres_should_hold_only_input_tables(self) -> None:
         tables = set(inspect(self.engine).get_table_names())
@@ -538,9 +548,11 @@ class CiceroneSystemLibrary:
         u1_file = recs.loc[recs["user_id"].astype(str) == "u1"].sort_values("rank")
         served = self._rec_reader().get_recommendations("u1", k=2)
         assert list(served["item_id"].astype(str)) == list(u1_file["item_id"].astype(str).head(2))
+        assert list(served["rank"]) == [1, 2]
 
     def items_snapshot_should_carry_availability_flags(self) -> None:
         snapshot = pd.read_parquet(self.output_path / "items_snapshot.parquet")
+        assert set(snapshot["item_id"].astype(str)) == set(self.items["item_id"])
         assert bool(snapshot.loc[snapshot["item_id"].astype(str) == "i3", "in_stock"].iloc[0]) is False
         assert bool(snapshot.loc[snapshot["item_id"].astype(str) == "i4", "published"].iloc[0]) is False
 
@@ -553,13 +565,7 @@ class CiceroneSystemLibrary:
     def serve_should_match_output_files_for_user(self, user_id: str) -> None:
         expected = available_ids_from_files(self.output_path, user_id, settings=self.settings)
         generated_at = json.loads((self.output_path / "manifest.json").read_text())["generated_at"]
-        response = self._serve_client().get(f"/recommendations/{user_id}", headers=_SERVE_HEADERS)
-        assert response.status_code == 200
-        body = response.json()
-        assert body["fallback"] is False
-        assert [row["item_id"] for row in body["items"]] == expected
-        assert body["generated_at"] == generated_at
-        assert response.headers.get("X-Generated-At") == generated_at
+        self._serve_should_return(user_id, expected, generated_at)
 
     def dataset_track_file_should_hold_exactly(self, event_ids: list[str]) -> None:
         track_path = self.output_path / TRACK_FILENAME
@@ -581,7 +587,7 @@ class CiceroneSystemLibrary:
         assert abs(float(overall["ctr"]) - 1 / int(impression_count)) < 1e-9
 
     def dashboard_quality_page_should_show_ctr(self, impression_count: int) -> None:
-        response = self._dashboard_client().get("/dashboard/quality", auth=_DASHBOARD_AUTH)
+        response = self._dashboard().get("/dashboard/quality", auth=DASHBOARD_AUTH)
         assert response.status_code == 200
         expected = f"{(1 / int(impression_count)) * 100:.2f}%"
         assert re.search(rf"CTR</dt>\s*<dd[^>]*>{re.escape(expected)}", response.text)

@@ -13,16 +13,11 @@ Track Ingest Feeds The Next Run And Quality Page
     ...                then CTR shows up on the dashboard Quality page.
     ${tracked}=    Track Impressions And Click For User    u1
     Append Postgres Conversion Event    u1    ${tracked}[first_item]
+    ${n_events}=    Catalog Event Count    1
     Run System Job Again    system-spec-eval
-    Manifest Should Record Successful Run    system-spec-eval
+    Manifest Should Record Successful Run    system-spec-eval    ${n_events}
     Track Store Should Contain Tracked Events    ${tracked}[event_ids]
+    Manifest Track Eval Should Record Ctr    ${tracked}[impression_count]
+    Track History Should Include    u1    ${tracked}[first_item]
     Dashboard Quality Page Should Show Tracked Metrics    ${tracked}[impression_count]
-
-*** Keywords ***
-Set Up Postgres System
-    ${available}=    Postgres Test Database Available
-    IF    not ${available}
-        Skip    TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- start compose postgres (docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres) and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml
-    END
-    Reset Postgres Schema
-    Seed And Train Postgres System
+    Dashboard Quality Page Should Show Ctr    ${tracked}[impression_count]

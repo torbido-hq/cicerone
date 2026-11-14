@@ -1,7 +1,7 @@
 """Postgres-specific helpers for system / DB tests.
 
-Schema-reset guardrails and fixture normalization stay here. Shared catalog,
-TOML, and HTTP mounts live in ``support.system_spec`` and are re-exported.
+Schema-reset guardrails and fixture normalization. Shared catalog, TOML and
+HTTP mounts live in ``support.system_spec``.
 """
 
 from __future__ import annotations
@@ -21,72 +21,10 @@ from cicerone.io.db_store import (
 from support.postgres_defaults import (
     canonical_postgres_test_db,
     looks_like_test_database,
-    resolve_test_database_url,
 )
-from support.system_spec import (
-    DASHBOARD_AUTH,
-    REPO_FEATURES_CONFIG,
-    REPO_ROOT,
-    SERVE_HEADERS,
-    SKIP_NO_TEST_DB,
-    SYSTEM_DASHBOARD_PASSWORD,
-    SYSTEM_DASHBOARD_USER,
-    SYSTEM_SERVE_TOKEN,
-    available_recommendation_ids,
-    dashboard_client,
-    dashboard_users,
-    mount_dashboard_app,
-    mount_serve_app,
-    parse_track_eval,
-    run_system_job,
-    sample_system_catalog,
-    serve_client,
-    stop_serve_events,
-    write_system_config,
-)
-
-TEST_DATABASE_URL = resolve_test_database_url()
 
 INPUT_DB_TABLES = frozenset({DEFAULT_EVENTS_TABLE, DEFAULT_USERS_TABLE, DEFAULT_ITEMS_TABLE})
 OUTPUT_DB_TABLES = DEFAULT_DB_TABLES - INPUT_DB_TABLES
-
-__all__ = [
-    "DASHBOARD_AUTH",
-    "INPUT_DB_TABLES",
-    "OUTPUT_DB_TABLES",
-    "REPO_FEATURES_CONFIG",
-    "REPO_ROOT",
-    "SERVE_HEADERS",
-    "SKIP_NO_TEST_DB",
-    "SYSTEM_DASHBOARD_PASSWORD",
-    "SYSTEM_DASHBOARD_USER",
-    "SYSTEM_SERVE_TOKEN",
-    "TEST_DATABASE_URL",
-    "available_recommendation_ids",
-    "dashboard_client",
-    "dashboard_users",
-    "is_dedicated_test_database",
-    "mount_dashboard_app",
-    "mount_serve_app",
-    "parse_track_eval",
-    "postgres_ready",
-    "reset_schema",
-    "run_system_job",
-    "sample_system_catalog",
-    "seed_catalog",
-    "serve_client",
-    "stop_serve_events",
-    "write_system_config",
-]
-
-
-def is_dedicated_test_database(db_name: str | None) -> bool:
-    """True when ``db_name`` is safe for destructive test schema resets.
-
-    Pattern-only: do not trust ``postgres_test_db()`` / ``POSTGRES_TEST_DB``
-    env, which could be overridden to the app DB name (e.g. ``cicerone``).
-    """
-    return looks_like_test_database(db_name)
 
 
 def reset_schema(engine: Engine) -> None:
@@ -98,7 +36,7 @@ def reset_schema(engine: Engine) -> None:
     ``ALLOW_SCHEMA_RESET_FOR_TESTS=1`` (see CONTRIBUTING.md).
     """
     db_name = engine.url.database
-    if not is_dedicated_test_database(db_name):
+    if not looks_like_test_database(db_name):
         # Prefer canonical_postgres_test_db() — postgres_test_db() can raise on hostile overrides.
         raise RuntimeError(
             f"Refusing to reset schema for non-test database {db_name!r}. "
