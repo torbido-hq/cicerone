@@ -18,7 +18,8 @@ from cicerone.events.store import load_recommendations_frame
 from cicerone.events.updater import IncrementalUpdater
 from cicerone.feature_config import FeatureConfig
 from cicerone.io.factory import build_output_sink
-from cicerone.publish import PublishError, build_publisher, publish_recommendations, registered_publish_kinds
+from cicerone.publish.base import PublishError, publish_recommendations
+from cicerone.publish.factory import build_publisher
 from cicerone.publish.kafka import KafkaPublisher, validate_kafka_publish_options
 from cicerone.publish.payload import user_recommendation_messages
 from cicerone.publish.rabbitmq import RabbitMQPublisher, validate_rabbitmq_publish_options
@@ -146,8 +147,9 @@ def test_user_recommendation_messages_keeps_reasons_and_variant():
     assert rec["variant"] == "control"
 
 
-def test_registered_publish_kinds():
-    assert registered_publish_kinds() == ("kafka", "rabbitmq")
+def test_build_publisher_rejects_unknown_kind():
+    with pytest.raises(ConfigError, match=r"publish.kind must be one of \['kafka', 'rabbitmq'\], got 'sqs'"):
+        build_publisher(PublishSettings(enabled=True, kind="sqs"))
 
 
 def test_validate_kafka_publish_options():
@@ -297,7 +299,7 @@ def test_rabbitmq_publisher_close_wraps_os_error(monkeypatch):
 def test_build_publisher_disabled():
     settings = make_settings()
     assert settings.publish.enabled is False
-    assert build_publisher(settings) is None
+    assert build_publisher(settings.publish) is None
     assert build_publisher(PublishSettings()) is None
 
 
@@ -310,7 +312,7 @@ def test_build_publisher_kafka(monkeypatch):
             options={"bootstrap_servers": "localhost:9092", "topic": "recs"},
         )
     )
-    publisher = build_publisher(settings)
+    publisher = build_publisher(settings.publish)
     assert publisher is not None
     assert publisher._producer is None
     publisher.connect()
@@ -324,9 +326,8 @@ _PUBLISH_OPTIONS = {
 }
 
 
-@pytest.mark.parametrize("kind", registered_publish_kinds())
+@pytest.mark.parametrize("kind", sorted(_PUBLISH_OPTIONS))
 def test_every_built_publisher_accepts_user_ids(kind):
-    assert set(_PUBLISH_OPTIONS) == set(registered_publish_kinds())
     publisher = build_publisher(PublishSettings(enabled=True, kind=kind, options=_PUBLISH_OPTIONS[kind]))
     assert publisher is not None
     param = inspect.signature(publisher.publish).parameters["user_ids"]
@@ -696,7 +697,6 @@ def test_updater_publish_failure_does_not_unsucceed(tmp_path, feature_config: Fe
     )
     events = [normalize_event(event_payload(user_id="u1", item_id="i9", event_id="n1"))]
     assert updater.apply(events) == 1
-    assert updater.events_applied == 1
     assert publisher.publish_attempts == 1
 
 

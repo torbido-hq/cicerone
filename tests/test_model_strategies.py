@@ -5,8 +5,9 @@ import pytest
 from rectools import Columns
 
 from cicerone.config import STRATEGY_NAMES
+from cicerone.config.constants import DEFAULT_MODELS
 from cicerone.dataset import build_dataset
-from cicerone.model import DEFAULT_MODELS, STRATEGIES, train_and_recommend
+from cicerone.model import STRATEGIES, FitOptions, train_and_recommend
 from cicerone.model.strategies import as_recommender_model, validate_strategy_names
 
 
@@ -21,13 +22,14 @@ def test_validate_strategy_names_raises_on_mismatch():
 
 
 def test_as_recommender_model_accepts_every_registered_strategy():
+    from cicerone.content_fallback import ContentFallbackModel
     from cicerone.model import build_strategy_model
     from cicerone.model_config import SEQUENTIAL_STRATEGY, sequential_extra_available
 
-    for name, strategy in STRATEGIES.items():
+    for name in STRATEGIES:
         if name == SEQUENTIAL_STRATEGY and not sequential_extra_available():
             continue
-        model = strategy.factory() if strategy.factory is not None else build_strategy_model(name)
+        model = ContentFallbackModel() if name == "content_fallback" else build_strategy_model(name)
         assert as_recommender_model(model) is model, name
 
 
@@ -107,6 +109,7 @@ def test_item_based_and_content_fallback_require_interactions(feature_config, sa
         top_k=5,
         enabled_models=["collaborative", *gated_models, "popular"],
         content_fallback_enabled=True,
+        fit=FitOptions(),
     )
     assert "u4" in set(mixed[Columns.User])
     feature_only = mixed[mixed[Columns.User] == "u4"]
@@ -120,6 +123,7 @@ def test_item_based_and_content_fallback_require_interactions(feature_config, sa
         top_k=5,
         enabled_models=gated_models,
         content_fallback_enabled=True,
+        fit=FitOptions(),
     )
     assert not interacting_only.empty
     assert interacting_only["source"].isin(gated_sources).all()
@@ -131,5 +135,6 @@ def test_item_based_and_content_fallback_require_interactions(feature_config, sa
         top_k=5,
         enabled_models=gated_models,
         content_fallback_enabled=True,
+        fit=FitOptions(),
     )
     assert feature_only_gated.empty

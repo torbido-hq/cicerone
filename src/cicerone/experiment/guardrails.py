@@ -37,9 +37,6 @@ def evaluate_guardrails(
     *,
     variant: str,
     catalog_size: int | None = None,
-    max_fallback_rate: float = DEFAULT_MAX_FALLBACK_RATE,
-    max_top_item_share: float = DEFAULT_MAX_TOP_ITEM_SHARE,
-    min_coverage: int = DEFAULT_MIN_COVERAGE,
 ) -> GuardrailReport:
     if recs.empty:
         return GuardrailReport(
@@ -61,13 +58,13 @@ def evaluate_guardrails(
     else:
         top_item_share = 1.0
     distinct_items = int(item_counts.size) if item_counts is not None else 0
-    coverage_floor = min_coverage
+    coverage_floor = DEFAULT_MIN_COVERAGE
     if catalog_size is not None and catalog_size > 0:
-        coverage_floor = min(min_coverage, max(1, catalog_size // 20))
+        coverage_floor = min(DEFAULT_MIN_COVERAGE, max(1, catalog_size // 20))
     failures: list[str] = []
-    if fallback_rate > max_fallback_rate:
+    if fallback_rate > DEFAULT_MAX_FALLBACK_RATE:
         failures.append("fallback_rate")
-    if top_item_share > max_top_item_share:
+    if top_item_share > DEFAULT_MAX_TOP_ITEM_SHARE:
         failures.append("top_item_share")
     if distinct_items < coverage_floor:
         failures.append("coverage")

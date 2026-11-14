@@ -277,7 +277,6 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
         *,
         receipt_handle: str | None = None,
         object_key: str | None = None,
-        object_etag: str | None = None,
     ) -> None:
         # pending holds undelivered events; poll moves them to in_flight.
         # _batches stays ordered: marker/SQS delete only for a leading batch
@@ -287,8 +286,6 @@ class S3EventSource(S3ListPoll, S3SqsPoll, EventSource):
             remaining=set(event_ids),
             receipt_handle=receipt_handle,
             object_key=object_key,
-            object_etag=object_etag,
-            event_ids=set(event_ids),
         )
         completed: list[Batch] = []
         with self._lock:

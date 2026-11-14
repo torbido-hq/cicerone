@@ -66,11 +66,6 @@ class PikaIo:
     def closing(self) -> bool:
         return self._closing
 
-    @property
-    def busy(self) -> bool:
-        with self._state_lock:
-            return self._busy > 0
-
     def _clear_busy(self) -> None:
         with self._state_lock:
             if self._busy > 0:

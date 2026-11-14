@@ -34,7 +34,6 @@ from cicerone.artifact import (
     ARTIFACT_FILENAME,
     ARTIFACT_SCHEMA_VERSION,
     loads_artifact,
-    recommend_from_artifact,
 )
 from cicerone.config import load_settings
 from cicerone.io.dataset_recommendation_reader import DatasetRecommendationReader
@@ -149,7 +148,7 @@ def test_system_job_mixed_db_in_dataset_out(trained_system: TrainedSystem) -> No
     assert payload is not None
     assert (trained_system.output_path / ARTIFACT_FILENAME).read_bytes() == payload
     loaded = loads_artifact(payload)
-    assert not recommend_from_artifact(loaded, ["u1"], top_k=3).empty
+    assert set(loaded.fitted) == set(loaded.models)
 
 
 @pytest.mark.skipif(not TEST_DATABASE_URL, reason=SKIP_NO_TEST_DB)

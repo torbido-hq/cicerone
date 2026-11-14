@@ -78,8 +78,6 @@ def test_incremental_updater_write_through(tmp_path, feature_config: FeatureConf
     cold = frame[frame["user_id"] == COLD_START_USER_ID]
     assert "cold-keep" in set(cold["item_id"].astype(str))
     assert called["n"] == 1
-    assert updater.events_applied == 2
-    assert updater.last_success_at is not None
 
 
 def test_incremental_updater_reserves_boost_slots(tmp_path, feature_config: FeatureConfig):
@@ -1417,10 +1415,10 @@ def test_incremental_updater_user_cache_lru_evicts(tmp_path, feature_config):
     )
     assert updater.apply([normalize_event(event_payload(user_id="u1", item_id="a", event_id="e1"))]) == 1
     assert updater.apply([normalize_event(event_payload(user_id="u2", item_id="b", event_id="e2"))]) == 1
-    assert len(updater.cached_user_ids) <= 2
+    assert len(updater._cached_by_user) <= 2
     assert updater.apply([normalize_event(event_payload(user_id="u3", item_id="c", event_id="e3"))]) == 1
-    assert len(updater.cached_user_ids) <= 2
-    assert "u3" in updater.cached_user_ids
+    assert len(updater._cached_by_user) <= 2
+    assert "u3" in updater._cached_by_user
 
 
 def test_incremental_updater_rejects_non_positive_cache_size(tmp_path, feature_config):
@@ -1457,7 +1455,7 @@ def test_popular_ranking_drops_zero_weight_and_breaks_item_ties(tmp_path, featur
             {"event_type": "unknown_type", "quantity": 9, "item_id": "z"},
         ]
     )
-    ranked = updater._popular_ranking(batch)
+    ranked = updater._popular_ranking(batch, updater._row_signal_weights(batch))
     assert list(ranked["item_id"]) == ["a", "b"]
     assert list(ranked["source"]) == ["popular_fallback", "popular_fallback"]
     assert ranked.iloc[0]["score"] == pytest.approx(ranked.iloc[1]["score"])
@@ -1480,10 +1478,8 @@ def test_popular_ranking_drops_negative_weights(tmp_path, feature_config: Featur
             {"event_type": "view", "quantity": 1, "item_id": "ok"},
         ]
     )
-    ranked = updater._popular_ranking(batch)
+    ranked = updater._popular_ranking(batch, updater._row_signal_weights(batch))
     assert list(ranked["item_id"]) == ["ok"]
-    reused = updater._popular_ranking(batch, updater._row_signal_weights(batch))
-    assert list(reused["item_id"]) == ["ok"]
 
 
 def test_incremental_updater_preserves_variants(tmp_path, feature_config: FeatureConfig):
@@ -1929,7 +1925,6 @@ def test_incremental_updater_refreshes_cache_and_reader_when_the_manifest_fails(
         updater.apply(events)
     assert updater.last_apply_written
     assert refreshed == [1]
-    assert updater.events_applied == 1
     frame = load_recommendations_frame(settings.output)
     assert "i9" in set(frame[frame["user_id"] == "u1"]["item_id"].astype(str))
     assert "i9" in set(updater._cached_by_user["u1"]["item_id"].astype(str))
@@ -2033,16 +2028,9 @@ class _RecordingCatalog:
         add = [(str(row["user_id"]), str(row["item_id"])) for row in rows]
         return len(rows), [], add
 
-    def upsert_events(self, rows: list[dict]) -> int:
-        accepted, _, _ = self.replace_events(rows)
-        return accepted
-
 
 class _FailingCatalog:
     def replace_events(self, rows: list[dict]) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
-        raise OSError("catalog write failed")
-
-    def upsert_events(self, rows: list[dict]) -> int:
         raise OSError("catalog write failed")
 
 
@@ -2303,7 +2291,6 @@ def test_incremental_updater_cold_start_user_event_merges_cold_start_once(
         event_payload(user_id="u1", item_id="i9", event_id="s2"),
     ]
     assert updater.apply([normalize_event(event) for event in events]) == 2
-    assert updater.events_applied == 2
     frame = load_recommendations_frame(settings.output)
     cold = frame[frame["user_id"] == COLD_START_USER_ID].sort_values("rank")
     assert cold["item_id"].astype(str).tolist() == ["c1", "c2"]
@@ -2341,7 +2328,6 @@ def test_incremental_updater_cold_start_user_event_creates_no_list(
     ).to_parquet(tmp_path / "out" / "recommendations.parquet", index=False)
     event = event_payload(user_id=COLD_START_USER_ID, item_id="x", event_id="s3")
     assert updater.apply([normalize_event(event)]) == 1
-    assert updater.events_applied == 1
     assert not updater.last_apply_written
     assert not (tmp_path / "out" / MANIFEST_FILENAME).exists()
     frame = load_recommendations_frame(settings.output)
@@ -2372,7 +2358,6 @@ def test_incremental_updater_cold_start_user_event_skips_online_refresh(
     ]
     assert updater.apply([normalize_event(event) for event in events]) == 2
     assert refreshed == [["u1"]]
-    assert updater.events_applied == 2
     frame = load_recommendations_frame(settings.output)
     u1 = frame[frame["user_id"] == "u1"].sort_values("rank")
     assert u1["item_id"].astype(str).tolist() == ["i9", "p1", "x"]

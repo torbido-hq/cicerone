@@ -421,7 +421,8 @@ def _require_lock_backend(settings: Settings) -> None:
 def _require_exposure_log_backend(settings: Settings) -> None:
     if not settings.experiment.enabled or not settings.experiment.log_exposures:
         return
-    from cicerone.experiment.store import EXPOSURE_LOG_BACKEND_ERROR, EXPOSURE_LOG_HA_ERROR
+    from cicerone.experiment.store import EXPOSURE_LOG_HA_ERROR
+    from cicerone.experiment.store_dataset import EXPOSURE_LOG_BACKEND_ERROR
     from cicerone.io.blob import require_db_or_local_dataset
 
     require_db_or_local_dataset(settings.output, EXPOSURE_LOG_BACKEND_ERROR)
@@ -483,7 +484,7 @@ def _require_track_backend(settings: Settings) -> None:
     if not settings.track.enabled or settings.track.redis_url:
         return
     from cicerone.io.blob import require_db_or_local_dataset
-    from cicerone.track.store import TRACK_LOG_BACKEND_ERROR, TRACK_LOG_HA_ERROR
+    from cicerone.track.store_common import TRACK_LOG_BACKEND_ERROR, TRACK_LOG_HA_ERROR
 
     require_db_or_local_dataset(settings.output, TRACK_LOG_BACKEND_ERROR)
     if settings.events.ha and settings.output.kind != "db":

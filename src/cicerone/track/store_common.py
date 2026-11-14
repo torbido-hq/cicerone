@@ -16,7 +16,6 @@ from cicerone.io.recommendation_schema import (
     USER_COLUMN,
     VARIANT_COLUMN,
 )
-from cicerone.track.normalize import assign_missing_event_id
 from cicerone.values import occurred_since, utc_stamp
 
 TRACK_FILENAME = "track.jsonl"
@@ -44,10 +43,6 @@ HISTORY_COLUMNS: tuple[str, ...] = (
 
 def empty_history_frame() -> pd.DataFrame:
     return pd.DataFrame(columns=list(HISTORY_COLUMNS))
-
-
-def row_with_event_id(row: Mapping[str, Any]) -> dict[str, Any]:
-    return assign_missing_event_id(row)
 
 
 def history_frame(recommendations: pd.DataFrame, generated_at: str) -> pd.DataFrame:
@@ -84,8 +79,8 @@ def _stamp_before(value: str, since: str) -> bool:
     return stamp is not None and start is not None and bool(stamp < start)
 
 
-def lookback_since(*, window_hours: float, floor_hours: float = 0.0) -> str:
-    hours = max(float(window_hours or 0.0), float(floor_hours or 0.0), 0.0)
+def lookback_since(window_hours: float) -> str:
+    hours = max(window_hours, _TRACK_FLOOR_HOURS)
     return (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours)).isoformat()
 
 
@@ -96,7 +91,7 @@ def since_date_floor(since: str) -> str | None:
     return (start.tz_convert("UTC") - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-DASHBOARD_TRACK_FLOOR_HOURS = 24.0 * 90
+_TRACK_FLOOR_HOURS = 24.0 * 90
 
 
 _HISTORY_STEM = re.compile(

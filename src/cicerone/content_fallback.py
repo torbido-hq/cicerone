@@ -36,18 +36,15 @@ _RECOMMEND_THREAD_MIN_USERS = 8
 _RECOMMEND_THREAD_MAX_WORKERS = 8
 
 
-def _feature_dict(
+def item_feature_tokens(
     row: Mapping[str, Any] | pd.Series,
-    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+    feature_columns: Sequence[FeatureColumn],
 ) -> dict[str, float]:
     """Map one item row to {feature=value: 1.0} tokens for DictVectorizer."""
     tokens: dict[str, float] = {}
     for spec in feature_columns:
-        if isinstance(spec, FeatureColumn):
-            column = spec.column
-            ftype: str = spec.type
-        else:
-            column, ftype = spec
+        column = spec.column
+        ftype = spec.type
         if isinstance(row, pd.Series):
             if column not in row.index:
                 continue
@@ -87,14 +84,6 @@ def _feature_dict(
     return tokens
 
 
-def item_feature_tokens(
-    row: Mapping[str, Any] | pd.Series,
-    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
-) -> dict[str, float]:
-    """Public alias for the content-fallback item tokeniser."""
-    return _feature_dict(row, feature_columns)
-
-
 def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
     """Per-cold-item max cosine vs history (exact).
 
@@ -120,11 +109,11 @@ def _max_cosine_scores(cold_matrix, hist_matrix) -> np.ndarray:
     return scores
 
 
-def _recommend_thread_workers(n_users: int, *, min_users: int, max_workers: int) -> int:
-    if n_users < min_users or threading.current_thread() is not threading.main_thread():
+def _recommend_thread_workers(n_users: int) -> int:
+    if n_users < _RECOMMEND_THREAD_MIN_USERS or threading.current_thread() is not threading.main_thread():
         return 1
     cpus = os.cpu_count() or 1
-    return max(1, min(max_workers, cpus, n_users))
+    return max(1, min(_RECOMMEND_THREAD_MAX_WORKERS, cpus, n_users))
 
 
 class ContentFallbackModel:
@@ -132,19 +121,15 @@ class ContentFallbackModel:
 
     def __init__(
         self,
-        feature_columns: Sequence[FeatureColumn | tuple[str, str]] | None = None,
+        feature_columns: Sequence[FeatureColumn] | None = None,
         max_neighbors: int = 50,
         items: pd.DataFrame | None = None,
         interactions: pd.DataFrame | None = None,
-        recommend_thread_min_users: int = _RECOMMEND_THREAD_MIN_USERS,
-        recommend_thread_max_workers: int = _RECOMMEND_THREAD_MAX_WORKERS,
     ) -> None:
-        self.feature_columns: list[FeatureColumn | tuple[str, str]] = list(feature_columns or [])
+        self.feature_columns: list[FeatureColumn] = list(feature_columns or [])
         self.max_neighbors = max_neighbors
         self.items = items
         self.interactions = interactions
-        self.recommend_thread_min_users = max(1, int(recommend_thread_min_users))
-        self.recommend_thread_max_workers = max(1, int(recommend_thread_max_workers))
         self._item_ids: list[Any] = []
         self._item_index: dict[Any, int] = {}
         self._matrix: csr_matrix | None = None
@@ -186,7 +171,7 @@ class ContentFallbackModel:
 
         feature_names = []
         for spec in self.feature_columns:
-            column = spec.column if isinstance(spec, FeatureColumn) else spec[0]
+            column = spec.column
             if column in self.items.columns and column not in feature_names:
                 feature_names.append(column)
         cols = [id_col, *feature_names]
@@ -196,7 +181,7 @@ class ContentFallbackModel:
         item_ids = []
         for row in records:
             item_id = str(row[id_col])
-            tokens = _feature_dict(row, self.feature_columns)
+            tokens = item_feature_tokens(row, self.feature_columns)
             if not tokens:
                 continue
             dicts.append(tokens)
@@ -257,8 +242,7 @@ class ContentFallbackModel:
             history = self._user_history.get(str(user), [])
             if not history:
                 return []
-            recent_history = history[-_MAX_HISTORY_ITEMS:]
-            hist_indices = [item_index[i] for i in recent_history if i in item_index]
+            hist_indices = [item_index[i] for i in history if i in item_index]
             if not hist_indices:
                 return []
             hist_matrix = matrix[hist_indices]
@@ -290,13 +274,8 @@ class ContentFallbackModel:
                 for rank, idx in enumerate(order, start=1)
             ]
 
-        workers = _recommend_thread_workers(
-            len(users),
-            min_users=self.recommend_thread_min_users,
-            max_workers=self.recommend_thread_max_workers,
-        )
-        # Nested pools oversubscribe when strategy recommend already uses threads.
-        if workers > 1 and threading.current_thread() is threading.main_thread():
+        workers = _recommend_thread_workers(len(users))
+        if workers > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 user_rows = list(pool.map(_score_user, users))
         else:

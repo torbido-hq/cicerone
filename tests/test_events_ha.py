@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 import pytest
 from support.events import BeatingSource, apply_after_second_beat, event_payload
+from support.fakes import FakeReader
 from support.prometheus_metrics import registry_metric_value
 from support.settings import local_output, make_settings
 from support.toml_config import write_toml
@@ -392,10 +393,6 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
         lambda _settings: writer_fake,
     )
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=local_output(out),
@@ -404,7 +401,7 @@ def test_start_events_runtime_wires_apply_lock(tmp_path, feature_config: Feature
             events=EventsSettings(enabled=True, kind="webhook", ha=True),
         ),
         feature_config=feature_config,
-        reader=_Reader(),  # type: ignore[arg-type]
+        reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
     )
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
@@ -444,10 +441,6 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
         lambda _settings: writer_fake,
     )
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     with caplog.at_level(logging.INFO, logger="cicerone.serve.bootstrap_events"):
         runtime = start_events_runtime(
             make_settings(
@@ -457,7 +450,7 @@ def test_start_events_runtime_wires_apply_lock_without_ha(
                 events=EventsSettings(enabled=True, kind="webhook", ha=False),
             ),
             feature_config=feature_config,
-            reader=_Reader(),  # type: ignore[arg-type]
+            reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
         )
     assert runtime.apply_lock is apply_fake
     assert runtime.worker is not None
@@ -483,17 +476,13 @@ def test_start_events_runtime_skips_apply_lock_in_process(
 
     monkeypatch.setattr("cicerone.serve.bootstrap_events.build_lock_backend", _boom)
 
-    class _Reader:
-        def refresh(self) -> None:
-            return None
-
     runtime = start_events_runtime(
         make_settings(
             output=local_output(out),
             events=EventsSettings(enabled=True, kind="webhook", ha=False),
         ),
         feature_config=feature_config,
-        reader=_Reader(),  # type: ignore[arg-type]
+        reader=FakeReader(pd.DataFrame()),  # type: ignore[arg-type]
     )
     assert runtime.apply_lock is None
     assert runtime.worker is not None

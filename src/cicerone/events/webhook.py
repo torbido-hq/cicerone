@@ -39,9 +39,7 @@ class WebhookEventSource(EventSource):
             self._connected = True
 
     def ingest(self, payloads: Sequence[Any] | Mapping[str, Any] | Any) -> list[NormalizedEvent]:
-        if isinstance(payloads, Mapping):
-            events = [normalize_event(payloads)]
-        elif isinstance(payloads, Sequence) and not isinstance(payloads, (str, bytes, bytearray)):
+        if isinstance(payloads, Sequence) and not isinstance(payloads, (str, bytes, bytearray)):
             events = normalize_events(list(payloads))
         else:
             events = [normalize_event(payloads)]

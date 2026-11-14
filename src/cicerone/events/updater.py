@@ -123,8 +123,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._on_success = on_success
         self._fence = WriteFence(check=fence_check, lost="events apply lock lost before write", kind="apply")
         self._online = online
-        self._last_success_at: datetime | None = None
-        self._events_applied = 0
         self._replay_key: Callable[[NormalizedEvent], str | None] = event_replay_key
         self._user_cache_max_size = user_cache_max_size
         self._cached_by_user: OrderedDict[str, pd.DataFrame] = OrderedDict()
@@ -137,10 +135,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
         self._repair = PostWriteRepair()
         self._last_publish_failed = False
         self._last_apply_written = False
-
-    @property
-    def last_success_at(self) -> datetime | None:
-        return self._last_success_at
 
     def use_replay_key(self, key: Callable[[NormalizedEvent], str | None]) -> None:
         """Key under which applied events are recorded with the write; None leaves an event at-least-once."""
@@ -155,15 +149,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             return []
         recorded = self._sink.applied_event_keys([key for _event, key in keyed])
         return [event for event, key in keyed if key in recorded]
-
-    @property
-    def events_applied(self) -> int:
-        return self._events_applied
-
-    @property
-    def cached_user_ids(self) -> frozenset[str]:
-        """User ids currently held in the in-process LRU recommendation cache."""
-        return frozenset(self._cached_by_user)
 
     def invalidate_cache(self) -> None:
         self._cached_by_user.clear()
@@ -228,9 +213,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             if merged is None or not replace_ids:
                 # Nothing is written or kept online, so a redelivery is a no-op too and needs no replay key.
                 self.abort_online()
-                now = datetime.now(UTC)
-                self._last_success_at = now
-                self._events_applied += len(events)
                 if self._on_success is not None:
                     self._on_success()
                 logger.info(
@@ -272,8 +254,6 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             written = (manifest, user_ids)
             # The rows are committed: bring the cache and reader up to date before any step that can fail.
             self._store_users_in_cache(set(replace_ids), merged)
-            self._last_success_at = now
-            self._events_applied += len(events)
             # A reader refresh returns False when it kept the previous recommendations.
             if self._on_success is None or self._on_success() is not False:
                 done.add("refresh")
@@ -473,6 +453,7 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
             popular_ranking,
             latest_ranking,
             empty_user_batch,
+            weights,
             allowed=cold_allowed,
             allowed_by_variant=cold_allowed_by_variant,
         )
@@ -519,12 +500,9 @@ class IncrementalUpdater(UpdaterUserCache, UpdaterRanking, UpdaterMerge):
 
         def persist() -> None:
             try:
-                replace = getattr(catalog, "replace_events", None)
-                if callable(replace):
-                    _, discard, add = replace(rows)
-                    self._note_consumed(events, discard=discard, add=add)
-                    return
-                catalog.upsert_events(rows)
+                _, discard, add = catalog.replace_events(rows)
+                self._note_consumed(events, discard=discard, add=add)
+                return
             except OPTIONAL_IO_ERRORS:
                 logger.exception("Failed to persist incremental events to the catalog")
             self._note_consumed(events)

@@ -18,23 +18,20 @@ from cicerone.automl import CandidateResult, evaluate_candidates, select_best_ca
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.cli import configure_logging
 from cicerone.config import Settings, load_settings
-from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_SERVE_MAX_K
+from cicerone.config.constants import ALLOCATION_THOMPSON, DEFAULT_MODELS, DEFAULT_SERVE_MAX_K, RRF_K
 from cicerone.dataset import BuiltDataset, build_dataset
-from cicerone.errors import OPTIONAL_EVAL_ERRORS as _OPTIONAL_EVAL_ERRORS
-from cicerone.errors import PUBLISH_ERRORS as _PUBLISH_ERRORS
-from cicerone.errors import SINK_WRITE_ERRORS as _SINK_WRITE_ERRORS
-from cicerone.errors import log_caught as _log_caught
-from cicerone.errors import try_load as _try_load
-from cicerone.evaluation import conversion_events_for_settings, evaluate_tracking
+from cicerone.errors import OPTIONAL_EVAL_ERRORS, PUBLISH_ERRORS, SINK_WRITE_ERRORS, log_caught, try_load
+from cicerone.evaluation.context import conversion_events_for_settings
+from cicerone.evaluation.tracking import evaluate_tracking
 from cicerone.events.store import load_items_catalog_size, load_recommendations_frame
-from cicerone.experiment import (
+from cicerone.experiment.guardrails import evaluate_guardrails
+from cicerone.experiment.recipes import (
     ResolvedRecipe,
     apply_recipe,
     recipes_manifest_json,
     resolve_recipes,
     union_models,
 )
-from cicerone.experiment.guardrails import evaluate_guardrails
 from cicerone.experiment.store import ExperimentStore, active_pair_from_state, merge_experiment_state
 from cicerone.experiment.thompson import (
     allocate_thompson,
@@ -48,13 +45,15 @@ from cicerone.io.base import OutputSink, recommendations_write_guard
 from cicerone.io.factory import build_input_source, build_manifest_reader, build_output_sink
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, filter_variant_rows
 from cicerone.io.surfaces import latest_from_items, neighbors_from_events, popular_from_events
-from cicerone.item_scores import build_item_scores, empty_item_scores
-from cicerone.job_eval import job_track_since as _job_track_since
-from cicerone.job_eval import persist_track_outputs as _persist_track_outputs
-from cicerone.job_eval import read_input as _read_input
-from cicerone.job_eval import retrain_fence
-from cicerone.job_eval import score_previous_run as _score_previous_run
-from cicerone.job_eval import try_load_pair as _try_load_pair
+from cicerone.item_scores import build_item_scores
+from cicerone.job_eval import (
+    job_track_since,
+    persist_track_outputs,
+    read_input,
+    retrain_fence,
+    score_previous_run,
+    try_load_pair,
+)
 from cicerone.job_output import (
     JobManifest,
     ensure_publication_fence,
@@ -74,8 +73,6 @@ from cicerone.locks import (
     has_distributed_lock,
 )
 from cicerone.model import (
-    DEFAULT_MODELS,
-    RRF_K,
     FitOptions,
     ModelRunPlan,
     RecommenderModel,
@@ -85,8 +82,8 @@ from cicerone.model import (
     train_and_recommend,
 )
 from cicerone.model.recommend import RecommendCache
-from cicerone.publish import build_publisher
 from cicerone.publish.base import RecommendationPublisher
+from cicerone.publish.factory import build_publisher
 from cicerone.publish.sidecar import log_sidecar_generation_skip, sidecar_generation_current
 from cicerone.track.store import open_track_store
 
@@ -175,11 +172,11 @@ def _load_shared_eval_inputs(
     if not need_track:
         return None, None
     experiment_id = None if settings.track.enabled else settings.experiment.id
-    raw_track, recs = _try_load_pair(
+    raw_track, recs = try_load_pair(
         "read track rows",
         lambda: open_track_store(settings).read_rows(
             experiment_id=experiment_id,
-            since=_job_track_since(settings),
+            since=job_track_since(settings),
         ),
         None,
         "load recommendations for eval",
@@ -204,13 +201,13 @@ def _select_thompson_recipes(
     experiment = settings.experiment
     store = ExperimentStore(settings.output)
     failed = object()
-    raw_state = _try_load("read experiment state", store.read_state, failed, log=logger)
+    raw_state = try_load("read experiment state", store.read_state, failed, log=logger)
     if preloaded_track is None:
-        raw_track = _try_load(
+        raw_track = try_load(
             "read track rows",
             lambda: open_track_store(settings).read_rows(
                 experiment_id=experiment.id,
-                since=_job_track_since(settings),
+                since=job_track_since(settings),
             ),
             failed,
             log=logger,
@@ -243,14 +240,14 @@ def _select_thompson_recipes(
         conversions = conversion_events_for_settings(events, settings)
         if preloaded_recs is not None:
             recs = preloaded_recs
-            catalog_size = _try_load(
+            catalog_size = try_load(
                 "load catalog size for Thompson guardrails",
                 lambda: load_items_catalog_size(settings.output),
                 None,
                 log=logger,
             )
         else:
-            recs, catalog_size = _try_load_pair(
+            recs, catalog_size = try_load_pair(
                 "load recommendations for Thompson guardrails",
                 lambda: load_recommendations_frame(settings.output),
                 None,
@@ -313,8 +310,8 @@ def _select_thompson_recipes(
             allocation.rotated,
         )
         return ThompsonSelection(selected, pending)
-    except _OPTIONAL_EVAL_ERRORS as exc:
-        _log_caught("Thompson allocation fail closed", exc, log=logger)
+    except OPTIONAL_EVAL_ERRORS as exc:
+        log_caught("Thompson allocation fail closed", exc, log=logger)
         return ThompsonSelection(recipes)
 
 
@@ -348,22 +345,7 @@ def _select_automl_models(
     if not settings.automl.enabled:
         return AutomlSelection(models, weights, rrf_k, None)
     result = select_best_candidate(
-        evaluate_candidates(
-            events,
-            users,
-            items,
-            feature_config,
-            top_k=settings.top_k,
-            half_life_days=settings.half_life_days,
-            candidates=settings.automl.candidates,
-            n_splits=settings.automl.n_splits,
-            test_days=settings.automl.test_days,
-            max_workers=settings.max_workers,
-            model_configs=settings.model_configs,
-            sequential_min_median_interactions=settings.sequential_min_median_interactions,
-            debias=settings.automl.debias,
-            content_fallback_enabled=settings.content_fallback_enabled,
-        ),
+        evaluate_candidates(events, users, items, feature_config, settings),
         primary_metric=settings.automl.primary_metric,
     )
     logger.info(
@@ -388,7 +370,7 @@ def _select_job_recipes(
         return JobRecipes((), None)
     manifest = last_manifest
     if manifest is None:
-        manifest = _try_load(
+        manifest = try_load(
             "read last manifest for experiment recipes",
             lambda: build_manifest_reader(settings.output).read_latest(),
             None,
@@ -460,7 +442,6 @@ def _recommend_job(
             built,
             target_users,
             enabled_models=list(fit_plan.recommend_models),
-            strategy_cache=fitted if settings.save_model_artifact else None,
             epoch_metrics_top_k=settings.top_k,
             content_feature_columns=feature_config.item_features,
             fit=FitOptions.from_settings(settings),
@@ -561,36 +542,22 @@ def _write_job_outputs(
     result = run.written
     # Artifact → snapshot → recommendations; success only after all writes.
     outputs_written = False
-    write_item_scores = getattr(sink, "write_item_scores", None)
-    write_surfaces = getattr(sink, "write_surfaces", None)
     retrain.ensure()
-    item_scores = (
-        build_item_scores(
-            events,
-            items,
-            feature_config,
-            settings.half_life_days,
-            interactions=built.interactions,
-            now=weighting_now,
-        )
-        if callable(write_item_scores)
-        else empty_item_scores()
+    item_scores = build_item_scores(
+        events,
+        items,
+        feature_config,
+        settings.half_life_days,
+        interactions=built.interactions,
+        now=weighting_now,
     )
-    surface_frames = None
-    if callable(write_surfaces):
-        surface_k = max(settings.top_k, DEFAULT_SERVE_MAX_K * 5)
-        surface_frames = (
-            popular_from_events(events, surface_k),
-            latest_from_items(
-                items,
-                surface_k,
-                feature_config.blending.latest_date_columns,
-            ),
-            neighbors_from_events(
-                events,
-                max(settings.item_based_k_neighbors, DEFAULT_SERVE_MAX_K * 5),
-            ),
-        )
+    surface_k = max(settings.top_k, DEFAULT_SERVE_MAX_K * 5)
+    popular_surface = popular_from_events(events, surface_k)
+    latest_surface = latest_from_items(items, surface_k, feature_config.blending.latest_date_columns)
+    neighbors_surface = neighbors_from_events(
+        events,
+        max(settings.item_based_k_neighbors, DEFAULT_SERVE_MAX_K * 5),
+    )
     try:
         with recommendations_write_guard(sink):
             try:
@@ -607,18 +574,14 @@ def _write_job_outputs(
                     outputs_written = True
                     sink.write_items_snapshot(items)
 
-                if callable(write_item_scores):
-                    ensure_publication_fence(sink, retrain)
-                    outputs_written = True
-                    write_item_scores(item_scores)
-                if callable(write_surfaces) and surface_frames is not None:
-                    ensure_publication_fence(sink, retrain)
-                    outputs_written = True
-                    write_surfaces(
-                        popular=surface_frames[0],
-                        latest=surface_frames[1],
-                        neighbors=surface_frames[2],
-                    )
+                ensure_publication_fence(sink, retrain)
+                outputs_written = True
+                sink.write_item_scores(item_scores)
+                ensure_publication_fence(sink, retrain)
+                outputs_written = True
+                sink.write_surfaces(
+                    popular=popular_surface, latest=latest_surface, neighbors=neighbors_surface
+                )
                 ensure_publication_fence(sink, retrain)
                 outputs_written = True
                 sink.write_recommendations(recommendations)
@@ -632,7 +595,7 @@ def _write_job_outputs(
                 n_target_users = len(target_users)
                 n_users_with_recommendations = _recommendation_user_count(recommendations)
                 n_items = int(built.dataset.item_id_map.external_ids.shape[0])
-                n_item_scores = int(len(item_scores)) if callable(write_item_scores) else None
+                n_item_scores = int(len(item_scores))
                 models = ",".join(run_models)
                 automl_metrics = (
                     ",".join(
@@ -663,7 +626,7 @@ def _write_job_outputs(
                     result.manifest_written = True
                 else:
                     result.success_generated_at = None
-            except _SINK_WRITE_ERRORS as exc:
+            except SINK_WRITE_ERRORS as exc:
                 if outputs_written or manifest.artifact_written:
                     manifest.partial_outputs = True
                 if (
@@ -676,8 +639,8 @@ def _write_job_outputs(
                     try:
                         if write_job_manifest(sink, manifest, skip_if_newer_than=run.started_at):
                             result.manifest_written = True
-                    except _SINK_WRITE_ERRORS as manifest_exc:
-                        _log_caught(
+                    except SINK_WRITE_ERRORS as manifest_exc:
+                        log_caught(
                             "Failed to write manifest; original job error (if any) is preserved",
                             manifest_exc,
                             log=logger,
@@ -704,8 +667,8 @@ def _publish_job_sidecar(run: JobRun) -> None:
             publisher.publish(run.recommendations)
         else:
             log_sidecar_generation_skip(current)
-    except _PUBLISH_ERRORS as exc:
-        _log_caught("Publish failed after successful write", exc, log=logger)
+    except PUBLISH_ERRORS as exc:
+        log_caught("Publish failed after successful write", exc, log=logger)
 
 
 def _finalize_job(run: JobRun, error: BaseException | None) -> None:
@@ -717,11 +680,11 @@ def _finalize_job(run: JobRun, error: BaseException | None) -> None:
         except Exception as exc:
             # Logged here; an unexpected one is re-raised after the manifest records it.
             logger.exception("Failed to close recommendation publisher (%s: %s)", type(exc).__name__, exc)
-            if not isinstance(exc, _PUBLISH_ERRORS):
+            if not isinstance(exc, PUBLISH_ERRORS):
                 close_exc = exc
     if manifest.status == "success" and (settings.track.enabled or settings.eval.enabled):
         try:
-            _persist_track_outputs(
+            persist_track_outputs(
                 open_track_store(settings, fence=run.track_fence),
                 kind=settings.output.kind,
                 eval_report={
@@ -774,8 +737,8 @@ def _write_final_manifest(
         try:
             with recommendations_write_guard(run.sink):
                 write_job_manifest(run.sink, manifest, skip_if_newer_than=skip_if_newer_than)
-        except _SINK_WRITE_ERRORS as exc:
-            _log_caught(
+        except SINK_WRITE_ERRORS as exc:
+            log_caught(
                 "Failed to write manifest; original job error (if any) is preserved",
                 exc,
                 log=logger,
@@ -828,9 +791,9 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
     error: BaseException | None = None
 
     try:
-        run.publisher = build_publisher(settings)
+        run.publisher = build_publisher(settings.publish)
         source = build_input_source(settings.input)
-        events, users, items, last_manifest = _read_input(source, settings.output)
+        events, users, items, last_manifest = read_input(source, settings.output)
 
         logger.info(
             "Loaded %d events, %s users, %s items",
@@ -842,7 +805,7 @@ def _run_job(settings: Settings, triggered_by: str, fence_check: Callable[[], bo
         if last_manifest and last_manifest.get("generated_at"):
             run.eval_generated_at = str(last_manifest["generated_at"])
         preloaded_track, preloaded_recs = _load_shared_eval_inputs(settings)
-        run.track_eval_payload, run.served_eval_payload = _score_previous_run(
+        run.track_eval_payload, run.served_eval_payload = score_previous_run(
             settings,
             events,
             last_manifest,

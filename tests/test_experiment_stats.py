@@ -61,7 +61,7 @@ def test_guardrails_fail_closed_on_empty_and_concentration() -> None:
             "source": ["personalized"] * 10,
         }
     )
-    report = evaluate_guardrails(concentrated, variant="control", min_coverage=5)
+    report = evaluate_guardrails(concentrated, variant="control")
     assert report.ok is False
     assert "top_item_share" in report.failures
     assert "coverage" in report.failures

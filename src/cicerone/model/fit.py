@@ -17,14 +17,11 @@ from cicerone.config import (
     EpochMetricsSettings,
     Settings,
 )
+from cicerone.config.constants import DEFAULT_MODELS
 from cicerone.content_fallback import build_content_fallback_model
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureColumn
-from cicerone.model.constants import (
-    DEFAULT_MODELS,
-    LIGHTFM_NUM_THREADS_PARALLEL,
-    LIGHTFM_NUM_THREADS_SEQUENTIAL,
-)
+from cicerone.model.constants import LIGHTFM_NUM_THREADS_PARALLEL, LIGHTFM_NUM_THREADS_SEQUENTIAL
 from cicerone.model.epoch_metrics import (
     fit_with_epoch_metrics,
     interactions_for_epoch_metrics,
@@ -88,7 +85,6 @@ def _resolve_model_configs_for_fit(
 
 def _fit_strategy(name: str, ctx: _FitContext) -> tuple[str, RecommenderModel]:
     """Fit one strategy (picklable for ProcessPoolExecutor workers)."""
-    strategy = STRATEGIES[name]
     if name == "content_fallback":
         model = as_recommender_model(
             build_content_fallback_model(
@@ -98,8 +94,6 @@ def _fit_strategy(name: str, ctx: _FitContext) -> tuple[str, RecommenderModel]:
                 interactions=ctx.content_interactions,
             )
         )
-    elif strategy.factory is not None:
-        model = strategy.factory()
     else:
         model = build_strategy_model(
             name,
@@ -217,45 +211,22 @@ class FitOptions:
         )
 
 
-def merge_fit_options(fit: FitOptions | None, keywords: FitOptions) -> FitOptions:
-    if fit is None:
-        return keywords
-    if keywords != FitOptions():
-        raise TypeError("pass fit= or the individual fit keywords, not both")
-    return fit
-
-
 def fit_strategies(
     built: BuiltDataset,
     target_users: list[str],
-    enabled_models: list[str] | None = None,
-    strategy_cache: dict[str, RecommenderModel] | None = None,
-    max_workers: int = 1,
-    epoch_metrics: EpochMetricsSettings | None = None,
-    epoch_metrics_top_k: int = 10,
-    item_based_k_neighbors: int | None = None,
-    model_configs: dict[str, dict[str, Any]] | None = None,
-    content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    content_feature_columns: list[FeatureColumn] | None = None,
     *,
-    fit: FitOptions | None = None,
+    enabled_models: list[str] | None,
+    epoch_metrics_top_k: int,
+    content_feature_columns: list[FeatureColumn] | None,
+    fit: FitOptions,
+    strategy_cache: dict[str, RecommenderModel] | None = None,
 ) -> tuple[list[str], dict[str, RecommenderModel]]:
     """Fit (or cache-hit) enabled strategies; parallel when ``max_workers > 1``."""
-    options = merge_fit_options(
-        fit,
-        FitOptions(
-            max_workers=max_workers,
-            epoch_metrics=epoch_metrics,
-            item_based_k_neighbors=item_based_k_neighbors,
-            model_configs=model_configs,
-            content_fallback_max_neighbors=content_fallback_max_neighbors,
-        ),
-    )
-    max_workers = options.max_workers
-    epoch_metrics = options.epoch_metrics
-    item_based_k_neighbors = options.item_based_k_neighbors
-    model_configs = options.model_configs
-    content_fallback_max_neighbors = options.content_fallback_max_neighbors
+    max_workers = fit.max_workers
+    epoch_metrics = fit.epoch_metrics
+    item_based_k_neighbors = fit.item_based_k_neighbors
+    model_configs = fit.model_configs
+    content_fallback_max_neighbors = fit.content_fallback_max_neighbors
     dataset = built.dataset
     enabled_models = _resolve_enabled_models(enabled_models)
     resolved_configs = _resolve_model_configs_for_fit(model_configs, item_based_k_neighbors)

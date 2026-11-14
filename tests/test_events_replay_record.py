@@ -63,9 +63,8 @@ def test_a_redelivery_after_a_restart_is_acked_not_applied_again(tmp_path, featu
     output = _outputs(tmp_path)[kind]
     first_source = WebhookEventSource({})
     first_source.ingest(event_payload(event_id="replayed-1", user_id="u1", item_id="i9"))
-    first, first_updater = _worker(output, feature_config, first_source)
+    first, _first_updater = _worker(output, feature_config, first_source)
     assert first.tick() == 1
-    assert first_updater.events_applied == 1
 
     # A new process: nothing in memory, the source redelivers the same event.
     source = WebhookEventSource({})
@@ -75,7 +74,6 @@ def test_a_redelivery_after_a_restart_is_acked_not_applied_again(tmp_path, featu
     before = registry_metric_value("cicerone_events_replayed_total")
     assert worker.tick() == 1
     assert registry_metric_value("cicerone_events_replayed_total") == before + 1
-    assert updater.events_applied == 1
     assert source.health().lag == 0
     fresh = normalize_event(event_payload(event_id="fresh-2", user_id="u2", item_id="i8"))
     recorded = updater.applied_before([_event("replayed-1"), fresh])
@@ -157,7 +155,7 @@ def test_worker_returns_the_batch_when_the_record_lookup_fails(tmp_path, feature
 
     updater.applied_before = _lookup_fails  # type: ignore[method-assign]
     assert worker.tick() == 0
-    assert updater.events_applied == 0
+    assert not updater.last_apply_written
     assert source.health().lag == 1
 
 
@@ -234,7 +232,7 @@ def test_worker_returns_the_batch_when_the_lookup_raises_unexpectedly(tmp_path, 
     updater.applied_before = _lookup_bug  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="lookup bug"):
         worker.tick()
-    assert updater.events_applied == 0
+    assert not updater.last_apply_written
     assert source.health().lag == 1
 
 
@@ -305,7 +303,7 @@ def test_worker_returns_fresh_events_when_acking_replays_raises(tmp_path, featur
     worker._ack_unbuffered = _ack_bug  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="ack bug"):
         worker.tick()
-    assert updater.events_applied == 0
+    assert not updater.last_apply_written
     assert [event.event_id for event in source.poll(10)] == ["fresh-x"]
 
 

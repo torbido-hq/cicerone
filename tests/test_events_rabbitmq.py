@@ -719,7 +719,7 @@ def test_pika_io_busy_survives_overlapping_pump():
     io.start()
     try:
         assert entered.wait(timeout=2)
-        assert io.busy is True
+        assert io._busy > 0
 
         def _job() -> None:
             job_started.set()
@@ -730,12 +730,11 @@ def test_pika_io_busy_survives_overlapping_pump():
         assert wait_until(lambda: io._busy >= 2)
         released.set()
         assert job_started.wait(timeout=2)
-        assert io.busy is True
+        assert io._busy > 0
         hold_job.set()
         waiter.join(timeout=2)
         io._connection = None
-        assert wait_until(lambda: not io.busy)
-        assert io.busy is False
+        assert wait_until(lambda: io._busy == 0)
     finally:
         released.set()
         hold_job.set()
@@ -1866,7 +1865,7 @@ def test_ack_skips_when_io_replaced_before_resolve(monkeypatch):
     def _require() -> object:
         return old_io
 
-    source._require_io = _require  # type: ignore[method-assign]
+    source._require_ready = _require  # type: ignore[method-assign]
     source.ack(["e1"])
     assert source._delivery_tags.get("e1") == new_tag
     source.close()

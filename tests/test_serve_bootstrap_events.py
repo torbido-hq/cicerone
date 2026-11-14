@@ -12,7 +12,7 @@ from cicerone.config.settings import ExperimentSettings, TrackSettings, VariantS
 from cicerone.events.webhook import WebhookEventSource
 from cicerone.experiment.store import ExperimentStore, experiment_state
 from cicerone.feature_config import EligibilityRule, FeatureConfig
-from cicerone.publish import PublishError
+from cicerone.publish.base import PublishError
 from cicerone.serve.bootstrap_events import (
     _assign_incremental_variant,
     _input_users_provider,
@@ -26,6 +26,9 @@ class _Reader:
 
     def refresh(self) -> None:
         self.refreshed += 1
+
+    def get_items(self) -> None:
+        return None
 
 
 class _Pub:

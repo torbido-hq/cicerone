@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote_plus
 
@@ -59,8 +59,6 @@ class Batch:
     remaining: set[str]
     receipt_handle: str | None = None
     object_key: str | None = None
-    object_etag: str | None = None
-    event_ids: set[str] = field(default_factory=set)
 
 
 def optional_aws_region(options: dict[str, Any]) -> str | None:

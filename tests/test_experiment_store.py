@@ -705,11 +705,11 @@ def test_promoted_variant_reuses_cache_when_read_fails(tmp_path, monkeypatch) ->
     output = local_output(tmp_path)
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    assert store.promoted_variant("exp") == "treatment"
+    assert store.assignment_overlay("exp")[0] == "treatment"
 
     monkeypatch.setattr(store, "read_state", raising(OSError("store down")))
-    assert store.promoted_variant("exp") == "treatment"
-    assert store.promoted_variant("other") is None
+    assert store.assignment_overlay("exp")[0] == "treatment"
+    assert store.assignment_overlay("other")[0] is None
 
 
 def test_assignment_overlay_keeps_last_on_backend_io_error(tmp_path, monkeypatch) -> None:
@@ -730,10 +730,10 @@ def test_promoted_variant_reuses_cache_when_db_read_raises(tmp_path, monkeypatch
     output = sqlite_output(tmp_path / "exp.db")
     store = ExperimentStore(output)
     store.write_state(experiment_state("exp", promoted_variant="treatment"))
-    assert store.promoted_variant("exp") == "treatment"
+    assert store.assignment_overlay("exp")[0] == "treatment"
 
     monkeypatch.setattr(store.backend, "read_state", raising(OSError("store down")))
-    assert store.promoted_variant("exp") == "treatment"
+    assert store.assignment_overlay("exp")[0] == "treatment"
 
 
 def test_read_state_db_reraises_transient_operational_error(tmp_path, monkeypatch) -> None:
@@ -817,7 +817,7 @@ def test_last_state_ignores_cache_when_promoted_variant_queries_other_id(tmp_pat
     store.write_state(
         experiment_state("exp", promoted_variant="treatment", promoted_at="2026-09-02T00:00:00Z")
     )
-    assert store.promoted_variant("other") is None
+    assert store.assignment_overlay("other")[0] is None
     assert store.last_state("other") is None
     cached = store.last_state("exp")
     assert cached is not None

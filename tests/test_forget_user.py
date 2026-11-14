@@ -37,7 +37,7 @@ def _seed(output: IOSettings) -> None:
     else:
         DatabaseOutputSink(output.options).write_recommendations(_recs("u1", "u2"))
     track = TrackStore(output)
-    track.append_rows(
+    track.append_accepted_rows(
         [
             {"event_id": "e1", "kind": "impression", "user_id": "u1", "item_id": "i-u1"},
             {"event_id": "e2", "kind": "impression", "user_id": "u2", "item_id": "i-u2"},
@@ -70,7 +70,7 @@ def _remaining_users(output: IOSettings) -> set[str]:
 def test_forget_user_on_local_dataset_keeps_other_users(tmp_path) -> None:
     output = _local(tmp_path)
     _seed(output)
-    result = forget_user(output, "u1")
+    result = forget_user(output, "u1", fence=WriteFence())
     assert result.recommendations == 1
     assert result.track == 1
     assert result.exposures == 1
@@ -81,7 +81,7 @@ def test_forget_user_on_local_dataset_keeps_other_users(tmp_path) -> None:
 def test_forget_user_on_sqlite_keeps_other_users(tmp_path) -> None:
     output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     _seed(output)
-    result = forget_user(output, " u1 ")
+    result = forget_user(output, " u1 ", fence=WriteFence())
     assert result.recommendations == 1
     assert result.track == 1
     assert result.exposures == 1
@@ -90,19 +90,19 @@ def test_forget_user_on_sqlite_keeps_other_users(tmp_path) -> None:
 
 
 def test_forget_user_missing_output_is_zero(tmp_path) -> None:
-    result = forget_user(_local(tmp_path), "u1")
+    result = forget_user(_local(tmp_path), "u1", fence=WriteFence())
     assert result == type(result)(0, 0, 0, 0)
 
 
 def test_forget_user_refuses_object_store() -> None:
     output = IOSettings(kind="dataset", options={"storage_backend": "s3", "bucket": "b", "path": "unused"})
     with pytest.raises(ConfigError, match="local dataset"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
 
 
 def test_forget_user_requires_a_user_id(tmp_path) -> None:
     with pytest.raises(ValueError, match="user_id"):
-        forget_user(_local(tmp_path), "  ")
+        forget_user(_local(tmp_path), "  ", fence=WriteFence())
 
 
 def test_jsonl_without_a_user_row_leaves_recommendations(tmp_path) -> None:
@@ -110,7 +110,7 @@ def test_jsonl_without_a_user_row_leaves_recommendations(tmp_path) -> None:
     DatasetOutputSink(output.options).write_recommendations(_recs("u1"))
     (tmp_path / "track.jsonl").write_text('{"item_id": "i-u1"}\n[1]\n', encoding="utf-8")
     with pytest.raises(ValueError, match="user_id"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["u1"]
 
 
@@ -119,7 +119,7 @@ def test_corrupt_track_log_leaves_recommendations(tmp_path) -> None:
     DatasetOutputSink(output.options).write_recommendations(_recs("u1"))
     (tmp_path / "track.jsonl").write_text("{not json}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="not JSON"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     frame = pd.read_parquet(tmp_path / "recommendations.parquet")
     assert list(frame["user_id"]) == ["u1"]
     assert list(tmp_path.rglob(".*.tmp")) == []
@@ -169,7 +169,7 @@ def test_forget_user_rewrites_legacy_history_parquet(tmp_path) -> None:
             "generated_at": ["2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"],
         }
     ).to_parquet(legacy, index=False)
-    assert forget_user(output, "u1").history == 1
+    assert forget_user(output, "u1", fence=WriteFence()).history == 1
     kept = pd.read_parquet(legacy)
     assert list(kept["user_id"]) == ["u2"]
 
@@ -177,7 +177,7 @@ def test_forget_user_rewrites_legacy_history_parquet(tmp_path) -> None:
 def test_forget_user_drops_a_history_part_that_only_held_that_user(tmp_path) -> None:
     output = _local(tmp_path)
     TrackStore(output).append_history(_recs("u1"), generated_at="2026-09-29T12:00:00+00:00")
-    assert forget_user(output, "u1").history == 1
+    assert forget_user(output, "u1", fence=WriteFence()).history == 1
     assert list((tmp_path / "recommendation_history").glob("*.parquet")) == []
     assert list((tmp_path / "recommendation_history").glob(".*.tmp")) == []
 
@@ -201,7 +201,7 @@ def test_local_stage_failure_leaves_every_file(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(pd.DataFrame, "to_parquet", boom)
     with pytest.raises(OSError, match="disk full"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     assert len(seen) == 2
     assert _local_bytes(tmp_path) == before
     assert list(tmp_path.rglob(".*.tmp")) == []
@@ -225,7 +225,7 @@ def test_local_commit_failure_restores_every_file(tmp_path, monkeypatch) -> None
 
     monkeypatch.setattr(forget_mod.os, "replace", flaky)
     with pytest.raises(OSError, match="rename failed"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     assert swapped_in == ["recommendations.parquet", "track.jsonl"]
     assert _local_bytes(tmp_path) == before
     assert list(tmp_path.rglob(".*.tmp")) == []
@@ -250,7 +250,7 @@ def test_local_backup_rename_failure_leaves_no_backup(tmp_path, monkeypatch) -> 
 
     monkeypatch.setattr(forget_mod.os, "replace", flaky)
     with pytest.raises(OSError, match="rename failed"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     assert _local_bytes(tmp_path) == before
     assert list(tmp_path.rglob(".*.tmp")) == []
     assert list(tmp_path.rglob(".*.bak")) == []
@@ -278,7 +278,7 @@ def test_local_restore_failure_keeps_the_original_and_names_it(tmp_path, monkeyp
 
     monkeypatch.setattr(forget_mod.os, "replace", flaky)
     with pytest.raises(OSError, match="rename failed") as raised:
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     (backup,) = tmp_path.glob(".track.jsonl.*.bak")
     assert backup.read_bytes() == original_track
     assert raised.value.__notes__ == [f"originals not restored: {backup}"]
@@ -298,7 +298,7 @@ def test_local_backup_cleanup_failure_still_reports_the_erase(tmp_path, monkeypa
 
     monkeypatch.setattr(Path, "unlink", stubborn)
     with caplog.at_level("WARNING", logger="cicerone.forget"):
-        result = forget_user(output, "u1")
+        result = forget_user(output, "u1", fence=WriteFence())
     assert result.recommendations == 1
     assert _remaining_users(output) == {"u2"}
     assert any("could not remove backup" in record.getMessage() for record in caplog.records)
@@ -312,7 +312,7 @@ def test_local_rewrite_keeps_file_modes(tmp_path) -> None:
     modes = {"recommendations.parquet": 0o644, "track.jsonl": 0o640}
     for name, mode in modes.items():
         (tmp_path / name).chmod(mode)
-    forget_user(output, "u1")
+    forget_user(output, "u1", fence=WriteFence())
     for name, mode in modes.items():
         assert stat.S_IMODE((tmp_path / name).stat().st_mode) == mode
     assert _remaining_users(output) == {"u2"}
@@ -326,7 +326,7 @@ def test_local_staging_ignores_a_planted_symlink(tmp_path) -> None:
     victim.write_text("keep me", encoding="utf-8")
     for name in ("recommendations.parquet", "track.jsonl", ".exposures.jsonl"):
         (tmp_path / "out" / f".{name}.tmp").symlink_to(victim)
-    forget_user(output, "u1")
+    forget_user(output, "u1", fence=WriteFence())
     assert victim.read_text(encoding="utf-8") == "keep me"
     assert _remaining_users(output) == {"u2"}
 
@@ -336,8 +336,8 @@ def test_forget_user_matches_padded_ids(tmp_path) -> None:
     DatasetOutputSink(local.options).write_recommendations(_recs(" u1 ", "u2"))
     db = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'out.db'}"})
     DatabaseOutputSink(db.options).write_recommendations(_recs(" u1 ", "u2"))
-    assert forget_user(local, "u1").recommendations == 1
-    assert forget_user(db, " u1").recommendations == 1
+    assert forget_user(local, "u1", fence=WriteFence()).recommendations == 1
+    assert forget_user(db, " u1", fence=WriteFence()).recommendations == 1
     assert list(pd.read_parquet(tmp_path / "local" / "recommendations.parquet")["user_id"]) == ["u2"]
 
 
@@ -346,7 +346,7 @@ def test_forget_user_erases_every_store_on_in_memory_sqlite() -> None:
 
     output = IOSettings(kind="db", options={"database_url": "sqlite://"})
     _seed(output)
-    result = forget_user(output, "u1")
+    result = forget_user(output, "u1", fence=WriteFence())
     assert (result.recommendations, result.track, result.exposures, result.history) == (1, 1, 1, 1)
     engine = create_db_engine("sqlite://", options=output.options)
     for table in (
@@ -424,7 +424,7 @@ def test_history_without_user_id_leaves_recommendations(tmp_path) -> None:
     history.mkdir()
     pd.DataFrame({"item_id": ["i-u1"]}).to_parquet(history / "snap.parquet", index=False)
     with pytest.raises(ValueError, match="user_id"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["u1"]
 
 
@@ -437,7 +437,7 @@ def test_sqlite_schema_error_rolls_back_earlier_deletes(tmp_path) -> None:
         conn.execute(text("CREATE TABLE recommendation_history (item_id TEXT)"))
         conn.execute(text("INSERT INTO recommendation_history (item_id) VALUES ('i-u1')"))
     with pytest.raises(ValueError, match="user_id"):
-        forget_user(output, "u1")
+        forget_user(output, "u1", fence=WriteFence())
     recommendations = pd.read_sql('SELECT user_id FROM "recommendations"', engine)
     track = pd.read_sql('SELECT user_id FROM "recommendation_track"', engine)
     exposures = pd.read_sql('SELECT user_id FROM "recommendation_exposures"', engine)
@@ -449,7 +449,7 @@ def test_sqlite_schema_error_rolls_back_earlier_deletes(tmp_path) -> None:
 
 def test_forget_user_missing_sqlite_tables_are_zero(tmp_path) -> None:
     output = IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{tmp_path / 'empty.db'}"})
-    result = forget_user(output, "u1")
+    result = forget_user(output, "u1", fence=WriteFence())
     assert result.recommendations == 0
     assert result.track == 0
     assert result.exposures == 0

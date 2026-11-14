@@ -19,23 +19,16 @@ from rectools.metrics.base import MetricAtK
 from rectools.metrics.debias import DebiasConfig
 
 from cicerone.config import (
-    AUTOML_DEFAULT_N_SPLITS,
     AUTOML_DEFAULT_PRIMARY_METRIC,
-    AUTOML_DEFAULT_TEST_DAYS,
-    DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
     validate_model_weights,
     validate_rrf_k,
     weights_field,
 )
-from cicerone.config.settings import ExplainSettings
+from cicerone.config.constants import DEFAULT_MODELS
+from cicerone.config.settings import ExplainSettings, Settings
 from cicerone.dataset import build_dataset, build_interactions
 from cicerone.feature_config import FeatureConfig
-from cicerone.model import (
-    DEFAULT_MODELS,
-    STRATEGIES,
-    RecommenderModel,
-    train_and_recommend,
-)
+from cicerone.model import STRATEGIES, FitOptions, RecommenderModel, train_and_recommend
 from cicerone.model.constants import RANDOM_STATE
 from cicerone.model_config import (
     SEQUENTIAL_EXTRA_HINT,
@@ -288,10 +281,10 @@ def _evaluate_fold(
                 weights=candidate.weights,
                 rrf_k=candidate.rrf_k,
                 strategy_cache=strategy_cache,
-                model_configs=model_configs,
                 recommend_cache=recommend_cache,
                 explain=ExplainSettings(enabled=False),
                 content_fallback_enabled=content_fallback_enabled,
+                fit=FitOptions(model_configs=model_configs),
             ),
             built.interactions,
             top_k,
@@ -347,36 +340,28 @@ def evaluate_candidates(
     users: pd.DataFrame | None,
     items: pd.DataFrame | None,
     config: FeatureConfig,
-    top_k: int,
-    half_life_days: float,
-    candidates: list[dict[str, Any]] | None = None,
-    n_splits: int = AUTOML_DEFAULT_N_SPLITS,
-    test_days: int = AUTOML_DEFAULT_TEST_DAYS,
-    max_workers: int = 1,
-    model_configs: dict[str, dict[str, Any]] | None = None,
-    sequential_min_median_interactions: int = DEFAULT_SEQUENTIAL_MIN_MEDIAN_INTERACTIONS,
-    debias: bool = False,
-    content_fallback_enabled: bool = False,
+    settings: Settings,
 ) -> list[CandidateResult]:
     """Backtest candidates over time folds. ``max_workers > 1`` evaluates folds in parallel."""
-    parsed_candidates = _parse_candidates(candidates)
+    automl = settings.automl
+    parsed_candidates = _parse_candidates(automl.candidates)
     if any(SEQUENTIAL_STRATEGY in candidate.models for candidate in parsed_candidates):
         skip_reason = sequential_automl_skip_reason(
-            events, min_median_interactions=sequential_min_median_interactions
+            events, min_median_interactions=settings.sequential_min_median_interactions
         )
         if skip_reason is not None:
             logger.info("Excluding sequential from AutoML candidate pool: %s", skip_reason)
             parsed_candidates = exclude_sequential_from_candidates(parsed_candidates)
             if not parsed_candidates:
                 raise ValueError("AutoML has no candidates left after excluding sequential; " + skip_reason)
-    if not content_fallback_enabled:
+    if not settings.content_fallback_enabled:
         parsed_candidates = exclude_content_fallback_from_candidates(parsed_candidates)
         if not parsed_candidates:
             raise ValueError(
                 "AutoML has no candidates left after excluding content_fallback "
                 "(job.content_fallback.enabled is false)"
             )
-    pic_skip = popular_in_category_automl_skip_reason(items, model_configs=model_configs)
+    pic_skip = popular_in_category_automl_skip_reason(items, model_configs=settings.model_configs)
     if pic_skip is not None and any(
         "popular_in_category" in candidate.models for candidate in parsed_candidates
     ):
@@ -384,36 +369,36 @@ def evaluate_candidates(
         parsed_candidates = exclude_popular_in_category_from_candidates(parsed_candidates)
         if not parsed_candidates:
             raise ValueError("AutoML has no candidates left after excluding popular_in_category; " + pic_skip)
-    folds = _time_based_folds(events, n_splits=n_splits, test_days=test_days)
+    folds = _time_based_folds(events, n_splits=automl.n_splits, test_days=automl.test_days)
     if not folds:
         raise ValueError(
-            f"Not enough event history for {n_splits} fold(s) of {test_days} day(s) each; "
+            f"Not enough event history for {automl.n_splits} fold(s) of {automl.test_days} day(s) each; "
             "reduce automl n_splits/test_days or provide more historical events"
         )
-    if len(folds) < n_splits:
+    if len(folds) < automl.n_splits:
         logger.warning(
             "AutoML requested %d fold(s) of %d day(s) each but only %d had enough event history; "
             "backtest coverage is reduced",
-            n_splits,
-            test_days,
+            automl.n_splits,
+            automl.test_days,
             len(folds),
         )
 
-    metrics = _make_metrics(top_k, debias=debias)
-    if max_workers > 1:
+    metrics = _make_metrics(settings.top_k, debias=automl.debias)
+    if settings.max_workers > 1:
         worker_context = _EvalWorkerContext(
             users=users,
             items=items,
             config=config,
-            top_k=top_k,
-            half_life_days=half_life_days,
+            top_k=settings.top_k,
+            half_life_days=settings.half_life_days,
             candidates=parsed_candidates,
             metrics=metrics,
-            model_configs=model_configs,
-            content_fallback_enabled=content_fallback_enabled,
+            model_configs=settings.model_configs,
+            content_fallback_enabled=settings.content_fallback_enabled,
         )
         with ProcessPoolExecutor(
-            max_workers=min(max_workers, len(folds)),
+            max_workers=min(settings.max_workers, len(folds)),
             # Forking a threaded scheduler (OpenMP, logging locks) can deadlock the workers.
             mp_context=multiprocessing.get_context("spawn"),
             initializer=_init_eval_worker,
@@ -434,12 +419,12 @@ def evaluate_candidates(
                 users,
                 items,
                 config,
-                top_k,
-                half_life_days,
+                settings.top_k,
+                settings.half_life_days,
                 parsed_candidates,
                 metrics,
-                model_configs,
-                content_fallback_enabled,
+                settings.model_configs,
+                settings.content_fallback_enabled,
             )
             for train_events, test_events in folds
         ]

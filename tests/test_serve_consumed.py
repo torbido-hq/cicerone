@@ -23,6 +23,9 @@ class _History:
         rows = self._events[self._events["user_id"] == user_id].head(limit)
         return rows.reset_index(drop=True)
 
+    def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
+        return {str(user_id): _History.get_events_for_user(self, str(user_id), limit) for user_id in user_ids}
+
     def get_user(self, user_id: str):
         del user_id
         return None
@@ -40,7 +43,7 @@ class _CountingHistory(_History):
 
     def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
         self.bulk += 1
-        return {str(user_id): _History.get_events_for_user(self, str(user_id), limit) for user_id in user_ids}
+        return super().get_events_for_users(user_ids, limit)
 
 
 def test_drop_consumed_removes_matching_ids():
@@ -78,7 +81,7 @@ def test_merge_fill_appends_unseen_items():
 def test_consumed_item_ids_unions_history_and_overlay():
     history = _History(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids("u1", history=history, overlay=overlay, lookback=10) == {"i1", "i2"}
 
 
@@ -87,7 +90,7 @@ def test_consumed_item_ids_for_users_unions_history_and_overlay():
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
     )
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
         "u1": {"i1", "i2"},
         "u2": {"i3"},
@@ -207,7 +210,7 @@ def test_sqlite_get_events_for_users_custom_query_keeps_other_users():
 
 def test_recommendations_hide_consumed_from_overlay():
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     app = create_app(
         serve_settings(),
         FakeReader(recs_df(), items_df()),
@@ -244,9 +247,13 @@ def test_consumed_item_ids_for_users_isolates_single_user_errors():
                 raise OSError("unavailable")
             return super().get_events_for_user(user_id, limit)
 
+        def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
+            del user_ids, limit
+            raise OSError("bulk down")
+
     history = _Partial(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}]))
     overlay = ConsumedOverlay()
-    overlay.add("u2", "i9")
+    overlay.add_many([("u2", "i9")])
     assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
         "u1": {"i1"},
         "u2": {"i9"},
@@ -262,7 +269,7 @@ def test_consumed_item_ids_for_users_missing_bulk_does_not_retry_per_user():
 
     history = _MissingBulk(pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]))
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
         "u1": {"i2"},
         "u2": set(),
@@ -283,11 +290,15 @@ def test_consumed_item_ids_for_users_missing_single_stops_remaining_reads():
                 raise FileNotFoundError("events.parquet")
             return super().get_events_for_user(user_id, limit)
 
+        def get_events_for_users(self, user_ids, limit: int) -> dict[str, pd.DataFrame]:
+            del user_ids, limit
+            raise OSError("bulk down")
+
     history = _MissingAfterFirst(
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
     )
     overlay = ConsumedOverlay()
-    overlay.add("u3", "i9")
+    overlay.add_many([("u3", "i9")])
     assert consumed_item_ids_for_users(["u1", "u2", "u3"], history=history, overlay=overlay, lookback=10) == {
         "u1": {"i1"},
         "u2": set(),
@@ -307,7 +318,7 @@ def test_consumed_item_ids_for_users_bulk_error_falls_back_per_user():
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}, {"user_id": "u2", "item_id": "i3"}])
     )
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids_for_users(["u1", "u2"], history=history, overlay=overlay, lookback=10) == {
         "u1": {"i1", "i2"},
         "u2": {"i3"},
@@ -350,7 +361,7 @@ def test_consumed_item_ids_history_error_keeps_overlay():
             return None
 
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids("u1", history=_Boom(), overlay=overlay, lookback=10) == {"i2"}
 
 
@@ -417,8 +428,8 @@ def test_consumed_overlay_rejects_non_positive_bounds():
 
 def test_consumed_overlay_discard_pair_and_user():
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i1")
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i1")])
+    overlay.add_many([("u1", "i2")])
     overlay.discard("u1", "i1")
     assert overlay.item_ids("u1") == {"i2"}
     overlay.discard("u1")
@@ -427,9 +438,9 @@ def test_consumed_overlay_discard_pair_and_user():
 
 def test_consumed_overlay_discard_item_all_users():
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i1")
-    overlay.add("u1", "i2")
-    overlay.add("u2", "i1")
+    overlay.add_many([("u1", "i1")])
+    overlay.add_many([("u1", "i2")])
+    overlay.add_many([("u2", "i1")])
     overlay.discard_item("i1")
     assert overlay.item_ids("u1") == {"i2"}
     assert overlay.item_ids("u2") == set()
@@ -437,12 +448,12 @@ def test_consumed_overlay_discard_item_all_users():
 
 def test_consumed_overlay_evicts_old_items_and_users():
     overlay = ConsumedOverlay(max_items_per_user=2, max_users=2)
-    overlay.add("u1", "i1")
-    overlay.add("u1", "i2")
-    overlay.add("u1", "i3")
+    overlay.add_many([("u1", "i1")])
+    overlay.add_many([("u1", "i2")])
+    overlay.add_many([("u1", "i3")])
     assert overlay.item_ids("u1") == {"i2", "i3"}
-    overlay.add("u2", "a")
-    overlay.add("u3", "b")
+    overlay.add_many([("u2", "a")])
+    overlay.add_many([("u3", "b")])
     assert overlay.item_ids("u1") == set()
     assert overlay.item_ids("u2") == {"a"}
     assert overlay.item_ids("u3") == {"b"}
@@ -459,13 +470,13 @@ def test_consumed_item_ids_missing_history_is_quiet():
             return None
 
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i2")
+    overlay.add_many([("u1", "i2")])
     assert consumed_item_ids("u1", history=_Missing(), overlay=overlay, lookback=10) == {"i2"}
 
 
 def test_consumed_overlay_replace_pairs_is_atomic():
     overlay = ConsumedOverlay()
-    overlay.add("u1", "i1")
+    overlay.add_many([("u1", "i1")])
     overlay.replace_pairs([("u1", "i1")], [("u1", "i2")])
     assert overlay.item_ids("u1") == {"i2"}
 

@@ -849,6 +849,7 @@ def test_event_worker_stop_does_not_close_before_in_flight_ack(tmp_path, feature
             ack_release.wait(timeout=2)
             super().ack(event_ids)
             order.append("ack-done")
+            return list(event_ids)
 
         def close(self) -> None:
             order.append("close")
@@ -908,11 +909,11 @@ def test_event_worker_reconnect_nacks_buffer_after_connect(tmp_path, feature_con
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
-    assert kept.kept_count == 1
+    worker._buffer.extend(source.poll(1))
+    assert len(worker._buffer._events) == 1
     assert worker._reconnect_source() is True
     assert nacked == ["buf-1"]
-    assert len(worker._buffer) == 0
+    assert len(worker._buffer._events) == 0
     assert [event.event_id for event in source.poll(1)] == ["buf-1"]
     assert order == ["connect", "connect", "nack"]
 
@@ -980,8 +981,8 @@ def test_event_worker_reconnect_restores_buffer_when_nack_fails(tmp_path, featur
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
-    assert kept.kept_count == 1
+    worker._buffer.extend(source.poll(1))
+    assert len(worker._buffer._events) == 1
     assert worker._reconnect_source() is True
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-2"]
 
@@ -1010,8 +1011,8 @@ def test_event_worker_reconnect_restores_buffer_when_nack_is_unexpected(
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
-    assert kept.kept_count == 1
+    worker._buffer.extend(source.poll(1))
+    assert len(worker._buffer._events) == 1
 
     with pytest.raises(LookupError, match="nack bug"):
         worker._reconnect_source()
@@ -1048,8 +1049,8 @@ def test_event_worker_reconnect_keeps_buffer_when_nack_is_noop(tmp_path, feature
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
-    assert kept.kept_count == 1
+    worker._buffer.extend(source.poll(1))
+    assert len(worker._buffer._events) == 1
     assert worker._reconnect_source() is True
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-4"]
 
@@ -1080,8 +1081,8 @@ def test_event_worker_reconnect_restores_buffer_when_connect_fails(tmp_path, fea
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
-    assert kept.kept_count == 1
+    worker._buffer.extend(source.poll(1))
+    assert len(worker._buffer._events) == 1
     assert worker._reconnect_source() is False
     assert [event.event_id for event in worker._buffer.flush()] == ["buf-3"]
 
@@ -1112,9 +1113,9 @@ def test_event_worker_flush_restores_rejected_nack(tmp_path, feature_config: Fea
             top_k=3,
         ),
     )
-    kept = worker._buffer.extend(source.poll(1))
+    worker._buffer.extend(source.poll(1))
     ready = worker._buffer.flush()
-    assert kept.kept_count == 1
+    assert [event.event_id for event in ready] == ["rej-1"]
     assert worker._flush_ready(ready) == 0
     assert [event.event_id for event in worker._buffer.flush()] == ["rej-1"]
 
@@ -1228,11 +1229,11 @@ def test_event_worker_remembers_numeric_event_id_after_ack_timeout(tmp_path, fea
             return list(self._pending)
 
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
-            del event_ids
             self._acks += 1
             if self._acks == 1:
                 raise TimeoutError("ack timed out")
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -1329,6 +1330,7 @@ def test_event_worker_retries_failed_post_apply_ack(tmp_path, feature_config: Fe
             if len(self.acked) == 1:
                 raise OSError("commit failed")
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -1380,6 +1382,7 @@ def test_event_worker_retries_failed_unbuffered_ack(tmp_path, feature_config: Fe
             acked.extend(str(event_id) for event_id in event_ids)
             if len(acked) == 1:
                 raise OSError("unbuffered ack failed")
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -1659,6 +1662,7 @@ def test_event_worker_retry_acks_deferred_duplicates(tmp_path, feature_config: F
             acked.extend(str(event_id) for event_id in event_ids)
             if acked == [original.event_id]:
                 raise OSError("apply ack failed")
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -2575,6 +2579,7 @@ def test_event_worker_does_not_ack_fingerprint_redelivery_while_buffered(
 
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -2634,6 +2639,7 @@ def test_event_worker_acks_fingerprint_redelivery_after_apply(tmp_path, feature_
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -2693,6 +2699,7 @@ def test_event_worker_applies_same_fingerprint_with_new_id(tmp_path, feature_con
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -2755,6 +2762,7 @@ def test_event_worker_applies_same_fingerprint_with_explicit_ids_on_ephemeral_so
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -2930,6 +2938,7 @@ def test_event_worker_acks_deferred_generated_fingerprint_after_apply(
             self.acked.extend(str(event_id) for event_id in event_ids)
             acked = {str(event_id) for event_id in event_ids}
             self._pending = [event for event in self._pending if event.event_id not in acked]
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -3041,6 +3050,7 @@ def test_event_worker_does_not_ack_buffered_redelivery(tmp_path, feature_config:
 
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             acked.extend(str(event_id) for event_id in event_ids)
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -3092,6 +3102,7 @@ def test_event_worker_acks_redelivery_after_applied_restore(tmp_path, feature_co
         def ack(self, event_ids):  # type: ignore[no-untyped-def]
             self.acked.extend(str(event_id) for event_id in event_ids)
             self._pending = []
+            return list(event_ids)
 
         def nack(self, events):  # type: ignore[no-untyped-def]
             return list(events)
@@ -3437,14 +3448,12 @@ def test_event_worker_acks_when_the_sidecar_fails_after_the_write(
     assert caplog.text.count(_CLEANUP_FAILED) == int(persist_fails)
     worker._persist_online_after_ack = persist  # type: ignore[method-assign]
     assert source.health().lag == 0
-    assert updater.events_applied == 1
     assert registry_metric_value("cicerone_events_tick_errors_total") == before_tick + 1
     written = load_recommendations_frame(settings.output)
     assert "i9" in set(written[written["user_id"] == "u1"]["item_id"].astype(str))
 
     source.ingest(event_payload(event_id="post-write-1", user_id="u1", item_id="i9"))
     assert worker.tick() == 0
-    assert updater.events_applied == 1
     [repaired] = publisher.published
     assert "u1" in repaired
 

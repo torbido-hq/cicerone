@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from cicerone.config.constants import TRACK_KIND_CLICK, TRACK_KIND_IMPRESSION, TRACK_KINDS
+from cicerone.config.constants import TRACK_KIND_IMPRESSION, TRACK_KINDS
 from cicerone.events.normalize import EventNormalizeError, parse_occurred_at, supplied_event_id
 
 _REQUIRED = ("kind", "user_id", "item_id", "occurred_at")
@@ -172,13 +172,3 @@ def _stable_event_id(
         generated_at or "",
     )
     return str(uuid5(NAMESPACE_URL, json.dumps(parts, separators=(",", ":"))))
-
-
-__all__ = [
-    "TRACK_KIND_CLICK",
-    "TRACK_KIND_IMPRESSION",
-    "NormalizedTrack",
-    "TrackNormalizeError",
-    "assign_missing_event_id",
-    "normalize_track",
-]

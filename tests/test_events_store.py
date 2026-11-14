@@ -13,7 +13,6 @@ from support.settings import local_output
 
 from cicerone.config import IOSettings, make_settings
 from cicerone.events.store import (
-    count_recommendation_users,
     empty_recommendations_frame,
     load_items_catalog_size,
     load_recommendation_guardrail_rows,
@@ -128,7 +127,6 @@ def test_load_recommendations_for_users_dataset_filters(tmp_path, monkeypatch):
     calls = patch_parquet_reads(monkeypatch)
     frame = load_recommendations_for_users(settings.output, ["u2"])
     assert list(frame["user_id"]) == ["u2"]
-    assert count_recommendation_users(settings.output) == 2
     assert load_recommendations_for_users(settings.output, []).empty
     assert any(call["filters"] == [("user_id", "in", ["u2"])] for call in calls)
 
@@ -183,7 +181,6 @@ def test_load_recommendations_for_users_db(tmp_path):
     settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
     frame = load_recommendations_for_users(settings.output, ["u1"])
     assert list(frame["user_id"]) == ["u1"]
-    assert count_recommendation_users(settings.output) == 2
 
 
 def test_load_recommendations_for_users_db_empty_user_ids(tmp_path, monkeypatch):
@@ -261,76 +258,9 @@ def test_load_recommendations_for_users_dataset_schema_mismatch(tmp_path, caplog
     assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
 
 
-def test_count_recommendation_users_db_missing_table(tmp_path):
-    db_path = tmp_path / "missing_count.db"
-    sqlite3.connect(db_path).close()
-    settings = make_settings(
-        output=IOSettings(kind="db", options={"database_url": f"sqlite+pysqlite:///{db_path}"})
-    )
-    assert count_recommendation_users(settings.output) == 0
-
-
-def test_count_recommendation_users_db_schema_mismatch(tmp_path, caplog):
-    db_path = tmp_path / "count_schema.db"
-    url = f"sqlite+pysqlite:///{db_path}"
-    engine = create_engine(url)
-    with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE recommendations (item_id TEXT, rank INTEGER)"))
-        conn.execute(text("INSERT INTO recommendations (item_id, rank) VALUES ('i1', 1)"))
-    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
-    with caplog.at_level(logging.WARNING):
-        assert count_recommendation_users(settings.output) == 0
-    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
-
-
-def test_count_recommendation_users_dataset_projects_user_id(tmp_path, monkeypatch):
-    path = tmp_path / "recommendations.parquet"
-    pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
-            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
-        ]
-    ).to_parquet(path, index=False)
-    settings = make_settings(output=local_output(tmp_path))
-    calls = patch_parquet_reads(monkeypatch)
-    assert count_recommendation_users(settings.output) == 2
-    assert [call["columns"] for call in calls] == [["user_id"]]
-
-
-def test_count_recommendation_users_dataset_schema_mismatch(tmp_path, caplog):
-    path = tmp_path / "recommendations.parquet"
-    pd.DataFrame([{"item_id": "i1", "rank": 1}]).to_parquet(path, index=False)
-    settings = make_settings(output=local_output(tmp_path))
-    with caplog.at_level(logging.WARNING):
-        assert count_recommendation_users(settings.output) == 0
-    assert any("schema mismatch" in record.getMessage().lower() for record in caplog.records)
-
-
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [(TypeError("bad user_id arg"), None), (ArrowTypeError("user_id: type mismatch"), 0)],
-)
-def test_count_recommendation_users_dataset_type_error_is_not_a_schema_mismatch(
-    tmp_path, monkeypatch, exc, expected
-):
-    settings = make_settings(output=local_output(tmp_path))
-
-    def boom(*_args, **_kwargs):
-        raise exc
-
-    monkeypatch.setattr("cicerone.io.options.read_parquet", boom)
-    if expected is None:
-        with pytest.raises(TypeError, match="bad user_id arg"):
-            count_recommendation_users(settings.output)
-    else:
-        assert count_recommendation_users(settings.output) == expected
-
-
 def test_load_recommendations_for_users_unsupported_kind():
     with pytest.raises(ValueError, match="Unsupported output kind"):
         load_recommendations_for_users(IOSettings(kind="other", options={}), ["u1"])
-    with pytest.raises(ValueError, match="Unsupported output kind"):
-        count_recommendation_users(IOSettings(kind="other", options={}))
 
 
 def test_load_items_catalog_size_dataset(tmp_path):
@@ -526,49 +456,6 @@ def test_load_recommendations_frame_pandas_hard_sql(tmp_path, monkeypatch):
         load_recommendations_frame(settings.output)
 
 
-def test_count_recommendation_users_pandas_missing_table(tmp_path, monkeypatch):
-    from pandas.errors import DatabaseError
-
-    url = f"sqlite+pysqlite:///{tmp_path / 'count_pandas.db'}"
-    sqlite3.connect(tmp_path / "count_pandas.db").close()
-    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
-
-    class _Conn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def execute(self, *_args, **_kwargs):
-            raise DatabaseError("no such table: recommendations")
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
-    assert count_recommendation_users(settings.output) == 0
-
-
-def test_count_recommendation_users_pandas_hard_sql(tmp_path, monkeypatch):
-    from pandas.errors import DatabaseError
-
-    url = f"sqlite+pysqlite:///{tmp_path / 'count_pandas_hard.db'}"
-    sqlite3.connect(tmp_path / "count_pandas_hard.db").close()
-    settings = make_settings(output=IOSettings(kind="db", options={"database_url": url}))
-
-    class _Conn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def execute(self, *_args, **_kwargs):
-            raise DatabaseError("connection refused")
-
-    monkeypatch.setattr("cicerone.events.store.engine_for", lambda _url: _FakeEngine(_Conn))
-    with pytest.raises(DatabaseError, match="connection refused"):
-        count_recommendation_users(settings.output)
-
-
 def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
     settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame({"item_id": pd.Series(dtype=str)}).to_parquet(
@@ -598,25 +485,12 @@ def test_load_items_catalog_size_empty_and_read_errors(tmp_path, monkeypatch):
         load_items_catalog_size(settings.output)
 
 
-def test_count_recommendation_users_arrow_not_implemented_fallback(tmp_path, monkeypatch):
-    pd.DataFrame(
-        [
-            {"user_id": "u1", "item_id": "i1", "rank": 1, "score": 1.0, "source": "personalized"},
-            {"user_id": "u2", "item_id": "i2", "rank": 1, "score": 0.5, "source": "personalized"},
-        ]
-    ).to_parquet(tmp_path / "recommendations.parquet", index=False)
-    settings = make_settings(output=local_output(tmp_path))
-    patch_parquet_reads(monkeypatch, pushdown_error=ArrowNotImplementedError("column projection"))
-    assert count_recommendation_users(settings.output) == 2
-
-
 def test_load_recommendations_empty_existing_file(tmp_path):
     settings = make_settings(output=local_output(tmp_path))
     pd.DataFrame(columns=["user_id", "item_id", "rank", "score", "source"]).to_parquet(
         tmp_path / "recommendations.parquet", index=False
     )
     assert load_recommendations_frame(settings.output).empty
-    assert count_recommendation_users(settings.output) == 0
     guard = load_recommendation_guardrail_rows(settings.output)
     assert guard is not None
     assert guard.empty
@@ -714,8 +588,6 @@ def test_event_store_raises_unexpected_and_hard_s3(tmp_path, monkeypatch):
         load_recommendations_frame(settings.output)
     with pytest.raises(RuntimeError, match="boom"):
         load_recommendation_guardrail_rows(settings.output)
-    with pytest.raises(RuntimeError, match="boom"):
-        count_recommendation_users(settings.output)
 
     def _fail_filters(*_args, **kwargs):
         if kwargs.get("filters") is not None:

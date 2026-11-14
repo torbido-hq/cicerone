@@ -19,7 +19,7 @@ search weights, see [search-weights.md](search-weights.md).
 | `feature_config.py` | Load `config/features.toml` (event weights, feature columns, eligibility/boost policy rules; `[[boost]]` / `[[boosts]]`) |
 | `policy/` | Declarative eligibility masks (fail-open/fail-closed matrix), cohort grouping (`eligibility.py`), score boosts (`boosts.py`) |
 | `blending.py` | Per-user weighted mix of personalized/popular/latest (optional) |
-| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`, `replace_recommendations_for_users`); optional `ItemScoresWriter.write_item_scores`; `BaseRecommendationReader` with empty defaults for custom readers |
+| `io/base.py` | `InputSource` / `OutputSink` / `RecommendationReader` protocols (including `configure_item_filters`, `replace_recommendations_for_users`, `write_item_scores`); `BaseRecommendationReader` with empty defaults for custom readers |
 | `io/recommendation_schema.py` | Shared recommendation column constants + SQL identifier helper for read/write paths |
 | `io/db_errors.py` | Shared SQLAlchemy missing-table/column classifiers for recommendation I/O |
 | `io/factory.py` | kind→backend registry (`"dataset"` or `"db"`) |
@@ -113,8 +113,8 @@ Postgres catalog with dataset output.
 a Postgres or local parquet catalog through webhook `POST /events`
 write-through to serve and the dashboard.
 
-Public imports stay stable after the package splits:
-`from cicerone.model import …` and `from cicerone.config import …`.
+`cicerone.model` and `cicerone.config` re-export their main API from the
+package; other packages are imported from the module that defines a name.
 Cross-module helpers are public; `_` is for true module-locals only.
 
 ## Tests
@@ -525,8 +525,8 @@ Implementation details:
   when eligibility runs per cohort.
 - **Artifacts:** schema version **3** persists RecTools models with
   `model.save` / `load_model` (zip envelope); `users`/`items` frames and
-  `content_fallback` stay pickle-backed so `recommend_from_artifact` can
-  re-apply user-scoped eligibility offline. Schema v2 bare pickles are not
+  `content_fallback` stay pickle-backed so the `[events.online]` worker can
+  re-apply user-scoped eligibility. Schema v2 bare pickles are not
   loadable.
 
 ## Extensibility: adding a new I/O backend
@@ -547,7 +547,7 @@ keys a given backend requires. To add a new backend (e.g. another object store):
 
 Nothing in `config/`, `job.py`, `dataset.py`, or `model/` needs to
 change — they only ever see the `InputSource`/`OutputSink` protocol and the
-generic `IOSettings`. Catalog scores are optional (`ItemScoresWriter`).
+generic `IOSettings`.
 
 ## Incremental events
 

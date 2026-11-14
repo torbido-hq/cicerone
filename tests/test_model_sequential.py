@@ -10,16 +10,19 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from rectools import Columns
+from support.settings import make_settings
 from support.toml_config import MINIMAL_IO_TOML, write_toml
 
 from cicerone.automl import (
     Candidate,
+    evaluate_candidates,
     exclude_sequential_from_candidates,
     median_distinct_items_per_user,
     sequential_automl_skip_reason,
 )
 from cicerone.config import ConfigError, load_settings
 from cicerone.dataset import build_dataset
+from cicerone.model import FitOptions
 from cicerone.model_config import (
     DEFAULT_SEQUENTIAL_CONFIG,
     SEQUENTIAL_ARCHITECTURES,
@@ -268,8 +271,6 @@ def test_exclude_sequential_from_candidates_drops_solo_and_strips_fusion():
 def test_evaluate_candidates_skips_sequential_when_extra_missing(
     sample_items, feature_config, caplog, monkeypatch
 ):
-    from cicerone.automl import evaluate_candidates
-
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: False)
     now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
@@ -292,15 +293,17 @@ def test_evaluate_candidates_skips_sequential_when_extra_missing(
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[
-                {"models": ["sequential"]},
-                {"models": ["popular"]},
-                {"models": ["sequential", "popular"], "weights": {"sequential": 1.0, "popular": 0.3}},
-            ],
-            n_splits=1,
-            test_days=7,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[
+                    {"models": ["sequential"]},
+                    {"models": ["popular"]},
+                    {"models": ["sequential", "popular"], "weights": {"sequential": 1.0, "popular": 0.3}},
+                ],
+                automl_n_splits=1,
+                automl_test_days=7,
+            ),
         )
     assert any("Excluding sequential" in record.message for record in caplog.records)
     assert [result.candidate.models for result in results] == [["popular"], ["popular"]]
@@ -309,8 +312,6 @@ def test_evaluate_candidates_skips_sequential_when_extra_missing(
 def test_evaluate_candidates_skips_sequential_below_median_threshold(
     sample_items, feature_config, caplog, monkeypatch
 ):
-    from cicerone.automl import evaluate_candidates
-
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: True)
     now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
@@ -331,12 +332,14 @@ def test_evaluate_candidates_skips_sequential_below_median_threshold(
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[{"models": ["sequential"]}, {"models": ["popular"]}],
-            n_splits=1,
-            test_days=7,
-            sequential_min_median_interactions=5,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[{"models": ["sequential"]}, {"models": ["popular"]}],
+                automl_n_splits=1,
+                automl_test_days=7,
+                sequential_min_median_interactions=5,
+            ),
         )
     assert any("min_median_interactions=5" in record.message for record in caplog.records)
     assert [result.candidate.models for result in results] == [["popular"]]
@@ -345,8 +348,6 @@ def test_evaluate_candidates_skips_sequential_below_median_threshold(
 def test_evaluate_candidates_raises_when_only_sequential_is_excluded(
     sample_items, feature_config, monkeypatch
 ):
-    from cicerone.automl import evaluate_candidates
-
     monkeypatch.setattr("cicerone.automl.sequential_extra_available", lambda: False)
     now = pd.Timestamp.now(tz="UTC")
     events = pd.DataFrame(
@@ -367,11 +368,13 @@ def test_evaluate_candidates_raises_when_only_sequential_is_excluded(
             None,
             sample_items,
             feature_config,
-            top_k=2,
-            half_life_days=90,
-            candidates=[{"models": ["sequential"]}],
-            n_splits=1,
-            test_days=7,
+            make_settings(
+                top_k=2,
+                half_life_days=90,
+                automl_candidates=[{"models": ["sequential"]}],
+                automl_n_splits=1,
+                automl_test_days=7,
+            ),
         )
 
 
@@ -435,7 +438,7 @@ def test_sequential_fit_recommend_top_k_shape(feature_config):
         config=feature_config,
         top_k=3,
         enabled_models=["sequential"],
-        model_configs=configs,
+        fit=FitOptions(model_configs=configs),
     )
     assert not recs.empty
     assert set(recs[Columns.User]) <= set(events["user_id"])

@@ -13,16 +13,14 @@ from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings, Settings
 from cicerone.config.constants import ALLOCATION_THOMPSON, TRACK_KIND_IMPRESSION
 from cicerone.errors import OPTIONAL_EVAL_ERRORS, OPTIONAL_IO_ERRORS, try_load
-from cicerone.evaluation import (
-    conversion_event_types,
+from cicerone.evaluation.context import (
+    concat_history,
     conversion_events_for_settings,
-    evaluate_served,
-    evaluate_tracking,
     generated_ats_from_track,
-    recs_from_impressions,
-    replay_ks,
+    stamp_recommendations,
 )
-from cicerone.evaluation.context import concat_history, stamp_recommendations
+from cicerone.evaluation.served import evaluate_served, recs_from_impressions, replay_ks
+from cicerone.evaluation.tracking import conversion_event_types, evaluate_tracking
 from cicerone.events.store import load_recommendations_frame
 from cicerone.experiment.assignment import assign_user
 from cicerone.experiment.store import ExperimentStore
@@ -32,7 +30,7 @@ from cicerone.io.factory import build_manifest_reader
 from cicerone.io.recommendation_schema import USER_COLUMN, VARIANT_COLUMN, pick_fallback_variant
 from cicerone.locks import LockBackend, WriteFence
 from cicerone.track.store import TrackStore, open_track_store
-from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
+from cicerone.track.store_common import lookback_since
 from cicerone.values import utc_stamp
 
 logger = logging.getLogger(__name__)
@@ -138,13 +136,13 @@ def persist_track_outputs(
                 lambda: store.append_history(recommendations, generated_at=generated_at),
             )
         )
-    fence = getattr(store, "fence", None)
+    fence = store.fence
 
     def _run_serial() -> None:
         for label, fn in tasks:
             try_load(label, fn, None, log=logger)
 
-    if fence is not None and fence.lock is not None:
+    if fence.lock is not None:
         with fence.hold():
             _run_serial()
         return
@@ -163,8 +161,7 @@ def job_track_since(settings: Settings) -> str | None:
     )
     if not need_track:
         return None
-    window_hours = float(settings.track.attribution_window_hours)
-    floor = pd.Timestamp(lookback_since(window_hours=window_hours, floor_hours=DASHBOARD_TRACK_FLOOR_HOURS))
+    floor = pd.Timestamp(lookback_since(settings.track.attribution_window_hours))
     thompson = settings.experiment.enabled and settings.experiment.allocation == ALLOCATION_THOMPSON
     if not thompson:
         return floor.isoformat()
@@ -178,7 +175,7 @@ def job_track_since(settings: Settings) -> str | None:
     stamp = pd.to_datetime(started, utc=True, errors="coerce") if started else pd.NaT
     if pd.isna(stamp):
         return None
-    earliest = min(floor, stamp - pd.Timedelta(hours=window_hours))
+    earliest = min(floor, stamp - pd.Timedelta(hours=settings.track.attribution_window_hours))
     return earliest.isoformat()
 
 

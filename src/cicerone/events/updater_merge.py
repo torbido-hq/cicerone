@@ -96,7 +96,7 @@ class UpdaterMerge:
 
     if TYPE_CHECKING:
 
-        def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame: ...
+        def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series) -> pd.DataFrame: ...
 
     def _merge_user_rows(
         self,
@@ -105,7 +105,7 @@ class UpdaterMerge:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
         batch: pd.DataFrame,
-        weights: pd.Series | None = None,
+        weights: pd.Series,
         online_rows: pd.DataFrame | None = None,
         allowed: frozenset[str] | None = None,
         allowed_by_variant: Mapping[str, frozenset[str] | None] | None = None,
@@ -145,7 +145,7 @@ class UpdaterMerge:
                 popular if inject else popular.iloc[0:0],
                 latest if inject else latest.iloc[0:0],
                 batch if inject else empty_batch,
-                weights if inject else None,
+                weights,
                 online_rows=online_rows if inject else None,
                 allowed=variant_allowed,
             )
@@ -183,7 +183,7 @@ class UpdaterMerge:
         popular: pd.DataFrame,
         latest: pd.DataFrame,
         batch: pd.DataFrame,
-        weights: pd.Series | None = None,
+        weights: pd.Series,
         online_rows: pd.DataFrame | None = None,
         allowed: frozenset[str] | None = None,
     ) -> pd.DataFrame:

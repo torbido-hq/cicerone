@@ -139,26 +139,6 @@ def rank_latest_items(
     return list(zip(item_ids, ranks, scores, strict=True))
 
 
-def build_latest_ranking(
-    items: pd.DataFrame,
-    date_column: str,
-    allowed_item_ids: Sequence,
-    top_k: int,
-    target_users: Sequence[str],
-) -> pd.DataFrame:
-    """Non-personalized top-K by newest ``date_column``, expanded to ``target_users``.
-
-    Prefer ``rank_latest_items`` + blend-time expansion when many users share one
-    allowlist; this helper remains for callers that need an explicit frame.
-    """
-    if not target_users:
-        return _empty_recs()
-    return expand_latest_ranking(
-        rank_latest_items(items, date_column, allowed_item_ids, top_k),
-        target_users,
-    )
-
-
 def expand_latest_ranking(
     ranked: Sequence[tuple[str, int, float]],
     target_users: Sequence[str],
@@ -231,7 +211,6 @@ def blend_for_users(
     *,
     personalized: pd.DataFrame,
     popular: pd.DataFrame,
-    latest: pd.DataFrame | None,
     counts: Mapping[str, int],
     target_users: Sequence[str],
     config: BlendingConfig,
@@ -242,9 +221,8 @@ def blend_for_users(
 ) -> pd.DataFrame:
     """Weighted RRF with per-user source weights (best rank per item within each source).
 
-    Prefer ``shared_latest`` (one ranking for all users) or ``latest_by_user``
-    (per-user / per-cohort rankings; keys must be ``str`` user ids) over a
-    Cartesian ``latest`` frame.
+    Latest comes from ``shared_latest`` (one ranking for all users) or
+    ``latest_by_user`` (per-user / per-cohort rankings; keys must be ``str`` user ids).
     """
     unique_users = list(dict.fromkeys(str(u) for u in target_users))
     if not unique_users:
@@ -252,17 +230,11 @@ def blend_for_users(
 
     counts_by_user = {str(user_id): int(n) for user_id, n in counts.items()}
 
-    use_indexed_latest = shared_latest is not None or latest_by_user is not None
-    latest_index = (
-        None if latest_by_user is None else {str(uid): ranking for uid, ranking in latest_by_user.items()}
-    )
-    if use_indexed_latest and latest_available:
-        if shared_latest is not None:
-            latest_frame = expand_latest_ranking(shared_latest, unique_users)
-        else:
-            latest_frame = _latest_index_frame(latest_index or {}, unique_users)
-    elif latest is not None and latest_available:
-        latest_frame = _normalize_source_frame(latest, LATEST_SOURCE)
+    if latest_available and shared_latest is not None:
+        latest_frame = expand_latest_ranking(shared_latest, unique_users)
+    elif latest_available and latest_by_user is not None:
+        latest_index = {str(uid): ranking for uid, ranking in latest_by_user.items()}
+        latest_frame = _latest_index_frame(latest_index, unique_users)
     else:
         latest_frame = _empty_recs()
     frames = {
@@ -294,7 +266,6 @@ def append_cold_start_rows(
     recommendations: pd.DataFrame,
     *,
     popular: pd.DataFrame,
-    latest: pd.DataFrame | None,
     config: BlendingConfig,
     top_k: int,
     latest_available: bool,
@@ -304,7 +275,6 @@ def append_cold_start_rows(
     cold = blend_for_users(
         personalized=_empty_recs(),
         popular=popular,
-        latest=latest,
         counts={COLD_START_USER_ID: 0},
         target_users=[COLD_START_USER_ID],
         config=config,

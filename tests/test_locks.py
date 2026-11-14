@@ -19,22 +19,19 @@ from cicerone.config import (
 )
 from cicerone.config.constants import DEFAULT_EVENTS_APPLY_LOCK_TTL_SECONDS
 from cicerone.locks import (
-    REDIS_LOCK_TTL_MS,
     LockLostError,
-    PostgresAdvisoryLock,
-    RedisLock,
     WriteFence,
     acquire_until,
-    advisory_keys_from_lock_key,
     build_dataset_writer_lock,
     build_lock_backend,
     build_output_writer_lock,
-    dataset_append_lock_key,
     events_apply_lock_key,
     has_distributed_lock,
 )
 from cicerone.locks import hold as lock_hold
-from cicerone.locks.redis import RedisError
+from cicerone.locks.keys import REDIS_LOCK_TTL_MS, advisory_keys_from_lock_key, dataset_append_lock_key
+from cicerone.locks.postgres import PostgresAdvisoryLock
+from cicerone.locks.redis import RedisError, RedisLock
 from cicerone.trigger import RunGuard
 
 
@@ -335,15 +332,14 @@ def test_redis_lock_refreshes_ttl_while_held(monkeypatch):
 
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=1,
+        ttl_ms=2,
     )
     token = lock._token
     assert lock.acquire() is True
     _wait_for_event(refreshed)
     lock.release()
     assert client.refresh_script.call_count >= 1
-    client.refresh_script.assert_any_call(keys=[lock._key], args=[token, 200])
+    client.refresh_script.assert_any_call(keys=[lock._key], args=[token, 2])
 
 
 def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
@@ -353,8 +349,7 @@ def test_redis_lock_allows_reacquire_after_refresh_loss(monkeypatch):
 
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=1,
+        ttl_ms=2,
     )
     first_token = lock._token
     lost = threading.Event()
@@ -381,8 +376,7 @@ def test_redis_lock_marks_lost_on_refresh_redis_error(monkeypatch):
 
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=1,
+        ttl_ms=2,
     )
     lost = threading.Event()
     real_mark_lost = lock._mark_lost
@@ -407,8 +401,7 @@ def test_redis_lock_marks_lost_on_unexpected_refresh_error(monkeypatch):
 
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=1,
+        ttl_ms=2,
     )
     lost = threading.Event()
     real_mark_lost = lock._mark_lost
@@ -431,8 +424,7 @@ def test_redis_acquire_starts_new_refresher_after_release(monkeypatch):
     client.set.return_value = True
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     assert lock.acquire() is True
     first = lock._refresh_thread
@@ -449,8 +441,7 @@ def test_redis_stale_release_does_not_drop_new_holder(monkeypatch):
     client.set.return_value = True
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     assert lock.acquire() is True
     stale_generation = lock._hold_generation
@@ -470,8 +461,7 @@ def test_redis_try_acquire_releases_token_rotated_during_set(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     token = lock._token
 
@@ -489,8 +479,7 @@ def test_redis_stale_token_release_failure_is_logged(monkeypatch, caplog):
     client = _mock_redis_module(monkeypatch)
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
 
     def _set(*_args, **_kwargs):
@@ -509,8 +498,7 @@ def test_redis_stale_token_release_raises_unexpected(monkeypatch):
     client = _mock_redis_module(monkeypatch)
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
 
     def _set(*_args, **_kwargs):
@@ -529,8 +517,7 @@ def test_redis_stale_start_refresh_does_not_stop_new_holder(monkeypatch):
     client.set.return_value = True
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     assert lock.acquire() is True
     stale = lock._hold_generation
@@ -548,8 +535,7 @@ def test_redis_release_generation_skips_stop_after_reacquire(monkeypatch):
     client.set.return_value = True
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     assert lock.acquire() is True
     generation = lock._hold_generation
@@ -595,8 +581,7 @@ def test_redis_stale_mark_lost_does_not_clear_new_holder(monkeypatch):
     client.set.return_value = True
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=10_000,
+        ttl_ms=20_000,
     )
     assert lock.acquire() is True
     stale_generation = lock._hold_generation
@@ -630,8 +615,7 @@ def test_redis_release_ignores_in_flight_refresh_failure(monkeypatch):
 
     lock = RedisLock(
         "redis://localhost:6379/0",
-        ttl_ms=200,
-        refresh_interval_ms=1,
+        ttl_ms=2,
     )
     real_mark_lost = lock._mark_lost
 
@@ -914,10 +898,10 @@ def test_write_fence_hold_binds_try_acquire_generation():
 
 def test_writer_lock_held_here_without_hold_generation():
     lock = FakeLock()
-    assert not locks_mod.writer_lock_held_here(lock)
+    assert not lock_hold.writer_lock_held_here(lock)
     with WriteFence(lock).hold():
-        assert locks_mod.writer_lock_held_here(lock)
-    assert not locks_mod.writer_lock_held_here(lock)
+        assert lock_hold.writer_lock_held_here(lock)
+    assert not lock_hold.writer_lock_held_here(lock)
 
 
 def test_write_fence_hold_rechecks_caller_fence_after_acquire():

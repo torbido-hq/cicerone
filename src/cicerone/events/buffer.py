@@ -14,13 +14,8 @@ from cicerone.events.normalize import event_fingerprint
 class BufferExtendResult:
     """Outcome of ``MicroBatchBuffer.extend`` for source ack/nack bookkeeping."""
 
-    kept: tuple[NormalizedEvent, ...]
     duplicates: tuple[NormalizedEvent, ...]
     overflow: tuple[NormalizedEvent, ...]
-
-    @property
-    def kept_count(self) -> int:
-        return len(self.kept)
 
 
 class MicroBatchBuffer:
@@ -29,7 +24,6 @@ class MicroBatchBuffer:
         *,
         batch_size: int,
         batch_window_seconds: float,
-        dedupe: bool = True,
         max_events: int | None = None,
         fingerprint_dedupe: bool = False,
     ):
@@ -41,12 +35,9 @@ class MicroBatchBuffer:
         cap = batch_size if max_events is None else max_events
         if cap < batch_size:
             raise ValueError("max_events must be >= batch_size")
-        if fingerprint_dedupe and not dedupe:
-            raise ValueError("fingerprint_dedupe requires dedupe")
         self._batch_size = batch_size
         self._max_events = cap
         self._batch_window_seconds = batch_window_seconds
-        self._dedupe = dedupe
         self._fingerprint_dedupe = fingerprint_dedupe
         self._events: list[NormalizedEvent] = []
         self._event_ids: set[str] = set()
@@ -60,9 +51,6 @@ class MicroBatchBuffer:
     def _tracks_fingerprint(self, event: NormalizedEvent) -> bool:
         return self._fingerprint_dedupe and event.generated_event_id
 
-    def __len__(self) -> int:
-        return len(self._events)
-
     @property
     def remaining_capacity(self) -> int:
         return max(0, self._max_events - len(self._events))
@@ -74,8 +62,7 @@ class MicroBatchBuffer:
         return fingerprint in self._fingerprints
 
     def extend(self, events: Sequence[NormalizedEvent]) -> BufferExtendResult:
-        """Append events; classify kept vs duplicate vs capacity overflow for ack/nack."""
-        kept: list[NormalizedEvent] = []
+        """Append events; classify duplicates and capacity overflow for ack/nack."""
         duplicates: list[NormalizedEvent] = []
         overflow: list[NormalizedEvent] = []
         now = time.monotonic()
@@ -83,23 +70,20 @@ class MicroBatchBuffer:
             if len(self._events) >= self._max_events:
                 overflow.append(event)
                 continue
-            if self._dedupe:
-                if event.event_id in self._event_ids:
-                    duplicates.append(event)
-                    continue
-                fingerprint = event_fingerprint(event)
-                if self._tracks_fingerprint(event) and fingerprint in self._fingerprints:
-                    duplicates.append(event)
-                    continue
-                self._event_ids.add(event.event_id)
-                if self._tracks_fingerprint(event):
-                    self._fingerprints.add(fingerprint)
+            if event.event_id in self._event_ids:
+                duplicates.append(event)
+                continue
+            fingerprint = event_fingerprint(event)
+            if self._tracks_fingerprint(event) and fingerprint in self._fingerprints:
+                duplicates.append(event)
+                continue
+            self._event_ids.add(event.event_id)
+            if self._tracks_fingerprint(event):
+                self._fingerprints.add(fingerprint)
             if self._window_started_at is None:
                 self._window_started_at = now
             self._events.append(event)
-            kept.append(event)
         return BufferExtendResult(
-            kept=tuple(kept),
             duplicates=tuple(duplicates),
             overflow=tuple(overflow),
         )

@@ -260,10 +260,7 @@ class EventWorker:
         return pending
 
     def _ack_live_ids(self, event_ids: Sequence[str]) -> set[str]:
-        result = self._source.ack(event_ids)
-        if result is None:
-            return {str(event_id) for event_id in event_ids}
-        return {str(event_id) for event_id in result}
+        return {str(event_id) for event_id in self._source.ack(event_ids)}
 
     def _drop_retry_acks(self, live: Sequence[NormalizedEvent]) -> None:
         if not self._retry_acks or not live:
