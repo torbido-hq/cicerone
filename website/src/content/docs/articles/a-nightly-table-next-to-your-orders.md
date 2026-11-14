@@ -389,7 +389,9 @@ enabled = true
 host = "0.0.0.0"
 port = 8090
 users_path = "/app/config/dashboard_users.toml"
-lookup_k = 10
+
+[serve]
+default_k = 10
 ```
 
 `cron_schedule` has to match the batch job so the page can tell when a run looks overdue. The `[input]` block is required by the config loader and otherwise unused.
