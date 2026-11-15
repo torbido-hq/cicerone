@@ -13,7 +13,6 @@ from cicerone.blending import (
     POPULAR_SOURCE,
     append_cold_start_rows,
     blend_for_users,
-    build_latest_ranking,
     expand_latest_ranking,
     interaction_counts,
     personalized_weight,
@@ -23,7 +22,7 @@ from cicerone.blending import (
 )
 from cicerone.dataset import build_dataset
 from cicerone.feature_config import BlendingConfig, FeatureConfig
-from cicerone.model import train_and_recommend
+from cicerone.model import FitOptions, train_and_recommend
 
 
 def _blending(**overrides) -> BlendingConfig:
@@ -102,7 +101,6 @@ def test_blend_for_users_tolerates_source_weights_without_latest_key(monkeypatch
     out = blend_for_users(
         personalized=empty,
         popular=popular,
-        latest=None,
         counts={"u1": 0},
         target_users=["u1"],
         config=config,
@@ -124,7 +122,7 @@ def test_resolve_latest_date_column_picks_first_usable():
     assert resolve_latest_date_column(None, ["created_at"]) is None
 
 
-def test_build_latest_ranking_orders_by_date_and_respects_allowlist():
+def test_rank_latest_items_orders_by_date_and_respects_allowlist():
     items = pd.DataFrame(
         [
             {"item_id": "old", "published_at": "2020-01-01"},
@@ -132,17 +130,11 @@ def test_build_latest_ranking_orders_by_date_and_respects_allowlist():
             {"item_id": "blocked", "published_at": "2025-01-01"},
         ]
     )
-    ranking = build_latest_ranking(
-        items,
-        "published_at",
-        allowed_item_ids=["old", "new"],
-        top_k=2,
-        target_users=["u1", "u2"],
-    )
-    assert list(ranking[ranking[Columns.User] == "u1"][Columns.Item]) == ["new", "old"]
-    assert set(ranking[Columns.User]) == {"u1", "u2"}
-    assert (ranking["source"] == LATEST_SOURCE).all()
-    assert "blocked" not in set(ranking[Columns.Item])
+    ranked = rank_latest_items(items, "published_at", allowed_item_ids=["old", "new"], top_k=2)
+    assert [item for item, _rank, _score in ranked] == ["new", "old"]
+    expanded = expand_latest_ranking(ranked, ["u1", "u2"])
+    assert set(expanded[Columns.User]) == {"u1", "u2"}
+    assert (expanded["source"] == LATEST_SOURCE).all()
 
 
 def test_blend_cold_start_prefers_popular_and_latest():
@@ -176,21 +168,10 @@ def test_blend_cold_start_prefers_popular_and_latest():
             },
         ]
     )
-    latest = pd.DataFrame(
-        [
-            {
-                Columns.User: "cold",
-                Columns.Item: "lat1",
-                Columns.Rank: 1,
-                Columns.Score: 1.0,
-                "source": LATEST_SOURCE,
-            }
-        ]
-    )
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=latest,
+        shared_latest=[("lat1", 1, 1.0)],
         counts={"cold": 0},
         target_users=["cold"],
         config=config,
@@ -236,7 +217,6 @@ def test_blend_rich_history_prefers_personalized():
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=None,
         counts={"rich": 100},
         target_users=["rich"],
         config=config,
@@ -271,17 +251,6 @@ def test_blend_mid_curve_mixes_sources():
             }
         ]
     )
-    latest = pd.DataFrame(
-        [
-            {
-                Columns.User: "mid",
-                Columns.Item: "lat1",
-                Columns.Rank: 1,
-                Columns.Score: 1.0,
-                "source": LATEST_SOURCE,
-            }
-        ]
-    )
     weights = source_weights(5, config, latest_available=True)
     assert math.isclose(weights[PERSONALIZED_SOURCE], 0.5)
     assert math.isclose(weights[POPULAR_SOURCE], 0.25)
@@ -290,7 +259,7 @@ def test_blend_mid_curve_mixes_sources():
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=latest,
+        shared_latest=[("lat1", 1, 1.0)],
         counts={"mid": 5},
         target_users=["mid"],
         config=config,
@@ -329,7 +298,6 @@ def test_blend_shared_item_gets_blended_source():
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=None,
         counts={"u": 5},
         target_users=["u"],
         config=config,
@@ -370,7 +338,6 @@ def test_append_cold_start_rows_adds_sentinel():
     out = append_cold_start_rows(
         base,
         popular=popular,
-        latest=None,
         config=config,
         top_k=1,
         latest_available=False,
@@ -398,12 +365,11 @@ def test_interaction_counts_empty_frame():
     assert interaction_counts(pd.DataFrame({"item_id": [1]})) == {}
 
 
-def test_build_latest_ranking_edge_cases():
+def test_rank_latest_items_edge_cases():
     items = pd.DataFrame([{"item_id": "i1", "published_at": "not-a-date"}])
-    empty = build_latest_ranking(items, "published_at", ["i1"], top_k=1, target_users=["u1"])
-    assert empty.empty
-    assert build_latest_ranking(items, "published_at", [], top_k=1, target_users=["u1"]).empty
-    assert build_latest_ranking(items, "published_at", ["missing"], top_k=1, target_users=["u1"]).empty
+    assert rank_latest_items(items, "published_at", ["i1"], top_k=1) == []
+    assert rank_latest_items(items, "published_at", [], top_k=1) == []
+    assert rank_latest_items(items, "published_at", ["missing"], top_k=1) == []
 
 
 def test_blend_for_users_empty_when_no_contributions():
@@ -413,7 +379,6 @@ def test_blend_for_users_empty_when_no_contributions():
             columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]
         ),
         popular=pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]),
-        latest=None,
         counts={},
         target_users=["u1"],
         config=config,
@@ -439,7 +404,6 @@ def test_append_cold_start_rows_noop_when_no_popular():
     out = append_cold_start_rows(
         base,
         popular=pd.DataFrame(),
-        latest=None,
         config=config,
         top_k=1,
         latest_available=False,
@@ -486,6 +450,7 @@ def test_train_and_recommend_with_blending_end_to_end(feature_config: FeatureCon
         config=config,
         top_k=3,
         enabled_models=["collaborative", "popular"],
+        fit=FitOptions(),
     )
     assert not recs.empty
     assert COLD_START_USER_ID in set(recs["user_id"].astype(str))
@@ -516,11 +481,7 @@ def test_train_and_recommend_blending_without_date_column(feature_config: Featur
     )
     built = build_dataset(events, None, sample_items, config, half_life_days=90)
     recs = train_and_recommend(
-        built,
-        target_users=["u1"],
-        config=config,
-        top_k=2,
-        enabled_models=["collaborative"],
+        built, target_users=["u1"], config=config, top_k=2, enabled_models=["collaborative"], fit=FitOptions()
     )
     assert not recs.empty
     assert LATEST_SOURCE not in set(recs["source"])
@@ -563,7 +524,6 @@ def test_blend_for_users_shared_latest_avoids_cartesian_frame():
             columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]
         ),
         popular=popular,
-        latest=None,
         counts={"u1": 0},
         target_users=["u1"],
         config=config,
@@ -574,42 +534,47 @@ def test_blend_for_users_shared_latest_avoids_cartesian_frame():
     assert "lat1" in set(out[Columns.Item])
 
 
-def test_blend_for_users_shared_latest_matches_cartesian_scores():
-    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5)
-    empty = pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"])
-    latest = pd.DataFrame(
+def test_blend_for_users_shared_latest_rrf_scores_by_hand():
+    # Zero history, popular_share=0.5: popular and latest each weigh 0.5; RRF term is 0.5 / (60 + rank).
+    config = _blending(curve="linear", saturate_at=1.0, popular_share=0.5, rrf_k=60.0)
+    popular = pd.DataFrame(
         [
             {
                 Columns.User: "u1",
-                Columns.Item: "lat1",
-                Columns.Rank: 1,
-                Columns.Score: 2.0,
-                "source": LATEST_SOURCE,
-            },
-            {
-                Columns.User: "u1",
                 Columns.Item: "lat2",
-                Columns.Rank: 2,
+                Columns.Rank: 1,
                 Columns.Score: 1.0,
-                "source": LATEST_SOURCE,
-            },
+                "source": POPULAR_SOURCE,
+            }
         ]
     )
-    kwargs = dict(
-        personalized=empty,
-        popular=empty,
-        counts={"u1": 0},
-        target_users=["u1"],
+    out = blend_for_users(
+        personalized=pd.DataFrame(
+            columns=[Columns.User, Columns.Item, Columns.Rank, Columns.Score, "source"]
+        ),
+        popular=popular,
+        counts={"u1": 0, "u2": 0},
+        target_users=["u1", "u2"],
         config=config,
         top_k=2,
         latest_available=True,
+        shared_latest=[("lat1", 1, 2.0), ("lat2", 2, 1.0)],
     )
-    cartesian = blend_for_users(latest=latest, **kwargs)
-    indexed = blend_for_users(latest=None, shared_latest=[("lat1", 1, 2.0), ("lat2", 2, 1.0)], **kwargs)
-    pd.testing.assert_frame_equal(
-        cartesian.sort_values([Columns.Item]).reset_index(drop=True),
-        indexed.sort_values([Columns.Item]).reset_index(drop=True),
-    )
+    rows = {
+        (row[Columns.User], row[Columns.Item]): (row[Columns.Rank], row[Columns.Score], row["source"])
+        for _, row in out.iterrows()
+    }
+    expected = {
+        ("u1", "lat2"): (1, 0.5 / 61 + 0.5 / 62, BLENDED_SOURCE),
+        ("u1", "lat1"): (2, 0.5 / 61, LATEST_SOURCE),
+        ("u2", "lat1"): (1, 0.5 / 61, LATEST_SOURCE),
+        ("u2", "lat2"): (2, 0.5 / 62, LATEST_SOURCE),
+    }
+    assert rows.keys() == expected.keys()
+    for key, (rank, score, source) in expected.items():
+        assert rows[key][0] == rank
+        assert math.isclose(rows[key][1], score)
+        assert rows[key][2] == source
 
 
 def test_blend_for_users_latest_by_user_ignores_index_users_not_in_targets():
@@ -618,7 +583,6 @@ def test_blend_for_users_latest_by_user_ignores_index_users_not_in_targets():
     out = blend_for_users(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts={"u1": 0},
         target_users=["u1"],
         config=config,
@@ -639,7 +603,6 @@ def test_blend_for_users_latest_by_user_avoids_cartesian_frame():
     out = blend_for_users(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts={"u1": 0, "u2": 0},
         target_users=["u1", "u2"],
         config=config,
@@ -663,7 +626,6 @@ def test_blend_for_users_latest_by_user_shared_ranking_matches_shared_latest():
     kwargs = dict(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts=dict.fromkeys(users, 0),
         target_users=users,
         config=config,
@@ -685,7 +647,6 @@ def test_blend_for_users_latest_by_user_groups_identical_ranks_despite_scores():
     kwargs = dict(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts=dict.fromkeys(users, 0),
         target_users=users,
         config=config,
@@ -712,7 +673,6 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
     out = blend_for_users(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts={"1": 0},
         target_users=[1],
         config=config,
@@ -726,7 +686,6 @@ def test_blend_for_users_latest_by_user_normalizes_non_string_keys():
     out_str_keys = blend_for_users(
         personalized=empty,
         popular=empty,
-        latest=None,
         counts={"1": 0},
         target_users=[1],
         config=config,
@@ -754,7 +713,6 @@ def test_blend_for_users_stringifies_int_users_and_count_keys():
     out = blend_for_users(
         personalized=personalized,
         popular=empty,
-        latest=None,
         counts={1: 10},
         target_users=["1"],
         config=config,
@@ -792,7 +750,6 @@ def test_blend_for_users_empty_target_users_returns_empty_frame():
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=None,
         counts={"u1": 10},
         config=config,
         top_k=3,
@@ -838,7 +795,6 @@ def test_blend_for_users_zero_personalized_weight_skips_user_without_other_sourc
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=None,
         counts={"rich": 10, "zero": 0},
         target_users=["rich", "zero"],
         config=config,
@@ -889,7 +845,6 @@ def test_blend_for_users_golden_top_k_across_weight_groups():
     out = blend_for_users(
         personalized=personalized,
         popular=popular,
-        latest=None,
         counts={"cold": 0, "mid": 5, "rich": 10},
         target_users=["rich", "mid", "cold"],
         config=config,

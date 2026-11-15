@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -17,6 +18,7 @@ from cicerone.config import (
     make_settings,
 )
 from cicerone.events.errors import RedisError
+from cicerone.locks import WriteFence
 from cicerone.track.normalize import normalize_track
 from cicerone.track.store import TrackStore
 from cicerone.track.store_redis import default_redis_key_prefix
@@ -141,8 +143,11 @@ def _row(**overrides: object) -> dict[str, object]:
 _OUTPUT = IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/out"})
 
 
-def _store(client: _FakeRedis, output: IOSettings = _OUTPUT) -> TrackStore:
-    return TrackStore(output, redis_url="redis://localhost:6379/0", redis_client=client)
+def _store(client: _FakeRedis, output: IOSettings = _OUTPUT, **kwargs: str) -> TrackStore:
+    store = TrackStore(output, redis_url="redis://localhost:6379/0", **kwargs)
+    with patch("cicerone.track.store_redis._connect", return_value=client):
+        store._track_log()
+    return store
 
 
 def _log(client: _FakeRedis) -> dict[str, str]:
@@ -153,8 +158,11 @@ def _log(client: _FakeRedis) -> dict[str, str]:
 def test_redis_track_appends_reads_and_forgets_one_user():
     client = _FakeRedis()
     store = _store(client)
-    assert store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")]) == 2
-    assert store.append_rows([_row()]) == 0
+    assert (
+        len(store.append_accepted_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")]))
+        == 2
+    )
+    assert len(store.append_accepted_rows([_row()])) == 0
     assert [row["user_id"] for row in store.read_rows()] == ["alice", "bob"]
     assert store.delete_redis_rows("alice") == 1
     _log(client)["junk"] = "{"
@@ -169,9 +177,9 @@ def test_redis_append_is_idempotent_when_the_reply_is_lost():
     store = _store(client)
     client.lose_reply["execute"] = RedisError("Timeout reading from socket")
     with pytest.raises(RedisError):
-        store.append_rows([_row()])
+        store.append_accepted_rows([_row()])
     # The row was stored before the reply was lost; the retry neither duplicates nor drops it.
-    assert store.append_rows([_row()]) == 0
+    assert len(store.append_accepted_rows([_row()])) == 0
     assert [json.loads(row)["event_id"] for row in client.rows] == ["imp-1"]
 
 
@@ -182,9 +190,9 @@ def test_redis_append_failure_before_the_write_lets_a_retry_store_the_row():
     store = _store(client)
     client.fail_next["execute"] = RedisError("connection reset")
     with pytest.raises(RedisError):
-        store.append_rows([_row()])
+        store.append_accepted_rows([_row()])
     assert client.rows == []
-    assert store.append_rows([_row()]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 1
 
 
 def test_redis_append_stores_a_batch_whole_or_not_at_all():
@@ -195,10 +203,13 @@ def test_redis_append_stores_a_batch_whole_or_not_at_all():
     batch = [_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")]
     client.fail_next["execute"] = RedisError("connection reset")
     with pytest.raises(RedisError):
-        store.append_rows(batch)
+        store.append_accepted_rows(batch)
     assert client.rows == []
-    assert store.append_rows(batch) == 2
-    assert store.append_rows([*batch, _row(user_id="carol", item_id="ipa-003", event_id="imp-3")]) == 1
+    assert len(store.append_accepted_rows(batch)) == 2
+    assert (
+        len(store.append_accepted_rows([*batch, _row(user_id="carol", item_id="ipa-003", event_id="imp-3")]))
+        == 1
+    )
 
 
 def test_load_settings_allows_ha_track_when_redis_url_is_set(tmp_path):
@@ -280,9 +291,9 @@ def test_deployments_sharing_redis_keep_their_logs_apart():
     client = _FakeRedis()
     other = IOSettings(kind="dataset", options={"storage_backend": "local", "path": "/tmp/elsewhere"})
     eu, us = _store(client), _store(client, other)
-    named = TrackStore(_OUTPUT, redis_url="redis://x", redis_client=client, redis_key_prefix="named")
+    named = _store(client, redis_key_prefix="named")
     for store in (eu, us, named):
-        assert store.append_rows([_row()]) == 1
+        assert len(store.append_accepted_rows([_row()])) == 1
     assert us.delete_redis_rows("alice") == 1
     assert [row["user_id"] for row in eu.read_rows()] == ["alice"]
     assert [row["user_id"] for row in named.read_rows()] == ["alice"]
@@ -330,10 +341,10 @@ def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monke
         )
     )
     store = _store(client, output)
-    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+    store.append_accepted_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
     _log(client)["imp-3"] = json.dumps({**_row(event_id="imp-3"), "user_id": " alice "})
 
-    result = forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+    result = forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence())
     assert result.recommendations == 1
     assert result.track == 2
     assert [json.loads(row)["user_id"] for row in client.rows] == ["bob"]
@@ -342,10 +353,12 @@ def test_forget_user_erases_the_redis_track_log_after_the_output(tmp_path, monke
 
 def test_redis_track_still_reads_rows_left_on_the_output(tmp_path):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    TrackStore(output).append_rows([_row(event_id="imp-old"), _row(event_id="imp-both")])
+    TrackStore(output).append_accepted_rows([_row(event_id="imp-old"), _row(event_id="imp-both")])
     client = _FakeRedis()
     store = _store(client, output)
-    store.append_rows([_row(event_id="imp-both"), _row(user_id="bob", item_id="ipa-002", event_id="imp-new")])
+    store.append_accepted_rows(
+        [_row(event_id="imp-both"), _row(user_id="bob", item_id="ipa-002", event_id="imp-new")]
+    )
     assert sorted(row["event_id"] for row in store.read_rows()) == ["imp-both", "imp-new", "imp-old"]
 
 
@@ -362,11 +375,11 @@ def test_forget_user_erases_nothing_when_redis_is_unreachable(tmp_path, monkeypa
             [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
         )
     )
-    _store(client, output).append_rows([_row()])
+    _store(client, output).append_accepted_rows([_row()])
 
     client.fail_next["ping"] = RedisConnectionError("Connection refused")
     with pytest.raises(RedisConnectionError, match="Connection refused"):
-        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence())
     assert list(pd.read_parquet(tmp_path / "recommendations.parquet")["user_id"]) == ["alice"]
     assert sorted(_log(client)) == ["imp-1"]
 
@@ -374,9 +387,9 @@ def test_forget_user_erases_nothing_when_redis_is_unreachable(tmp_path, monkeypa
 def test_redis_delete_keeps_an_append_that_races_the_read():
     client = _FakeRedis()
     store = _store(client)
-    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+    store.append_accepted_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
     carol = _row(user_id="carol", item_id="ipa-003", event_id="imp-3")
-    client.after["hscan"] = lambda: store.append_rows([carol])
+    client.after["hscan"] = lambda: len(store.append_accepted_rows([carol]))
     assert store.delete_redis_rows("alice") == 1
     assert sorted(_log(client)) == ["imp-2", "imp-3"]
 
@@ -386,7 +399,7 @@ def test_redis_delete_failure_never_drops_other_users():
 
     client = _FakeRedis()
     store = _store(client)
-    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+    store.append_accepted_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
     client.fail_next["hdel"] = RedisError("OOM command not allowed")
     with pytest.raises(RedisError):
         store.delete_redis_rows("alice")
@@ -408,22 +421,22 @@ def test_forget_user_notes_a_redis_failure_after_the_output_erase(tmp_path, monk
             [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
         )
     )
-    _store(client, output).append_rows([_row()])
+    _store(client, output).append_accepted_rows([_row()])
 
     client.fail_next["hdel"] = RedisConnectionError("connection reset")
     with pytest.raises(RedisConnectionError) as raised:
-        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence())
     assert raised.value.__notes__ == [
         "output rows were erased; run forget-user again to finish the Redis track log"
     ]
     assert pd.read_parquet(tmp_path / "recommendations.parquet").empty
-    assert forget_user(output, "alice", redis_url="redis://localhost:6379/0").track == 1
+    assert forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence()).track == 1
 
 
 def test_forget_user_notes_a_lost_writer_lease_after_the_output_erase(tmp_path, monkeypatch):
     from cicerone.forget import forget_user
     from cicerone.io.dataset_store import DatasetOutputSink
-    from cicerone.locks.hold import LockLostError
+    from cicerone.locks import LockLostError
 
     client = _FakeRedis()
     monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
@@ -433,14 +446,14 @@ def test_forget_user_notes_a_lost_writer_lease_after_the_output_erase(tmp_path, 
             [{"user_id": "alice", "item_id": "ipa-001", "rank": 1, "score": 0.5, "source": "popular"}]
         )
     )
-    _store(client, output).append_rows([_row()])
+    _store(client, output).append_accepted_rows([_row()])
 
     def lose_lease(self, user_id):
         raise LockLostError("writer lease lost")
 
     monkeypatch.setattr(TrackStore, "delete_redis_rows", lose_lease)
     with pytest.raises(LockLostError) as raised:
-        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence())
     assert raised.value.__notes__ == [
         "output rows were erased; run forget-user again to finish the Redis track log"
     ]
@@ -465,7 +478,7 @@ def test_job_treats_a_redis_track_read_failure_as_optional(caplog):
 def test_job_does_not_score_an_unreadable_track_log_as_empty(tmp_path, monkeypatch):
     from cicerone.config import make_settings
     from cicerone.events.errors import RedisError
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     settings = make_settings(track={"enabled": True, "redis_url": "redis://localhost:6379/0"}, output=output)
@@ -474,16 +487,16 @@ def test_job_does_not_score_an_unreadable_track_log_as_empty(tmp_path, monkeypat
         raise RedisError("Timeout reading from socket")
 
     monkeypatch.setattr(TrackStore, "read_rows", unreachable)
-    track, _served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+    track, _served = score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
 
 
 def test_redis_track_filtered_read_keeps_the_matching_copy_of_an_event(tmp_path):
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
-    TrackStore(output).append_rows([_row(event_id="dup", experiment_id="exp-old")])
+    TrackStore(output).append_accepted_rows([_row(event_id="dup", experiment_id="exp-old")])
     client = _FakeRedis()
     store = _store(client, output)
-    store.append_rows([_row(event_id="dup", experiment_id="exp-new")])
+    store.append_accepted_rows([_row(event_id="dup", experiment_id="exp-new")])
     assert [row["experiment_id"] for row in store.read_rows(experiment_id="exp-new")] == ["exp-new"]
     assert [row["experiment_id"] for row in store.read_rows()] == ["exp-old"]
 
@@ -495,10 +508,10 @@ def test_forget_user_refuses_object_store_output_before_touching_redis(monkeypat
     client = _FakeRedis()
     monkeypatch.setattr("cicerone.track.store_redis._connect", lambda _url: client)
     output = IOSettings(kind="dataset", options={"storage_backend": "s3", "bucket": "b", "path": "unused"})
-    _store(client, output).append_rows([_row()])
+    _store(client, output).append_accepted_rows([_row()])
     client.fail_next["ping"] = AssertionError("Redis must not be contacted")
     with pytest.raises(ConfigError, match="forget-user requires"):
-        forget_user(output, "alice", redis_url="redis://localhost:6379/0")
+        forget_user(output, "alice", redis_url="redis://localhost:6379/0", fence=WriteFence())
     assert sorted(_log(client)) == ["imp-1"]
 
 
@@ -509,7 +522,7 @@ def test_redis_track_logs_its_key_and_size(caplog):
 
     client = _FakeRedis()
     store = _store(client)
-    store.append_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
+    store.append_accepted_rows([_row(), _row(user_id="bob", item_id="ipa-002", event_id="imp-2")])
     key = next(iter(client.hashes))
     with caplog.at_level(logging.INFO, logger="cicerone.track.store"):
         store.log_redis_location()
@@ -528,11 +541,11 @@ def test_redis_append_failed_inside_exec_is_completed_by_a_retry():
     client.after["hsetnx"] = lambda: client.fail_next.__setitem__("hsetnx", RedisResponseError("OOM"))
     batch = [_row(event_id="imp-1"), _row(event_id="imp-2")]
     with pytest.raises(RedisResponseError, match="OOM"):
-        store.append_rows(batch)
+        store.append_accepted_rows(batch)
     # The stored row stays: a concurrent retry that sees it as a duplicate must not lose it.
     assert sorted(_log(client)) == ["imp-1"]
-    assert store.append_rows([batch[0]]) == 0
-    assert store.append_rows(batch) == 1
+    assert len(store.append_accepted_rows([batch[0]])) == 0
+    assert len(store.append_accepted_rows(batch)) == 1
     assert sorted(_log(client)) == ["imp-1", "imp-2"]
 
 
@@ -540,7 +553,7 @@ def test_job_keeps_the_served_eval_when_the_track_log_is_unreadable(tmp_path, mo
     from cicerone.config import make_settings
     from cicerone.events.errors import RedisError
     from cicerone.io.dataset_store import DatasetOutputSink
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = IOSettings(kind="dataset", options={"storage_backend": "local", "path": str(tmp_path)})
     DatasetOutputSink(output.options).write_recommendations(
@@ -563,7 +576,7 @@ def test_job_keeps_the_served_eval_when_the_track_log_is_unreadable(tmp_path, mo
     monkeypatch.setattr(TrackStore, "read_rows", unreachable)
     monkeypatch.setattr("cicerone.job_eval.replay_assignments", must_not_run)
     monkeypatch.setattr("cicerone.job_eval.evaluate_served", must_not_run)
-    track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "2026-08-28T03:00:00Z"})
+    track, served = score_previous_run(settings, pd.DataFrame(), {"generated_at": "2026-08-28T03:00:00Z"})
     assert track is None
     assert served is None
 
@@ -572,7 +585,7 @@ def test_redis_track_reads_and_erases_in_scan_pages(monkeypatch):
     monkeypatch.setattr("cicerone.track.store_redis._SCAN_COUNT", 2)
     client = _FakeRedis()
     store = _store(client)
-    store.append_rows([_row(event_id=f"imp-{n}") for n in range(5)])
+    store.append_accepted_rows([_row(event_id=f"imp-{n}") for n in range(5)])
     assert len(store.read_rows()) == 5
     assert store.delete_redis_rows("alice") == 5
     assert client.scan_pages[-2:] == [3, 3]

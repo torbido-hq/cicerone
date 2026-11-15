@@ -57,8 +57,8 @@ def _event_key(row: dict[str, Any], line: str) -> str:
 class RedisTrackLog:
     """Hash of event id to JSON row: one HSETNX per append, HDEL per erase."""
 
-    def __init__(self, redis_url: str, *, key_prefix: str, client: Any | None = None):
-        self._client = client if client is not None else _connect(redis_url)
+    def __init__(self, redis_url: str, *, key_prefix: str):
+        self._client = _connect(redis_url)
         self._log_key = f"{key_prefix}:track"
 
     def append(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -846,7 +846,7 @@ def test_experiment_context_ctr_from_track_rows(tmp_path):
             },
         ],
     )
-    TrackStore(base.output).append_rows(
+    TrackStore(base.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -962,7 +962,7 @@ def test_experiment_context_drops_exposures_outside_track_window(tmp_path):
             ),
         ],
     )
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -1016,7 +1016,7 @@ def test_experiment_context_skips_other_experiment_track_rows(tmp_path, monkeypa
             }
         ],
     )
-    TrackStore(base.output).append_rows(
+    TrackStore(base.output).append_accepted_rows(
         [_impression(f"old-{i}", f"imp-old-{i}", "exp-old") for i in range(100)]
         + [_impression("u1", "imp-now", "exp-1"), _impression("u-bare", "imp-bare")]
     )
@@ -1709,7 +1709,8 @@ def test_fixed_promote_and_unpromote_refuse_when_state_read_fails(tmp_path, monk
 def test_promote_winner_reads_state_under_writer_lock(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from cicerone.locks import WriteFence, writer_lock_held_here
+    from cicerone.locks import WriteFence
+    from cicerone.locks.hold import writer_lock_held_here
 
     settings = _settings(tmp_path, log_exposures=False)
     seen = {"held": False}

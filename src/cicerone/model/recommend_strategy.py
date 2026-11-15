@@ -13,10 +13,9 @@ import pandas as pd
 
 from cicerone.blending import rank_latest_items, resolve_latest_date_column
 from cicerone.dataset import BuiltDataset
-from cicerone.model.constants import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.model.recommend_cache import (
     RecommendCache,
-    dataset_fingerprint,
     items_fingerprint,
     recommend_cache_key,
 )
@@ -110,7 +109,7 @@ def recommend_per_strategy(
                 items_fingerprint(allowed_items),
                 items_fingerprint(recommend_users),
                 bool(strategy.personalized),
-                dataset_fingerprint(dataset),
+                id(dataset),
             )
             cached = recommend_cache.get(cache_key) if recommend_cache is not None else None
             if cached is not None:
@@ -183,7 +182,7 @@ def recommend_per_strategy(
                 cohort_key,
                 latest_k,
                 items_fingerprint(allowed_items),
-                dataset_fingerprint(dataset),
+                id(dataset),
             )
             cached_latest = recommend_cache.get(latest_key) if recommend_cache is not None else None
             if cached_latest is not None:

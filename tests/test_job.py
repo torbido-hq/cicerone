@@ -6,17 +6,18 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from support.artifact import recommend_from_loaded
 from support.fakes import FakeLock, FakePublisher, raising
 from support.settings import local_output, make_settings
 
 from cicerone import job
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
-from cicerone.config.constants import DEFAULT_SERVE_MAX_K
+from cicerone.config.constants import DEFAULT_SERVE_MAX_K, RRF_K
 from cicerone.job import _recommendation_user_count, _target_user_ids
+from cicerone.job_eval import persist_track_outputs, read_input
 from cicerone.locks import LockLostError, WriteFence
-from cicerone.model import RRF_K
-from cicerone.publish import PublishError
+from cicerone.publish.base import PublishError
 from cicerone.track.store import TrackStore
 
 REPO_FEATURES_CONFIG = Path(__file__).resolve().parents[1] / "config" / "features.toml"
@@ -626,7 +627,7 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
     output = local_output(output_dir)
     store = TrackStore(output)
     row = recs.iloc[0]
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -652,7 +653,7 @@ def test_job_run_writes_track_and_served_eval(tmp_path, monkeypatch):
 
 def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypatch):
     from cicerone.config import EvalSettings, TrackSettings
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     out = tmp_path / "out"
     out.mkdir()
@@ -687,14 +688,14 @@ def test_score_previous_run_reads_history_when_track_disabled(tmp_path, monkeypa
             }
         ]
     )
-    _track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    _track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert calls == [{"2026-08-28T03:00:00+00:00"}]
     assert served is not None
 
 
 def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monkeypatch):
     from cicerone.config import EvalSettings, TrackSettings
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     out = tmp_path / "out"
     out.mkdir()
@@ -741,7 +742,7 @@ def test_score_previous_run_ignores_preloaded_track_when_disabled(tmp_path, monk
             "item_id": "i1",
         }
     ]
-    _track, served = _score_previous_run(
+    _track, served = score_previous_run(
         settings,
         events,
         {"generated_at": "2026-08-28T03:00:00+00:00"},
@@ -1036,7 +1037,7 @@ def test_read_input_swallows_manifest_reader_construction(monkeypatch):
         "cicerone.job_eval.build_manifest_reader",
         lambda _output: (_ for _ in ()).throw(ValueError("bad url")),
     )
-    events, users, items, manifest = job._read_input(
+    events, users, items, manifest = read_input(
         _Source(),
         IOSettings(kind="db", options={"database_url": "postgresql+psycopg://bad"}),
     )
@@ -1052,9 +1053,9 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
     def _busy(*_args, **_kwargs):
         raise WriterLockBusyError("dataset writer lock busy")
 
-    monkeypatch.setattr("cicerone.locks.hold.WriteFence.hold", _busy)
+    monkeypatch.setattr("cicerone.locks.WriteFence.hold", _busy)
     with pytest.raises(WriterLockBusyError, match="dataset writer lock busy"):
-        job._persist_track_outputs(
+        persist_track_outputs(
             TrackStore(
                 local_output("/tmp/out"),
                 fence=WriteFence(object()),
@@ -1066,26 +1067,6 @@ def test_persist_track_outputs_reraises_lock_errors(monkeypatch):
         )
 
 
-def test_persist_track_outputs_accepts_store_without_fence():
-    written: list[str] = []
-
-    class _Store:
-        def write_eval(self, report) -> None:
-            written.append("eval")
-
-        def append_history(self, recommendations, *, generated_at) -> None:
-            written.append("history")
-
-    job._persist_track_outputs(
-        _Store(),
-        kind="db",
-        eval_report={"generated_at": "t"},
-        recommendations=pd.DataFrame([{"user_id": "u1"}]),
-        generated_at="t",
-    )
-    assert written == ["eval", "history"]
-
-
 def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):
     from cicerone.locks import LockLostError
 
@@ -1095,7 +1076,7 @@ def test_persist_track_outputs_reraises_write_eval_lock_loss(monkeypatch):
 
     monkeypatch.setattr(TrackStore, "write_eval", _lost)
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
-        job._persist_track_outputs(
+        persist_track_outputs(
             TrackStore(local_output("/tmp/out")),
             kind="dataset",
             eval_report={"generated_at": "t"},
@@ -1137,7 +1118,7 @@ def test_persist_track_outputs_serializes_db_writes(monkeypatch):
 
     monkeypatch.setattr(TrackStore, "write_eval", _write_eval)
     monkeypatch.setattr(TrackStore, "append_history", _append_history)
-    job._persist_track_outputs(
+    persist_track_outputs(
         TrackStore(IOSettings(kind="db", options={"database_url": "sqlite://"})),
         kind="db",
         eval_report={"generated_at": "t"},
@@ -1167,7 +1148,7 @@ def test_persist_track_outputs_holds_lock_for_db(monkeypatch):
 
     monkeypatch.setattr(TrackStore, "write_eval", lambda self, report: None)
     monkeypatch.setattr(TrackStore, "append_history", lambda self, recommendations, *, generated_at: None)
-    job._persist_track_outputs(
+    persist_track_outputs(
         TrackStore(
             IOSettings(kind="db", options={"database_url": "sqlite://"}),
             fence=WriteFence(_Lock()),
@@ -1193,7 +1174,7 @@ def test_recommendation_user_count_excludes_cold_start():
 
 
 def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
-    from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, load_artifact, recommend_from_artifact
+    from cicerone.artifact import ARTIFACT_SCHEMA_VERSION, loads_artifact
 
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -1240,8 +1221,8 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
     assert manifest["artifact_schema_version"] == ARTIFACT_SCHEMA_VERSION
 
     recommendations = pd.read_parquet(output_dir / "recommendations.parquet")
-    loaded = load_artifact(artifact_path)
-    from_artifact = recommend_from_artifact(loaded, sorted(recommendations["user_id"].unique()), top_k=2)
+    loaded = loads_artifact(artifact_path.read_bytes())
+    from_artifact = recommend_from_loaded(loaded, sorted(recommendations["user_id"].unique()), top_k=2)
     pd.testing.assert_frame_equal(
         recommendations.sort_values(["user_id", "rank"]).reset_index(drop=True),
         from_artifact.sort_values(["user_id", "rank"]).reset_index(drop=True),
@@ -1251,7 +1232,7 @@ def test_job_run_writes_model_artifact_when_enabled(tmp_path, monkeypatch):
 def test_job_run_signs_model_artifact_when_hmac_key_set(tmp_path, monkeypatch):
     import zipfile
 
-    from cicerone.artifact import load_artifact
+    from cicerone.artifact import loads_artifact
 
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -1281,10 +1262,10 @@ def test_job_run_signs_model_artifact_when_hmac_key_set(tmp_path, monkeypatch):
     artifact_path = output_dir / "model.artifact"
     with zipfile.ZipFile(artifact_path) as zf:
         assert "hmac.sha256" in zf.namelist()
-    loaded = load_artifact(artifact_path, hmac_key=key)
+    loaded = loads_artifact(artifact_path.read_bytes(), hmac_key=key)
     assert loaded.models
     with pytest.raises(ValueError, match="HMAC"):
-        load_artifact(artifact_path, hmac_key="fedcba9876543210")
+        loads_artifact(artifact_path.read_bytes(), hmac_key="fedcba9876543210")
 
 
 def test_select_automl_models_keeps_job_models_when_disabled(tmp_path, monkeypatch):
@@ -1619,6 +1600,14 @@ def test_recommend_job_with_recipes_tags_variants(tmp_path, monkeypatch):
     assert "popular" in scored.fitted
 
 
+class _CatalogSurfacesSink:
+    def write_item_scores(self, df: pd.DataFrame) -> None:
+        del df
+
+    def write_surfaces(self, *, popular: pd.DataFrame, latest: pd.DataFrame, neighbors: pd.DataFrame) -> None:
+        del popular, latest, neighbors
+
+
 def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -1637,7 +1626,7 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
     events = pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]})
     written: list[object] = []
 
-    class _Sink:
+    class _Sink(_CatalogSurfacesSink):
         def write_recommendations(self, frame: pd.DataFrame) -> None:
             written.append(frame)
 
@@ -1666,7 +1655,8 @@ def test_write_job_outputs_marks_success_manifest(tmp_path, monkeypatch):
         events=events,
         items=None,
         built=SimpleNamespace(
-            dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
+            dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"]))),
+            interactions=pd.DataFrame(),
         ),
         target_users=["u1"],
         automl_result=None,
@@ -1695,7 +1685,7 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
     settings = load_settings()
     payloads: list[dict[str, object]] = []
 
-    class _Sink:
+    class _Sink(_CatalogSurfacesSink):
         def write_recommendations(self, frame: pd.DataFrame) -> None:
             raise RuntimeError("disk full")
 
@@ -1726,7 +1716,8 @@ def test_write_job_outputs_keeps_failure_manifest_written(tmp_path, monkeypatch)
             events=pd.DataFrame({"user_id": ["u1"], "item_id": ["i1"]}),
             items=None,
             built=SimpleNamespace(
-                dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"])))
+                dataset=SimpleNamespace(item_id_map=SimpleNamespace(external_ids=pd.Series(["i1"]))),
+                interactions=pd.DataFrame(),
             ),
             target_users=["u1"],
             automl_result=None,
@@ -1821,7 +1812,7 @@ def test_finalize_job_keeps_track_output_error_over_manifest_write_failure(tmp_p
     from cicerone.job import JobManifest, JobRun, _finalize_job
 
     original = OSError("track write failed")
-    monkeypatch.setattr(job, "_persist_track_outputs", raising(original))
+    monkeypatch.setattr(job, "persist_track_outputs", raising(original))
 
     class _Sink:
         write_manifest = raising(TypeError("manifest bug"))
@@ -2646,44 +2637,6 @@ def test_job_holds_writer_lock_for_artifact_and_items(tmp_path, monkeypatch):
     assert ("items", 1) in depths
 
 
-def test_job_skips_item_scores_when_sink_lacks_writer(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    pd.DataFrame(
-        [{"item_id": "i1", "category": "beer", "producer_id": "p1", "published": True, "in_stock": True}]
-    ).to_parquet(input_dir / "items.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
-    real = job.build_output_sink
-
-    def _legacy(*args, **kwargs):
-        sink = real(*args, **kwargs)
-        sink.write_item_scores = None
-        return sink
-
-    monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
-    built = {"n": 0}
-    original_scores = job.build_item_scores
-
-    def _count(*args, **kwargs):
-        built["n"] += 1
-        return original_scores(*args, **kwargs)
-
-    monkeypatch.setattr("cicerone.job.build_item_scores", _count)
-    job.run()
-    assert built["n"] == 0
-    assert not (output_dir / "item_scores.parquet").exists()
-    assert (output_dir / "recommendations.parquet").exists()
-    manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "success"
-    assert manifest["n_item_scores"] is None
-
-
 def test_job_keeps_prior_recommendations_when_item_scores_write_fails(tmp_path, monkeypatch):
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -2718,39 +2671,6 @@ def test_job_keeps_prior_recommendations_when_item_scores_write_fails(tmp_path, 
     pd.testing.assert_frame_equal(first, kept)
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["status"] == "failed"
-    assert manifest["partial_outputs"] is True
-
-
-def test_job_recs_fail_without_earlier_outputs_is_still_partial(tmp_path, monkeypatch):
-    input_dir = tmp_path / "in"
-    output_dir = tmp_path / "out"
-    input_dir.mkdir()
-    output_dir.mkdir()
-    now = pd.Timestamp.now(tz="UTC")
-    pd.DataFrame(
-        [{"user_id": "u1", "item_id": "i1", "event_type": "purchase", "quantity": 1, "occurred_at": now}]
-    ).to_parquet(input_dir / "events.parquet", index=False)
-    monkeypatch.setenv("CICERONE_CONFIG_PATH", _write_config(tmp_path, input_dir, output_dir, top_k=1))
-    real = job.build_output_sink
-
-    def _legacy(*args, **kwargs):
-        sink = real(*args, **kwargs)
-        sink.write_item_scores = None
-        sink.write_surfaces = None
-        return sink
-
-    from cicerone.io.dataset_store import DatasetOutputSink
-
-    def boom(self, df):
-        raise RuntimeError("disk full")
-
-    monkeypatch.setattr("cicerone.job.build_output_sink", _legacy)
-    monkeypatch.setattr(DatasetOutputSink, "write_recommendations", boom)
-    with pytest.raises(RuntimeError, match="disk full"):
-        job.run()
-    manifest = json.loads((output_dir / "manifest.json").read_text())
-    assert manifest["status"] == "failed"
-    # The store may have committed before raising.
     assert manifest["partial_outputs"] is True
 
 
@@ -3773,7 +3693,7 @@ def test_load_shared_eval_inputs_loads_dataset_in_parallel(tmp_path, monkeypatch
         seen["parallel"] = kwargs.get("parallel")
         return [{"event_id": "a"}], empty
 
-    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    monkeypatch.setattr("cicerone.job.try_load_pair", _pair)
     track, recs = _load_shared_eval_inputs(settings)
     assert seen["parallel"] is True
     assert track == [{"event_id": "a"}]
@@ -3803,7 +3723,7 @@ def test_load_shared_eval_inputs_loads_db_serially(tmp_path, monkeypatch):
         seen["parallel"] = kwargs.get("parallel")
         return [{"event_id": "a"}], pd.DataFrame()
 
-    monkeypatch.setattr("cicerone.job._try_load_pair", _pair)
+    monkeypatch.setattr("cicerone.job.try_load_pair", _pair)
     _load_shared_eval_inputs(settings)
     assert seen["parallel"] is False
 

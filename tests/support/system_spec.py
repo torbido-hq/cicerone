@@ -224,6 +224,8 @@ def available_recommendation_ids(
         category=None,
         category_column=category_column,
         exclude_unavailable=True,
+        ids_by_category={},
+        on_missing_category_column=lambda: None,
     )
     ids = list(filtered["item_id"].astype(str))
     return ids if k is None else ids[:k]

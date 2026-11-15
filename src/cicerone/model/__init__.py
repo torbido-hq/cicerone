@@ -2,14 +2,6 @@
 
 from __future__ import annotations
 
-from cicerone.model.constants import (
-    COLLABORATIVE_EPOCHS,
-    DEFAULT_MODELS,
-    LATEST_WINDOW_DAYS,
-    RANDOM_STATE,
-    RRF_K,
-    SOURCE_COLUMN,
-)
 from cicerone.model.fit import (
     FitOptions,
     ModelRunPlan,
@@ -27,14 +19,8 @@ from cicerone.model.strategies import (
 )
 
 __all__ = [
-    "COLLABORATIVE_EPOCHS",
-    "DEFAULT_MODELS",
     "FitOptions",
-    "LATEST_WINDOW_DAYS",
     "ModelRunPlan",
-    "RANDOM_STATE",
-    "RRF_K",
-    "SOURCE_COLUMN",
     "STRATEGIES",
     "Strategy",
     "RecommenderModel",

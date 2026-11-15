@@ -40,9 +40,9 @@ def _record_accepted_ingest(rows: list[dict[str, Any]]) -> None:
         record_track_ingest(kind=kind, status="accepted", count=count)
 
 
-def mount_track_routes(app: FastAPI, settings: Settings, track_store: TrackStore | None) -> TrackStore | None:
+def mount_track_routes(app: FastAPI, settings: Settings, track_store: TrackStore | None) -> None:
     if track_store is None:
-        return None
+        return
     app.state.track_store = track_store
     dependencies = optional_bearer_deps(settings.serve.auth_token)
 
@@ -95,5 +95,3 @@ def mount_track_routes(app: FastAPI, settings: Settings, track_store: TrackStore
             accepted=len(accepted_rows),
             event_ids=[str(row["event_id"]) for row in accepted_rows],
         )
-
-    return track_store

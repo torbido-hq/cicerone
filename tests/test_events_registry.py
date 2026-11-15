@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cicerone.events.registry import build_event_source, register_event_source, registered_event_source_kinds
+from cicerone.events.registry import build_event_source, registered_event_source_kinds
 from cicerone.events.webhook import WebhookEventSource
 
 
@@ -31,8 +31,3 @@ def test_config_kind_validation_uses_registry():
 def test_build_unknown_kind():
     with pytest.raises(ValueError, match="Unknown events kind"):
         build_event_source("nope", {})
-
-
-def test_register_duplicate_kind():
-    with pytest.raises(ValueError, match="already registered"):
-        register_event_source("webhook", lambda options: WebhookEventSource(options))

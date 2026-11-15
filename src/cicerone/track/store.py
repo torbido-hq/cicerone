@@ -11,40 +11,19 @@ import pandas as pd
 from cicerone.config.settings import IOSettings, Settings
 from cicerone.events.errors import RedisError
 from cicerone.locks import WriteFence
+from cicerone.track.normalize import assign_missing_event_id
 from cicerone.track.store_common import (
-    EVAL_FILENAME,
-    HISTORY_COLUMNS,
-    HISTORY_DIR,
-    TRACK_FILENAME,
-    TRACK_LOG_BACKEND_ERROR,
-    TRACK_LOG_HA_ERROR,
     empty_history_frame,
     history_frame,
     iso_utc,
     row_matches,
-    row_with_event_id,
     unique_event_rows,
 )
-from cicerone.track.store_dataset import TrackDatasetBackend, history_part_name
+from cicerone.track.store_dataset import TrackDatasetBackend
 from cicerone.track.store_db import TrackDbBackend
 from cicerone.track.store_redis import RedisTrackLog, default_redis_key_prefix
 
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "EVAL_FILENAME",
-    "HISTORY_COLUMNS",
-    "HISTORY_DIR",
-    "TRACK_FILENAME",
-    "TRACK_LOG_BACKEND_ERROR",
-    "TRACK_LOG_HA_ERROR",
-    "TrackBackend",
-    "TrackStore",
-    "build_track_backend",
-    "history_frame",
-    "history_part_name",
-    "open_track_store",
-]
 
 
 class TrackBackend(Protocol):
@@ -80,13 +59,11 @@ class TrackStore:
         *,
         fence: WriteFence | None = None,
         redis_url: str | None = None,
-        redis_client: Any = None,
         redis_key_prefix: str | None = None,
     ):
         self._fence = fence or WriteFence()
         self.backend = build_track_backend(output, self._fence)
         self._redis_url = redis_url or None
-        self._redis_client = redis_client
         self._redis_key_prefix = redis_key_prefix or default_redis_key_prefix(output)
         self._redis_log: RedisTrackLog | None = None
 
@@ -95,14 +72,10 @@ class TrackStore:
         return self._fence
 
     def _track_log(self) -> RedisTrackLog | None:
-        if self._redis_url is None and self._redis_client is None:
+        if self._redis_url is None:
             return None
         if self._redis_log is None:
-            self._redis_log = RedisTrackLog(
-                self._redis_url or "",
-                client=self._redis_client,
-                key_prefix=self._redis_key_prefix,
-            )
+            self._redis_log = RedisTrackLog(self._redis_url, key_prefix=self._redis_key_prefix)
         return self._redis_log
 
     def log_redis_location(self) -> None:
@@ -120,15 +93,12 @@ class TrackStore:
     def append_accepted_rows(self, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
-        payload = [row_with_event_id(row) for row in rows]
+        payload = [assign_missing_event_id(row) for row in rows]
         redis_log = self._track_log()
         if redis_log is None:
             return self.backend.append_accepted(payload)
         with self._fence.lease():
             return redis_log.append(payload)
-
-    def append_rows(self, rows: Sequence[Mapping[str, Any]]) -> int:
-        return len(self.append_accepted_rows(rows))
 
     def ping_redis(self) -> None:
         redis_log = self._track_log()

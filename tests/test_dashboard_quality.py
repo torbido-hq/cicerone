@@ -112,7 +112,7 @@ def test_quality_page_live_metrics_from_track_rows(tmp_path):
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -149,7 +149,7 @@ def test_quality_live_label_when_stored_eval_lacks_track_eval(tmp_path):
             },
         }
     )
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -181,7 +181,7 @@ def test_quality_context_propagates_unexpected_eval_errors(tmp_path, monkeypatch
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -211,7 +211,7 @@ def test_quality_live_eval_error_falls_back_to_empty(tmp_path, monkeypatch):
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -248,11 +248,11 @@ def test_quality_live_eval_read_rows_error(tmp_path, monkeypatch):
 
 def test_quality_live_eval_pushes_conversion_event_types(tmp_path, monkeypatch):
     from cicerone.dashboard_quality import quality_context
-    from cicerone.evaluation import DEFAULT_CONVERSION_TYPE
+    from cicerone.evaluation.tracking import DEFAULT_CONVERSION_TYPE
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -283,7 +283,7 @@ def test_quality_live_eval_conversion_load_error_still_scores(tmp_path, monkeypa
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -401,14 +401,14 @@ def test_quality_as_of_falls_back_to_served_eval(tmp_path):
     assert context["diversity_metrics"] == {}
 
 
-def test_replay_metric_names_are_source_keys_only():
-    from cicerone.dashboard_quality import _replay_metric_names
+def test_source_metric_names_read_by_source_keys_only():
+    from cicerone.dashboard_quality import _source_metric_names
 
-    assert _replay_metric_names(None) == []
-    assert _replay_metric_names({"metrics": {"NDCG@10": 0.2}, "by_source": {"a": {"Recall@10": 0.1}}}) == [
+    assert _source_metric_names(None) == []
+    assert _source_metric_names({"metrics": {"NDCG@10": 0.2}, "by_source": {"a": {"Recall@10": 0.1}}}) == [
         "Recall@10",
     ]
-    assert _replay_metric_names({"by_source": {"a": "bad"}}) == []
+    assert _source_metric_names({"by_source": {"a": "bad"}}) == []
 
 
 def test_quality_eval_enabled_empty_replay_copy(tmp_path):
@@ -453,7 +453,7 @@ def test_quality_context_clears_error_when_live_track_succeeds(tmp_path, monkeyp
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -496,7 +496,7 @@ def test_quality_live_eval_with_conversions(tmp_path):
             }
         ]
     ).to_parquet(tmp_path / "events.parquet", index=False)
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -524,7 +524,7 @@ def test_quality_live_eval_joins_history_when_current_recs_missing(tmp_path):
     settings = _settings(tmp_path, track={"enabled": True})
     stamp = "2026-08-28T03:00:00+00:00"
     store = TrackStore(settings.output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -557,7 +557,7 @@ def test_quality_live_eval_concats_history_with_current_recs(tmp_path):
     settings = _settings(tmp_path, track={"enabled": True})
     stamp = "2026-08-28T03:00:00+00:00"
     store = TrackStore(settings.output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -607,7 +607,7 @@ def test_quality_live_eval_loads_recommendations_for_tracked_users(tmp_path, mon
 
     monkeypatch.setattr("cicerone.dashboard_quality.load_recommendations_for_users", _load)
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -645,7 +645,7 @@ def test_quality_live_eval_history_error_keeps_current_recs(tmp_path, monkeypatc
     from cicerone.track.normalize import normalize_track
 
     settings = _settings(tmp_path, track={"enabled": True})
-    TrackStore(settings.output).append_rows(
+    TrackStore(settings.output).append_accepted_rows(
         [
             normalize_track(
                 {
@@ -940,7 +940,7 @@ def test_quality_live_track_replay_delta_skips_current_manifest(tmp_path):
     stored_served = {"metrics": {"NDCG@10": 0.4, "CatalogCoverage@10": 0.25}, "by_source": {}}
     store = TrackStore(settings.output)
     store.write_eval({"served_eval": stored_served})
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {

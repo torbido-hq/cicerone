@@ -18,19 +18,18 @@ from cicerone.errors import (
     log_caught,
     try_load,
 )
-from cicerone.evaluation import (
-    conversion_event_types,
+from cicerone.evaluation.context import (
     conversion_events_for_settings,
-    evaluate_tracking,
     generated_ats_from_track,
     load_metric_events,
+    prefer_history,
 )
-from cicerone.evaluation.context import prefer_history
+from cicerone.evaluation.tracking import conversion_event_types, evaluate_tracking
 from cicerone.events.store import load_recommendations_for_users
 from cicerone.io.base import ManifestReader
 from cicerone.io.recommendation_schema import ITEM_COLUMN, SOURCE_COLUMN, USER_COLUMN, VARIANT_COLUMN
 from cicerone.track.store import TrackStore, open_track_store
-from cicerone.track.store_common import DASHBOARD_TRACK_FLOOR_HOURS, lookback_since
+from cicerone.track.store_common import lookback_since
 
 logger = logging.getLogger(__name__)
 _CATALOG_PREFIXES = ("CatalogCoverage", "MeanInvUserFreq", "AvgRecPopularity")
@@ -131,10 +130,6 @@ def _source_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
             if key not in names:
                 names.append(key)
     return names
-
-
-def _replay_metric_names(served_eval: dict[str, Any] | None) -> list[str]:
-    return _source_metric_names(served_eval)
 
 
 def _is_catalog_metric(name: str) -> bool:
@@ -446,10 +441,7 @@ def _recommendations_for_track(settings: Settings, rows: list[dict[str, Any]]) -
 
 def _live_track_eval(settings: Settings, store: TrackStore) -> dict[str, Any] | None:
     try:
-        since = lookback_since(
-            window_hours=settings.track.attribution_window_hours,
-            floor_hours=DASHBOARD_TRACK_FLOOR_HOURS,
-        )
+        since = lookback_since(settings.track.attribution_window_hours)
         rows = store.read_rows(since=since)
     except OPTIONAL_IO_ERRORS as exc:
         log_caught("Failed to read track rows for Quality", exc, log=logger)

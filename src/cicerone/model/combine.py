@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 from rectools import Columns
 
-from cicerone.model.constants import SOURCE_COLUMN
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.ranking import WEIGHT_COLUMN, fuse_weighted_rrf, keep_top_k, renumber_ranks
 from cicerone.reasons import PRIORITY_BLOCK_COLUMN, SOURCE_CONTRIBS_COLUMN
 

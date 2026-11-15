@@ -26,22 +26,17 @@ class UpdaterRanking:
             quantity_scaled_events=self._feature_config.quantity_scaled_events,
         ).fillna(0.0)
 
-    def _aligned_weights(self, batch: pd.DataFrame, weights: pd.Series | None) -> pd.Series:
-        if weights is None:
-            return self._row_signal_weights(batch)
-        return weights.reindex(batch.index)
-
-    def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
+    def _signal_rows(self, batch: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
         if batch.empty:
             return batch
-        aligned = self._aligned_weights(batch, weights)
+        aligned = weights.reindex(batch.index)
         keep = aligned > 0
         scored = batch.loc[keep]
         if scored.empty:
             return scored
         return scored.assign(_signal_weight=aligned.loc[keep])
 
-    def _popular_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
+    def _popular_ranking(self, batch: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
         empty = pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         scored = self._signal_rows(batch, weights)
         if scored.empty:
@@ -62,7 +57,7 @@ class UpdaterRanking:
             ]
         return ranked.reset_index(drop=True)
 
-    def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series | None = None) -> pd.DataFrame:
+    def _latest_ranking(self, batch: pd.DataFrame, weights: pd.Series) -> pd.DataFrame:
         if batch.empty:
             return pd.DataFrame(columns=[ITEM_COLUMN, SCORE_COLUMN, SOURCE_COLUMN])
         frame = self._signal_rows(batch, weights)

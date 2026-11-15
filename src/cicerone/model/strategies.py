@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -13,7 +12,7 @@ from rectools.dataset import Dataset
 from rectools.models import model_from_config
 
 from cicerone.config import STRATEGY_NAMES, ConfigError
-from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE, ContentFallbackModel
+from cicerone.content_fallback import CONTENT_FALLBACK_SOURCE
 from cicerone.model.constants import LIGHTFM_NUM_THREADS_SEQUENTIAL
 from cicerone.model_config import (
     LIGHTFM_WRAPPER_CLS,
@@ -68,8 +67,6 @@ class Strategy:
     source_label: str
     # Item-KNN / sequential / content_fallback need history; LightFM hybrid can score feature-only users.
     requires_interactions: bool = False
-    # Optional factory (tests / content_fallback); skips model_from_config.
-    factory: Callable[[], RecommenderModel] | None = None
 
 
 def build_strategy_model(
@@ -95,11 +92,6 @@ def build_strategy_model(
     return as_recommender_model(model_from_config(rectools_model_config(cfg)))
 
 
-def _build_content_fallback() -> RecommenderModel:
-    """Placeholder; real fit builds ContentFallbackModel with items/features."""
-    return as_recommender_model(ContentFallbackModel())
-
-
 STRATEGIES: dict[str, Strategy] = {
     "collaborative": Strategy(personalized=True, source_label="personalized"),
     "item_based": Strategy(
@@ -123,7 +115,6 @@ STRATEGIES: dict[str, Strategy] = {
         requires_interactions=True,
     ),
     "content_fallback": Strategy(
-        factory=_build_content_fallback,
         personalized=True,
         source_label=CONTENT_FALLBACK_SOURCE,
         requires_interactions=True,

@@ -25,9 +25,9 @@ from cicerone.track.store import TrackStore
 def test_lookback_since_uses_floor() -> None:
     from cicerone.track.store_common import lookback_since
 
-    stamp = pd.to_datetime(lookback_since(window_hours=1.0, floor_hours=24.0), utc=True)
+    stamp = pd.to_datetime(lookback_since(1.0), utc=True)
     now = pd.Timestamp.now(tz="UTC")
-    assert 23.0 <= (now - stamp).total_seconds() / 3600.0 <= 25.0
+    assert 24.0 * 90 - 1 <= (now - stamp).total_seconds() / 3600.0 <= 24.0 * 90 + 1
 
 
 def test_track_row_sql_filter_since_uses_date_floor() -> None:
@@ -145,10 +145,10 @@ def test_track_store_roundtrip_dataset(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
     assert store.read_rows() == []
-    assert store.append_rows([]) == 0
-    first = store.append_rows([_row(), _row(kind="click", event_id="clk-1", rank=None)])
+    assert len(store.append_accepted_rows([])) == 0
+    first = len(store.append_accepted_rows([_row(), _row(kind="click", event_id="clk-1", rank=None)]))
     assert first == 2
-    again = store.append_rows([_row(), _row(kind="click", event_id="clk-1")])
+    again = len(store.append_accepted_rows([_row(), _row(kind="click", event_id="clk-1")]))
     assert again == 0
     rows = store.read_rows()
     assert {row["event_id"] for row in rows} == {"imp-1", "clk-1"}
@@ -184,8 +184,8 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     store = TrackStore(output)
     assert store.read_rows() == []
     assert store.read_eval() is None
-    assert store.append_rows([_row(), _row()]) == 1
-    assert store.append_rows([_row()]) == 0
+    assert len(store.append_accepted_rows([_row(), _row()])) == 1
+    assert len(store.append_accepted_rows([_row()])) == 0
     rows = store.read_rows()
     assert len(rows) == 1
     assert rows[0]["user_id"] == "alice"
@@ -195,7 +195,7 @@ def test_track_store_roundtrip_sqlite(tmp_path) -> None:
     store.append_history(recs, generated_at="2026-08-28T03:00:00+00:00")
     assert len(store.read_history()) == 1
     engine = store.backend.engine()
-    store.append_rows([_row(event_id="imp-2", item_id="ipa-002")])
+    store.append_accepted_rows([_row(event_id="imp-2", item_id="ipa-002")])
     assert store.backend.engine() is engine
     assert len(store.read_rows()) == 2
 
@@ -208,7 +208,7 @@ def test_track_and_eval_tables_are_created_in_one_statement(tmp_path) -> None:
     engine = store.backend.engine()
     event.listen(engine, "before_cursor_execute", lambda *args: statements.append(args[2]))
 
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     store.write_eval({"ok": True})
 
     creates = [sql.strip() for sql in statements if "CREATE TABLE" in sql]
@@ -225,7 +225,7 @@ def test_track_read_and_append_do_not_create_indexes(tmp_path) -> None:
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
     assert store.read_rows() == []
-    assert store.append_rows([_row()]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 1
     assert store.read_rows()[0]["event_id"] == "imp-1"
     engine = create_engine(url)
     with engine.connect() as conn:
@@ -258,7 +258,7 @@ def test_track_store_ignores_invalid_eval_json(tmp_path) -> None:
 def test_append_track_rejects_object_store(s3_options) -> None:
     output = IOSettings(kind="dataset", options=s3_options)
     with pytest.raises(ConfigError, match="not atomic"):
-        TrackStore(output).append_rows([_row()])
+        TrackStore(output).append_accepted_rows([_row()])
 
 
 def test_track_jsonl_skips_bad_lines(tmp_path) -> None:
@@ -283,8 +283,8 @@ def test_track_jsonl_append_streams_file_over_storage_cap(tmp_path, monkeypatch)
     (tmp_path / "track.jsonl").write_text(json.dumps(_row()) + "\n", encoding="utf-8")
     monkeypatch.setattr("cicerone.io.blob.DEFAULT_MAX_STORAGE_READ_BYTES", 8)
     store = TrackStore(output)
-    assert store.append_rows([_row()]) == 0
-    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 0
+    assert len(store.append_accepted_rows([_row(event_id="imp-2", item_id="ipa-002")])) == 1
 
 
 def test_track_eval_roundtrip_s3(s3_options) -> None:
@@ -364,8 +364,8 @@ def test_track_read_history_filtered_skips_unreadable_legacy(tmp_path) -> None:
 
 
 def test_history_part_name_sanitizes_timestamp() -> None:
-    from cicerone.track.store import history_part_name
     from cicerone.track.store_common import _unslug_history_stem, history_stem_before
+    from cicerone.track.store_dataset import history_part_name
 
     assert history_part_name("2026-08-28T03:00:00+00:00") == "2026-08-28T03-00-00+00-00.parquet"
     assert history_part_name("   ") == "snapshot.parquet"
@@ -375,7 +375,7 @@ def test_history_part_name_sanitizes_timestamp() -> None:
     assert _unslug_history_stem("2026-08-28T03-00-00.123+00-00") == "2026-08-28T03:00:00.123+00:00"
     assert history_stem_before("2026-08-28T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
     assert not history_stem_before("2026-08-29T03-00-00+00-00", "2026-08-29T00:00:00+00:00")
-    from cicerone.track.store import history_frame
+    from cicerone.track.store_common import history_frame
 
     frame = history_frame(
         pd.DataFrame([{"user_id": "u1", "item_id": "i1"}]),
@@ -395,7 +395,7 @@ def test_track_store_sqlite_read_errors(tmp_path, monkeypatch) -> None:
 
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     store.write_eval({"ok": True})
     engine = store.backend.engine()
     with engine.begin() as conn:
@@ -430,7 +430,7 @@ def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) ->
 
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
 
     monkeypatch.setattr(
         pd, "read_sql", raising(OperationalError("SELECT 1", {}, Exception("connection refused")))
@@ -446,14 +446,14 @@ def test_track_store_sqlite_operational_error_reraises(tmp_path, monkeypatch) ->
 def test_track_jsonl_same_batch_duplicate_event_id(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
-    assert store.append_rows([_row(), _row()]) == 1
+    assert len(store.append_accepted_rows([_row(), _row()])) == 1
     assert len(store.read_rows()) == 1
 
 
 def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
-    assert store.append_rows([_row()]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 1
     reads = {"n": 0}
     original = store.backend._iter_track_lines
 
@@ -462,7 +462,7 @@ def test_track_jsonl_append_skips_reread_when_warm(tmp_path, monkeypatch) -> Non
         return original()
 
     monkeypatch.setattr(store.backend, "_iter_track_lines", _count)
-    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
+    assert len(store.append_accepted_rows([_row(event_id="imp-2", item_id="ipa-002")])) == 1
     assert reads["n"] == 0
     assert {row["event_id"] for row in store.read_rows()} == {"imp-1", "imp-2"}
 
@@ -471,7 +471,7 @@ def test_track_jsonl_append_writer_lock_busy(tmp_path, no_lock_wait) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output, fence=WriteFence(FakeLock(acquires=False, owned=False)))
     with pytest.raises(RuntimeError, match="dataset writer lock busy"):
-        store.append_rows([_row()])
+        store.append_accepted_rows([_row()])
 
 
 def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
@@ -480,7 +480,7 @@ def test_track_jsonl_append_rechecks_owned_before_write(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output, fence=WriteFence(FakeLock(owned=FenceCheck(2))))
     with pytest.raises(LockLostError, match="dataset writer lock lost before write"):
-        store.append_rows([_row()])
+        store.append_accepted_rows([_row()])
     assert store.read_rows() == []
 
 
@@ -597,9 +597,9 @@ def test_track_jsonl_append_without_fcntl(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("cicerone.io.options.fcntl", None)
     output = local_output(tmp_path)
     store = TrackStore(output)
-    assert store.append_rows([_row()]) == 1
-    assert store.append_rows([_row()]) == 0
-    assert store.append_rows([_row(event_id="imp-2", item_id="ipa-002")]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 1
+    assert len(store.append_accepted_rows([_row()])) == 0
+    assert len(store.append_accepted_rows([_row(event_id="imp-2", item_id="ipa-002")])) == 1
 
 
 def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
@@ -613,7 +613,7 @@ def test_track_jsonl_assigns_event_id_when_missing(tmp_path) -> None:
         "event_id": "",
     }
     store = TrackStore(output)
-    assert store.append_rows([row, dict(row)]) == 1
+    assert len(store.append_accepted_rows([row, dict(row)])) == 1
     ids = [str(item["event_id"]) for item in store.read_rows()]
     assert len(ids) == 1
     assert all(ids)
@@ -637,8 +637,8 @@ def test_assign_missing_event_id_hashes_raw_occurred_at() -> None:
 
 def test_track_jsonl_second_store_respects_existing_event_ids(tmp_path) -> None:
     output = local_output(tmp_path)
-    assert TrackStore(output).append_rows([_row()]) == 1
-    assert TrackStore(output).append_rows([_row()]) == 0
+    assert len(TrackStore(output).append_accepted_rows([_row()])) == 1
+    assert len(TrackStore(output).append_accepted_rows([_row()])) == 0
 
 
 def test_track_jsonl_dedupes_duplicate_event_ids(tmp_path) -> None:
@@ -655,7 +655,7 @@ def test_track_store_sqlite_missing_table_error_helper(tmp_path, monkeypatch) ->
 
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     monkeypatch.setattr(
         pd,
         "read_sql",
@@ -671,7 +671,7 @@ def test_track_store_sqlite_pandas_database_error_is_empty(tmp_path, monkeypatch
     from pandas.errors import DatabaseError
 
     store = TrackStore(sqlite_output(tmp_path / "track.db"))
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     monkeypatch.setattr(
         pd,
         "read_sql",
@@ -686,7 +686,7 @@ def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, 
     from pandas.errors import DatabaseError
 
     store = TrackStore(sqlite_output(tmp_path / "track.db"))
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     patch_module_ref(
         monkeypatch, "cicerone.io.sql_rows.pd", read_sql=raising(DatabaseError("connection refused"))
     )
@@ -697,7 +697,7 @@ def test_track_store_sqlite_pandas_database_error_unexpected_reraises(tmp_path, 
 def test_track_store_sqlite_unexpected_error_ignores_missing_table_helper(tmp_path, monkeypatch) -> None:
     output = sqlite_output(tmp_path / "track.db")
     store = TrackStore(output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     patch_module_ref(monkeypatch, "cicerone.io.sql_rows.pd", read_sql=raising(RuntimeError("x")))
     monkeypatch.setattr("cicerone.io.sql_rows.is_missing_table_error", lambda _exc: True)
     with pytest.raises(RuntimeError, match="x"):
@@ -848,7 +848,7 @@ def test_track_db_stores_null_for_missing_optional_columns(track_db_output) -> N
     store = TrackStore(track_db_output)
     row = _row()
     row.update({"rank": None, "variant": None, "experiment_id": None, "generated_at": None, "kind": None})
-    assert store.append_rows([row]) == 1
+    assert len(store.append_accepted_rows([row])) == 1
     with store.backend.engine().connect() as conn:
         rank = quote_identifier(conn, "rank")
         table = quote_identifier(conn, track_db_output.options["track_table"])
@@ -876,7 +876,7 @@ def test_track_read_eval_s3_access_denied_reraises(monkeypatch, s3_options) -> N
 def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             _row(event_id="a", experiment_id="exp-a", occurred_at="2026-08-28T10:00:00Z"),
             _row(event_id="b", experiment_id="exp-b", occurred_at="2026-08-28T12:00:00Z"),
@@ -892,7 +892,7 @@ def test_track_read_rows_filters_experiment_and_since(tmp_path) -> None:
 def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             _row(event_id="old", occurred_at="2026-08-20T12:00:00Z"),
             _row(event_id="new", occurred_at="2026-08-28T13:00:00Z"),
@@ -908,7 +908,7 @@ def test_track_read_rows_since_indexes_old_event_ids(tmp_path) -> None:
 def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
     output = local_output(tmp_path)
     store = TrackStore(output)
-    store.append_rows([_row(event_id="timed", occurred_at="2026-08-28T13:00:00Z")])
+    store.append_accepted_rows([_row(event_id="timed", occurred_at="2026-08-28T13:00:00Z")])
     path = tmp_path / "track.jsonl"
     path.write_text(
         path.read_text()
@@ -929,7 +929,7 @@ def test_track_read_rows_since_drops_untimed(tmp_path) -> None:
 
 def test_track_read_rows_filters_db(track_db_output) -> None:
     store = TrackStore(track_db_output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             _row(event_id="a", experiment_id="exp-a", occurred_at="2026-08-28T10:00:00Z"),
             _row(event_id="b", experiment_id="exp-b", occurred_at="2026-08-28T12:00:00Z"),
@@ -955,7 +955,7 @@ def test_track_read_rows_db_since_uses_instant(track_db_output) -> None:
         "experiment_id": None,
         "generated_at": None,
     }
-    store.append_rows([_row(event_id="early", occurred_at="2026-08-28T12:00:00Z"), offset])
+    store.append_accepted_rows([_row(event_id="early", occurred_at="2026-08-28T12:00:00Z"), offset])
     recent = store.read_rows(since="2026-08-29T05:00:00+00:00")
     assert {row["event_id"] for row in recent} == {"offset"}
 
@@ -1189,7 +1189,7 @@ _TRACK_COLUMNS = [
 
 
 def _stored_columns(store, output) -> list[tuple[str, str, bool]]:
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     table = output.options["track_table"]
     engine = store.backend.engine()
     assert inspect(engine).get_pk_constraint(table)["constrained_columns"] == ["event_id"]
@@ -1227,8 +1227,8 @@ def test_track_db_appends_to_a_table_from_the_previous_create_statement(non_mysq
                 "VALUES ('seed', 'click', 'alice', 'ipa-001', '2026-08-28T12:00:00+00:00')"
             )
         )
-    assert store.append_rows([_row()]) == 1
-    assert store.append_rows([_row()]) == 0
+    assert len(store.append_accepted_rows([_row()])) == 1
+    assert len(store.append_accepted_rows([_row()])) == 0
     assert {row["event_id"] for row in store.read_rows()} == {"seed", "imp-1"}
 
 
@@ -1245,8 +1245,8 @@ def _capture_statements(store) -> list[str]:
 def test_track_db_creates_the_table_once_per_store_on_mysql(mysql_track_output) -> None:
     store = TrackStore(mysql_track_output)
     statements = _capture_statements(store)
-    store.append_rows([_row()])
-    store.append_rows([_row(event_id="imp-2")])
+    store.append_accepted_rows([_row()])
+    store.append_accepted_rows([_row(event_id="imp-2")])
     assert sum("CREATE TABLE" in sql for sql in statements) == 1
     assert len(store.read_rows()) == 2
 
@@ -1261,47 +1261,47 @@ def test_track_db_retries_a_failed_create_on_mysql(mysql_track_output) -> None:
 
     event.listen(store.backend.engine(), "before_cursor_execute", fail_first_create)
     with pytest.raises(RuntimeError, match="create failed"):
-        store.append_rows([_row()])
-    assert store.append_rows([_row()]) == 1
+        store.append_accepted_rows([_row()])
+    assert len(store.append_accepted_rows([_row()])) == 1
 
 
 def test_track_db_dropped_table_stays_gone_until_a_new_store_on_mysql(mysql_track_output) -> None:
     store = TrackStore(mysql_track_output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     engine = store.backend.engine()
     with engine.begin() as conn:
         table = quote_identifier(conn, mysql_track_output.options["track_table"])
         conn.execute(text(f"DROP TABLE {table}"))
     with pytest.raises(SQLAlchemyError):
-        store.append_rows([_row()])
-    assert TrackStore(mysql_track_output).append_rows([_row()]) == 1
+        store.append_accepted_rows([_row()])
+    assert len(TrackStore(mysql_track_output).append_accepted_rows([_row()])) == 1
 
 
 def test_track_db_creates_the_table_on_every_append_on_other_backends(non_mysql_track_output) -> None:
     store = TrackStore(non_mysql_track_output)
     statements = _capture_statements(store)
-    store.append_rows([_row()])
-    store.append_rows([_row(event_id="imp-2")])
+    store.append_accepted_rows([_row()])
+    store.append_accepted_rows([_row(event_id="imp-2")])
     assert sum("CREATE TABLE" in sql for sql in statements) == 2
 
 
 def test_track_db_duplicate_event_ids_keep_the_first_row(track_db_output) -> None:
     store = TrackStore(track_db_output)
-    assert store.append_rows([_row(), _row(item_id="same-batch")]) == 1
-    assert store.append_rows([_row(item_id="later-batch")]) == 0
-    assert store.append_rows([_row(item_id="later-batch"), _row(event_id="imp-2")]) == 1
+    assert len(store.append_accepted_rows([_row(), _row(item_id="same-batch")])) == 1
+    assert len(store.append_accepted_rows([_row(item_id="later-batch")])) == 0
+    assert len(store.append_accepted_rows([_row(item_id="later-batch"), _row(event_id="imp-2")])) == 1
     rows = {row["event_id"]: row["item_id"] for row in store.read_rows()}
     assert rows == {"imp-1": "ipa-001", "imp-2": "ipa-001"}
 
 
 def test_track_db_insert_ignores_a_duplicate_the_precheck_missed(track_db_output, monkeypatch) -> None:
     store = TrackStore(track_db_output)
-    store.append_rows([_row()])
+    store.append_accepted_rows([_row()])
     monkeypatch.setattr("cicerone.track.store_db._existing_event_ids", lambda *_args: set())
     statements = _capture_statements(store)
 
     # Counted as accepted: the store can't tell the insert dropped it.
-    assert store.append_rows([_row(item_id="racing-writer")]) == 1
+    assert len(store.append_accepted_rows([_row(item_id="racing-writer")])) == 1
 
     assert [row["item_id"] for row in store.read_rows()] == ["ipa-001"]
     # VALUES(col) warns as deprecated on MySQL 8.4.
@@ -1310,10 +1310,10 @@ def test_track_db_insert_ignores_a_duplicate_the_precheck_missed(track_db_output
 
 def test_track_db_concurrent_stores_keep_one_row(track_db_output) -> None:
     stores = [TrackStore(track_db_output) for _ in range(8)]
-    stores[0].append_rows([_row(event_id="created-first")])
+    stores[0].append_accepted_rows([_row(event_id="created-first")])
     row = _row()
     with ThreadPoolExecutor(max_workers=8) as pool:
-        list(pool.map(lambda store: store.append_rows([row]), stores))
+        list(pool.map(lambda store: len(store.append_accepted_rows([row])), stores))
     assert sorted(row["event_id"] for row in stores[0].read_rows()) == ["created-first", "imp-1"]
 
 
@@ -1324,7 +1324,7 @@ def test_track_db_rolls_back_rows_when_the_fence_is_lost_after_insert(track_db_o
     fence = FenceCheck(3)
     store = TrackStore(track_db_output, fence=retrain_fence(None, fence))
     with pytest.raises(LockLostError, match="retrain lock lost before write"):
-        store.append_rows([_row()])
+        store.append_accepted_rows([_row()])
     assert fence.calls == 3
     assert store.read_rows() == []
 
@@ -1342,7 +1342,7 @@ def test_track_db_inserts_in_key_order_on_mysql_and_reports_in_input_order(mysql
 
 def test_track_db_keeps_input_order_on_other_backends(non_mysql_track_output) -> None:
     store = TrackStore(non_mysql_track_output)
-    store.append_rows([_row(event_id="b"), _row(event_id="a")])
+    store.append_accepted_rows([_row(event_id="b"), _row(event_id="a")])
     assert [row["event_id"] for row in store.read_rows()] == ["b", "a"]
 
 
@@ -1352,7 +1352,7 @@ def test_track_db_rejects_values_mysql_would_clamp(mysql_track_output) -> None:
     row = _row()
     row["rank"] = 2**40
     with pytest.raises(DataError):
-        store.append_rows([row])
+        store.append_accepted_rows([row])
     assert store.read_rows() == []
 
 
@@ -1371,14 +1371,18 @@ def test_track_db_event_ids_differing_by_case_accent_or_trailing_space_stay_dist
     store = TrackStore(track_db_output)
     # normalize_track strips ids, so only a direct store call can pass the trailing space.
     ids = {"ABC", "abc", "ábc", "abc "}
-    assert store.append_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)]) == 4
-    assert store.append_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)]) == 0
+    assert (
+        len(store.append_accepted_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)])) == 4
+    )
+    assert (
+        len(store.append_accepted_rows([{**_row(), "event_id": event_id} for event_id in sorted(ids)])) == 0
+    )
     assert {row["event_id"] for row in store.read_rows()} == ids
 
 
 def test_track_db_read_filters_stay_exact(track_db_output) -> None:
     store = TrackStore(track_db_output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             _row(event_id="upper", experiment_id="EXP"),
             _row(event_id="lower", experiment_id="exp"),
@@ -1396,7 +1400,7 @@ def test_track_db_read_filters_stay_exact(track_db_output) -> None:
 def test_track_db_stores_timestamps_as_written(track_db_output) -> None:
     store = TrackStore(track_db_output)
     row = _row(occurred_at="2026-08-28T12:00:00.123456+02:00", generated_at="2026-08-28T03:00:00+00:00")
-    store.append_rows([row])
+    store.append_accepted_rows([row])
     stored = store.read_rows()[0]
     assert stored["occurred_at"] == row["occurred_at"]
     assert stored["generated_at"] == "2026-08-28T03:00:00+00:00"
@@ -1428,7 +1432,7 @@ _TOO_LONG_OVERRIDES = [pytest.param(param.values[0], id=param.id) for param in _
 @pytest.mark.parametrize("overrides", _LONGEST_VALUES)
 def test_track_db_stores_the_longest_values_on_every_backend(track_db_output, overrides) -> None:
     store = TrackStore(track_db_output)
-    assert store.append_rows([_row(**overrides)]) == 1
+    assert len(store.append_accepted_rows([_row(**overrides)])) == 1
     (stored,) = store.read_rows()
     for name, value in overrides.items():
         assert stored[name] == value
@@ -1442,7 +1446,7 @@ def test_track_db_rejects_a_batch_with_a_too_long_value_on_mysql(
     store = TrackStore(mysql_track_output)
     batch = [_row(event_id="good"), _row(**{"event_id": "bad", **overrides})]
     with pytest.raises(TrackNormalizeError, match=message):
-        store.append_rows(batch[::-1] if too_long_first else batch)
+        store.append_accepted_rows(batch[::-1] if too_long_first else batch)
     assert store.read_rows() == []
 
 
@@ -1450,7 +1454,7 @@ def test_track_db_rejects_a_batch_with_a_too_long_value_on_mysql(
 def test_track_db_rejects_too_long_columns_normalize_bounds_on_mysql(mysql_track_output, column) -> None:
     store = TrackStore(mysql_track_output)
     with pytest.raises(TrackNormalizeError, match=f"{column} is longer than 65535 bytes"):
-        store.append_rows([{**_row(), column: "x" * 65536}])
+        store.append_accepted_rows([{**_row(), column: "x" * 65536}])
     assert store.read_rows() == []
 
 
@@ -1458,14 +1462,17 @@ def test_track_db_rejects_too_long_columns_normalize_bounds_on_mysql(mysql_track
 def test_track_db_rejects_a_lone_surrogate_on_mysql(mysql_track_output, column) -> None:
     store = TrackStore(mysql_track_output)
     with pytest.raises(TrackNormalizeError, match=f"{column} is not valid UTF-8 text"):
-        store.append_rows([{**_row(), column: "\ud800"}])
+        store.append_accepted_rows([{**_row(), column: "\ud800"}])
     assert store.read_rows() == []
 
 
 @pytest.mark.parametrize("overrides", _TOO_LONG_OVERRIDES)
 def test_track_db_accepts_too_long_values_on_other_backends(non_mysql_track_output, overrides) -> None:
     store = TrackStore(non_mysql_track_output)
-    assert store.append_rows([_row(event_id="good"), _row(**{"event_id": "long", **overrides})]) == 2
+    assert (
+        len(store.append_accepted_rows([_row(event_id="good"), _row(**{"event_id": "long", **overrides})]))
+        == 2
+    )
     assert len(store.read_rows()) == 2
 
 
@@ -1495,7 +1502,7 @@ def test_persist_track_outputs_writes_eval_and_history_on_every_backend(track_db
     assert stored[0]["rank"] == 1
     assert stored[0]["source"] == "personalized"
     assert stored[0]["generated_at"] == _GENERATED_AT
-    assert store.append_rows([_row()]) == 1
+    assert len(store.append_accepted_rows([_row()])) == 1
     assert len(store.read_rows()) == 1
 
 
@@ -1665,13 +1672,13 @@ def test_persist_track_outputs_logs_a_report_too_large_for_mysql_and_still_write
 
 
 def test_by_source_uses_the_older_run_for_an_older_impression_on_every_backend(track_db_output) -> None:
-    from cicerone.evaluation import evaluate_tracking
     from cicerone.evaluation.context import concat_history, generated_ats_from_track, stamp_recommendations
+    from cicerone.evaluation.tracking import evaluate_tracking
 
     older, current = "2026-08-27T03:00:00+00:00", _GENERATED_AT
     store = TrackStore(track_db_output)
     store.append_history(_RECS.assign(source="popular_fallback"), generated_at=older)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             _row(event_id="imp-old", generated_at=older),
             _row(event_id="clk-old", kind="click", occurred_at="2026-08-28T12:01:00Z", generated_at=older),

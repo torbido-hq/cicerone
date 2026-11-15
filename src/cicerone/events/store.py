@@ -18,7 +18,7 @@ from cicerone.io.db_store import (
 )
 from cicerone.io.engines import engine_for, quote_identifier, release_engine
 from cicerone.io.filenames import RECOMMENDATIONS_FILENAME
-from cicerone.io.options import PARQUET_PUSHDOWN_ERRORS, read_parquet_pushdown, require_option, table_option
+from cicerone.io.options import read_parquet_pushdown, require_option, table_option
 from cicerone.io.recommendation_reader_common import ITEMS_SNAPSHOT_FILENAME
 from cicerone.io.recommendation_schema import (
     ITEM_COLUMN,
@@ -166,17 +166,6 @@ def _empty_frame_from_db_error(exc: BaseException, *, table: str) -> pd.DataFram
     return None
 
 
-def _zero_from_db_error(exc: BaseException, *, table: str) -> int | None:
-    """Map missing-table/column DB errors to ``0`` users; ``None`` means re-raise."""
-    if is_missing_column_error(exc):
-        logger.warning("Recommendations schema mismatch while counting users; treating as empty: %s", exc)
-        return 0
-    if is_missing_table_error(exc):
-        logger.warning("Recommendations table %r missing while counting users; treating as empty", table)
-        return 0
-    return None
-
-
 def _load_dataset_recommendations(output: IOSettings) -> pd.DataFrame:
     frame = read_parquet_if_exists(output.options, RECOMMENDATIONS_FILENAME)
     if frame is None or frame.empty:
@@ -252,52 +241,5 @@ def load_recommendations_for_users(output: IOSettings, user_ids: Collection[str]
 
     if output.kind == "db":
         return _load_db_recommendations(output, user_ids=ids)
-
-    raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")
-
-
-def count_recommendation_users(output: IOSettings) -> int:
-    if output.kind == "dataset":
-        try:
-            frame = read_parquet_pushdown(output.options, RECOMMENDATIONS_FILENAME, columns=[USER_COLUMN])
-        except STORAGE_READ_ERRORS as exc:
-            if is_storage_not_found(exc):
-                return 0
-            raise
-        except PARQUET_PUSHDOWN_ERRORS as exc:
-            message = str(exc).lower()
-            if USER_COLUMN in message or "fieldref" in message:
-                logger.warning(
-                    "Recommendations schema mismatch while counting users; treating as empty: %s", exc
-                )
-                return 0
-            raise
-        if USER_COLUMN not in frame.columns:
-            logger.warning("Recommendations schema mismatch while counting users; treating as empty")
-            return 0
-        if frame.empty:
-            return 0
-        return int(frame[USER_COLUMN].astype(str).nunique())
-
-    if output.kind == "db":
-        table, _columns, user_col = _db_table_and_columns(output)
-        url = require_option(output.options, "database_url", "db")
-        engine = engine_for(url)
-        try:
-            with engine.connect() as conn:
-                value = conn.execute(
-                    text(
-                        f"SELECT COUNT(DISTINCT {quote_identifier(engine, user_col)}) "
-                        f"FROM {quote_identifier(engine, table)}"
-                    )
-                ).scalar()
-        except SQL_READ_ERRORS as exc:
-            zero = _zero_from_db_error(exc, table=table)
-            if zero is not None:
-                return zero
-            raise
-        finally:
-            release_engine(url)
-        return int(value or 0)
 
     raise ValueError(f"Unsupported output kind for incremental load: {output.kind!r}")

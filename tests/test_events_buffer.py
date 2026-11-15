@@ -14,11 +14,12 @@ def test_micro_batch_buffer_count_and_dedupe():
     e2 = normalize_event(event_payload(event_id=None))  # same fingerprint as e1
     e3 = normalize_event(event_payload(event_id=None, item_id="i2"))
     first = buffer.extend([e1, e2])
-    assert first.kept_count == 1
     assert len(first.duplicates) == 1
+    assert first.overflow == ()
     assert buffer.ready() is False
     second = buffer.extend([e3])
-    assert second.kept_count == 1
+    assert second.duplicates == ()
+    assert second.overflow == ()
     flushed = buffer.flush_if_ready()
     assert len(flushed) == 2
 
@@ -32,16 +33,15 @@ def test_micro_batch_buffer_window():
     assert buffer.ready(now=10.0) is True
 
 
-def test_buffer_validation_and_len():
+def test_buffer_validation():
     with pytest.raises(ValueError, match="batch_size"):
         MicroBatchBuffer(batch_size=0, batch_window_seconds=1.0)
     with pytest.raises(ValueError, match="batch_window"):
         MicroBatchBuffer(batch_size=1, batch_window_seconds=0)
-    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0, dedupe=False)
-    assert len(buffer) == 0
+    buffer = MicroBatchBuffer(batch_size=10, batch_window_seconds=60.0)
     assert buffer.flush_if_ready() == []
     buffer.extend([normalize_event(event_payload()), normalize_event(event_payload(event_id="same-fp"))])
-    assert len(buffer) == 2
+    assert buffer.remaining_capacity == 8
     assert buffer.ready() is False
 
 
@@ -61,15 +61,16 @@ def test_buffer_dedupes_by_event_id():
     first = normalize_event(event_payload(event_id="id-1", item_id="a"))
     second = normalize_event(event_payload(event_id="id-1", item_id="b"))
     result = buffer.extend([first, second])
-    assert result.kept_count == 1
     assert len(result.duplicates) == 1
+    assert result.overflow == ()
+    assert [event.item_id for event in buffer.flush()] == ["a"]
 
 
 def test_buffer_caps_events_and_clears_dedupe_on_flush():
     buffer = MicroBatchBuffer(batch_size=2, batch_window_seconds=60.0, max_events=2)
     events = [normalize_event(event_payload(event_id=f"e{i}", item_id=f"i{i}")) for i in range(4)]
     result = buffer.extend(events)
-    assert result.kept_count == 2
+    assert result.duplicates == ()
     assert len(result.overflow) == 2
     assert buffer.remaining_capacity == 0
     assert len(buffer._event_ids) == 2
@@ -90,8 +91,9 @@ def test_buffer_fingerprint_dedupe_off_by_default():
     first = normalize_event(event_payload(event_id="a", item_id="same"))
     second = normalize_event(event_payload(event_id="b", item_id="same"))
     result = buffer.extend([first, second])
-    assert result.kept_count == 2
     assert result.duplicates == ()
+    assert result.overflow == ()
+    assert [event.event_id for event in buffer.flush()] == ["a", "b"]
 
 
 def test_buffer_fingerprint_dedupe_generated_only():
@@ -102,10 +104,5 @@ def test_buffer_fingerprint_dedupe_generated_only():
     explicit = normalize_event(event_payload(event_id="explicit", item_id="same"))
     generated_dup = normalize_event(payload)
     result = buffer.extend([generated, explicit, generated_dup])
-    assert [event.event_id for event in result.kept] == [generated.event_id, "explicit"]
     assert [event.event_id for event in result.duplicates] == [generated_dup.event_id]
-
-
-def test_micro_batch_buffer_rejects_fingerprint_dedupe_without_dedupe():
-    with pytest.raises(ValueError, match="fingerprint_dedupe requires dedupe"):
-        MicroBatchBuffer(batch_size=1, batch_window_seconds=1.0, dedupe=False, fingerprint_dedupe=True)
+    assert [event.event_id for event in buffer.flush()] == [generated.event_id, "explicit"]

@@ -14,7 +14,6 @@ from cicerone.events.db import (
 )
 from cicerone.events.db_identity import (
     _identity_sort_key,
-    _is_numeric_identity,
     _row_identity,
     _stable_event_id,
     row_to_event,
@@ -586,12 +585,6 @@ def test_identity_sort_key_orders_numeric_ids_and_ctid():
     raw = _identity_sort_key("id:not-an-int")
     assert numeric != raw
     assert numeric < raw or raw < numeric
-    assert _is_numeric_identity("id:9")
-    assert _is_numeric_identity("rowid:00000000000000000010")
-    assert _is_numeric_identity("ctid:(0,10)")
-    assert not _is_numeric_identity("e1")
-    assert not _is_numeric_identity("id:not-an-int")
-    assert not _is_numeric_identity("ctid:not-a-tuple")
 
 
 def test_row_identity_prefers_id_then_rowid_then_ctid():

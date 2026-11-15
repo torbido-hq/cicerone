@@ -208,13 +208,10 @@ class RedisStreamsEventSource(QueuedEventSource):
     def _group_lag(self, client: Any) -> int | None:
         groups = client.xinfo_groups(self._stream)
         for group in groups:
-            name = group.get("name") or group.get(b"name")
-            if str(name) != self._group:
+            if str(group.get("name")) != self._group:
                 continue
             if "lag" in group:
                 return int(group["lag"])
-            if b"lag" in group:
-                return int(group[b"lag"])
             return None
         return None
 

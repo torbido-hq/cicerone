@@ -106,10 +106,6 @@ class DatasetCatalogStore:
                 self._write(_ITEMS, remaining.reset_index(drop=True))
             return before + self._delete_events_for_item_locked(item_id)
 
-    def upsert_events(self, rows: list[dict[str, Any]]) -> int:
-        accepted, _, _ = self.replace_events(rows)
-        return accepted
-
     def replace_events(
         self, rows: list[dict[str, Any]]
     ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
@@ -140,18 +136,6 @@ class DatasetCatalogStore:
             remaining = set(event_pairs([jsonable_row(row) for row in merged.to_dict(orient="records")]))
             discard = [pair for pair in event_pairs(previous) if pair not in remaining]
             return int(len(incoming_rows)), discard, event_pairs(incoming_rows)
-
-    def get_event(self, event_id: str) -> dict[str, Any] | None:
-        if not event_id:
-            return None
-        with self._locks[_EVENTS]:
-            events = self._read(_EVENTS)
-            if events.empty or EVENT_ID_COLUMN not in events.columns:
-                return None
-            matched = events.loc[events[EVENT_ID_COLUMN].astype(str) == str(event_id)]
-            if matched.empty:
-                return None
-            return jsonable_row(matched.iloc[0].to_dict())
 
     def _read_for_user(self, filename: str, user_id: str) -> pd.DataFrame:
         try:

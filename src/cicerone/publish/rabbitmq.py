@@ -54,6 +54,7 @@ class RabbitMQPublisher:
         self._queue = require_queue(options, prefix=_PREFIX) if not self._exchange else ""
         routing = optional_routing_key(options, prefix=_PREFIX)
         self._routing_key = routing if routing is not None else self._queue
+        self._pika: Any = None
         self._connection: Any | None = None
         self._channel: Any | None = None
         self._connected_once = False
@@ -69,9 +70,7 @@ class RabbitMQPublisher:
                 apply_amqp_timeouts(pika.URLParameters(self._amqp_url), self._timeout_seconds)
             )
             channel = connection.channel()
-            confirm = getattr(channel, "confirm_delivery", None)
-            if callable(confirm):
-                confirm()
+            channel.confirm_delivery()
             if self._exchange == "":
                 channel.queue_declare(queue=self._queue, durable=True)
             connected = True
@@ -84,6 +83,7 @@ class RabbitMQPublisher:
                     "Failed to close RabbitMQ publisher connection after connect error",
                     logger,
                 )
+        self._pika = pika
         self._connection = connection
         self._channel = channel
         self._connected_once = True
@@ -121,16 +121,11 @@ class RabbitMQPublisher:
                 exchange=self._exchange,
                 routing_key=self._routing_key,
                 body=body,
-                properties=self._properties(message_id),
+                properties=self._pika.BasicProperties(
+                    message_id=message_id, content_type="application/json", delivery_mode=2
+                ),
             )
             progress.sent += 1
-
-    def _properties(self, message_id: str) -> Any:
-        try:
-            import pika
-        except ImportError:
-            return None
-        return pika.BasicProperties(message_id=message_id, content_type="application/json", delivery_mode=2)
 
     def _recover(self) -> None:
         try:

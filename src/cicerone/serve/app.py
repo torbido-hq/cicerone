@@ -47,12 +47,8 @@ from cicerone.io.base import (
 from cicerone.io.catalog import CatalogStore
 from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.io.surfaces_reader import EmptySurfacesReader, SurfacesReader
-from cicerone.item_scores import empty_item_scores, normalize_item_scores, page_item_scores
-from cicerone.locks import (
-    WriteFence,
-    WriterLockBusyError,
-    build_dataset_writer_lock,
-)
+from cicerone.item_scores import page_item_scores
+from cicerone.locks import WriteFence, WriterLockBusyError, build_dataset_writer_lock
 from cicerone.metrics import (
     METRICS_TOKEN_HEADER,
     record_experiment_served,
@@ -387,7 +383,7 @@ def create_app(
                 for row in filtered.itertuples(index=False)
             ]
             submit_append(
-                partial(track_store.append_rows, rows),
+                partial(track_store.append_accepted_rows, rows),
                 kind="impression",
                 label="append serve impressions",
                 user_id=user_id,
@@ -455,7 +451,6 @@ def create_app(
             top_k = k
         else:
             top_k = settings.serve.default_k
-        top_k = min(top_k, DEFAULT_SERVE_MAX_K)
         hide_consumed = settings.serve.exclude_consumed if exclude_consumed is None else exclude_consumed
         generated_at = generated_at_cache.get()
         body = _recommend_for_user(
@@ -497,7 +492,7 @@ def create_app(
                 status_code=400,
                 detail=f"user_ids must have at most {DEFAULT_SERVE_BATCH_USERS} distinct values",
             )
-        top_k = settings.serve.default_k if body.limit is None else min(body.limit, DEFAULT_SERVE_MAX_K)
+        top_k = settings.serve.default_k if body.limit is None else body.limit
         hide_consumed = (
             settings.serve.exclude_consumed if body.exclude_consumed is None else body.exclude_consumed
         )
@@ -580,16 +575,10 @@ def create_app(
         cursor: str | None = Query(default=None, description="Seek after this item_id"),
         item_id: str | None = Query(default=None, description="Single catalog id"),
     ) -> ItemScoresResponse:
-        snapshot = getattr(reader, "get_item_scores_snapshot", None)
-        if callable(snapshot):
-            scores, ids = snapshot()
-        else:
-            scores = reader.get_item_scores()
-            scores = empty_item_scores() if scores is None or scores.empty else normalize_item_scores(scores)
-            ids = None
+        scores, ids = reader.get_item_scores_snapshot()
         page, next_cursor = page_item_scores(
             scores,
-            limit=min(limit, DEFAULT_SERVE_ITEM_SCORES_MAX),
+            limit=limit,
             cursor=cursor,
             item_id=item_id,
             ids=ids,

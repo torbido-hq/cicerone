@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, runtime_checkable
 
+import numpy as np
 import pandas as pd
 
 from cicerone.capability import CapabilityMeta
@@ -29,6 +30,8 @@ class InputSource(Protocol):
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
 
+    def get_events_for_users(self, user_ids: Sequence[str], limit: int) -> dict[str, pd.DataFrame]: ...
+
     def get_user(self, user_id: str) -> dict[str, Any] | None: ...
 
 
@@ -36,6 +39,8 @@ class UserHistoryReader(Protocol):
     """Per-user slices of input events/users for the dashboard inspector."""
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame: ...
+
+    def get_events_for_users(self, user_ids: Sequence[str], limit: int) -> dict[str, pd.DataFrame]: ...
 
     def get_user(self, user_id: str) -> dict[str, Any] | None: ...
 
@@ -69,8 +74,6 @@ class OutputSink(Protocol):
         """Persist popular / latest / item-neighbor tables for serve surfaces."""
         ...
 
-
-class ItemScoresWriter(Protocol):
     def write_item_scores(self, df: pd.DataFrame) -> None:
         """Persist catalog-wide popular/latest scores for search indexers."""
         ...
@@ -140,8 +143,8 @@ class RecommendationReader(Protocol):
         """Monotonic token bumped when the items snapshot changes."""
         ...
 
-    def get_item_scores(self) -> pd.DataFrame:
-        """Catalog ``item_scores`` rows, or empty when none written."""
+    def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray | None]:
+        """Id-sorted catalog ``item_scores`` rows and their item ids, or empty when none written."""
         ...
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
@@ -180,8 +183,8 @@ class BaseRecommendationReader(ABC):
     def items_version(self) -> int:
         return 0
 
-    def get_item_scores(self) -> pd.DataFrame:
-        return pd.DataFrame()
+    def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray | None]:
+        return pd.DataFrame(), None
 
     def get_cold_start_fallback(self, k: int, *, variant: str | None = None) -> pd.DataFrame:
         del k, variant

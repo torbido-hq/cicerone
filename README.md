@@ -631,10 +631,8 @@ fitted-model artifact** alongside those outputs:
 - **db** output → single-row `model_artifacts` table (BYTEA; override the
   table name with `[output.options].model_artifact_table`)
 
-Load and recommend without re-fitting via `cicerone.artifact`
-(`load_artifact` / `loads_artifact` / `recommend_from_artifact`). The
-manifest records `artifact_written` and `artifact_schema_version` when an
-artifact was saved.
+The manifest records `artifact_written` and `artifact_schema_version`
+when an artifact was saved.
 
 This is a train/serve *artifact* split (inspired by tools like
 LibRecommender), not live inference: `GET /recommendations` still reads

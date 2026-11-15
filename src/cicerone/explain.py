@@ -52,7 +52,7 @@ def _as_boosts(value: object) -> list[dict[str, object]]:
 
 def _item_token_index(
     items: pd.DataFrame | None,
-    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+    feature_columns: Sequence[FeatureColumn],
     *,
     keep_ids: set[str] | None = None,
 ) -> dict[str, dict[str, float]]:
@@ -115,7 +115,7 @@ def overlap_for_item(
     scored.sort(key=lambda row: (-row[1], row[0]))
     similar: list[dict[str, object]] = []
     if max_similar_items > 0:
-        top = scored[: max(0, max_similar_items)]
+        top = scored[:max_similar_items]
         similar = [{"item_id": item, "score": float(score)} for item, score, _shared in top]
         attr_rows = top
     else:
@@ -136,7 +136,7 @@ def attach_reasons(
     *,
     items: pd.DataFrame | None,
     interactions: pd.DataFrame | None,
-    feature_columns: Sequence[FeatureColumn | tuple[str, str]],
+    feature_columns: Sequence[FeatureColumn],
     settings: ExplainSettings,
 ) -> pd.DataFrame:
     """Serialize ``reasons`` JSON; drop internal combiner/boost columns."""

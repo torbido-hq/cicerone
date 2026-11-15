@@ -128,7 +128,7 @@ def fit_with_epoch_metrics(
     settings: EpochMetricsSettings,
     top_k: int,
     *,
-    label: str = "Collaborative",
+    label: str,
 ) -> RecommenderModel:
     """``fit_partial`` loop with in-sample Precision/Recall@K logs."""
     fit_partial = _epoch_metric_fit_partial(model)
@@ -156,13 +156,3 @@ def fit_with_epoch_metrics(
 
     warn_on_epoch_metric_trajectory(history, settings, label=label)
     return model
-
-
-def fit_lightfm_with_epoch_metrics(
-    model: RecommenderModel,
-    dataset: Dataset,
-    interactions: pd.DataFrame,
-    settings: EpochMetricsSettings,
-    top_k: int,
-) -> RecommenderModel:
-    return fit_with_epoch_metrics(model, dataset, interactions, settings, top_k, label="Collaborative")

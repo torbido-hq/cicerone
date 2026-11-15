@@ -113,8 +113,6 @@ class S3SqsPoll:
         return count
 
     def _fetch_sqs(self, need: int) -> None:
-        if need < 1:
-            return
         with self._lock:
             sqs = self._sqs
             s3 = self._s3

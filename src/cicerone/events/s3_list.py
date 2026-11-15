@@ -32,8 +32,6 @@ class S3ListPoll:
     _register_batch: Callable[..., None]
 
     def _fetch_list(self, need: int) -> None:
-        if need < 1:
-            return
         with self._lock:
             s3 = self._s3
             bucket = self._bucket
@@ -46,7 +44,7 @@ class S3ListPoll:
                 raise EventSourceError("S3EventSource.connect() required before poll")
         kwargs: dict[str, Any] = {
             "Bucket": bucket,
-            "MaxKeys": min(page_size, max(need, 1)),
+            "MaxKeys": min(page_size, need),
         }
         if prefix:
             kwargs["Prefix"] = prefix
@@ -65,16 +63,16 @@ class S3ListPoll:
                 events = self._load_object_events(s3, bucket, key, etag=etag)
             except ValueError:
                 logger.exception("Skipping unreadable s3://%s/%s", bucket, key)
-                self._register_batch([], object_key=key, object_etag=etag)
+                self._register_batch([], object_key=key)
                 continue
             except S3_READ_ERRORS:
                 logger.exception("Failed to read s3://%s/%s; leaving it for retry", bucket, key)
                 break
             novel = [event for event in events if event.event_id not in held_ids]
             if not novel:
-                self._register_batch([], object_key=key, object_etag=etag)
+                self._register_batch([], object_key=key)
                 continue
-            self._register_batch(novel, object_key=key, object_etag=etag)
+            self._register_batch(novel, object_key=key)
             held_ids.update(event.event_id for event in novel)
             held_keys.add(key)
             loaded += len(novel)

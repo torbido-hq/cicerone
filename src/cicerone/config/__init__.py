@@ -50,7 +50,6 @@ from cicerone.config.constants import (
     STRATEGY_NAMES,
     ConfigError,
     Mode,
-    StrategyName,
 )
 from cicerone.config.lock_url import (
     POSTGRES_LOCK_URL_REQUIRED,
@@ -145,7 +144,6 @@ __all__ = [
     "STRATEGY_NAMES",
     "ServeSettings",
     "Settings",
-    "StrategyName",
     "TrackSettings",
     "TriggerSettings",
     "VariantSettings",

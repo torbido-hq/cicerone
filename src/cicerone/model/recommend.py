@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import pandas as pd
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import (
-    DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
-    EpochMetricsSettings,
     validate_model_weights,
     validate_rrf_k,
 )
@@ -18,7 +15,7 @@ from cicerone.config.settings import ExplainSettings
 from cicerone.dataset import BuiltDataset
 from cicerone.explain import attach_reasons
 from cicerone.feature_config import FeatureConfig
-from cicerone.model.fit import FitOptions, ModelRunPlan, fit_strategies, merge_fit_options, plan_model_run
+from cicerone.model.fit import FitOptions, ModelRunPlan, fit_strategies, plan_model_run
 from cicerone.model.recommend_cache import RecommendCache
 from cicerone.model.recommend_cohort import resolve_cohort_plan
 from cicerone.model.recommend_combine import combine_strategy_frames
@@ -137,30 +134,15 @@ def train_and_recommend(
     weights: dict[str, float] | None = None,
     rrf_k: float | None = None,
     strategy_cache: dict[str, RecommenderModel] | None = None,
-    max_workers: int = 1,
-    epoch_metrics: EpochMetricsSettings | None = None,
-    item_based_k_neighbors: int | None = None,
-    model_configs: dict[str, dict[str, Any]] | None = None,
     content_fallback_enabled: bool | None = None,
-    content_fallback_max_neighbors: int = DEFAULT_CONTENT_FALLBACK_MAX_NEIGHBORS,
     run_plan: ModelRunPlan | None = None,
     recommend_cache: RecommendCache | None = None,
     explain: ExplainSettings | None = None,
     *,
-    fit: FitOptions | None = None,
+    fit: FitOptions,
 ) -> pd.DataFrame:
     """Fit enabled strategies, then recommend + combine."""
     target_users = _without_cold_start_targets(target_users)
-    options = merge_fit_options(
-        fit,
-        FitOptions(
-            max_workers=max_workers,
-            epoch_metrics=epoch_metrics,
-            item_based_k_neighbors=item_based_k_neighbors,
-            model_configs=model_configs,
-            content_fallback_max_neighbors=content_fallback_max_neighbors,
-        ),
-    )
     if run_plan is None:
         run_plan = plan_model_run(
             enabled_models,
@@ -174,7 +156,7 @@ def train_and_recommend(
         strategy_cache=strategy_cache,
         epoch_metrics_top_k=top_k,
         content_feature_columns=config.item_features,
-        fit=options,
+        fit=fit,
     )
     return recommend_with_models(
         fitted,
@@ -187,6 +169,6 @@ def train_and_recommend(
         rrf_k=rrf_k,
         run_plan=run_plan,
         recommend_cache=recommend_cache,
-        max_workers=options.max_workers,
+        max_workers=fit.max_workers,
         explain=explain,
     )

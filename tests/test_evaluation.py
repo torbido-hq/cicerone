@@ -11,27 +11,27 @@ from support.settings import local_output, make_settings
 
 from cicerone.blending import COLD_START_USER_ID
 from cicerone.config import IOSettings
-from cicerone.evaluation import (
-    DEFAULT_CONVERSION_TYPE,
-    OCCURRED_AT,
-    conversion_event_types,
-    conversion_events,
-    evaluate_served,
-    evaluate_tracking,
-    filter_events_by_types,
-    filter_events_to_recommended,
-    generated_ats_from_track,
-    recs_from_impressions,
-    replay_ks,
-    user_track_outcomes,
-)
 from cicerone.evaluation.context import (
     EVENT_METRIC_COLUMNS,
     _filter_events_since,
     concat_history,
+    generated_ats_from_track,
     load_metric_events,
     prefer_history,
     stamp_recommendations,
+)
+from cicerone.evaluation.served import (
+    evaluate_served,
+    filter_events_to_recommended,
+    recs_from_impressions,
+    replay_ks,
+)
+from cicerone.evaluation.tracking import (
+    conversion_event_types,
+    conversion_events,
+    evaluate_tracking,
+    filter_events_by_types,
+    user_track_outcomes,
 )
 
 
@@ -49,11 +49,6 @@ class Boom(Exception):
 def _patch_metric_sql(monkeypatch: pytest.MonkeyPatch, read_sql) -> None:
     monkeypatch.setattr("cicerone.evaluation.context.engine_for", lambda *_args, **_kwargs: _FakeEngine())
     patch_module_ref(monkeypatch, "cicerone.evaluation.context.pd", read_sql=read_sql)
-
-
-def test_evaluation_package_reexports_prior_constants() -> None:
-    assert OCCURRED_AT == "occurred_at"
-    assert DEFAULT_CONVERSION_TYPE == "purchase"
 
 
 def _track(*rows: dict) -> list[dict]:
@@ -715,21 +710,21 @@ def test_evaluate_served_history_without_generated_at() -> None:
 
 
 def test_score_previous_run_fail_open(tmp_path) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     settings = make_settings(
         track={"enabled": True},
         eval={"enabled": True},
         output=local_output(tmp_path),
     )
-    track, served = _score_previous_run(settings, pd.DataFrame(), None)
+    track, served = score_previous_run(settings, pd.DataFrame(), None)
     assert track is not None
     assert track["overall"]["n_impressions"] == 0
     assert served is None
 
 
 def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, monkeypatch) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = local_output(tmp_path)
     settings = make_settings(eval={"enabled": True}, output=output)
@@ -743,16 +738,16 @@ def test_score_previous_run_skips_served_eval_only_when_replay_fails(tmp_path, m
     monkeypatch.setattr("cicerone.job_eval.evaluate_served", _served)
 
     monkeypatch.setattr("cicerone.job_eval.replay_assignments", raising(ValueError("replay")))
-    _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
+    score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
     assert assigned_seen == []
 
     monkeypatch.setattr("cicerone.job_eval.replay_assignments", lambda *_args, **_kwargs: None)
-    _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
+    score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"}, preloaded_recs=recs)
     assert assigned_seen == [None]
 
 
 def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = local_output(tmp_path)
     settings = make_settings(track={"enabled": True}, eval={"enabled": True}, output=output)
@@ -765,7 +760,7 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
         raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
-        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+        track, served = score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
     assert served is None
     assert any(
@@ -775,7 +770,7 @@ def test_score_previous_run_swallows_errors(tmp_path, monkeypatch, caplog) -> No
 
 
 def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, caplog) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = local_output(tmp_path)
     pd.DataFrame(
@@ -787,7 +782,7 @@ def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, ca
         raising(ValueError("track")),
     )
     with caplog.at_level("ERROR", logger="cicerone.job_eval"):
-        track, served = _score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
+        track, served = score_previous_run(settings, pd.DataFrame(), {"generated_at": "t"})
     assert track is None
     assert any(
         "Failed to compute track eval (ValueError: track)" in record.getMessage() for record in caplog.records
@@ -795,7 +790,7 @@ def test_score_previous_run_swallows_track_eval_errors(tmp_path, monkeypatch, ca
 
 
 def test_evaluate_served_empty_and_as_dict() -> None:
-    from cicerone.evaluation import TrackEvalReport
+    from cicerone.evaluation.tracking import TrackEvalReport
 
     assert evaluate_served(pd.DataFrame(), pd.DataFrame(), generated_at=None, ks=(5,), event_types=()) is None
     only_cold = pd.DataFrame(
@@ -838,7 +833,7 @@ def test_evaluate_served_empty_and_as_dict() -> None:
 
 
 def test_score_previous_run_served_eval(tmp_path) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
@@ -850,7 +845,7 @@ def test_score_previous_run_served_eval(tmp_path) -> None:
     )
     recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
     store = TrackStore(output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -876,7 +871,7 @@ def test_score_previous_run_served_eval(tmp_path) -> None:
             }
         ]
     )
-    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert track["overall"]["n_impressions"] == 1
     assert served is not None
@@ -888,7 +883,7 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
     import threading
 
     from cicerone.config.settings import ExperimentSettings, VariantSettings
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
@@ -915,7 +910,7 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
     )
     recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
     store = TrackStore(output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -962,7 +957,7 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
             }
         ]
     )
-    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert seen == [caller]
     assert track is not None
     assert served is not None
@@ -970,7 +965,7 @@ def test_score_previous_run_assignment_overlay_on_caller_thread(tmp_path, monkey
 
 def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypatch) -> None:
     from cicerone.config.settings import ExperimentSettings, VariantSettings
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
     from cicerone.track.normalize import normalize_track
     from cicerone.track.store import TrackStore
 
@@ -997,7 +992,7 @@ def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypa
     )
     recs.to_parquet(tmp_path / "recommendations.parquet", index=False)
     store = TrackStore(output)
-    store.append_rows(
+    store.append_accepted_rows(
         [
             normalize_track(
                 {
@@ -1040,11 +1035,11 @@ def test_score_previous_run_reraises_unexpected_overlay_error(tmp_path, monkeypa
         ]
     )
     with pytest.raises(RuntimeError, match="state bug"):
-        _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+        score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
 
 
 def test_score_previous_run_empty_history(tmp_path) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = local_output(tmp_path)
     recs = pd.DataFrame(
@@ -1062,13 +1057,13 @@ def test_score_previous_run_empty_history(tmp_path) -> None:
             }
         ]
     )
-    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is None
     assert served is not None
 
 
 def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> None:
-    from cicerone.job import _score_previous_run
+    from cicerone.job_eval import score_previous_run
 
     output = local_output(tmp_path)
     recs = pd.DataFrame(
@@ -1090,14 +1085,14 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
         "cicerone.track.store.TrackStore.read_history",
         raising(OSError("history")),
     )
-    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is not None
     monkeypatch.setattr(
         "cicerone.job_eval.evaluate_served",
         raising(ValueError("served")),
     )
-    track, served = _score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
+    track, served = score_previous_run(settings, events, {"generated_at": "2026-08-28T03:00:00+00:00"})
     assert track is not None
     assert served is None
 
@@ -1105,7 +1100,9 @@ def test_score_previous_run_history_and_served_errors(tmp_path, monkeypatch) -> 
 def test_evaluation_remaining_branches(monkeypatch, caplog) -> None:
     from datetime import timedelta
 
-    from cicerone.evaluation import annotate_impression_source, merge_asof_events, recs_from_history
+    from cicerone.evaluation.metrics import merge_asof_events
+    from cicerone.evaluation.served import recs_from_history
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     empty = merge_asof_events(pd.DataFrame(), pd.DataFrame({"user_id": ["a"]}), window=timedelta(hours=1))
     assert empty.empty
@@ -1377,7 +1374,7 @@ def test_evaluate_served_source_rectools_unexpected_propagates(monkeypatch) -> N
 
 
 def test_annotate_source_latest_uses_newest_generated_at() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1628,7 +1625,7 @@ def test_evaluate_tracking_overall_excludes_unattributed_click_and_conversion() 
 
 
 def test_annotate_source_unmatched_generated_at_does_not_take_later_snap() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1890,7 +1887,7 @@ def test_distinct_priors_by_group_without_prior_key_is_empty() -> None:
 
 
 def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1916,7 +1913,7 @@ def test_annotate_source_does_not_invent_variant_from_later_snap() -> None:
 
 
 def test_annotate_source_untimestamped_keeps_latest_source() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1943,7 +1940,7 @@ def test_annotate_source_untimestamped_keeps_latest_source() -> None:
 
 
 def test_annotate_source_untimestamped_keeps_existing_source() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1965,7 +1962,7 @@ def test_annotate_source_untimestamped_keeps_existing_source() -> None:
 
 
 def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     snapshots = pd.DataFrame(
         [
@@ -1985,7 +1982,7 @@ def test_annotate_source_untimestamped_does_not_clear_source_without_match() -> 
 
 
 def test_annotate_source_matches_shared_item_by_variant() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     recs = pd.DataFrame(
         [
@@ -2087,7 +2084,7 @@ def test_evaluate_tracking_attributes_shared_item_by_variant() -> None:
 
 
 def test_annotate_source_without_generated_at_keeps_variant() -> None:
-    from cicerone.evaluation import annotate_impression_source
+    from cicerone.evaluation.tracking import annotate_impression_source
 
     recs = pd.DataFrame(
         [{"user_id": "alice", "item_id": "ipa", "source": "personalized", "variant": "control"}]

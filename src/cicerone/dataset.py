@@ -58,11 +58,6 @@ def _normalize_feature_df(df: pd.DataFrame | None) -> _NormalizedFeatures:
     """
     if df is None or df.empty:
         return _NormalizedFeatures(frame=None, categorical=None)
-    if "feature" not in df.columns:
-        raise ValueError(
-            "_normalize_feature_df expected an _explode_features frame with a 'feature' column, "
-            f"got columns {list(df.columns)}"
-        )
     return _NormalizedFeatures(frame=df, categorical=list(df["feature"].unique()))
 
 

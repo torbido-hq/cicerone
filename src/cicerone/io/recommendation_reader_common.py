@@ -232,14 +232,6 @@ class ItemFilterMixin:
         else:
             self._item_score_ids = scores[ITEM_COLUMN].to_numpy(dtype=str)
 
-    def get_item_scores(self) -> pd.DataFrame:
-        with self._lock:
-            return self._item_scores
-
-    def get_item_score_ids(self) -> np.ndarray:
-        with self._lock:
-            return self._item_score_ids
-
     def get_item_scores_snapshot(self) -> tuple[pd.DataFrame, np.ndarray]:
         with self._lock:
             return self._item_scores, self._item_score_ids

@@ -6,10 +6,10 @@ from support.model_events import synthetic_events
 
 from cicerone.config import EpochMetricsSettings
 from cicerone.dataset import build_dataset
-from cicerone.model import train_and_recommend
+from cicerone.model import FitOptions, train_and_recommend
 from cicerone.model.epoch_metrics import (
     epoch_metric_total_epochs,
-    fit_lightfm_with_epoch_metrics,
+    fit_with_epoch_metrics,
     invoke_epoch_fit_partial,
     sample_epoch_metric_users,
     should_log_epoch,
@@ -128,7 +128,7 @@ def test_warn_on_epoch_metric_trajectory_skips_metrics_missing_from_some_snapsho
     assert "Recall@2" not in caplog.text
 
 
-def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
+def test_fit_with_epoch_metrics_rejects_non_lightfm_wrapper():
 
     class NoPartial:
         def fit(self, dataset):
@@ -138,8 +138,13 @@ def test_fit_lightfm_with_epoch_metrics_rejects_non_lightfm_wrapper():
             return pd.DataFrame()
 
     with pytest.raises(TypeError, match="fit_partial"):
-        fit_lightfm_with_epoch_metrics(
-            NoPartial(), None, pd.DataFrame(), settings=EpochMetricsSettings(every=1), top_k=2
+        fit_with_epoch_metrics(
+            NoPartial(),
+            None,
+            pd.DataFrame(),
+            settings=EpochMetricsSettings(every=1),
+            top_k=2,
+            label="Collaborative",
         )
 
 
@@ -206,8 +211,7 @@ def test_train_and_recommend_logs_epoch_metrics_when_configured(
             config=feature_config,
             top_k=2,
             enabled_models=["collaborative"],
-            epoch_metrics=EpochMetricsSettings(every=2),
-            model_configs=configs,
+            fit=FitOptions(epoch_metrics=EpochMetricsSettings(every=2), model_configs=configs),
         )
 
     assert not recommendations.empty
@@ -230,6 +234,7 @@ def test_train_and_recommend_skips_epoch_metrics_by_default(sample_items, featur
             config=feature_config,
             top_k=2,
             enabled_models=["collaborative"],
+            fit=FitOptions(),
         )
 
     assert "Collaborative epoch" not in caplog.text

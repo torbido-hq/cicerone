@@ -31,15 +31,3 @@ def items_fingerprint(allowed_items: Sequence | None) -> Hashable:
     if not allowed_items:
         return None
     return frozenset(map(str, allowed_items))
-
-
-def dataset_fingerprint(dataset: object) -> Hashable:
-    fingerprint = getattr(dataset, "fingerprint", None)
-    if callable(fingerprint):
-        fingerprint = fingerprint()
-    if fingerprint is not None:
-        return _cache_key_part(fingerprint)
-    version = getattr(dataset, "version", None)
-    if version is not None:
-        return _cache_key_part(version)
-    return id(dataset)

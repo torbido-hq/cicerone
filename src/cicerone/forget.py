@@ -16,7 +16,8 @@ from sqlalchemy.engine import Connection, Engine
 
 from cicerone.config.settings import IOSettings
 from cicerone.events.errors import RedisError
-from cicerone.experiment.store import EXPOSURES_FILENAME, ExperimentStore
+from cicerone.experiment.store import ExperimentStore
+from cicerone.experiment.store_dataset import EXPOSURES_FILENAME
 from cicerone.io.blob import require_db_or_local_dataset
 from cicerone.io.dataset_store import DatasetOutputSink
 from cicerone.io.db_store import DEFAULT_RECOMMENDATIONS_TABLE
@@ -56,7 +57,7 @@ def forget_user(
     output: IOSettings,
     user_id: str,
     *,
-    fence: WriteFence | None = None,
+    fence: WriteFence,
     redis_url: str | None = None,
     redis_key_prefix: str | None = None,
 ) -> ForgetResult:
@@ -69,7 +70,6 @@ def forget_user(
         raise ValueError("user_id is required")
     # Object-store JSONL rewrite is not atomic.
     require_db_or_local_dataset(output, FORGET_OUTPUT_ERROR)
-    fence = fence or WriteFence()
     redis_store = None
     if redis_url:
         redis_store = TrackStore(output, fence=fence, redis_url=redis_url, redis_key_prefix=redis_key_prefix)

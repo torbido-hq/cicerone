@@ -125,6 +125,7 @@ def lookup_recommendations(
             settings.serve.default_k,
             category=None,
             exclude_unavailable=True,
+            consumed_ids=set(),
             items_snapshot=snapshot,
         )
         if served is None:

@@ -51,7 +51,7 @@ from cicerone.io.options import (
 from cicerone.io.recommendation_schema import USER_COLUMN
 from cicerone.io.replace_users import RecommendationSchemaError, normalize_replace_user_ids
 from cicerone.io.user_lookup import filter_rows_for_user, newest_events, newest_events_by_user
-from cicerone.locks.hold import WriteFence
+from cicerone.locks import WriteFence
 
 logger = logging.getLogger(__name__)
 

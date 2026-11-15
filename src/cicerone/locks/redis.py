@@ -49,7 +49,6 @@ class RedisLock:
         *,
         key: str = DEFAULT_LOCK_KEY,
         ttl_ms: int = REDIS_LOCK_TTL_MS,
-        refresh_interval_ms: int | None = None,
     ):
         import_extra("redis", "redis", 'lock_backend = "redis"')
         from cicerone.redis_client import redis_from_url
@@ -57,9 +56,7 @@ class RedisLock:
         self._client = redis_from_url(redis_url)
         self._key = key
         self._ttl_ms = ttl_ms
-        self._refresh_interval_ms = (
-            max(ttl_ms // 2, 1) if refresh_interval_ms is None else max(refresh_interval_ms, 1)
-        )
+        self._refresh_interval_ms = max(ttl_ms // 2, 1)
         self._token = str(uuid.uuid4())
         self._held = False
         self._hold_generation = 0

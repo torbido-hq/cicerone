@@ -146,10 +146,6 @@ def test_validate_rejects_bad_poll_interval():
         prefix="events.options",
     )
     assert at_session_max["session.timeout.ms"] == MAX_SESSION_TIMEOUT_MS
-    from cicerone.kafka_options import _heartbeat_interval_ms
-
-    with pytest.raises(ConfigError, match="heartbeat"):
-        _heartbeat_interval_ms(1)
     from cicerone.kafka_options import MAX_TIMEOUT_MS
 
     with pytest.raises(ConfigError, match="max_poll_interval_ms"):
@@ -186,17 +182,6 @@ def test_validate_rejects_bad_timeout():
     assert kafka_timeout_ms(at_max, prefix="x") == MAX_TIMEOUT_MS
     with pytest.raises(ConfigError, match="timeout_seconds"):
         kafka_client_config(kafka_source_options(timeout_seconds=1e308), prefix="events.options")
-
-
-def test_kafka_timeout_ms_normalizes_conversion_overflow(monkeypatch):
-    from cicerone import kafka_options
-
-    monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 1e308)
-    with pytest.raises(ConfigError, match="timeout_seconds"):
-        kafka_options.kafka_timeout_ms(kafka_source_options(), prefix="events.options")
-    monkeypatch.setattr(kafka_options, "kafka_timeout_seconds", lambda options, *, prefix: 0.005)
-    with pytest.raises(ConfigError, match="timeout_seconds"):
-        kafka_options.kafka_timeout_ms(kafka_source_options(), prefix="events.options")
 
 
 def test_poll_ack_and_health(monkeypatch):

@@ -160,7 +160,7 @@ class KafkaEventSource(QueuedEventSource):
             return EventSourceHealth(connected=False, lag=None, last_event_at=last_event_at)
         return EventSourceHealth(
             connected=True,
-            lag=local_held if local_held else 0,
+            lag=local_held,
             last_event_at=last_event_at,
             detail=f"topic={self._topic} group={self._group_id} consumer={self._consumer_name}",
         )
@@ -185,7 +185,7 @@ class KafkaEventSource(QueuedEventSource):
         return out
 
     def _message_to_event(self, consumer: Any, message: Any) -> NormalizedEvent | None:
-        error = message.error() if hasattr(message, "error") else None
+        error = message.error()
         if error:
             logger.warning("Skipping Kafka message with error: %s", error)
             return None

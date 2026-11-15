@@ -9,25 +9,16 @@ from support.model_events import synthetic_events
 
 from cicerone.config import ConfigError
 from cicerone.dataset import build_dataset
-from cicerone.model import (
-    STRATEGIES,
-    FitOptions,
-    RecommenderModel,
-    Strategy,
-    fit_strategies,
-    train_and_recommend,
-)
+from cicerone.model import FitOptions, RecommenderModel, fit_strategies, train_and_recommend
 
 
-def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, feature_config, monkeypatch):
-    events = synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fit_calls = []
+def counting_strategy_fits(monkeypatch) -> list[int]:
     from cicerone.model import build_strategy_model
 
-    def counting_factory():
-        model = build_strategy_model("popular")
+    fit_calls: list[int] = []
+
+    def counting_build(name, **kwargs):
+        model = build_strategy_model(name, **kwargs)
         original_fit = model.fit
 
         def counting_fit(dataset):
@@ -37,11 +28,15 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
         model.fit = counting_fit
         return model
 
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
+    monkeypatch.setattr("cicerone.model.fit.build_strategy_model", counting_build)
+    return fit_calls
+
+
+def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, feature_config, monkeypatch):
+    events = synthetic_events()
+    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
+
+    fit_calls = counting_strategy_fits(monkeypatch)
 
     cache: dict[str, RecommenderModel] = {}
     first = train_and_recommend(
@@ -51,6 +46,7 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
         top_k=2,
         enabled_models=["popular"],
         strategy_cache=cache,
+        fit=FitOptions(),
     )
     second = train_and_recommend(
         built,
@@ -59,6 +55,7 @@ def test_train_and_recommend_reuses_strategy_cache_across_calls(sample_items, fe
         top_k=2,
         enabled_models=["popular"],
         strategy_cache=cache,
+        fit=FitOptions(),
     )
 
     assert len(fit_calls) == 1
@@ -73,25 +70,7 @@ def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_we
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    fit_calls = []
-    from cicerone.model import build_strategy_model
-
-    def counting_factory():
-        model = build_strategy_model("popular")
-        original_fit = model.fit
-
-        def counting_fit(dataset):
-            fit_calls.append(1)
-            return original_fit(dataset)
-
-        model.fit = counting_fit
-        return model
-
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
+    fit_calls = counting_strategy_fits(monkeypatch)
 
     cache: dict[str, RecommenderModel] = {}
     small_top_k = train_and_recommend(
@@ -101,6 +80,7 @@ def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_we
         top_k=1,
         enabled_models=["popular"],
         strategy_cache=cache,
+        fit=FitOptions(),
     )
     large_top_k = train_and_recommend(
         built,
@@ -110,6 +90,7 @@ def test_train_and_recommend_strategy_cache_reused_across_different_top_k_and_we
         enabled_models=["popular"],
         weights={"popular": 2.0},
         strategy_cache=cache,
+        fit=FitOptions(),
     )
 
     assert len(fit_calls) == 1
@@ -121,31 +102,23 @@ def test_train_and_recommend_without_cache_refits_every_call(sample_items, featu
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
 
-    fit_calls = []
-    from cicerone.model import build_strategy_model
-
-    def counting_factory():
-        model = build_strategy_model("popular")
-        original_fit = model.fit
-
-        def counting_fit(dataset):
-            fit_calls.append(1)
-            return original_fit(dataset)
-
-        model.fit = counting_fit
-        return model
-
-    monkeypatch.setitem(
-        STRATEGIES,
-        "popular",
-        Strategy(personalized=False, source_label="popular_fallback", factory=counting_factory),
-    )
+    fit_calls = counting_strategy_fits(monkeypatch)
 
     train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        fit=FitOptions(),
     )
     train_and_recommend(
-        built, target_users=["u1", "u2", "u3"], config=feature_config, top_k=2, enabled_models=["popular"]
+        built,
+        target_users=["u1", "u2", "u3"],
+        config=feature_config,
+        top_k=2,
+        enabled_models=["popular"],
+        fit=FitOptions(),
     )
 
     assert len(fit_calls) == 2
@@ -163,9 +136,9 @@ def test_train_and_recommend_parallel_fit_matches_sequential(sample_items, featu
         enabled_models=["popular", "latest"],
     )
 
-    sequential = train_and_recommend(**kwargs, max_workers=1)
+    sequential = train_and_recommend(**kwargs, fit=FitOptions(max_workers=1))
     # max_workers > model count must be capped, not raise.
-    parallel = train_and_recommend(**kwargs, max_workers=10)
+    parallel = train_and_recommend(**kwargs, fit=FitOptions(max_workers=10))
 
     pd.testing.assert_frame_equal(sequential.reset_index(drop=True), parallel.reset_index(drop=True))
 
@@ -182,7 +155,7 @@ def test_train_and_recommend_parallel_fit_populates_strategy_cache(sample_items,
         top_k=2,
         enabled_models=["popular", "latest"],
         strategy_cache=cache,
-        max_workers=2,
+        fit=FitOptions(max_workers=2),
     )
 
     assert set(cache) == {"popular", "latest"}
@@ -232,24 +205,6 @@ def test_plan_model_run_centralizes_content_fallback_and_blending():
     assert list(plan.recommend_models) == ["collaborative", "content_fallback", "popular"]
 
 
-def test_item_based_k_neighbors_reaches_tfidf_recommender(sample_items, feature_config):
-    events = synthetic_events()
-    built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
-
-    fitted: dict = {}
-    train_and_recommend(
-        built,
-        target_users=["u1", "u2", "u3"],
-        config=feature_config,
-        top_k=2,
-        enabled_models=["item_based"],
-        item_based_k_neighbors=7,
-        strategy_cache=fitted,
-    )
-    params = fitted["item_based"].get_params(simple_types=True)
-    assert params["model.K"] == 7
-
-
 def test_fit_options_reach_the_fitted_strategy(sample_items, feature_config):
     events = synthetic_events()
     built = build_dataset(events, None, sample_items, feature_config, half_life_days=90)
@@ -267,25 +222,14 @@ def test_fit_options_reach_the_fitted_strategy(sample_items, feature_config):
     assert fitted["item_based"].get_params(simple_types=True)["model.K"] == 7
 
     _, direct = fit_strategies(
-        built, ["u1"], enabled_models=["item_based"], fit=FitOptions(item_based_k_neighbors=5)
+        built,
+        ["u1"],
+        enabled_models=["item_based"],
+        fit=FitOptions(item_based_k_neighbors=5),
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
     )
     assert direct["item_based"].get_params(simple_types=True)["model.K"] == 5
-
-
-def test_fit_options_and_fit_keywords_cannot_be_combined(sample_items, feature_config):
-    built = build_dataset(synthetic_events(), None, sample_items, feature_config, half_life_days=90)
-    with pytest.raises(TypeError, match="not both"):
-        fit_strategies(built, ["u1"], enabled_models=["popular"], max_workers=2, fit=FitOptions())
-    with pytest.raises(TypeError, match="not both"):
-        train_and_recommend(
-            built,
-            target_users=["u1"],
-            config=feature_config,
-            top_k=2,
-            enabled_models=["popular"],
-            item_based_k_neighbors=7,
-            fit=FitOptions(),
-        )
 
 
 def test_fit_options_from_settings_copies_the_fit_settings():
@@ -322,13 +266,35 @@ def test_fit_strategies_rejects_popular_in_category_without_item_feature(sample_
     items = None if built.items is None else built.items.drop(columns=["category"])
     stripped = replace(built, items=items)
     with pytest.raises(ConfigError, match="category"):
-        fit_strategies(stripped, ["u1"], enabled_models=["popular_in_category"])
+        fit_strategies(
+            stripped,
+            ["u1"],
+            enabled_models=["popular_in_category"],
+            epoch_metrics_top_k=10,
+            content_feature_columns=None,
+            fit=FitOptions(),
+        )
     missing = replace(built, items=None)
     with pytest.raises(ConfigError, match="items frame is missing"):
-        fit_strategies(missing, ["u1"], enabled_models=["popular_in_category"])
+        fit_strategies(
+            missing,
+            ["u1"],
+            enabled_models=["popular_in_category"],
+            epoch_metrics_top_k=10,
+            content_feature_columns=None,
+            fit=FitOptions(),
+        )
     cache: dict = {"popular_in_category": object()}
     with pytest.raises(ConfigError, match="category"):
-        fit_strategies(stripped, ["u1"], enabled_models=["popular_in_category"], strategy_cache=cache)
+        fit_strategies(
+            stripped,
+            ["u1"],
+            enabled_models=["popular_in_category"],
+            strategy_cache=cache,
+            epoch_metrics_top_k=10,
+            content_feature_columns=None,
+            fit=FitOptions(),
+        )
 
 
 def test_fit_strategy_on_worker_requires_initializer():

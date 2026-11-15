@@ -12,15 +12,10 @@ from botocore.exceptions import BotoCoreError
 
 from cicerone.config.settings import IOSettings, Settings
 from cicerone.experiment.store_dataset import (
-    EXPOSURE_LOG_BACKEND_ERROR,
-    EXPOSURES_FILENAME,
-    STATE_FILENAME,
     ExperimentDatasetBackend,
 )
 from cicerone.experiment.store_db import (
     DEFAULT_EXPOSURES_TABLE,
-    DEFAULT_STATE_TABLE,
-    EXPOSURE_COLUMNS,
     STATE_CORE_KEYS,
     ExperimentDbBackend,
 )
@@ -34,24 +29,6 @@ logger = logging.getLogger(__name__)
 _OVERLAY_READ_ERRORS = (OSError, ValueError, BotoCoreError, *SQL_READ_ERRORS)
 
 EXPOSURE_LOG_HA_ERROR = 'experiment.log_exposures with events.ha requires output kind = "db"'
-
-__all__ = [
-    "DEFAULT_EXPOSURES_TABLE",
-    "DEFAULT_STATE_TABLE",
-    "EXPOSURES_FILENAME",
-    "EXPOSURE_COLUMNS",
-    "EXPOSURE_LOG_BACKEND_ERROR",
-    "EXPOSURE_LOG_HA_ERROR",
-    "STATE_CORE_KEYS",
-    "STATE_FILENAME",
-    "ExperimentBackend",
-    "ExperimentStore",
-    "active_pair_from_state",
-    "build_experiment_backend",
-    "build_experiment_store",
-    "experiment_state",
-    "merge_experiment_state",
-]
 
 
 class ExperimentBackend(Protocol):
@@ -176,10 +153,6 @@ class ExperimentStore:
                 self._promote_experiment_id = None
                 self._promote_value = None
                 self._promote_state = None
-
-    def promoted_variant(self, experiment_id: str) -> str | None:
-        """Return the live promote winner; reuse the last successful read on failure."""
-        return self.assignment_overlay(experiment_id)[0]
 
     def assignment_overlay(self, experiment_id: str) -> tuple[str | None, tuple[str, str] | None]:
         """Return ``(promoted_variant, active_pair)``; reuse the last successful read on failure."""

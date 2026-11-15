@@ -401,22 +401,10 @@ Re-run the job from [step 3](#3-run-the-job-once). Alongside
 `model.artifact` in `data/output/`. The manifest gains
 `artifact_written = true` and `artifact_schema_version = 3`.
 
-Load it and recommend without calling `job.run` again:
-
-```sh
-docker run --rm -v "$PWD/data":/data cicerone-test python -c "
-from cicerone.artifact import load_artifact, recommend_from_artifact
-artifact = load_artifact('/data/output/model.artifact')
-print('models:', artifact.models, 'schema:', artifact.schema_version)
-print(recommend_from_artifact(artifact, ['alice', 'bob'], top_k=3))
-"
-```
-
 Serve mode never loads this file on `GET /recommendations` — it still
 only reads precomputed recommendation rows. With `[events.online]` the
-events worker loads it between retrains. Artifacts are for offline reload /
-that write-through path; only load ones your own batch job wrote (pickle is
-not safe on untrusted bytes). See the README's
+events worker loads it between retrains. Only load artifacts your own
+batch job wrote (pickle is not safe on untrusted bytes). See the README's
 [Model artifacts](../README.md#model-artifacts) section.
 
 ## 11. Try the database backend (optional)

@@ -110,7 +110,7 @@ def test_capability_set_to_none_is_not_offered():
 
 
 def test_a_non_callable_release_generation_falls_back_to_release():
-    from cicerone.locks.hold import WriteFence
+    from cicerone.locks import WriteFence
 
     class Lock:
         release_generation = 1

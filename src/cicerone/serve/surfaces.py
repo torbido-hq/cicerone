@@ -39,7 +39,7 @@ SESSION_PATH = "/session/recommendations"
 
 
 def _top_k(limit: int | None, default_k: int) -> int:
-    return min(limit or default_k, DEFAULT_SERVE_MAX_K)
+    return limit or default_k
 
 
 def frame_to_items(frame: pd.DataFrame, source_default: str) -> list[SurfaceItem]:
@@ -131,7 +131,7 @@ def mount_surface_routes(
         user_id: str | None = Query(default=None),
     ) -> SurfaceResponse:
         top_k = _top_k(limit, settings.serve.default_k)
-        rows = surfaces.get_popular(max(top_k * 5, top_k))
+        rows = surfaces.get_popular(top_k * 5)
         rows = _filter_surface(rows, category=category, exclude_unavailable=exclude_unavailable)
         rows = _maybe_hide(rows, user_id).head(top_k)
         if rows.empty:
@@ -156,7 +156,7 @@ def mount_surface_routes(
         user_id: str | None = Query(default=None),
     ) -> SurfaceResponse:
         top_k = _top_k(limit, settings.serve.default_k)
-        rows = surfaces.get_latest(max(top_k * 5, top_k))
+        rows = surfaces.get_latest(top_k * 5)
         rows = _filter_surface(rows, category=category, exclude_unavailable=exclude_unavailable)
         rows = _maybe_hide(rows, user_id).head(top_k)
         if rows.empty:
@@ -182,7 +182,7 @@ def mount_surface_routes(
         user_id: str | None = Query(default=None),
     ) -> SimilarResponse:
         top_k = _top_k(limit, settings.serve.default_k)
-        neighbors = surfaces.get_similar(item_id, max(top_k * 5, top_k))
+        neighbors = surfaces.get_similar(item_id, top_k * 5)
         rows = similar_as_surface(neighbors)
         rows = _filter_surface(rows, category=category, exclude_unavailable=exclude_unavailable)
         rows = drop_consumed(rows, {str(item_id)})
@@ -218,12 +218,8 @@ def mount_surface_routes(
                 detail=f"Session may include at most {DEFAULT_SERVE_MAX_K} item ids",
             )
         top_k = settings.serve.default_k
-        fetch_k = max(top_k * 5, top_k)
-        getter = getattr(surfaces, "get_similar_many", None)
-        if callable(getter):
-            by_item = getter(session_ids, fetch_k)
-        else:
-            by_item = {item_id: surfaces.get_similar(item_id, fetch_k) for item_id in session_ids}
+        fetch_k = top_k * 5
+        by_item = surfaces.get_similar_many(session_ids, fetch_k)
         parts: list[pd.DataFrame] = []
         for item_id in session_ids:
             neighbors = similar_as_surface(by_item.get(item_id, pd.DataFrame()))

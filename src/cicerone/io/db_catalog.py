@@ -260,10 +260,6 @@ class DatabaseCatalogStore:
             events = self._delete_id(conn, self._events, ITEM_COLUMN, item_id)
         return items + events
 
-    def upsert_events(self, rows: list[dict[str, Any]]) -> int:
-        accepted, _, _ = self.replace_events(rows)
-        return accepted
-
     def replace_events(
         self, rows: list[dict[str, Any]]
     ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
@@ -279,20 +275,6 @@ class DatabaseCatalogStore:
             remaining = self._pairs_present(conn, old_pairs)
             discard = [pair for pair in old_pairs if pair not in remaining]
             return int(len(incoming)), discard, event_pairs(incoming)
-
-    def get_event(self, event_id: str) -> dict[str, Any] | None:
-        if not event_id or not self._table_exists(self._events):
-            return None
-        try:
-            columns = [column["name"] for column in inspect(self._engine).get_columns(self._events)]
-        except MISSING_TABLE_ERRORS:
-            return None
-        if EVENT_ID_COLUMN not in columns:
-            return None
-        frame = self._read_id(self._events, EVENT_ID_COLUMN, event_id)
-        if frame.empty:
-            return None
-        return self._decode_row(jsonable_row(frame.iloc[0].to_dict()))
 
     def get_events_for_user(self, user_id: str, limit: int) -> pd.DataFrame:
         if not self._table_exists(self._events):

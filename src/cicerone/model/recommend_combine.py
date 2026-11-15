@@ -14,10 +14,11 @@ from cicerone.blending import (
     interaction_counts,
     rank_latest_items,
 )
+from cicerone.config.constants import RRF_K
 from cicerone.dataset import BuiltDataset
 from cicerone.feature_config import FeatureConfig
+from cicerone.io.recommendation_schema import SOURCE_COLUMN
 from cicerone.model.combine import combine_by_priority, combine_by_weighted_fusion
-from cicerone.model.constants import RRF_K, SOURCE_COLUMN
 from cicerone.model.recommend_cohort import CohortPlan
 from cicerone.model.recommend_strategy import StrategyFrames
 from cicerone.model.strategies import STRATEGIES, RecommenderModel
@@ -152,7 +153,6 @@ def combine_strategy_frames(
         combined = blend_for_users(
             personalized=personalized,
             popular=popular,
-            latest=None,
             counts=counts,
             target_users=cohort_plan.unique_target_users,
             config=blending,
@@ -183,7 +183,6 @@ def combine_strategy_frames(
         combined = append_cold_start_rows(
             combined,
             popular=cold_popular,
-            latest=None,
             config=blending,
             top_k=combine_k,
             latest_available=strategy_frames.latest_available,

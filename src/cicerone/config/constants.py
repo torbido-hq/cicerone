@@ -48,8 +48,6 @@ DEFAULT_EXPLAIN_MAX_SIMILAR_ITEMS = 3
 DEFAULT_EXPLAIN_MAX_ATTRIBUTES = 5
 
 Mode = Literal["batch", "serve"]
-# Strategy names stay as ``str`` and are validated against STRATEGY_NAMES at load.
-StrategyName = str
 
 MODES: tuple[Mode, ...] = ("batch", "serve")
 DEFAULT_MODE: Mode = "batch"

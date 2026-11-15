@@ -62,10 +62,6 @@ _FETCH_COLUMNS = (
 _T = TypeVar("_T")
 
 
-def _validate_events_query(query: str) -> str:
-    return readonly_select(query, option="events.options.events_query")
-
-
 def _parsed_rows(
     rows: Sequence[dict[str, Any]],
     parse: Callable[[dict[str, Any]], _T],
@@ -128,7 +124,7 @@ class DbEventSource(EventSource):
         if self._events_query is not None:
             if not isinstance(self._events_query, str):
                 raise ValueError("events.options.events_query must be a string")
-            self._events_query = _validate_events_query(self._events_query)
+            self._events_query = readonly_select(self._events_query, option="events.options.events_query")
         self._watermark_path = Path(options["watermark_path"]) if options.get("watermark_path") else None
         initial = options.get("initial_watermark")
         self._watermark_at = db_occurred_at(initial) if initial not in (None, "") else _EPOCH

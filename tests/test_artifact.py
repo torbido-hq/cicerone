@@ -5,23 +5,19 @@ from datetime import datetime
 
 import pandas as pd
 import pytest
+from support.artifact import recommend_from_loaded
 
 from cicerone.artifact import (
     ARTIFACT_SCHEMA_VERSION,
     build_artifact,
     dumps_artifact,
-    load_artifact,
     loads_artifact,
-    recommend_from_artifact,
-    save_artifact,
 )
 from cicerone.dataset import build_dataset
-from cicerone.model import fit_strategies, train_and_recommend
+from cicerone.model import FitOptions, fit_strategies, train_and_recommend
 
 
-def test_artifact_round_trip_recommendations_match(
-    tmp_path, feature_config, sample_events, sample_users, sample_items
-):
+def test_artifact_round_trip_recommendations_match(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     target_users = ["u1", "u2", "u3", "u4"]
     enabled = ["collaborative", "popular"]
@@ -35,6 +31,7 @@ def test_artifact_round_trip_recommendations_match(
         top_k=top_k,
         enabled_models=enabled,
         strategy_cache=fitted,
+        fit=FitOptions(),
     )
 
     artifact = build_artifact(
@@ -45,25 +42,20 @@ def test_artifact_round_trip_recommendations_match(
         model_weights=None,
         rrf_k=None,
     )
-    path = tmp_path / "model.artifact"
-    save_artifact(path, artifact)
-
-    loaded = load_artifact(path)
+    loaded = loads_artifact(dumps_artifact(artifact))
     assert loaded.schema_version == ARTIFACT_SCHEMA_VERSION
     assert list(loaded.models) == enabled
     assert isinstance(loaded.created_at, datetime)
     assert loaded.created_at == artifact.created_at
 
-    reloaded = recommend_from_artifact(loaded, target_users, top_k=top_k)
+    reloaded = recommend_from_loaded(loaded, target_users, top_k)
     pd.testing.assert_frame_equal(
         original.sort_values(["user_id", "rank"]).reset_index(drop=True),
         reloaded.sort_values(["user_id", "rank"]).reset_index(drop=True),
     )
 
 
-def test_artifact_round_trip_with_weighted_fusion(
-    tmp_path, feature_config, sample_events, sample_users, sample_items
-):
+def test_artifact_round_trip_with_weighted_fusion(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     target_users = ["u1", "u2"]
     enabled = ["collaborative", "popular"]
@@ -80,6 +72,7 @@ def test_artifact_round_trip_with_weighted_fusion(
         weights=weights,
         rrf_k=40,
         strategy_cache=fitted,
+        fit=FitOptions(),
     )
     artifact = build_artifact(
         fitted=fitted,
@@ -89,8 +82,8 @@ def test_artifact_round_trip_with_weighted_fusion(
         model_weights=weights,
         rrf_k=40,
     )
-    save_artifact(tmp_path / "model.artifact", artifact)
-    reloaded = recommend_from_artifact(load_artifact(tmp_path / "model.artifact"), target_users, top_k=top_k)
+    loaded = loads_artifact(dumps_artifact(artifact))
+    reloaded = recommend_from_loaded(loaded, target_users, top_k)
     pd.testing.assert_frame_equal(
         original.sort_values(["user_id", "rank"]).reset_index(drop=True),
         reloaded.sort_values(["user_id", "rank"]).reset_index(drop=True),
@@ -101,7 +94,14 @@ def test_loads_artifact_rejects_wrong_schema_version(
     feature_config, sample_events, sample_users, sample_items
 ):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -124,7 +124,14 @@ def test_loads_artifact_rejects_legacy_pickle_model_artifact(
     feature_config, sample_events, sample_users, sample_items
 ):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -144,7 +151,14 @@ def test_loads_artifact_rejects_unexpected_zip_member(
     import zipfile
 
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -183,7 +197,14 @@ def test_loads_artifact_rejects_both_formats_for_declared_model(
     import zipfile
 
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -208,7 +229,14 @@ def test_artifact_hmac_round_trip_and_reject_wrong_key(
     feature_config, sample_events, sample_users, sample_items
 ):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -229,7 +257,14 @@ def test_artifact_hmac_round_trip_and_reject_wrong_key(
 
 def test_dumps_artifact_rejects_short_hmac_key(feature_config, sample_events, sample_users, sample_items):
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
-    _, fitted = fit_strategies(built, ["u1"], enabled_models=["popular"])
+    _, fitted = fit_strategies(
+        built,
+        ["u1"],
+        enabled_models=["popular"],
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
+    )
     artifact = build_artifact(
         fitted=fitted,
         built=built,
@@ -246,34 +281,6 @@ def test_loads_artifact_rejects_oversize_payload(monkeypatch):
     monkeypatch.setattr("cicerone.artifact.DEFAULT_MAX_ARTIFACT_BYTES", 8)
     with pytest.raises(ValueError, match="exceeds"):
         loads_artifact(b"PK\x03\x04" + b"x" * 20)
-
-
-def test_load_artifact_rejects_oversize_file(tmp_path, monkeypatch):
-    from pathlib import Path
-
-    path = tmp_path / "model.artifact"
-    path.write_bytes(b"PK\x03\x04" + b"x" * 20)
-    reads: list[int | None] = []
-    original_open = Path.open
-
-    def _open(self: Path, *args: object, **kwargs: object):
-        handle = original_open(self, *args, **kwargs)
-        if self.resolve() != path.resolve():
-            return handle
-        original_read = handle.read
-
-        def _read(size: int = -1) -> bytes:
-            reads.append(size)
-            return original_read(size)
-
-        handle.read = _read  # type: ignore[method-assign]
-        return handle
-
-    monkeypatch.setattr(Path, "open", _open)
-    monkeypatch.setattr("cicerone.artifact.DEFAULT_MAX_ARTIFACT_BYTES", 8)
-    with pytest.raises(ValueError, match="exceeds"):
-        load_artifact(path)
-    assert reads == [9]
 
 
 def test_loads_artifact_rejects_oversize_hmac_member():
@@ -308,7 +315,13 @@ def test_fit_strategies_populates_cache(feature_config, sample_events, sample_us
     built = build_dataset(sample_events, sample_users, sample_items, feature_config, half_life_days=90)
     cache: dict = {}
     enabled, fitted = fit_strategies(
-        built, ["u1", "u2"], enabled_models=["popular", "latest"], strategy_cache=cache
+        built,
+        ["u1", "u2"],
+        enabled_models=["popular", "latest"],
+        strategy_cache=cache,
+        epoch_metrics_top_k=10,
+        content_feature_columns=None,
+        fit=FitOptions(),
     )
     assert enabled == ["popular", "latest"]
     assert set(fitted) == {"popular", "latest"}
