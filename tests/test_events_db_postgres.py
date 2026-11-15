@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from support.postgres_defaults import resolve_test_database_url
 
+from cicerone.config import ConfigError
 from cicerone.events.db import DbEventSource
 
 TEST_DATABASE_URL = resolve_test_database_url()
@@ -204,5 +205,56 @@ def test_postgres_naive_occurred_at_is_utc_whatever_the_session_time_zone():
     try:
         assert source.health().lag == 1
         assert [event.event_id for event in source.poll(10)] == ["after"]
+    finally:
+        source.close()
+
+
+def _create_table(columns: str) -> None:
+    engine = create_engine(TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE TABLE "{_TABLE}" ({columns})'))
+    engine.dispose()
+
+
+def _refusal(options: dict[str, str]) -> str:
+    source = DbEventSource({"database_url": TEST_DATABASE_URL, **options})
+    source.connect()
+    try:
+        with pytest.raises(ConfigError) as refused:
+            source.health()
+        with pytest.raises(ConfigError):
+            source.poll(10)
+    finally:
+        source.close()
+    return str(refused.value)
+
+
+def test_postgres_structured_read_columns_are_refused_at_start():
+    _create_table(
+        'id INT4RANGE, event_id JSONB, idempotency_key JSON, "User_Id" TEXT[], item_id TEXT,'
+        " event_type TEXT, quantity JSONB, occurred_at TIMESTAMPTZ, extra JSONB"
+    )
+    assert _refusal({"events_table": _TABLE}).endswith(
+        "must not be JSON, arrays, rows or ranges: User_Id, event_id, id, idempotency_key, quantity"
+    )
+
+
+def test_postgres_row_projected_by_events_query_is_refused():
+    query = (
+        "SELECT ROW(1, 2) AS event_id, 'u1' AS user_id, 'i1' AS item_id,"
+        " 'view' AS event_type, now() AS occurred_at"
+    )
+    assert _refusal({"events_query": query}).endswith("must not be JSON, arrays, rows or ranges: event_id")
+
+
+def test_postgres_unread_json_column_is_allowed():
+    _create_table(
+        "event_id TEXT, user_id TEXT, item_id TEXT, event_type TEXT, occurred_at TIMESTAMPTZ, extra JSONB"
+    )
+    source = _source()
+    source.connect()
+    try:
+        assert source.health().lag == 0
+        assert list(source.poll(10)) == []
     finally:
         source.close()

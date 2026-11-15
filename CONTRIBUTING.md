@@ -226,7 +226,7 @@ everything lands on `main` — no cherry-picks or merge-backs):
 ### Current trains
 
 Concrete mapping (this line only):
-no split; main is **0.8.6**.
+no split; main is **0.8.7**.
 
 Update this line in the same PR that changes the split.
 
