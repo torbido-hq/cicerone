@@ -9,7 +9,7 @@ Documentation       Webhook POST /events write-through on Postgres output.
 ...                 Requires a test DB URL via TEST_DATABASE_URL or
 ...                 POSTGRES_TEST_HOST (see CONTRIBUTING.md).
 Library             libraries/CiceroneSystemLibrary.py
-Suite Setup         Set Up Postgres Events System
+Suite Setup         Set Up Postgres System    events_webhook=${True}
 Suite Teardown      Tear Down Postgres Events System
 
 *** Variables ***
@@ -37,14 +37,6 @@ Flush Writes Through To Serve Postgres And Dashboard
     Dashboard Should Show Incremental Flush    1
 
 *** Keywords ***
-Set Up Postgres Events System
-    ${available}=    Postgres Test Database Available
-    IF    not ${available}
-        Skip    TEST_DATABASE_URL / POSTGRES_TEST_HOST not set -- start compose postgres (docker compose --env-file docker/postgres/defaults.env --profile db up -d postgres) and export POSTGRES_TEST_HOST=localhost ALLOW_SCHEMA_RESET_FOR_TESTS=1, or run via docker-compose.ci.yml
-    END
-    Reset Postgres Schema
-    Seed And Train Postgres System    events_webhook=${True}
-
 Tear Down Postgres Events System
     Stop Serve Events Runtime
     Reset Postgres Schema
