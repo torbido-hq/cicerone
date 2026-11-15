@@ -24,17 +24,6 @@ from cicerone.io import options as io_options
 from cicerone.io.engines import dispose_engines, quote_identifier
 from cicerone.locks import hold as lock_hold
 
-# 0.8 pytest system specs, kept for the port to Robot (system_tests/); not run on 0.9.
-collect_ignore = [
-    "test_system_dataset.py",
-    "test_system_dataset_quality.py",
-    "test_system_db.py",
-    "test_system_db_quality.py",
-    "test_system_events.py",
-    "test_system_mixed.py",
-    "test_system_mixed_quality.py",
-]
-
 _READ_S3_PARQUET_PYARROW = io_options._read_s3_parquet_pyarrow
 
 

@@ -13,7 +13,7 @@ Suite Teardown      Reset Postgres Schema
 *** Test Cases ***
 Job Reads Postgres And Writes Parquet Output
     [Documentation]    Postgres events/users/items -> job.run -> files under the dataset output path.
-    Settings Should Read Db And Write Dataset
+    Settings Should Read And Write    db    dataset
     Postgres Should Hold Only Input Tables
     Mixed Output Files Should Match Contract
     ${n_events}=    Catalog Event Count

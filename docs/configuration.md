@@ -148,7 +148,7 @@ Optional retrain webhook **in addition to** cron. Runs inside
 | `enabled` | `false` | — |
 | `auth_token` | unset | **Required** when enabled |
 | `host` | `127.0.0.1` | Compose / `docker run -p` needs `0.0.0.0` |
-| `port` | `8080` (1–65535; 0 deprecated) | `POST /trigger/retrain` (`202` started, `429` busy or debounced); `GET /health` |
+| `port` | `8080` (1–65535) | `POST /trigger/retrain` (`202` started, `429` busy or debounced); `GET /health` |
 | `debounce_seconds` | `60` | From the last guarded run's start. In-flight or recent runs are skipped, not queued |
 | `poll_input_bucket` | `false` | Dataset input only: `events.parquet` mtime / S3 `LastModified` |
 | `poll_input_single_replica` | `false` | **Required** with `poll_input_bucket` and a `postgres` / `redis` lock; enable polling on one replica only |
@@ -174,7 +174,7 @@ Required `auth_token` when `job.mode = "serve"`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Published Docker ports need `0.0.0.0` |
-| `port` | `8000` (1–65535; 0 deprecated) | — |
+| `port` | `8000` (1–65535) | — |
 | `default_k` | `10` (max 100) | Used when the client omits `limit` / `k` |
 | `refresh_interval_seconds` | `60` | Dataset output: reload parquet cache. DB output: reload the items snapshot only |
 | `category_column` | `"category"` | `?category=` filter |
@@ -270,11 +270,10 @@ tables) / `eligibility`. Changing `traffic` remaps users.
 | --- | --- | --- |
 | `enabled` | `false` | Required to start `cicerone dashboard` (which also needs at least one user) and for `cicerone users` to read `users_path` from this file |
 | `host` | `127.0.0.1` | Compose needs `0.0.0.0` |
-| `port` | `8090` (1–65535; 0 deprecated) | — |
+| `port` | `8090` (1–65535) | — |
 | `users_path` | `/app/config/dashboard_users.toml` | HTTP Basic |
 | `refresh_interval_seconds` | `30` | Status poll |
 | `history_limit` | `20` | Meaningful for db output only (dataset `manifest.json` is overwritten) |
-| `lookup_k` | `20` | Deprecated and ignored (removed in 0.9.0); warns when the dashboard is enabled; Inspect shows `serve.default_k` rows |
 | `lookup_events` | `20` | Inspector `[input]` events |
 | `lookup_user_attrs` | empty | Allowlisted user columns |
 | `trigger_url` | derived | Retrain webhook base URL as the dashboard reaches it (e.g. `http://recommender:8080`). Unset: `http://127.0.0.1:<[job.trigger].port>` (`[::1]` for an IPv6 wildcard), only when `[job.trigger].host` is loopback or a wildcard. Set it to show the Retrain button when the dashboard config has no `[job.trigger]`, and whenever the dashboard runs in a different container or host from the trigger: the derived `127.0.0.1` is the dashboard's own. No query or fragment. `http` to a non-loopback host is refused unless `trigger_allow_http` is set |

@@ -17,10 +17,17 @@ Track Ingest Feeds The Next Run And Quality Page
     ...                then CTR shows up on the dashboard Quality page.
     ${tracked}=    Track Impressions And Click For User    u1
     Dataset Track Files Should Exist Only Under Output
+    Dataset Track File Should Hold Exactly    ${tracked}[event_ids]
     Append Dataset Conversion Event    u1    ${tracked}[first_item]
+    Dataset Input Events Should Be Catalog Plus    u1    ${tracked}[first_item]
+    ${n_events}=    Catalog Event Count    1
+    Manifest Should Record Successful Run    system-spec
     Run System Job Again    system-spec-eval
-    Manifest Should Record Successful Run    system-spec-eval
+    Track Store Should Hold Exactly    ${tracked}[event_ids]
     Dataset Manifest On Disk Should Match Reader
-    Track Store Should Contain Tracked Events    ${tracked}[event_ids]
+    Manifest Should Record Successful Run    system-spec-eval    ${n_events}
+    Manifest Track Eval Should Record Ctr    ${tracked}[impression_count]
     Dataset Eval And History Files Should Exist    ${tracked}[impression_count]
+    Track History Should Include    u1    ${tracked}[first_item]
     Dashboard Quality Page Should Show Tracked Metrics    ${tracked}[impression_count]
+    Dashboard Quality Page Should Show Ctr    ${tracked}[impression_count]

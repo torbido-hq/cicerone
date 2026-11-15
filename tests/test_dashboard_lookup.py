@@ -137,7 +137,7 @@ def test_lookup_recommendations_skips_snapshot_names_when_not_thompson():
 
 
 def test_lookup_recommendations_shows_serve_default_k_rows():
-    settings = make_settings(dashboard_enabled=True, top_k=50, dashboard_lookup_k=3, serve_default_k=5)
+    settings = make_settings(dashboard_enabled=True, top_k=50, serve_default_k=5)
     result = lookup_recommendations(settings, _service(FakeReader(_k_recs()), settings), "u1")
 
     assert [row["item_id"] for row in result["items"]] == ["i1", "i2", "i3", "i4", "i5"]

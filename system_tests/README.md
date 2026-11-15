@@ -1,10 +1,8 @@
 # Robot Framework system tests
 
 Black-box tests against the real `recommender`/`serve`/`dashboard`
-containers over HTTP — not in-process like the pytest suite (see
-`tests/test_system_db.py` for the in-process DB round-trip, and
-`tests/test_serve.py` / `tests/test_dashboard.py` / `tests/test_trigger.py`
-for the same endpoints via FastAPI's `TestClient`). Runs locally via the
+containers over HTTP, unlike the in-process `tests/` suite (pytest, plus
+`tests/robot/system_*.robot` for the in-process journeys). Runs locally via the
 command below, and in CI as the `system-tests` job
 (`.github/workflows/ci.yml`).
 

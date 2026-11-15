@@ -133,6 +133,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `cicerone.artifact.save_artifact`, `load_artifact` and
   `recommend_from_artifact`. The model artifact is still written and is read
   by the `[events.online]` worker.
+- `serve.port`, `job.trigger.port` and `dashboard.port` = 0 (any free
+  port) is a `ConfigError`; ports are 1–65535.
+- `dashboard.lookup_k` is gone; setting it logs an unknown-key warning.
+- The flat `Settings.<section>_<field>` properties (`settings.serve_port`,
+  `settings.dashboard_enabled`, …); use `settings.serve.port` and so on.
 
 ## [0.8.6] - 2026-11-13
 

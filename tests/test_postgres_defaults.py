@@ -10,6 +10,7 @@ import pytest
 from support.postgres_defaults import (
     build_test_database_url,
     load_postgres_defaults,
+    looks_like_test_database,
     postgres_port_for_host,
     postgres_test_db,
     resolve_test_database_url,
@@ -41,12 +42,29 @@ def test_postgres_test_db_rejects_non_test_env_override(monkeypatch):
         postgres_test_db()
 
 
-def test_looks_like_test_database():
-    from support.postgres_defaults import looks_like_test_database
-
-    assert looks_like_test_database("cicerone_test") is True
-    assert looks_like_test_database("cicerone") is False
-    assert looks_like_test_database(None) is False
+@pytest.mark.parametrize(
+    ("db_name", "expected"),
+    [
+        ("test_db", True),
+        ("foo_test", True),
+        ("test_", True),
+        ("_test", True),
+        ("cicerone_test", True),
+        (None, False),
+        ("", False),
+        ("production", False),
+        ("staging", False),
+        ("dev", False),
+        ("foo_test_backup", False),
+        ("pretest_db", False),
+        ("cicerone", False),
+        ("latest", False),
+        ("testing", False),
+        ("test", False),
+    ],
+)
+def test_looks_like_test_database_classification(db_name: str | None, expected: bool) -> None:
+    assert looks_like_test_database(db_name) is expected
 
 
 def test_build_test_database_url_uses_host_port_for_localhost(monkeypatch):

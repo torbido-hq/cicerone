@@ -16,7 +16,6 @@ port = 8090
 users_path = "/app/config/dashboard_users.robot.toml"
 refresh_interval_seconds = 5
 history_limit = 20
-lookup_k = 5
 
 [job]
 cron_schedule = "0 3 29 2 *" # leap day only; cannot collide with the webhook trigger test

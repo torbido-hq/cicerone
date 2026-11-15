@@ -15,7 +15,7 @@ Suite Teardown      Reset Postgres Schema
 *** Test Cases ***
 Track Ingest Feeds The Next Run And Quality Page
     [Documentation]    POST /track, a Postgres conversion, a second job run, then CTR on Quality.
-    Settings Should Read Db And Write Dataset
+    Settings Should Read And Write    db    dataset
     ${tracked}=    Track Impressions And Click For User    u1
     Dataset Track File Should Hold Exactly    ${tracked}[event_ids]
     Postgres Should Hold Only Input Tables
