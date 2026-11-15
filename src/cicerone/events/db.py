@@ -102,6 +102,27 @@ def _utc_connection(engine: Engine) -> Iterator[Connection]:
         yield conn
 
 
+def _refuse_structured_columns(conn: Connection, description: Sequence[Any]) -> None:
+    # Structured values load as Python objects: their str() never matches the CAST(... AS TEXT) cursor,
+    # and deep JSON overflows the driver's decoder.
+    oids = {column.name: column.type_code for column in description if column.name.lower() in _FETCH_COLUMNS}
+    structured = set(
+        conn.execute(
+            text(
+                "SELECT oid FROM pg_type"
+                " WHERE oid = ANY(:oids)"
+                " AND (typcategory IN ('A', 'C', 'R') OR typname IN ('json', 'jsonb', 'record'))"
+            ),
+            {"oids": list(oids.values())},
+        ).scalars()
+    )
+    refused = sorted(name for name, oid in oids.items() if oid in structured)
+    if refused:
+        raise ConfigError(
+            f"events DB source columns must not be JSON, arrays, rows or ranges: {', '.join(refused)}"
+        )
+
+
 def _log_unplaceable_row(payload: dict[str, Any], exc: EventNormalizeError) -> None:
     logger.warning("Skipping invalid event row %s", _rejection(payload, exc))
 
@@ -295,6 +316,8 @@ class DbEventSource(EventSource):
         with engine.connect() as conn:
             result = conn.execute(text(f"SELECT * FROM {self._from_clause(engine)} LIMIT 0"))
             columns = frozenset(map(str, result.keys()))
+            if engine.dialect.name == "postgresql":
+                _refuse_structured_columns(conn, result.cursor.description)
         by_lower = {name.lower(): name for name in columns}
         if "occurred_at" not in by_lower:
             raise ConfigError(

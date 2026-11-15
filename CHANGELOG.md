@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.7] - 2026-11-15
+
+### Changed
+
+- The `db` events source refuses a Postgres JSON, JSONB, array, row or range
+  column among those it reads with a `ConfigError` when it starts. Python could
+  not place such ids on the cursor in database order, and deeply nested JSON
+  stopped polling.
+
 ## [0.8.6] - 2026-11-13
 
 ### Added

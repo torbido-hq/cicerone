@@ -221,6 +221,9 @@ every row must have a non-blank `event_id` or `idempotency_key` (`0`
 counts as blank, and ids are trimmed). A row
 with neither is rejected like an invalid row below and never holds the
 watermark. `event_id` and `idempotency_key` must be text or integer columns.
+On Postgres, a JSON, JSONB, array, row or range column among those the source
+reads (`event_id`, `idempotency_key`, `id`, `user_id`, `item_id`, `event_type`,
+`quantity`, `occurred_at`) is a `ConfigError` when the source starts.
 Without `event_id`, table sources use `id`, SQLite `rowid`, or Postgres
 `ctid` so identical payloads at the same timestamp stay distinct.
 Without `event_id`, poll pages by `occurred_at` only: if more than about
